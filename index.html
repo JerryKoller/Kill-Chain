@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kill Chain — Download</title>
+  <meta name="description" content="Download Kill Chain v1.0.0 for Windows." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --surface: #12151c;
+      --border: #1e2430;
+      --text: #e8eaed;
+      --muted: #8b95a8;
+      --accent: #c41e3a;
+      --accent-hover: #e02445;
+      --accent-glow: rgba(196, 30, 58, 0.25);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Inter", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1.25rem;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(196, 30, 58, 0.12), transparent),
+        radial-gradient(ellipse 60% 40% at 100% 100%, rgba(30, 36, 48, 0.8), transparent);
+    }
+
+    .card {
+      width: 100%;
+      max-width: 480px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2.5rem 2rem;
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+    }
+
+    .badge {
+      display: inline-block;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: rgba(196, 30, 58, 0.1);
+      border: 1px solid rgba(196, 30, 58, 0.25);
+      padding: 0.35rem 0.65rem;
+      border-radius: 6px;
+      margin-bottom: 1.25rem;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.5;
+      margin-bottom: 2rem;
+    }
+
+    .file-info {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+      margin-bottom: 1.75rem;
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .file-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.85rem;
+    }
+
+    .file-row span:first-child { color: var(--muted); }
+    .file-row span:last-child {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.8rem;
+      color: var(--text);
+    }
+
+    .download-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+      width: 100%;
+      padding: 0.95rem 1.5rem;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+      box-shadow: 0 4px 20px var(--accent-glow);
+    }
+
+    .download-btn:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 6px 28px var(--accent-glow);
+    }
+
+    .download-btn:active { transform: scale(0.98); }
+
+    .download-btn svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .note {
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.55;
+      text-align: center;
+    }
+
+    .note strong { color: var(--text); font-weight: 500; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="badge">v1.0.0</div>
+    <h1>Kill Chain</h1>
+    <p class="subtitle">Windows installer — run the setup file to install Kill Chain on your PC.</p>
+
+    <div class="file-info">
+      <div class="file-row">
+        <span>File</span>
+        <span>Kill-Chain-Setup-1.0.0.exe</span>
+      </div>
+      <div class="file-row">
+        <span>Size</span>
+        <span id="file-size">~77 MB</span>
+      </div>
+      <div class="file-row">
+        <span>Platform</span>
+        <span>Windows 64-bit</span>
+      </div>
+    </div>
+
+    <a class="download-btn" id="download-btn" href="#" download="Kill-Chain-Setup-1.0.0.exe">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+      </svg>
+      Download for Windows
+    </a>
+
+    <p class="note">
+      <strong>Windows may show a security warning</strong> for files downloaded from the internet.
+      Click &ldquo;More info&rdquo; then &ldquo;Run anyway&rdquo; if you trust this source.
+    </p>
+  </main>
+
+  <script src="config.js"></script>
+  <script>
+    var url = window.DOWNLOAD_URL || "./Kill-Chain-Setup-1.0.0.exe";
+    var btn = document.getElementById("download-btn");
+    btn.href = url;
+
+    fetch(url, { method: "HEAD" })
+      .then(function (res) {
+        var bytes = res.headers.get("Content-Length");
+        if (!bytes) return;
+        var mb = (parseInt(bytes, 10) / (1024 * 1024)).toFixed(1);
+        document.getElementById("file-size").textContent = mb + " MB";
+      })
+      .catch(function () {});
+  </script>
+</body>
+</html>
