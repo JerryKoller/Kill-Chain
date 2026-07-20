@@ -1,5 +1,7 @@
 # Audio Playground — XM6 Edition
 
+> **Public downloads & release info:** [main branch](https://github.com/JerryKoller/Kill-Chain) · This `app` branch is the source code.
+
 > A futuristic sound laboratory for shaping music until your **Sony WH-1000XM6** feel magical.
 
 This is a Windows desktop app (Electron + React + TypeScript + Web Audio + WebGL2) built around three ideas:
