@@ -1,0 +1,424 @@
+import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { usePlayerStore } from "@/state/playerStore";
+import { useAudioStore } from "@/state/audioStore";
+import { useUIStore } from "@/state/uiStore";
+import { useSettingsStore } from "@/state/settingsStore";
+import { useAirspaceStore } from "@/state/airspaceStore";
+import { useCoverStore } from "@/state/coverStore";
+import { pathFromAudioSrc } from "@/state/libraryStore";
+import { NeonButton } from "@/components/shared/NeonButton";
+import { playUi } from "@/audio/uiSounds";
+import {
+  seekAirspaceMedia,
+  setAirspaceMediaVolume,
+  toggleAirspaceMedia,
+} from "@/lib/airspaceMedia";
+import { claimSource } from "@/lib/sourceArbiter";
+
+export function TransportBar() {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const status = usePlayerStore((s) => s.status);
+  const position = usePlayerStore((s) => s.position);
+  const duration = usePlayerStore((s) => s.duration);
+  const fileName = usePlayerStore((s) => s.fileName);
+  const metadata = usePlayerStore((s) => s.metadata);
+  const src = usePlayerStore((s) => s.src);
+  const volume = usePlayerStore((s) => s.volume);
+  const loop = usePlayerStore((s) => s.loop);
+  const loopbackActive = usePlayerStore((s) => s.loopbackActive);
+  const loopbackMode = usePlayerStore((s) => s.loopbackMode);
+  const attachElement = usePlayerStore((s) => s.attachElement);
+  const toggle = usePlayerStore((s) => s.toggle);
+  const seek = usePlayerStore((s) => s.seek);
+  const setVolume = usePlayerStore((s) => s.setVolume);
+  const setLoop = usePlayerStore((s) => s.setLoop);
+  const loadBlob = usePlayerStore((s) => s.loadBlob);
+  const loadPath = usePlayerStore((s) => s.loadDataUrlOrPath);
+  const startLoopback = usePlayerStore((s) => s.startLoopback);
+  const stopLoopback = usePlayerStore((s) => s.stopLoopback);
+  const tick = usePlayerStore((s) => s.tick);
+  const ensureReady = useAudioStore((s) => s.ensureReady);
+  const bypass = useAudioStore((s) => s.bypass);
+  const toggleBypass = useAudioStore((s) => s.toggleBypass);
+  const toast = useUIStore((s) => s.toast);
+  const setView = useUIStore((s) => s.setView);
+  const airMedia = useAirspaceStore((s) => s.media);
+
+  useEffect(() => {
+    if (audioRef.current) attachElement(audioRef.current);
+  }, [attachElement]);
+
+  // Use the audio element's native timeupdate (~4 Hz) instead of a 60 Hz
+  // rAF loop — enough for the transport bar and far cheaper at idle.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    const onTimeUpdate = () => tick();
+    const onSeeked = () => tick();
+    el.addEventListener("timeupdate", onTimeUpdate);
+    el.addEventListener("seeked", onSeeked);
+    return () => {
+      el.removeEventListener("timeupdate", onTimeUpdate);
+      el.removeEventListener("seeked", onSeeked);
+    };
+  }, [tick, attachElement]);
+
+  const openFile = async () => {
+    await ensureReady();
+    if (typeof window !== "undefined" && window.playground?.openAudioFile) {
+      const p = await window.playground.openAudioFile();
+      if (p) {
+        // Use the custom `playground-audio://` scheme registered in the
+        // Electron main process. The file path travels as a single URL-
+        // encoded query parameter so Chromium's standard-scheme URL parser
+        // can't mangle Windows drive letters: a path-style URL like
+        // `playground-audio:///C:/...` gets normalised to `playground-
+        // audio://c/...` (host=c) and silently loses the drive prefix,
+        // which only happens to work on drive C: by accident.
+        const url = `playground-audio:///load?p=${encodeURIComponent(p)}`;
+        await loadPath(url, p.split(/[\\/]/).pop() || "Track");
+      }
+    } else {
+      // Browser fallback
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "audio/*";
+      input.onchange = async () => {
+        const f = input.files?.[0];
+        if (f) await loadBlob(f, f.name);
+      };
+      input.click();
+    }
+  };
+
+  // ── Airspace deck ──
+  // When the in-app browser has media and the local player isn't actively
+  // playing a file, the transport bar becomes the deck for THAT media:
+  // thumbnail, title, real scrubbing, play/pause and volume all drive the
+  // page's video. While Airspace is ROUTED through the chain (direct
+  // capture), the deck stays in charge too — pause/scrub act on the video
+  // itself while the capture keeps flowing.
+  const deck =
+    airMedia != null &&
+    (loopbackMode === "airspace" ||
+      (status !== "playing" && (status === "empty" || !airMedia.paused)));
+
+  const shownPos = deck ? airMedia.currentTime : position;
+  const shownDur = deck ? airMedia.duration : duration;
+  const pct = shownDur > 0 ? (shownPos / shownDur) * 100 : 0;
+  const isPlaying = deck ? !airMedia.paused : status === "playing";
+
+  // Now-playing album art via the shared lazy cover cache (keyed by file path).
+  const coverPath = pathFromAudioSrc(src);
+  const libCover = useCoverStore((s) => (coverPath ? s.covers[coverPath] : undefined));
+  const requestCover = useCoverStore((s) => s.requestCover);
+  useEffect(() => {
+    if (coverPath) requestCover(coverPath);
+  }, [coverPath, requestCover]);
+  const localCover = (libCover && libCover.length > 0 ? libCover : null) ?? metadata.coverUrl;
+  const cover = deck ? airMedia.artwork : localCover;
+
+  const hasTrack = deck || status !== "empty";
+  const npTitle = deck
+    ? airMedia.title || "Airspace"
+    : metadata.title || fileName || "No track loaded";
+  const npSub = deck
+    ? `Airspace · ${airMedia.artist}`
+    : metadata.artist || (hasTrack ? "Unknown artist" : "Load a track to begin");
+
+  return (
+    <div className="px-4 pb-4">
+      <audio ref={audioRef} className="hidden" />
+
+      <div className="glass-strong rounded-2xl px-4 py-3 flex items-center gap-3 flex-wrap">
+        {/* Now playing — always visible so you know what's loaded */}
+        <div
+          className={`flex items-center gap-2.5 min-w-0 w-[210px] shrink-0 ${deck ? "cursor-pointer" : ""}`}
+          onClick={deck ? () => setView("airspace") : undefined}
+          title={deck ? "Playing in Airspace — click to open the browser" : undefined}
+        >
+          <div
+            className="relative w-10 h-10 rounded-lg border border-white/10 bg-white/[0.04] shrink-0 grid place-items-center text-base text-dim overflow-hidden"
+            style={
+              cover
+                ? { background: `center/cover no-repeat url("${cover}")` }
+                : undefined
+            }
+          >
+            {!cover && (deck ? "▶" : "♪")}
+            {deck && (
+              <span className="absolute bottom-0 inset-x-0 bg-cyan/80 text-black text-[7px] font-bold uppercase tracking-[0.2em] text-center leading-[10px]">
+                Airspace
+              </span>
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-white/90 truncate" title={npTitle}>
+              {npTitle}
+            </div>
+            <div className="text-[10px] text-dim truncate" title={npSub}>
+              {npSub}
+            </div>
+          </div>
+        </div>
+
+        <NeonButton onClick={openFile} variant="ghost" className="text-xs">
+          + Load Track
+        </NeonButton>
+
+        {loopbackActive && loopbackMode === "loopback" && (
+          <NeonButton
+            variant="ghost"
+            className="text-xs"
+            onClick={() => {
+              // Panic mute - drop the master to dead silence for 1.5s.
+              const a = useAudioStore.getState();
+              const restore = a.outputGainDb;
+              a.setOutputGain(-60);
+              setTimeout(() => a.setOutputGain(restore), 1500);
+              toast("Feedback cut — output muted for 1.5 s");
+            }}
+            title="Hard mute the output for 1.5 seconds to kill a feedback ring"
+          >
+            Cut Feedback
+          </NeonButton>
+        )}
+
+        <NeonButton
+          variant="ghost"
+          active={loopbackActive}
+          className="text-xs"
+          onClick={async () => {
+            await ensureReady();
+            if (loopbackActive) {
+              stopLoopback();
+              toast("Exterior audio disabled");
+            } else {
+              const source = useSettingsStore.getState().audioInputSource;
+              const ok = await startLoopback(source || undefined);
+              if (ok) {
+                if (source) {
+                  toast(
+                    "Exterior audio on - routed through your virtual cable. " +
+                    "Set Windows default output to CABLE Input to capture everything.",
+                  );
+                } else if (usePlayerStore.getState().loopbackMode === "loopbackWithMute") {
+                  toast(
+                    "Exterior audio on - Windows output muted. " +
+                    "You hear ONLY the processed feed on your chosen device.",
+                  );
+                } else {
+                  // Legacy system-loopback path - warn about feedback.
+                  let separateDeviceAvailable = false;
+                  try {
+                    const all = await navigator.mediaDevices.enumerateDevices();
+                    separateDeviceAvailable =
+                      all.filter((d) => d.kind === "audiooutput" && d.deviceId && d.deviceId !== "default" && d.deviceId !== "communications")
+                        .length > 1;
+                  } catch { /* ignore */ }
+                  const sinkId = useSettingsStore.getState().audioOutputDeviceId;
+                  if (sinkId) {
+                    toast("Exterior audio on - routed through your chosen output");
+                  } else if (separateDeviceAvailable) {
+                    toast(
+                      "Exterior audio on. For zero feedback, install VB-Cable " +
+                      "from Settings → Audio Routing (free, ~5 MB).",
+                    );
+                  } else {
+                    toast(
+                      "Exterior audio on. Install VB-Cable from Settings → " +
+                      "Audio Routing for system-wide DSP with NO feedback.",
+                    );
+                  }
+                }
+              } else {
+                toast(
+                  "Couldn't enable exterior audio. " +
+                  "If using a virtual cable, check it's still installed and selected in Settings.",
+                );
+              }
+            }
+          }}
+          title={
+            loopbackActive
+              ? "Stop processing system audio"
+              : "Pipe Windows / browser / game audio through the lab. " +
+                "Use a virtual cable (Settings → Audio Routing) for zero feedback."
+          }
+        >
+          {loopbackActive ? "Disable Exterior Audio" : "Enable Exterior Audio"}
+        </NeonButton>
+
+        <NeonButton
+          onClick={async () => {
+            if (deck) {
+              playUi("press");
+              // Starting Airspace playback stands the other sources down.
+              if (airMedia.paused) claimSource("airspace");
+              await toggleAirspaceMedia();
+              return;
+            }
+            if (!hasTrack) {
+              playUi("denied");
+              toast("Load a track first — hit “+ Load Track” or drop a file anywhere");
+              return;
+            }
+            playUi("press");
+            await ensureReady();
+            await toggle();
+          }}
+          data-ui-sound="none" // voiced in the handler: press when a track is loaded, denied buzz otherwise
+          className={`min-w-[100px] justify-center ${hasTrack ? "" : "opacity-45"}`}
+          title={
+            deck
+              ? "Play / pause the media in Airspace"
+              : hasTrack
+                ? "Play / pause (Space)"
+                : "No track loaded yet"
+          }
+        >
+          {isPlaying ? "Pause" : "Play"}
+        </NeonButton>
+
+        {!deck && (
+          <button
+            onClick={() => setLoop(!loop)}
+            className={`btn-ghost text-xs ${loop ? "text-cyan" : ""}`}
+            title="Loop track"
+          >
+            ↻ Loop
+          </button>
+        )}
+
+        <div className="flex-1 flex items-center gap-3">
+          <span className="text-[11px] font-mono text-dim w-12 tabular-nums">
+            {fmt(shownPos)}
+          </span>
+          <ScrubBar
+            pct={pct}
+            duration={shownDur}
+            onSeek={deck ? seekAirspaceMedia : seek}
+          />
+          <span className="text-[11px] font-mono text-dim w-12 tabular-nums text-right">
+            {deck && airMedia.live ? "LIVE" : fmt(shownDur)}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 w-40">
+          <span className="text-[10px] uppercase text-dim tracking-widest">
+            Vol
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={deck ? airMedia.volume : volume}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (deck) setAirspaceMediaVolume(v);
+              else setVolume(v);
+            }}
+            className="w-full accent-cyan"
+            title={deck ? "Volume of the Airspace media" : "Player volume"}
+          />
+        </div>
+
+        <button
+          onClick={toggleBypass}
+          data-ui-sound="none" // voiced centrally: bypass change plays engage/disengage
+          className={`btn-ghost text-xs ${bypass ? "text-plasma" : ""}`}
+          title="A/B bypass entire DSP chain"
+        >
+          {bypass ? "BYPASSED" : "ENGAGED"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Seek bar with true drag-to-scrub (pointer capture) and a hover time bubble.
+ * The old bar was click-only, which felt broken when you tried to drag it.
+ */
+function ScrubBar({
+  pct,
+  duration,
+  onSeek,
+}: {
+  pct: number;
+  duration: number;
+  onSeek: (t: number) => void;
+}) {
+  const barRef = useRef<HTMLDivElement>(null);
+  const [hoverX, setHoverX] = useState<number | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+
+  const frac = (clientX: number) => {
+    const r = barRef.current?.getBoundingClientRect();
+    if (!r || r.width === 0) return 0;
+    return Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+  };
+
+  const hoverFrac = hoverX != null ? frac(hoverX) : null;
+
+  return (
+    <div
+      ref={barRef}
+      className="group/scrub relative h-2 flex-1 rounded-full bg-white/[0.06] cursor-pointer"
+      style={{ touchAction: "none" }}
+      onPointerDown={(e) => {
+        if (duration <= 0) return;
+        (e.currentTarget as Element).setPointerCapture(e.pointerId);
+        setScrubbing(true);
+        onSeek(frac(e.clientX) * duration);
+      }}
+      onPointerMove={(e) => {
+        setHoverX(e.clientX);
+        if (scrubbing && duration > 0) onSeek(frac(e.clientX) * duration);
+      }}
+      onPointerUp={(e) => {
+        try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        setScrubbing(false);
+      }}
+      onPointerCancel={() => setScrubbing(false)}
+      onPointerLeave={() => { if (!scrubbing) setHoverX(null); }}
+    >
+      <div className="absolute inset-0 rounded-full overflow-hidden">
+        <motion.div
+          className="h-full"
+          style={{
+            width: `${pct}%`,
+            background: "linear-gradient(90deg, rgb(var(--c-cyan)), rgb(var(--c-violet)))",
+            boxShadow: "0 0 18px rgb(var(--c-violet) / 0.55)",
+          }}
+          transition={{ ease: "linear", duration: 0.12 }}
+        />
+      </div>
+      {/* Playhead grab handle — grows on hover so it's clearly draggable */}
+      <div
+        className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full bg-white transition-all ${
+          scrubbing ? "w-3.5 h-3.5" : "w-0 h-0 group-hover/scrub:w-3 group-hover/scrub:h-3"
+        }`}
+        style={{ left: `${pct}%`, boxShadow: "0 0 10px rgb(var(--c-violet) / 0.8)" }}
+      />
+      {/* Hover time bubble */}
+      {hoverFrac != null && duration > 0 && (
+        <div
+          className="absolute bottom-full mb-2 -translate-x-1/2 px-1.5 py-0.5 rounded-md bg-black/85 border border-white/15 text-[10px] font-mono text-white/90 pointer-events-none whitespace-nowrap"
+          style={{ left: `${hoverFrac * 100}%` }}
+        >
+          {fmt(hoverFrac * duration)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmt(t: number): string {
+  if (!isFinite(t) || t <= 0) return "0:00";
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}

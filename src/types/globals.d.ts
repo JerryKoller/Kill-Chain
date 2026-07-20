@@ -1,0 +1,117 @@
+export {};
+
+declare global {
+  interface Window {
+    playground: {
+      openAudioFile: () => Promise<string | null>;
+      files?: {
+        save: (
+          defaultName: string,
+          filters: { name: string; extensions: string[] }[],
+          dataBase64: string,
+        ) => Promise<string | null>;
+        openText: (
+          filters: { name: string; extensions: string[] }[],
+        ) => Promise<{ path: string; text: string } | null>;
+      };
+      /**
+       * Open an http(s) / ms-settings:* / file:// URL via the OS default
+       * handler. Other schemes are refused by the main process.
+       */
+      shellOpen?: (url: string) => Promise<void>;
+      window: {
+        minimize: () => Promise<void>;
+        maximize: () => Promise<void>;
+        close: () => Promise<void>;
+        setAlwaysOnTop?: (on: boolean) => Promise<void>;
+        setMiniSize?: (mini: boolean) => Promise<void>;
+        setFullscreen?: (full: boolean) => Promise<void>;
+      };
+      platform: string;
+      versions: Record<string, string>;
+      /**
+       * Optional Windows-specific helpers wired through ipcMain. Each may
+       * return null if unsupported on the current OS or if the underlying
+       * PowerShell helper failed.
+       */
+      bluetooth?: {
+        listDevices: () => Promise<BluetoothDeviceInfo[]>;
+      };
+      library?: {
+        pickFolders: () => Promise<string[]>;
+        scan: (folders: string[]) => Promise<LibraryFileEntry[]>;
+      };
+      audioDevices?: {
+        getDefaultOutputName: () => Promise<string | null>;
+        listVirtualCables?: () => Promise<string[]>;
+      };
+      loopback?: {
+        setMode: (
+          mode: "loopback" | "loopbackWithMute" | "airspace",
+        ) => Promise<string>;
+      };
+      airspace?: {
+        setAdblock: (on: boolean) => Promise<{ enabled: boolean; blocked: number }>;
+        getAdblockStatus: () => Promise<{ enabled: boolean; blocked: number }>;
+      };
+      headtrack?: {
+        start: (port: number) => Promise<{ running: boolean; port: number; error?: string }>;
+        stop: () => Promise<void>;
+        status: () => Promise<{ running: boolean; port: number; packets: number }>;
+        onData: (cb: (d: HeadTrackData) => void) => () => void;
+      };
+      remote?: {
+        start: (port: number) => Promise<{ port: number; url: string } | null>;
+        stop: () => Promise<void>;
+        getStatus: () => Promise<{ running: boolean; port: number; url: string } | null>;
+        onCommand?: (cb: (cmd: string) => void) => () => void;
+      };
+      system?: {
+        getStats: () => Promise<SystemStats>;
+        getGpuInfo: () => Promise<SystemGpuInfo>;
+      };
+    };
+  }
+
+  interface SystemStats {
+    cores: number;
+    sysCpuPercent: number;
+    appCpuPercent: number;
+    appRamMB: number;
+    sysRamUsedMB: number;
+    sysRamTotalMB: number;
+    procCount: number;
+  }
+
+  interface SystemGpuInfo {
+    accelerated: boolean;
+    compositing: string;
+    rasterization: string;
+    webgl: string;
+  }
+
+  interface BluetoothDeviceInfo {
+    name: string;
+    connected: boolean;
+    battery: number | null;
+    codec: string | null;
+  }
+
+  interface LibraryFileEntry {
+    path: string;
+    name: string;
+    ext: string;
+    size: number;
+    mtimeMs: number;
+  }
+
+  /** One opentrack-protocol UDP sample (cm / degrees). */
+  interface HeadTrackData {
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    pitch: number;
+    roll: number;
+  }
+}

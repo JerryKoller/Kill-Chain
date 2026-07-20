@@ -1,0 +1,959 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --beat-glow: 0;
+  --beat-pulse: 0;
+  /*
+   * Global bloom multiplier. 0 = flat & sharp, 1 = heavy neon bloom.
+   * Overridden at runtime from Settings (uiGlow). Every accent glow below
+   * scales off this so the whole UI can be dialled from sharp to dreamy.
+   */
+  --glow: 0.4;
+}
+
+/*
+ * Settings → Reduce motion: an app-level override that works even when the
+ * OS setting is off. Kills every CSS animation/transition in one move; the
+ * canvas visualizers read the same flag in JS.
+ */
+:root.kc-reduced *,
+:root.kc-reduced *::before,
+:root.kc-reduced *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/*
+ * Theme system. Accent colours are stored as space-separated RGB *channels*
+ * so Tailwind can apply opacity modifiers (e.g. bg-cyan/10) via
+ * rgb(var(--c-cyan) / <alpha-value>). Text/panel/border/grid stay as full
+ * colours since they're consumed directly in CSS, not through Tailwind alpha.
+ *
+ * `cyan`  = primary accent (active states, confirm)
+ * `plasma`= secondary / alert accent
+ * `violet`= ambient glow
+ * `lime`  = success · `amber` = warning/gold
+ *
+ * Default (no data-theme) = OBSIDIAN: a dark, menacing steel-and-blood look.
+ */
+:root,
+:root[data-theme="obsidian"] {
+  color-scheme: dark;
+  --c-ink: 7 8 11;
+  --c-void: 13 15 19;
+  --c-cyan: 84 180 214;
+  --c-plasma: 255 64 64;
+  --c-violet: 122 92 255;
+  --c-lime: 95 211 138;
+  --c-amber: 255 176 72;
+  --c-text: #e8eaf2;
+  --c-text-dim: #888ea3;
+  --c-panel: rgba(255, 255, 255, 0.035);
+  --c-panel-strong: rgba(255, 255, 255, 0.06);
+  --c-border: rgba(255, 255, 255, 0.07);
+  --c-grid-1: rgba(122, 92, 255, 0.06);
+  --c-grid-2: rgba(84, 180, 214, 0.05);
+}
+
+:root[data-theme="crimson"] {
+  color-scheme: dark;
+  --c-ink: 9 6 6;
+  --c-void: 18 10 10;
+  --c-cyan: 255 90 54;
+  --c-plasma: 255 45 111;
+  --c-violet: 178 59 255;
+  --c-lime: 255 138 64;
+  --c-amber: 255 150 60;
+  --c-text: #f6e7e7;
+  --c-text-dim: #b58a8a;
+  --c-panel: rgba(255, 90, 80, 0.04);
+  --c-panel-strong: rgba(255, 90, 80, 0.07);
+  --c-border: rgba(255, 120, 110, 0.09);
+  --c-grid-1: rgba(255, 45, 111, 0.06);
+  --c-grid-2: rgba(255, 90, 54, 0.05);
+}
+
+:root[data-theme="military"] {
+  color-scheme: dark;
+  --c-ink: 10 12 9;
+  --c-void: 18 20 15;
+  --c-cyan: 196 180 84;
+  --c-plasma: 217 119 43;
+  --c-violet: 124 150 70;
+  --c-lime: 179 229 126;
+  --c-amber: 255 203 107;
+  --c-text: #e9ead6;
+  --c-text-dim: #9aa085;
+  --c-panel: rgba(220, 220, 160, 0.035);
+  --c-panel-strong: rgba(220, 220, 160, 0.06);
+  --c-border: rgba(210, 210, 160, 0.09);
+  --c-grid-1: rgba(196, 180, 84, 0.05);
+  --c-grid-2: rgba(124, 150, 70, 0.05);
+}
+
+:root[data-theme="abyss"] {
+  color-scheme: dark;
+  --c-ink: 5 8 14;
+  --c-void: 10 14 22;
+  --c-cyan: 51 214 255;
+  --c-plasma: 59 123 255;
+  --c-violet: 106 91 255;
+  --c-lime: 91 224 211;
+  --c-amber: 122 184 255;
+  --c-text: #dce8ff;
+  --c-text-dim: #8090b0;
+  --c-panel: rgba(120, 160, 255, 0.04);
+  --c-panel-strong: rgba(120, 160, 255, 0.07);
+  --c-border: rgba(120, 160, 255, 0.09);
+  --c-grid-1: rgba(59, 123, 255, 0.06);
+  --c-grid-2: rgba(51, 214, 255, 0.05);
+}
+
+:root[data-theme="toxic"] {
+  color-scheme: dark;
+  --c-ink: 6 9 6;
+  --c-void: 11 16 11;
+  --c-cyan: 91 255 157;
+  --c-plasma: 202 255 51;
+  --c-violet: 47 224 160;
+  --c-lime: 157 255 91;
+  --c-amber: 232 255 91;
+  --c-text: #e6ffe9;
+  --c-text-dim: #86a890;
+  --c-panel: rgba(120, 255, 160, 0.04);
+  --c-panel-strong: rgba(120, 255, 160, 0.07);
+  --c-border: rgba(120, 255, 160, 0.10);
+  --c-grid-1: rgba(91, 255, 157, 0.06);
+  --c-grid-2: rgba(202, 255, 51, 0.05);
+}
+
+:root[data-theme="ember"] {
+  color-scheme: dark;
+  --c-ink: 11 7 5;
+  --c-void: 19 12 8;
+  --c-cyan: 255 138 59;
+  --c-plasma: 255 64 64;
+  --c-violet: 255 91 46;
+  --c-lime: 255 210 59;
+  --c-amber: 255 182 72;
+  --c-text: #ffece0;
+  --c-text-dim: #b89a86;
+  --c-panel: rgba(255, 150, 90, 0.04);
+  --c-panel-strong: rgba(255, 150, 90, 0.07);
+  --c-border: rgba(255, 150, 90, 0.10);
+  --c-grid-1: rgba(255, 91, 46, 0.06);
+  --c-grid-2: rgba(255, 138, 59, 0.05);
+}
+
+:root[data-theme="mono"] {
+  color-scheme: dark;
+  --c-ink: 8 8 10;
+  --c-void: 16 16 19;
+  --c-cyan: 226 228 235;
+  --c-plasma: 255 77 77;
+  --c-violet: 150 156 176;
+  --c-lime: 200 204 214;
+  --c-amber: 208 208 208;
+  --c-text: #f0f1f5;
+  --c-text-dim: #868c9a;
+  --c-panel: rgba(255, 255, 255, 0.04);
+  --c-panel-strong: rgba(255, 255, 255, 0.07);
+  --c-border: rgba(255, 255, 255, 0.10);
+  --c-grid-1: rgba(255, 255, 255, 0.05);
+  --c-grid-2: rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme="neon"] {
+  color-scheme: dark;
+  --c-ink: 6 6 12;
+  --c-void: 11 11 22;
+  --c-cyan: 34 232 255;
+  --c-plasma: 255 43 214;
+  --c-violet: 122 59 255;
+  --c-lime: 157 255 91;
+  --c-amber: 255 182 72;
+  --c-text: #e7e9ff;
+  --c-text-dim: #9aa0c7;
+  --c-panel: rgba(255, 255, 255, 0.04);
+  --c-panel-strong: rgba(255, 255, 255, 0.07);
+  --c-border: rgba(255, 255, 255, 0.06);
+  --c-grid-1: rgba(122, 59, 255, 0.07);
+  --c-grid-2: rgba(34, 232, 255, 0.07);
+}
+
+:root[data-theme="studio"] {
+  color-scheme: dark;
+  --c-ink: 14 17 22;
+  --c-void: 22 26 34;
+  --c-cyan: 78 201 255;
+  --c-plasma: 255 122 138;
+  --c-violet: 142 155 255;
+  --c-lime: 179 229 126;
+  --c-amber: 255 203 107;
+  --c-text: #e8ecf4;
+  --c-text-dim: #98a0b3;
+  --c-panel: rgba(255, 255, 255, 0.03);
+  --c-panel-strong: rgba(255, 255, 255, 0.06);
+  --c-border: rgba(255, 255, 255, 0.06);
+  --c-grid-1: rgba(78, 201, 255, 0.04);
+  --c-grid-2: rgba(255, 122, 138, 0.04);
+}
+
+:root[data-theme="vinyl"] {
+  color-scheme: dark;
+  --c-ink: 21 14 8;
+  --c-void: 28 21 13;
+  --c-cyan: 255 178 96;
+  --c-plasma: 255 111 60;
+  --c-violet: 200 122 58;
+  --c-lime: 214 200 122;
+  --c-amber: 255 208 122;
+  --c-text: #f5e6cf;
+  --c-text-dim: #b8a07f;
+  --c-panel: rgba(255, 220, 180, 0.04);
+  --c-panel-strong: rgba(255, 220, 180, 0.07);
+  --c-border: rgba(255, 220, 180, 0.10);
+  --c-grid-1: rgba(255, 178, 96, 0.05);
+  --c-grid-2: rgba(255, 111, 60, 0.05);
+}
+
+/* Gunmetal — desaturated cool steel. Sharp, minimal, near-monochrome. */
+:root[data-theme="gunmetal"] {
+  color-scheme: dark;
+  --c-ink: 9 10 12;
+  --c-void: 16 18 21;
+  --c-cyan: 142 160 178;
+  --c-plasma: 214 96 84;
+  --c-violet: 110 124 142;
+  --c-lime: 150 178 150;
+  --c-amber: 198 178 132;
+  --c-text: #e6e9ee;
+  --c-text-dim: #868d99;
+  --c-panel: rgba(200, 212, 228, 0.03);
+  --c-panel-strong: rgba(200, 212, 228, 0.06);
+  --c-border: rgba(200, 212, 228, 0.08);
+  --c-grid-1: rgba(142, 160, 178, 0.045);
+  --c-grid-2: rgba(110, 124, 142, 0.04);
+}
+
+/* Carbon — industrial near-black with one sharp molten-amber accent. */
+:root[data-theme="carbon"] {
+  color-scheme: dark;
+  --c-ink: 8 8 9;
+  --c-void: 14 14 16;
+  --c-cyan: 230 138 58;
+  --c-plasma: 232 84 48;
+  --c-violet: 150 110 80;
+  --c-lime: 210 168 96;
+  --c-amber: 240 176 80;
+  --c-text: #ecebe8;
+  --c-text-dim: #8d8a84;
+  --c-panel: rgba(255, 255, 255, 0.025);
+  --c-panel-strong: rgba(255, 255, 255, 0.05);
+  --c-border: rgba(255, 255, 255, 0.07);
+  --c-grid-1: rgba(230, 138, 58, 0.04);
+  --c-grid-2: rgba(255, 255, 255, 0.03);
+}
+
+/* Kill-Chain · Night Ops — signature theme. Tactical green + tracer amber on
+   gunmetal black. Aggressive, military. This is the default look. */
+:root[data-theme="nightops"] {
+  color-scheme: dark;
+  --c-ink: 6 8 7;
+  --c-void: 12 15 13;
+  --c-cyan: 120 198 120;
+  --c-plasma: 224 120 64;
+  --c-violet: 98 150 110;
+  --c-lime: 150 220 120;
+  --c-amber: 224 188 96;
+  --c-text: #e3ebe2;
+  --c-text-dim: #859184;
+  --c-panel: rgba(150, 220, 150, 0.03);
+  --c-panel-strong: rgba(150, 220, 150, 0.055);
+  --c-border: rgba(150, 210, 150, 0.08);
+  --c-grid-1: rgba(120, 198, 120, 0.045);
+  --c-grid-2: rgba(98, 150, 110, 0.04);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  font-family: "Space Grotesk", "Inter", system-ui, "Segoe UI", sans-serif;
+  color: var(--c-text);
+  background: rgb(var(--c-ink));
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  user-select: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* Keyboard users get a clear focus ring on every interactive element;
+   mouse clicks don't (that's what :focus-visible is for). */
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[role="slider"]:focus-visible {
+  outline: 2px solid rgb(var(--c-cyan) / 0.7);
+  outline-offset: 2px;
+}
+
+/* The app disables text selection globally for an app-like feel — but text
+   fields must stay selectable or editing feels broken. */
+input,
+textarea {
+  user-select: text;
+}
+
+/*
+ * Native <select> popups render their <option> list with the OS palette, which
+ * looked washed-out (dim grey text) against our dark UI. Pin a solid dark
+ * background and bright, full-contrast text so dropdown choices are legible
+ * everywhere (Morph Lab corners, Presets blend, etc).
+ */
+select {
+  color: var(--c-text);
+}
+select option,
+select optgroup {
+  background-color: #0e1014;
+  color: var(--c-text);
+}
+select option:checked {
+  background-color: rgb(var(--c-cyan) / 0.22);
+  color: #ffffff;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgb(var(--c-cyan) / 0.33), rgb(var(--c-violet) / 0.33));
+  border-radius: 999px;
+  border: 2px solid rgb(var(--c-ink));
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgb(var(--c-cyan) / 0.6), rgb(var(--c-violet) / 0.6));
+}
+
+/* Slim, unobtrusive scrollbar for the navigation rail */
+.sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  border-radius: 999px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--c-cyan) / 0.45);
+}
+
+@layer components {
+  .glass {
+    background:
+      linear-gradient(180deg, var(--c-panel), rgba(255, 255, 255, 0.01));
+    border: 1px solid var(--c-border);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 30px 60px -30px rgba(0, 0, 0, 0.6);
+  }
+
+  .glass-strong {
+    background:
+      linear-gradient(180deg, var(--c-panel-strong), rgba(255, 255, 255, 0.02));
+    border: 1px solid var(--c-border);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(var(--c-grid-1) 1px, transparent 1px),
+      linear-gradient(90deg, var(--c-grid-2) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(ellipse at top, rgba(0, 0, 0, 0.85), transparent 75%);
+  }
+
+  .noise::after {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    opacity: 0.06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  .neon-text {
+    background: linear-gradient(110deg, rgb(var(--c-cyan)), rgb(var(--c-plasma)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 calc(24px * var(--glow)) rgb(var(--c-violet) / calc(0.4 * var(--glow)));
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium tracking-wide;
+    background: linear-gradient(120deg, rgb(var(--c-cyan) / 0.1), rgb(var(--c-violet) / 0.1));
+    border: 1px solid var(--c-border);
+    color: var(--c-text);
+  }
+
+  /* Classification-style module tag — "KC-01" markers next to view titles.
+     Mono, squared, hairline border: reads like a panel designation plate. */
+  .module-tag {
+    font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 9px;
+    line-height: 1;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 3px 6px 2px;
+    border: 1px solid rgb(var(--c-cyan) / 0.35);
+    border-radius: 3px;
+    color: rgb(var(--c-cyan) / 0.9);
+    background: rgb(var(--c-cyan) / 0.06);
+    white-space: nowrap;
+  }
+
+  /* Thin hairline divider that fades at both ends. */
+  .hairline {
+    height: 1px;
+    border: none;
+    background: linear-gradient(90deg, transparent, var(--c-border) 18%, var(--c-border) 82%, transparent);
+  }
+
+  /* Corner tick marks for key panels — subtle fire-control-display framing.
+     Opposing corners only, so it stays quiet at a glance. */
+  .panel-ticks::before,
+  .panel-ticks::after {
+    content: "";
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    border-color: rgb(var(--c-cyan) / 0.28);
+    border-style: solid;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .panel-ticks::before {
+    top: 7px;
+    left: 7px;
+    border-width: 1px 0 0 1px;
+  }
+  .panel-ticks::after {
+    bottom: 7px;
+    right: 7px;
+    border-width: 0 1px 1px 0;
+  }
+
+  .btn-ghost {
+    @apply px-3 py-2 rounded-xl text-sm tracking-wide transition;
+    color: var(--c-text);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .btn-neon {
+    @apply px-4 py-2 rounded-xl text-sm font-semibold tracking-wide transition relative overflow-hidden;
+    color: rgb(var(--c-ink));
+    background: linear-gradient(110deg, rgb(var(--c-cyan)), rgb(var(--c-plasma)));
+    box-shadow:
+      0 0 calc(24px * var(--glow)) rgb(var(--c-cyan) / calc(0.5 * var(--glow))),
+      0 0 calc(60px * var(--glow)) rgb(var(--c-plasma) / calc(0.4 * var(--glow)));
+  }
+  .btn-neon:hover {
+    filter: brightness(1.08) saturate(1.1);
+  }
+  .btn-neon:active {
+    transform: translateY(1px);
+  }
+
+  .titlebar-drag {
+    -webkit-app-region: drag;
+  }
+  .titlebar-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  /* Compositor-only status dot pulse (replaces a perpetual JS animation). */
+  .status-pulse {
+    animation: status-pulse 2.2s ease-in-out infinite;
+  }
+  @keyframes status-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.25); }
+  }
+
+  /* ── Fire Command identity ── */
+  .fire-header {
+    background:
+      radial-gradient(120% 200% at 8% 0%, rgb(255 90 40 / 0.14), transparent 55%),
+      radial-gradient(90% 160% at 92% 100%, rgb(255 40 20 / 0.1), transparent 50%),
+      linear-gradient(165deg, rgb(26 12 8 / 0.92), rgb(12 6 10 / 0.96));
+  }
+  /* faint tactical scanlines — static image, zero runtime cost */
+  .fire-header::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent 0 3px,
+      rgb(255 120 60 / 0.016) 3px 4px
+    );
+  }
+  .fire-title {
+    background: linear-gradient(92deg, #fff3e0 0%, #ffb648 28%, #ff6a3d 55%, #ff3d2e 82%, #ffb648 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: fire-sheen 7s linear infinite;
+    text-shadow: 0 0 28px rgb(255 106 61 / 0.25);
+  }
+  @keyframes fire-sheen {
+    0% { background-position: 0% 50%; }
+    100% { background-position: -200% 50%; }
+  }
+  .fire-status-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    animation: status-pulse 2.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fire-title { animation: none; }
+    .fire-status-dot { animation: none; }
+    .status-pulse { animation: none; }
+  }
+}
+
+@layer utilities {
+  .text-dim {
+    color: var(--c-text-dim);
+  }
+  .ring-neon {
+    box-shadow:
+      0 0 0 1px rgb(var(--c-cyan) / calc(0.35 + 0.3 * var(--glow))),
+      0 0 calc(24px * var(--glow)) rgb(var(--c-cyan) / calc(0.5 * var(--glow)));
+  }
+
+  /* Fire Command range sliders. Chromium (Electron) honours accent-color for
+     both the fill and the thumb, so we mostly just size the track here. */
+  .fire-range {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+  }
+  .fire-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #ff6a3d;
+    border: 2px solid rgba(0, 0, 0, 0.45);
+    box-shadow: 0 0 10px rgba(255, 106, 61, 0.6);
+  }
+  .fire-range::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(0, 0, 0, 0.45);
+    border-radius: 50%;
+    background: #ff6a3d;
+    box-shadow: 0 0 10px rgba(255, 106, 61, 0.6);
+  }
+  .fire-range::-moz-range-track {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Background orbs ride the global glow: at low glow they nearly vanish,
+     keeping the backdrop flat and sharp. */
+  .beat-orb-violet {
+    opacity: calc((0.35 + var(--beat-glow) * 0.3) * var(--glow) * 1.6);
+    transform: scale(calc(1 + var(--beat-pulse) * 0.08));
+    transition: opacity 0.08s ease-out, transform 0.06s ease-out;
+  }
+  .beat-orb-cyan {
+    opacity: calc((0.3 + var(--beat-glow) * 0.35) * var(--glow) * 1.6);
+    transform: scale(calc(1 + var(--beat-pulse) * 0.06));
+    transition: opacity 0.08s ease-out, transform 0.06s ease-out;
+  }
+}
+
+/* ══ Morph Lab (KC-05) — namespaced mlab-* ══ */
+.mlab-puck:focus-visible {
+  outline: 2px solid rgb(var(--c-cyan) / 0.9);
+  outline-offset: 3px;
+}
+.mlab-rec-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: rgb(var(--c-plasma));
+  box-shadow: 0 0 10px rgb(var(--c-plasma) / 0.8);
+  animation: mlab-blink 0.9s steps(2, start) infinite;
+}
+@keyframes mlab-blink {
+  50% { opacity: 0.15; }
+}
+
+/* ══ Macro Reactor (KC-06) — namespaced krx-* ══ */
+.krx-surface:focus {
+  outline: none;
+}
+.krx-pad-live {
+  animation: krx-breathe 2.8s ease-in-out infinite;
+}
+@keyframes krx-breathe {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.15); }
+}
+.krx-meter-fill {
+  transition: height 70ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mlab-rec-dot,
+  .krx-pad-live {
+    animation: none;
+  }
+  .krx-meter-fill {
+    transition: none;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Library Visualizer (kc-vz-*) — full-panel canvas overlay + HUD chrome.
+   Namespaced; appended by the Library/visualizer module.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Launch button in the Library header — armed-system styling. */
+.kc-vz-launch {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  font-family: "JetBrains Mono", Consolas, monospace;
+  color: rgb(var(--c-cyan));
+  background: rgb(var(--c-cyan) / 0.08);
+  border: 1px solid rgb(var(--c-cyan) / 0.4);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.kc-vz-launch:hover {
+  background: rgb(var(--c-cyan) / 0.16);
+  box-shadow: 0 0 calc(18px * var(--glow)) rgb(var(--c-cyan) / calc(0.45 * var(--glow)));
+}
+
+/* Overlay root fills the workspace below the title bar (h-9 = 36px), so
+   window drag/minimize/close stay reachable. :fullscreen covers all. */
+.kc-vz-root {
+  position: fixed;
+  top: 36px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 45; /* above view content/menus, below toasts (z-60) */
+  background: #04050a;
+  overflow: hidden;
+  animation: kc-vz-in 0.22s ease-out;
+}
+.kc-vz-root:fullscreen {
+  top: 0;
+}
+@keyframes kc-vz-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.kc-vz-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: pointer;
+}
+
+/* When idle, chrome fades and the cursor disappears — pure canvas. */
+.kc-vz-idle {
+  cursor: none;
+}
+.kc-vz-idle .kc-vz-canvas {
+  cursor: none;
+}
+.kc-vz-corner,
+.kc-vz-segbar {
+  transition: opacity 0.45s ease;
+}
+.kc-vz-idle .kc-vz-segbar,
+.kc-vz-idle .kc-vz-actions {
+  opacity: 0;
+  pointer-events: none;
+}
+.kc-vz-idle .kc-vz-track {
+  opacity: 0.3;
+}
+
+/* Now-playing block, top-left. */
+.kc-vz-track {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  max-width: min(46vw, 480px);
+  pointer-events: none;
+}
+.kc-vz-track-label {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  color: rgb(var(--c-cyan) / 0.75);
+  text-transform: uppercase;
+}
+.kc-vz-standby {
+  color: rgb(var(--c-amber) / 0.9);
+}
+.kc-vz-track-title {
+  margin-top: 3px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+}
+.kc-vz-track-artist {
+  font-size: 11px;
+  color: var(--c-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Action buttons, top-right. */
+.kc-vz-actions {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  display: flex;
+  gap: 8px;
+}
+.kc-vz-btn {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: rgb(var(--c-cyan) / 0.9);
+  background: rgba(4, 5, 10, 0.6);
+  border: 1px solid rgb(var(--c-cyan) / 0.3);
+  backdrop-filter: blur(6px);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.kc-vz-btn:hover {
+  background: rgb(var(--c-cyan) / 0.12);
+  border-color: rgb(var(--c-cyan) / 0.55);
+}
+.kc-vz-btn-close {
+  color: rgb(var(--c-plasma) / 0.9);
+  border-color: rgb(var(--c-plasma) / 0.35);
+}
+.kc-vz-btn-close:hover {
+  background: rgb(var(--c-plasma) / 0.12);
+  border-color: rgb(var(--c-plasma) / 0.6);
+}
+
+/* Segmented mode control, bottom-center. */
+.kc-vz-segbar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.kc-vz-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(4, 5, 10, 0.72);
+  border: 1px solid rgb(var(--c-cyan) / 0.22);
+  backdrop-filter: blur(8px);
+}
+.kc-vz-seg-btn {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 7px;
+  color: var(--c-text-dim);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.kc-vz-seg-btn:hover {
+  color: var(--c-text);
+}
+.kc-vz-seg-on {
+  color: rgb(var(--c-cyan));
+  background: rgb(var(--c-cyan) / 0.14);
+  box-shadow: inset 0 0 0 1px rgb(var(--c-cyan) / 0.35);
+}
+.kc-vz-hint {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgb(var(--c-cyan) / 0.35);
+}
+
+/* Mode designation flash — replays on every mode switch (element re-keyed). */
+.kc-vz-flash {
+  position: absolute;
+  top: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  animation: kc-vz-flash 2.2s ease-out forwards;
+}
+.kc-vz-flash-name {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: clamp(18px, 3.2vw, 30px);
+  font-weight: 700;
+  letter-spacing: 0.42em;
+  color: rgb(var(--c-cyan));
+  text-shadow: 0 0 calc(26px * var(--glow)) rgb(var(--c-cyan) / calc(0.6 * var(--glow)));
+  white-space: nowrap;
+}
+.kc-vz-flash-desc {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--c-text-dim);
+}
+@keyframes kc-vz-flash {
+  0% { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  12% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kc-vz-root {
+    animation: none;
+  }
+  .kc-vz-flash {
+    animation: kc-vz-flash-static 2.2s ease-out forwards;
+  }
+  @keyframes kc-vz-flash-static {
+    0% { opacity: 0; }
+    12% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Kill-chain status dot (TitleBar) — kc-status-*
+   Red pulsing on standby/bypass; snaps green when the DSP chain is ENGAGED
+   with a one-shot expanding pulse ring + glow burst (the ring/burst spans
+   mount fresh on each engage, so the animations replay). Disengage fades
+   back to red through the dot's color/shadow transition.
+   ───────────────────────────────────────────────────────────────────────── */
+.kc-status-dot {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #ff4646;
+  box-shadow: 0 0 8px rgb(255 70 70 / 0.75);
+  transition: background 0.5s ease, box-shadow 0.5s ease;
+  animation: kc-status-standby 2.2s ease-in-out infinite;
+}
+.kc-status-dot--engaged {
+  background: #3dff8a;
+  box-shadow:
+    0 0 10px rgb(61 255 138 / 0.9),
+    0 0 22px rgb(61 255 138 / 0.4);
+  animation: kc-status-armed 3s ease-in-out infinite;
+}
+.kc-status-ring {
+  position: absolute;
+  inset: -2px;
+  border-radius: 9999px;
+  border: 1.5px solid rgb(61 255 138 / 0.9);
+  pointer-events: none;
+  animation: kc-status-ring 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+.kc-status-burst {
+  position: absolute;
+  inset: -7px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgb(61 255 138 / 0.55) 0%, transparent 70%);
+  pointer-events: none;
+  animation: kc-status-burst 0.6s ease-out forwards;
+}
+@keyframes kc-status-standby {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.25); }
+}
+@keyframes kc-status-armed {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.1); filter: brightness(1.3); }
+}
+@keyframes kc-status-ring {
+  0% { transform: scale(1); opacity: 0.95; }
+  100% { transform: scale(3.6); opacity: 0; }
+}
+@keyframes kc-status-burst {
+  0% { transform: scale(0.5); opacity: 0.95; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kc-status-dot,
+  .kc-status-dot--engaged {
+    animation: none;
+  }
+  .kc-status-ring,
+  .kc-status-burst {
+    animation: none;
+    opacity: 0;
+  }
+}
