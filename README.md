@@ -1,6 +1,6 @@
 # Kill Chain — Download Site
 
-Share `Kill-Chain-Setup-1.0.0.exe` via a permanent public URL.
+Share `Kill-Chain-Setup-1.4.0.exe` via a permanent public URL.
 
 ---
 
@@ -31,14 +31,14 @@ Best balance of free, reliable, and mobile-friendly. GitHub hosts the page on a 
 
 4. **Upload the installer as a Release**
    - Repo → **Releases** → **Create a new release**
-   - Tag: `v1.0.0`
-   - Attach `Kill-Chain-Setup-1.0.0.exe`
+   - Tag: `v1.4.0`
+   - Attach `Kill-Chain-Setup-1.4.0.exe`
    - Publish
 
 5. **Point the download button at the release**
    - Edit `config.js`:
      ```js
-     window.DOWNLOAD_URL = "https://github.com/YOUR_USERNAME/kill-chain-download/releases/download/v1.0.0/Kill-Chain-Setup-1.0.0.exe";
+     window.DOWNLOAD_URL = "https://github.com/YOUR_USERNAME/kill-chain-download/releases/download/v1.4.0/Kill-Chain-Setup-1.4.0.exe";
      ```
    - Commit and push:
      ```bash
@@ -95,5 +95,5 @@ Open http://localhost:3000
 |------|---------|
 | `index.html` | Download landing page |
 | `config.js` | Download URL (change when deploying) |
-| `Kill-Chain-Setup-1.0.0.exe` | Windows installer (upload to Releases, not git) |
+| `Kill-Chain-Setup-1.4.0.exe` | Windows installer (upload to Releases, not git) |
 | `server.js` | Local dev server only |

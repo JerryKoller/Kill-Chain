@@ -35,7 +35,7 @@ const server = http.createServer((req, res) => {
       "Content-Type": type,
       "Content-Length": stat.size,
       "Content-Disposition": ext === ".exe"
-        ? 'attachment; filename="Kill-Chain-Setup-1.0.0.exe"'
+        ? `attachment; filename="${path.basename(filePath)}"`
         : "inline",
     });
 
