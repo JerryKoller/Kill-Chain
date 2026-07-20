@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Download Kill Chain
+    url: https://github.com/JerryKoller/Kill-Chain#download
+    about: Get the latest Windows installer
+  - name: Changelog
+    url: https://github.com/JerryKoller/Kill-Chain/blob/main/CHANGELOG.md
+    about: See what's new in each release

@@ -1,0 +1,61 @@
+name: Bug report
+description: Something isn't working right
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Kill Chain. Please fill in what you can — screenshots and steps to reproduce are especially useful.
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: Kill Chain version
+      options:
+        - v1.4.0
+        - v1.3.0 or older
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      description: e.g. Windows 11 24H2
+      placeholder: Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do before the problem happened?
+      placeholder: |
+        1. Open Kill Chain
+        2. Go to ...
+        3. Click ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, audio device, headphones, error messages, etc.
