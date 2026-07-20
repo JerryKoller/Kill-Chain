@@ -1,99 +1,67 @@
-# Kill Chain — Download Site
+# Kill Chain
 
-Share `Kill-Chain-Setup-1.4.0.exe` via a permanent public URL.
+**Kill Chain** is a Windows desktop audio engine built for serious listening — EQ, spatial processing, restoration, analysis, and playback tools in one dark, focused workspace. Route local files, system audio, or in-app web media through the full chain and hear the difference immediately.
 
----
-
-## Recommended: GitHub Pages + Releases (free, always on)
-
-Best balance of free, reliable, and mobile-friendly. GitHub hosts the page on a CDN; the 77 MB installer lives on Releases (up to 2 GB per file).
-
-### One-time setup (~10 minutes)
-
-1. **Create a GitHub repo** (public), e.g. `kill-chain-download`
-
-2. **Push only the site files** (not the EXE — it's in `.gitignore`):
-
-   ```bash
-   cd "Kill-Chain V1.0"
-   git init
-   git add index.html config.js .gitignore README.md server.js
-   git commit -m "Add Kill Chain download page"
-   git branch -M main
-   git remote add origin https://github.com/YOUR_USERNAME/kill-chain-download.git
-   git push -u origin main
-   ```
-
-3. **Enable GitHub Pages**
-   - Repo → **Settings** → **Pages**
-   - Source: **Deploy from branch** → `main` → `/ (root)` → Save
-   - Your page will be at: `https://YOUR_USERNAME.github.io/kill-chain-download/`
-
-4. **Upload the installer as a Release**
-   - Repo → **Releases** → **Create a new release**
-   - Tag: `v1.4.0`
-   - Attach `Kill-Chain-Setup-1.4.0.exe`
-   - Publish
-
-5. **Point the download button at the release**
-   - Edit `config.js`:
-     ```js
-     window.DOWNLOAD_URL = "https://github.com/YOUR_USERNAME/kill-chain-download/releases/download/v1.4.0/Kill-Chain-Setup-1.4.0.exe";
-     ```
-   - Commit and push:
-     ```bash
-     git add config.js && git commit -m "Link download to release" && git push
-     ```
-
-**Share this URL:** `https://YOUR_USERNAME.github.io/kill-chain-download/`
+**Current release:** v1.4.0 · Windows 64-bit
 
 ---
 
-## Other options
+## Download
 
-| Option | Cost | Stays up? | Mobile | Notes |
-|--------|------|-----------|--------|-------|
-| **GitHub Pages + Releases** | Free | Yes | Yes | **Best pick** — see above |
-| **itch.io** | Free | Yes | Yes | Built for indie software; upload EXE + screenshots |
-| **Cloudflare R2 + Pages** | ~Free* | Yes | Yes | R2 stores EXE; Pages hosts HTML. Slight setup. |
-| **Render / Railway** | Free tier | Mostly | Yes | Web service with EXE bundled; free tier may sleep |
-| **VPS** (Hetzner, DO) | ~$4–6/mo | Yes | Yes | Run `node server.js` with pm2; full control |
-| **localtunnel / ngrok** | Free | No | Spotty | PC must stay on; bad on mobile |
+**[Download Kill-Chain-Setup-1.4.0.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-1.4.0.exe)**
 
-\* Cloudflare R2: no egress fees through Cloudflare; storage is pennies/month for 77 MB.
+Or open the [download page](https://jerrykoller.github.io/Kill-Chain/) in your browser.
 
-### itch.io (quick alternative)
-
-1. Create account at [itch.io](https://itch.io)
-2. Create a new project → upload the EXE
-3. Set pricing to free, publish
-4. Share your itch page URL (e.g. `https://yourname.itch.io/kill-chain`)
-
-No code needed; itch handles hosting and downloads.
-
-### Cloudflare R2 (if you want your own domain later)
-
-1. Create R2 bucket, upload the EXE, enable public access
-2. Copy the public object URL
-3. Put `index.html` on Cloudflare Pages, set `DOWNLOAD_URL` in `config.js` to the R2 URL
+| | |
+|---|---|
+| **File** | `Kill-Chain-Setup-1.4.0.exe` |
+| **Size** | ~77 MB |
+| **Platform** | Windows 10/11 (64-bit) |
 
 ---
 
-## Local testing
+## Install
 
-```bash
-node server.js
-```
+1. Download the installer above.
+2. Run `Kill-Chain-Setup-1.4.0.exe` and follow the setup wizard.
+3. Launch **Kill Chain** from the Start menu or desktop shortcut.
 
-Open http://localhost:3000
+### Windows security notice
+
+Because Kill Chain is distributed outside the Microsoft Store, Windows may show a **“Windows protected your PC”** SmartScreen prompt the first time you run the installer. That is normal for independent software. Click **More info**, then **Run anyway**, if you trust this source.
 
 ---
 
-## Files
+## What you get
 
-| File | Purpose |
-|------|---------|
-| `index.html` | Download landing page |
-| `config.js` | Download URL (change when deploying) |
-| `Kill-Chain-Setup-1.4.0.exe` | Windows installer (upload to Releases, not git) |
-| `server.js` | Local dev server only |
+- **Kill Chain** — engage the full DSP path: EQ, bass/treble shaping, spatial width, limiting, and more.
+- **Sculptor** — restoration and clarity tools for damaged or muffled audio.
+- **Calibration** — hearing test, pure-tone calibration, and **Deadflat** room/headphone flattening.
+- **Tractor Beam** — analyze a track and auto-lock EQ corrections; hands-free **Auto-Lock** on source change.
+- **3rd Dimension** — 3D spatializer with head-tracking support (opentrack).
+- **Fire Command** — built-in synth, drum sequencer, piano roll, WAV export, and project save.
+- **Airspace** — in-app browser with route-through-chain playback.
+- **Scope & Visualizers** — real-time analysis and full-screen reactive visuals.
+- **Armory** — save and recall your own presets.
+
+Open the in-app **Glossary** for a full rundown of every module.
+
+---
+
+## Requirements
+
+- **OS:** Windows 10 or 11 (64-bit)
+- **Audio:** Any Windows output device (optimized for high-quality headphones)
+- **Optional:** opentrack for 3D head tracking · MIDI controller for Fire Command
+
+---
+
+## Support
+
+Found a bug or want a feature? Open an [issue](https://github.com/JerryKoller/Kill-Chain/issues) on this repo.
+
+---
+
+## License
+
+Kill Chain is provided as-is for personal use. All rights reserved.
