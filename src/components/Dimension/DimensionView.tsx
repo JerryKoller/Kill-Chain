@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActionBar } from "@/components/shared/ActionBar";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { Room3DCanvas } from "./Room3DCanvas";
@@ -12,12 +12,15 @@ import {
   MOTION_BANDS,
   MOTION_PATTERNS,
   MOTION_PRESETS,
+  SCENE_PRESETS,
+  MISSION_PROFILES,
   motionBandCentre,
   type SpeakerType,
   type DimMode,
   type DimSignal,
 } from "@/state/dimensionStore";
 import { useEqStore } from "@/state/eqStore";
+import { useUIStore } from "@/state/uiStore";
 import { getEngine } from "@/audio/AudioEngine";
 import { computeRT60, distanceGainDb, itdSeconds } from "@/audio/dsp/Spatializer3D";
 
@@ -63,6 +66,8 @@ export function DimensionView() {
   const setListenerYaw = useDimensionStore((s) => s.setListenerYaw);
   const setPaletteType = useDimensionStore((s) => s.setPaletteType);
   const applyLayout = useDimensionStore((s) => s.applyLayout);
+  const applyScenePreset = useDimensionStore((s) => s.applyScenePreset);
+  const scene = useDimensionStore((s) => s.scene);
   const addSpeaker = useDimensionStore((s) => s.addSpeaker);
   const autoArrangeBands = useDimensionStore((s) => s.autoArrangeBands);
   const resetDimension = useDimensionStore((s) => s.reset);
@@ -84,6 +89,54 @@ export function DimensionView() {
   return (
     <div className="space-y-4 pb-6">
       <ActionBar title="3rd Dimension" code="KC-09" subtitle="Deploy sound anywhere in a virtual room — position every source in space" />
+
+      {/* v2.0 — Mission Profiles: complete one-click spatial deployments. */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="text-[10px] uppercase tracking-[0.3em] text-dim">Mission Profiles</div>
+          <SceneFileButtons />
+        </div>
+        <div className="flex flex-wrap items-stretch gap-2">
+          {MISSION_PROFILES.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => applyScenePreset(p.id)}
+              title={p.desc}
+              className={`flex-1 min-w-[150px] rounded-xl border px-3 py-2 text-left transition ${
+                scene === p.id
+                  ? "border-cyan/60 bg-cyan/10 shadow-[0_0_18px_rgb(var(--c-cyan)/0.2)]"
+                  : "border-white/10 bg-white/[0.03] hover:bg-white/[0.07] hover:border-white/20"
+              }`}
+            >
+              <div className={`text-sm font-semibold ${scene === p.id ? "text-cyan" : "text-white/85"}`}>
+                {p.icon} {p.label}
+              </div>
+              <div className="text-[10px] text-white/40 mt-0.5 leading-snug line-clamp-2">
+                {p.desc}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* v1.5 — Cinema-seat scene presets (compact row). */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] uppercase tracking-[0.25em] text-dim mr-1">Seats</span>
+        {SCENE_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => applyScenePreset(p.id)}
+            title={p.desc}
+            className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
+              scene === p.id
+                ? "border-cyan/60 bg-cyan/10 text-cyan"
+                : "border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.07]"
+            }`}
+          >
+            {p.icon} {p.label}
+          </button>
+        ))}
+      </div>
 
       {/* Master controls */}
       <div className="flex flex-wrap items-center gap-3">
@@ -284,6 +337,8 @@ export function DimensionView() {
 
           <HeadTrackingPanel />
 
+          <WalkModePanel />
+
           {mode === "speaker" ? (
             <>
               <GlassPanel className="p-4">
@@ -446,6 +501,20 @@ function MotionPanel({ active }: { active: boolean }) {
           {motion.anchorLows ? "⚓ Solid bass — lows anchored" : "○ Lows free-flying"}
         </button>
 
+        <button
+          onClick={() => setMotion({ bpmSync: !motion.bpmSync })}
+          data-ui-sound="toggle"
+          data-ui-on={motion.bpmSync ? "true" : "false"}
+          className={`mt-2 w-full rounded-lg px-3 py-2 text-sm font-semibold border transition ${
+            motion.bpmSync
+              ? "border-cyan/50 bg-cyan/10 text-cyan"
+              : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+          }`}
+          title="Lock the formation to the track's beat grid: the constellation turns with the bars and presses in on every beat (uses the shared BPM analysis)."
+        >
+          {motion.bpmSync ? "🎵 BPM lock — moving on the grid" : "○ Free motion — ignore the beat"}
+        </button>
+
         {!active && (
           <div className="mt-3 text-[11px] text-amber-300/80">
             Hit “Enter 3D Space” and play something — the bands come alive with the music.
@@ -502,7 +571,8 @@ function MotionSlider({
         step={0.01}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-cyan"
+        className="kc-slider w-full"
+        style={{ ["--kc-fill" as string]: `${value * 100}%` }}
       />
     </div>
   );
@@ -514,17 +584,171 @@ function PanelTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** v2.0 — save / load the whole spatial scene as a `.kdim` Armory file. */
+function SceneFileButtons() {
+  const exportScene = useDimensionStore((s) => s.exportScene);
+  const importScene = useDimensionStore((s) => s.importScene);
+  const toast = useUIStore((s) => s.toast);
+  const desktop = typeof window !== "undefined" && !!window.playground?.files;
+  if (!desktop) return null;
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        onClick={() => {
+          void exportScene().then((ok) => {
+            if (ok) toast("Scene saved to the Armory (.kdim)");
+          });
+        }}
+        className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-semibold text-white/70 hover:bg-white/[0.08] transition"
+        title="Save the current spatial scene (layout, room, stage, motion, space) as a .kdim file"
+      >
+        ⬇ Save .kdim
+      </button>
+      <button
+        onClick={() => {
+          void importScene().then((name) => {
+            toast(name ? `Scene "${name}" deployed` : "Couldn't read that .kdim file");
+          });
+        }}
+        className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-semibold text-white/70 hover:bg-white/[0.08] transition"
+        title="Load a saved .kdim spatial scene"
+      >
+        ⬆ Load
+      </button>
+    </div>
+  );
+}
+
 /**
- * Head tracking (issue #9): listens for opentrack-protocol UDP packets
- * (Tobii via opentrack, AITrack/webcam trackers, phone or headphone IMU
- * bridges) and steers the 3D listener's facing — turn your head and the
- * virtual room stays put in physical space.
+ * v2.0 Walk Mode — WASD (R/F for up/down) translates the listener through
+ * the room in real time; speakers keep their positions so walking toward
+ * one makes it louder, closer and more direct. Drag the character in the
+ * room view for the same effect.
+ */
+function WalkModePanel() {
+  const walkMode = useDimensionStore((s) => s.walkMode);
+  const setWalkMode = useDimensionStore((s) => s.setWalkMode);
+  const listenerPos = useDimensionStore((s) => s.listenerPos);
+  const resetListenerPos = useDimensionStore((s) => s.resetListenerPos);
+  const active = useDimensionStore((s) => s.active);
+
+  // Held-key movement loop: rAF integrates velocity while keys are down.
+  const keysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!walkMode) return;
+    const keys = keysRef.current;
+    keys.clear();
+    const WALK_KEYS = new Set(["w", "a", "s", "d", "r", "f"]);
+    const isTyping = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    };
+    const onDown = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (!WALK_KEYS.has(k) || isTyping(e)) return;
+      e.preventDefault();
+      keys.add(k);
+    };
+    const onUp = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
+    const onBlur = () => keys.clear();
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    window.addEventListener("blur", onBlur);
+
+    let raf = 0;
+    let last = performance.now();
+    const SPEED = 1.7; // metres per second — a comfortable walking pace
+    const loop = () => {
+      const now = performance.now();
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      if (keys.size > 0) {
+        const fwd = (keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0);
+        const strafe = (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0);
+        const up = (keys.has("r") ? 1 : 0) - (keys.has("f") ? 1 : 0);
+        if (fwd !== 0 || strafe !== 0 || up !== 0) {
+          useDimensionStore.getState().nudgeListener(fwd * SPEED * dt, strafe * SPEED * dt, up * SPEED * dt * 0.6);
+        }
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("blur", onBlur);
+      keys.clear();
+    };
+  }, [walkMode]);
+
+  const off = Math.hypot(listenerPos.x, listenerPos.y, listenerPos.z);
+
+  return (
+    <GlassPanel className="p-4">
+      <div className="flex items-center justify-between gap-2">
+        <PanelTitle>Walk Mode</PanelTitle>
+        <button
+          onClick={() => setWalkMode(!walkMode)}
+          data-ui-sound="toggle"
+          data-ui-on={walkMode ? "true" : "false"}
+          className={`rounded-lg px-3 py-1.5 text-xs font-semibold border transition ${
+            walkMode
+              ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_14px_rgb(var(--c-cyan)/0.3)]"
+              : "border-white/15 bg-white/5 text-white/75 hover:bg-white/10"
+          }`}
+        >
+          {walkMode ? "● Walking" : "Enable"}
+        </button>
+      </div>
+      <div className="text-[11px] text-dim mt-2 leading-relaxed">
+        Move through the room:{" "}
+        <span className="font-mono text-white/70">W A S D</span> walk ·{" "}
+        <span className="font-mono text-white/70">R / F</span> rise & duck —
+        or drag your character in the room view. Speakers stay planted, so
+        distance and direction change as you move.
+      </div>
+      {!active && walkMode && (
+        <div className="mt-2 text-[11px] text-amber-300/80">
+          Enter 3D Space to hear the walk.
+        </div>
+      )}
+      <div className="mt-3 flex items-center gap-2">
+        <span className="text-[11px] font-mono tabular-nums text-white/70">
+          x {listenerPos.x.toFixed(1)} · y {listenerPos.y.toFixed(1)} · z {listenerPos.z.toFixed(1)} m
+        </span>
+        <div className="flex-1" />
+        <button
+          onClick={resetListenerPos}
+          disabled={off < 0.05}
+          className={`rounded-lg px-2.5 py-1 text-[11px] border transition ${
+            off >= 0.05
+              ? "border-white/15 bg-white/5 text-white/80 hover:bg-white/10"
+              : "border-white/8 text-white/25 cursor-not-allowed"
+          }`}
+          title="Walk back to the sweet spot (room centre)"
+        >
+          ⌂ Sweet spot
+        </button>
+      </div>
+    </GlassPanel>
+  );
+}
+
+/**
+ * Head tracking — listens for opentrack-protocol UDP packets (Tobii via
+ * opentrack, AITrack/webcam trackers, phone or headphone IMU bridges) and
+ * steers the full 6DOF listener pose: yaw, pitch and roll aim the head,
+ * X/Y/Z (when the tracker supplies them) translate it. The room stays put
+ * in physical space while you move through it.
  */
 function HeadTrackingPanel() {
   const headTracking = useDimensionStore((s) => s.headTracking);
   const port = useDimensionStore((s) => s.headTrackPort);
-  const yawDeg = useDimensionStore((s) => s.headTrackYawDeg);
-  const zeroDeg = useDimensionStore((s) => s.headTrackZeroDeg);
+  const pose = useDimensionStore((s) => s.headTrackPose);
+  const zero = useDimensionStore((s) => s.headTrackZero);
   const error = useDimensionStore((s) => s.headTrackError);
   const setHeadTracking = useDimensionStore((s) => s.setHeadTracking);
   const setHeadTrackPort = useDimensionStore((s) => s.setHeadTrackPort);
@@ -537,7 +761,18 @@ function HeadTrackingPanel() {
   // NOT on unmount: tracking should keep steering while you browse other
   // tabs (that's the point). Nothing to clean up here.
 
-  const relDeg = yawDeg !== null ? yawDeg - zeroDeg : null;
+  const rel = pose
+    ? {
+        yaw: pose.yaw - zero.yaw,
+        pitch: pose.pitch - zero.pitch,
+        roll: pose.roll - zero.roll,
+        x: (pose.x - zero.x) / 100,
+        y: (pose.y - zero.y) / 100,
+        z: (pose.z - zero.z) / 100,
+      }
+    : null;
+  const hasPos = rel !== null && (Math.abs(rel.x) > 0.005 || Math.abs(rel.y) > 0.005 || Math.abs(rel.z) > 0.005);
+  const fmtDeg = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(0)}°`;
 
   return (
     <GlassPanel className="p-4">
@@ -565,7 +800,8 @@ function HeadTrackingPanel() {
         Feed it any <span className="text-white/70">opentrack-compatible</span> tracker
         (Tobii, AITrack webcam, phone/headphone IMU) via &ldquo;UDP over network&rdquo; →
         <span className="font-mono text-white/70"> 127.0.0.1:{port}</span>.
-        Turn your head and the room stays put.
+        Full 6DOF: turn, tilt or lean and the room stays put — trackers that
+        send position move you through it.
       </div>
 
       {!desktop && (
@@ -593,25 +829,30 @@ function HeadTrackingPanel() {
         </label>
         <button
           onClick={recenter}
-          disabled={!headTracking || yawDeg === null}
+          disabled={!headTracking || pose === null}
           className={`rounded-lg px-2.5 py-1 text-[11px] border transition ${
-            headTracking && yawDeg !== null
+            headTracking && pose !== null
               ? "border-white/15 bg-white/5 text-white/80 hover:bg-white/10"
               : "border-white/8 text-white/25 cursor-not-allowed"
           }`}
-          title="Capture the current head pose as straight-ahead"
+          title="Capture the current head pose (orientation + position) as straight-ahead"
         >
           ⌖ Recenter
         </button>
         <div className="flex-1" />
         <span className="text-[11px] font-mono tabular-nums text-white/70">
           {headTracking
-            ? relDeg !== null
-              ? `yaw ${relDeg >= 0 ? "+" : ""}${relDeg.toFixed(0)}°`
+            ? rel !== null
+              ? `yaw ${fmtDeg(rel.yaw)} · pit ${fmtDeg(rel.pitch)} · rol ${fmtDeg(rel.roll)}`
               : "waiting for packets…"
             : "off"}
         </span>
       </div>
+      {headTracking && hasPos && rel && (
+        <div className="mt-1.5 text-right text-[11px] font-mono tabular-nums text-cyan/80">
+          pos {rel.x >= 0 ? "+" : ""}{rel.x.toFixed(2)} · {rel.y >= 0 ? "+" : ""}{rel.y.toFixed(2)} · {rel.z >= 0 ? "+" : ""}{rel.z.toFixed(2)} m
+        </div>
+      )}
     </GlassPanel>
   );
 }
@@ -662,14 +903,12 @@ function Segmented<T extends string>({
   options: { id: T; label: string }[];
 }) {
   return (
-    <div className="inline-flex rounded-xl border border-white/10 bg-white/[0.03] p-1">
+    <div className="kc-seg">
       {options.map((o) => (
         <button
           key={o.id}
           onClick={() => onChange(o.id)}
-          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
-            value === o.id ? "bg-white/12 text-white" : "text-white/55 hover:text-white/80"
-          }`}
+          className={`kc-seg-btn ${value === o.id ? "kc-on" : ""}`}
         >
           {o.label}
         </button>
@@ -704,7 +943,8 @@ function RoomSlider({
         step={0.5}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-cyan"
+        className="kc-slider w-full"
+        style={{ ["--kc-fill" as string]: `${((value - min) / (max - min)) * 100}%` }}
       />
     </div>
   );

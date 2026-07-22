@@ -11,6 +11,8 @@ export type LibrarySortKey =
   | "plays";
 export type SortDir = "asc" | "desc";
 export type LibraryGroupBy = "none" | "artist" | "album";
+/** List = virtualized rows; grid = album-art wall. */
+export type LibraryViewMode = "list" | "grid";
 
 /** Which slice of the library is on screen: everything, starred tracks,
  *  recently played, or one of the user's playlists ("pl:<id>"). */
@@ -49,6 +51,8 @@ export interface LibraryTrack {
   lossless: boolean | null;
   /** Codec / container short name (e.g. "FLAC", "MPEG 1 Layer 3"). */
   codec: string | null;
+  /** First genre tag (e.g. "Electronic"). null = untagged / none in file. */
+  genre: string | null;
   /** True once real tags were read (vs. derived from the path). */
   tagged: boolean;
 }
@@ -106,6 +110,7 @@ function mergeTags(t: LibraryTrack, tags: Partial<LibraryTrack>): LibraryTrack {
     bitsPerSample: tags.bitsPerSample ?? t.bitsPerSample,
     lossless: tags.lossless ?? t.lossless,
     codec: tags.codec ?? t.codec,
+    genre: tags.genre ?? t.genre,
     tagged: true,
   };
 }
@@ -142,6 +147,7 @@ async function parseTags(p: string): Promise<Partial<LibraryTrack> | null> {
       bitsPerSample: format.bitsPerSample ?? null,
       lossless: format.lossless ?? null,
       codec,
+      genre: (common.genre && common.genre[0]) || null,
     };
   } catch {
     return null;
@@ -154,6 +160,7 @@ interface Persisted {
   sortKey: LibrarySortKey;
   sortDir: SortDir;
   groupBy: LibraryGroupBy;
+  viewMode: LibraryViewMode;
 }
 
 function load(): Persisted {
@@ -163,6 +170,7 @@ function load(): Persisted {
     sortKey: "artist",
     sortDir: "asc",
     groupBy: "none",
+    viewMode: "list",
   };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -174,6 +182,9 @@ function load(): Persisted {
     // re-read so format / bitrate / sample-rate show up without a rescan.
     const tracks = rawTracks.map((t) => {
       const hasTech = (t as Partial<LibraryTrack>).bitrate !== undefined;
+      // v1.5 migration: records saved before `genre` existed get re-read once
+      // (background enrichment) so genre chips work without a manual rescan.
+      const hasGenre = (t as Partial<LibraryTrack>).genre !== undefined;
       return {
         ...t,
         bitrate: t.bitrate ?? null,
@@ -181,7 +192,8 @@ function load(): Persisted {
         bitsPerSample: t.bitsPerSample ?? null,
         lossless: t.lossless ?? null,
         codec: t.codec ?? null,
-        tagged: hasTech ? !!t.tagged : false,
+        genre: t.genre ?? null,
+        tagged: hasTech && hasGenre ? !!t.tagged : false,
       };
     });
     return {
@@ -190,6 +202,7 @@ function load(): Persisted {
       sortKey: p.sortKey ?? "artist",
       sortDir: p.sortDir ?? "asc",
       groupBy: p.groupBy ?? "none",
+      viewMode: p.viewMode === "grid" ? "grid" : "list",
     };
   } catch {
     return empty;
@@ -248,7 +261,10 @@ interface LibraryState {
   sortKey: LibrarySortKey;
   sortDir: SortDir;
   groupBy: LibraryGroupBy;
+  viewMode: LibraryViewMode;
   search: string;
+  /** Genre chip filter (exact match against LibraryTrack.genre). */
+  genreFilter: string | null;
   /** Which slice is on screen (all / favorites / recent / a playlist). */
   collection: LibraryCollection;
 
@@ -267,7 +283,9 @@ interface LibraryState {
   clearAll: () => void;
   setSort: (key: LibrarySortKey) => void;
   setGroupBy: (g: LibraryGroupBy) => void;
+  setViewMode: (m: LibraryViewMode) => void;
   setSearch: (q: string) => void;
+  setGenreFilter: (g: string | null) => void;
   setCollection: (c: LibraryCollection) => void;
 
   toggleFavorite: (path: string) => void;
@@ -303,6 +321,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
             sortKey: s.sortKey,
             sortDir: s.sortDir,
             groupBy: s.groupBy,
+            viewMode: s.viewMode,
           }),
         );
       } catch (err) {
@@ -406,7 +425,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     sortKey: initial.sortKey,
     sortDir: initial.sortDir,
     groupBy: initial.groupBy,
+    viewMode: initial.viewMode,
     search: "",
+    genreFilter: null,
     collection: "all",
 
     favorites: Object.fromEntries(initialMeta.favorites.map((f) => [f, true as const])),
@@ -464,6 +485,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
             bitsPerSample: null,
             lossless: null,
             codec: null,
+            genre: null,
             tagged: false,
           };
         });
@@ -504,7 +526,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       schedulePersist();
     },
 
+    setViewMode: (m) => {
+      set({ viewMode: m });
+      schedulePersist();
+    },
+
     setSearch: (q) => set({ search: q }),
+
+    setGenreFilter: (g) => set({ genreFilter: g }),
 
     setCollection: (c) => {
       // Grouping is a flat-list concept; playlists keep their manual order.
@@ -632,6 +661,7 @@ export function buildLibraryView(
     | "sortKey"
     | "sortDir"
     | "search"
+    | "genreFilter"
     | "groupBy"
     | "collection"
     | "favorites"
@@ -642,10 +672,12 @@ export function buildLibraryView(
 ): { orderedTracks: LibraryTrack[]; rows: LibRow[] } {
   const q = s.search.trim().toLowerCase();
   const matches = (t: LibraryTrack) =>
-    !q ||
-    t.title.toLowerCase().includes(q) ||
-    t.artist.toLowerCase().includes(q) ||
-    t.album.toLowerCase().includes(q);
+    (!s.genreFilter || t.genre === s.genreFilter) &&
+    (!q ||
+      t.title.toLowerCase().includes(q) ||
+      t.artist.toLowerCase().includes(q) ||
+      t.album.toLowerCase().includes(q) ||
+      (t.genre !== null && t.genre.toLowerCase().includes(q)));
 
   // ── Playlist collections: manual order wins over sort/group ──
   if (s.collection.startsWith("pl:")) {
@@ -800,11 +832,14 @@ export function playNextLibrary(list: LibraryTrack[]): void {
   usePlayerStore.getState().insertNext(toQueueItems(list));
 }
 
-// ── Play tracking + per-track EQ auto-apply ──
+// ── Play tracking ──
 // Watches the player: when a library track actually starts playing we bump
-// its play count / recency and (if the user saved one) restore its EQ
-// snapshot. Lives here (not in playerStore) so the player stays
-// library-agnostic; this module is loaded app-wide via TransportBar.
+// its play count / recency. Lives here (not in playerStore) so the player
+// stays library-agnostic; this module is loaded app-wide via TransportBar.
+//
+// v2.4: chain restore no longer happens here — MISSION STATE
+// (missionStateStore) owns the single source-settle pipeline that restores
+// saved memories / locks in priority order.
 let lastTrackedSrc: string | null = null;
 usePlayerStore.subscribe((s) => {
   if (s.status !== "playing" || !s.src || s.src === lastTrackedSrc) return;
@@ -812,7 +847,4 @@ usePlayerStore.subscribe((s) => {
   const path = pathFromAudioSrc(s.src);
   if (!path) return;
   useLibraryStore.getState().recordPlay(path);
-  void import("@/state/trackEqStore").then(({ autoApplyTrackEq }) => {
-    autoApplyTrackEq(path);
-  });
 });

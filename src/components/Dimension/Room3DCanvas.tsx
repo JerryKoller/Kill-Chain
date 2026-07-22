@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useDimensionStore,
   SPEAKER_META,
@@ -9,7 +9,7 @@ import {
 import { useEqStore, type EqBand } from "@/state/eqStore";
 import { usePlayerStore } from "@/state/playerStore";
 import { getEngine } from "@/audio/AudioEngine";
-import { distanceGainDb } from "@/audio/dsp/Spatializer3D";
+import { distanceGainDb, type ListenerPose } from "@/audio/dsp/Spatializer3D";
 
 /** Minimal 3-vector helpers (no deps — keeps the renderer lightweight). */
 interface V3 {
@@ -86,7 +86,7 @@ function bandColor(hz: number): string {
 }
 
 interface DragState {
-  kind: "orbit" | "move" | "height";
+  kind: "orbit" | "move" | "height" | "walk";
   id?: string;
   startX: number;
   startY: number;
@@ -94,6 +94,24 @@ interface DragState {
   startEl: number;
   startNy: number;
   planeY: number;
+}
+
+/** Short fading position history for the motion-band + listener trails. */
+type Trail = { x: number; y: number; z: number }[];
+const TRAIL_MAX = 26;
+
+function pushTrail(map: Map<string, Trail>, id: string, x: number, y: number, z: number): Trail {
+  let t = map.get(id);
+  if (!t) {
+    t = [];
+    map.set(id, t);
+  }
+  const last = t[t.length - 1];
+  if (!last || Math.hypot(last.x - x, last.y - y, last.z - z) > 0.03) {
+    t.push({ x, y, z });
+    if (t.length > TRAIL_MAX) t.shift();
+  }
+  return t;
 }
 
 export function Room3DCanvas() {
@@ -106,20 +124,25 @@ export function Room3DCanvas() {
   const dragRef = useRef<DragState | null>(null);
   const dirtyRef = useRef(true);
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 });
+  const trailsRef = useRef(new Map<string, Trail>());
+  const [fullscreen, setFullscreen] = useState(false);
 
   // Store slices — re-render (and mark dirty) whenever the scene changes.
   const speakers = useDimensionStore((s) => s.speakers);
   const room = useDimensionStore((s) => s.room);
   const mode = useDimensionStore((s) => s.mode);
   const listenerYaw = useDimensionStore((s) => s.listenerYaw);
+  const listenerPos = useDimensionStore((s) => s.listenerPos);
+  const walkMode = useDimensionStore((s) => s.walkMode);
+  const headTracking = useDimensionStore((s) => s.headTracking);
   const selectedId = useDimensionStore((s) => s.selectedId);
   const bandPlacements = useDimensionStore((s) => s.bandPlacements);
   const active = useDimensionStore((s) => s.active);
   const bands = useEqStore((s) => s.bands);
 
   // Snapshot the latest scene for the animation loop.
-  const sceneRef = useRef({ speakers, room, mode, listenerYaw, selectedId, bandPlacements, bands, active });
-  sceneRef.current = { speakers, room, mode, listenerYaw, selectedId, bandPlacements, bands, active };
+  const sceneRef = useRef({ speakers, room, mode, listenerYaw, listenerPos, walkMode, headTracking, selectedId, bandPlacements, bands, active });
+  sceneRef.current = { speakers, room, mode, listenerYaw, listenerPos, walkMode, headTracking, selectedId, bandPlacements, bands, active };
   dirtyRef.current = true;
 
   // Fit camera distance to the room the first time / when it grows a lot.
@@ -240,14 +263,25 @@ export function Room3DCanvas() {
       }
     };
 
-    const drawCharacter = (f: Frame) => {
-      const yaw = sceneRef.current.listenerYaw;
+    /** Live listener pose — includes head tracking + Walk Mode offsets. */
+    const livePose = (): ListenerPose => {
+      try {
+        return getEngine().dimension.getListenerPose();
+      } catch {
+        const sc = sceneRef.current;
+        return { yaw: sc.listenerYaw, pitch: 0, roll: 0, ...sc.listenerPos };
+      }
+    };
+
+    const drawCharacter = (f: Frame, pose: ListenerPose) => {
+      const { yaw, pitch, roll } = pose;
+      const P: V3 = { x: pose.x, y: pose.y, z: pose.z };
       const fwdL: V3 = { x: Math.sin(yaw), y: 0, z: -Math.cos(yaw) };
       const rightL = norm(cross(fwdL, { x: 0, y: 1, z: 0 }));
       const floorY = -f.hy;
-      // Chair base shadow.
-      const base = project(f, { x: 0, y: floorY, z: 0 });
-      const head = project(f, { x: 0, y: 0.15, z: 0 });
+      // Base shadow on the floor under wherever the listener stands.
+      const base = project(f, { x: P.x, y: floorY, z: P.z });
+      const head = project(f, add(P, { x: 0, y: 0.15, z: 0 }));
       if (base) {
         ctx.fillStyle = "rgba(0,0,0,0.35)";
         ctx.beginPath();
@@ -255,8 +289,12 @@ export function Room3DCanvas() {
         ctx.ellipse(base.sx, base.sy, rs, rs * 0.4, 0, 0, Math.PI * 2);
         ctx.fill();
       }
-      // Facing arrow on the floor.
-      const tip = project(f, add(scl(fwdL, f.hz * 0.5), { x: 0, y: floorY + 0.02, z: 0 }));
+      // Facing arrow on the floor; pitch lifts/drops the arrow tip so the
+      // head-tracked gaze reads in 3D.
+      const tip = project(
+        f,
+        add(add(scl(fwdL, f.hz * 0.5), { x: 0, y: floorY + 0.02 + Math.sin(pitch) * 1.2, z: 0 }), P),
+      );
       if (base && tip) {
         ctx.strokeStyle = "rgba(90,230,255,0.85)";
         ctx.lineWidth = 2.5;
@@ -270,7 +308,7 @@ export function Room3DCanvas() {
         ctx.fill();
       }
       // Torso.
-      const hip = project(f, { x: 0, y: -0.5, z: 0 });
+      const hip = project(f, add(P, { x: 0, y: -0.5, z: 0 }));
       if (head && hip) {
         ctx.strokeStyle = "rgba(180,210,235,0.8)";
         ctx.lineWidth = Math.max(6, (head.scale || 40) * 0.22);
@@ -291,9 +329,13 @@ export function Room3DCanvas() {
         ctx.beginPath();
         ctx.arc(head.sx, head.sy, r, 0, Math.PI * 2);
         ctx.fill();
-        // Ears (the listener's actual pickup points).
+        // Ears (the listener's actual pickup points) — roll tips the ear
+        // axis so a head-tracked lean is visible.
         for (const sgn of [-1, 1]) {
-          const ear = project(f, add(scl(rightL, sgn * 0.12), { x: 0, y: 0.13, z: 0 }));
+          const ear = project(
+            f,
+            add(add(scl(rightL, sgn * 0.12), { x: 0, y: 0.13 - Math.sin(roll) * sgn * 0.09, z: 0 }), P),
+          );
           if (ear) {
             ctx.fillStyle = "rgba(90,230,255,0.95)";
             ctx.beginPath();
@@ -302,6 +344,30 @@ export function Room3DCanvas() {
           }
         }
       }
+    };
+
+    /** Fading motion trail behind a moving source (or the walking listener). */
+    const drawTrail = (f: Frame, trail: Trail, color: string, width = 1.6) => {
+      if (trail.length < 2) return;
+      for (let i = 1; i < trail.length; i++) {
+        const a = project(f, trail[i - 1]);
+        const b = project(f, trail[i]);
+        if (!a || !b) continue;
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = (i / trail.length) * 0.4;
+        ctx.lineWidth = width * (0.4 + 0.6 * (i / trail.length));
+        ctx.beginPath();
+        ctx.moveTo(a.sx, a.sy);
+        ctx.lineTo(b.sx, b.sy);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    /** Fog / depth cue: distant items fade so the room reads volumetric. */
+    const fogAlpha = (depth: number): number => {
+      const d = camRef.current.dist;
+      return Math.max(0.32, Math.min(1, 1.25 - (depth / (d * 2.4)) * 1.1));
     };
 
     const drawSpeakerIcon = (
@@ -438,8 +504,17 @@ export function Room3DCanvas() {
       interface Item { depth: number; draw: () => void; }
       const items: Item[] = [];
 
-      const charP = project(f, { x: 0, y: 0, z: 0 });
-      if (charP) items.push({ depth: charP.depth, draw: () => drawCharacter(f) });
+      const pose = livePose();
+      const charP = project(f, { x: pose.x, y: pose.y, z: pose.z });
+      if (charP) items.push({ depth: charP.depth, draw: () => drawCharacter(f, pose) });
+
+      // Listener trail while walking / head-tracking through the room.
+      if (sc.walkMode || sc.headTracking) {
+        const t = pushTrail(trailsRef.current, "__listener", pose.x, pose.y + 0.05, pose.z);
+        drawTrail(f, t, "rgba(90,230,255,0.9)", 2.2);
+      } else {
+        trailsRef.current.delete("__listener");
+      }
 
       if (sc.mode === "speaker") {
         for (const s of sc.speakers as Speaker[]) {
@@ -479,9 +554,14 @@ export function Room3DCanvas() {
           const floor = project(f, { x: world.x, y: -f.hy, z: world.z });
           const lvl = lv ? lv.level : levels[b.id] ?? 0;
           const hue = bandColor(motionBandCentre(b));
+          // Fading flight trail behind each moving band.
+          const trail = lv
+            ? pushTrail(trailsRef.current, b.id, world.x, world.y, world.z)
+            : null;
           items.push({
             depth: p.depth,
             draw: () => {
+              if (trail) drawTrail(f, trail, hue);
               drawSpeakerIcon(p, hue, lvl, false, b.label, false, floor);
               // Motion trail dot so direction of travel reads at a glance.
               ctx.fillStyle = hue;
@@ -511,7 +591,12 @@ export function Room3DCanvas() {
       }
 
       items.sort((a, b) => b.depth - a.depth);
-      for (const it of items) it.draw();
+      for (const it of items) {
+        // Fog / depth cue: farther items render dimmer.
+        ctx.globalAlpha = fogAlpha(it.depth);
+        it.draw();
+        ctx.globalAlpha = 1;
+      }
 
       drawEarMeters();
     };
@@ -521,9 +606,12 @@ export function Room3DCanvas() {
       const playing = usePlayerStore.getState().status === "playing";
       const sc = sceneRef.current;
       // Motion Mode animates positions continuously while engaged — render
-      // every frame so the flight paths are smooth.
+      // every frame so the flight paths are smooth. Walk Mode and head
+      // tracking move the listener without store updates, so they render
+      // live too.
       const motionLive = sc.mode === "motion" && sc.active;
-      if (dirtyRef.current || playing || motionLive) {
+      const poseLive = sc.walkMode || sc.headTracking;
+      if (dirtyRef.current || playing || motionLive || poseLive) {
         render();
         dirtyRef.current = false;
       }
@@ -567,10 +655,38 @@ export function Room3DCanvas() {
       return { id: top.id, ny: top.ny, worldY: top.worldY };
     };
 
+    /** Is the cursor over the listener's head? (Walk Mode drag handle.) */
+    const hitListener = (x: number, y: number): { worldY: number } | null => {
+      const f = frameRef.current;
+      if (!f) return null;
+      const pose = livePose();
+      const p = project(f, { x: pose.x, y: pose.y + 0.15, z: pose.z });
+      if (!p) return null;
+      const reach = Math.max(16, p.scale * 0.22);
+      return Math.hypot(p.sx - x, p.sy - y) < reach ? { worldY: pose.y } : null;
+    };
+
     const onDown = (e: PointerEvent) => {
       const { x, y } = pointerPos(e);
-      const hit = hitSpeaker(x, y);
       const st = useDimensionStore.getState();
+      // Walk Mode: dragging your character moves the LISTENER through the
+      // room (Shift = change height). Takes priority over speaker hits.
+      if (st.walkMode) {
+        const lh = hitListener(x, y);
+        if (lh) {
+          dragRef.current = {
+            kind: "walk",
+            startX: x, startY: y,
+            startAz: camRef.current.az, startEl: camRef.current.el,
+            startNy: lh.worldY,
+            planeY: lh.worldY,
+          };
+          canvas.setPointerCapture(e.pointerId);
+          dirtyRef.current = true;
+          return;
+        }
+      }
+      const hit = hitSpeaker(x, y);
       if (hit) {
         st.select(hit.id);
         dragRef.current = {
@@ -612,6 +728,14 @@ export function Room3DCanvas() {
             nx: Math.max(-1, Math.min(1, world.x / f.hx)),
             nz: Math.max(-1, Math.min(1, world.z / f.hz)),
           });
+        }
+      } else if (drag.kind === "walk" && f) {
+        const st = useDimensionStore.getState();
+        if (e.shiftKey) {
+          st.setListenerPos({ y: drag.startNy - (y - drag.startY) / 140 });
+        } else {
+          const world = raycastToPlane(f, x, y, drag.planeY);
+          if (world) st.setListenerPos({ x: world.x, z: world.z });
         }
       }
       dirtyRef.current = true;
@@ -689,16 +813,44 @@ export function Room3DCanvas() {
     };
   }, []);
 
+  // Fullscreen cockpit — the whole room view takes the screen.
+  useEffect(() => {
+    const onChange = () => setFullscreen(document.fullscreenElement === wrapRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    if (document.fullscreenElement === wrap) {
+      void document.exitFullscreen();
+    } else {
+      void wrap.requestFullscreen().catch(() => { /* not allowed */ });
+    }
+  };
+
   return (
-    <div ref={wrapRef} className="relative w-full h-full min-h-[320px]">
+    <div
+      ref={wrapRef}
+      className={`relative w-full h-full min-h-[320px] ${fullscreen ? "bg-black" : ""}`}
+    >
       <canvas
         ref={canvasRef}
         className="absolute inset-0 touch-none cursor-grab active:cursor-grabbing rounded-xl"
       />
+      <button
+        onClick={toggleFullscreen}
+        className="absolute top-2 right-2 rounded-lg border border-white/15 bg-black/50 px-2.5 py-1.5 text-[11px] font-semibold text-white/75 hover:bg-black/70 hover:text-white transition"
+        title={fullscreen ? "Exit the cockpit (Esc)" : "Fullscreen cockpit — the room takes the whole screen"}
+      >
+        {fullscreen ? "✕ Exit cockpit" : "⛶ Cockpit"}
+      </button>
       <div className="pointer-events-none absolute bottom-2 left-3 text-[10px] text-white/40 leading-relaxed">
         Drag empty space to orbit · scroll to zoom · drag a speaker to move ·
         hold Shift to raise/lower · double-click the floor to add ·
         Delete removes the selected speaker
+        {walkMode ? " · drag your character to walk (Shift = height)" : ""}
       </div>
     </div>
   );

@@ -97,11 +97,34 @@ export const useMidiStore = create<MidiState>((set, get) => ({
   },
 }));
 
+// ── Raw note forwarding (v1.6) ──
+// A registered instrument receives every note-on/off (with velocity) in
+// addition to the mapping system — this is how a USB MIDI keyboard plays
+// Fire Command live. Registration is view-scoped: the Fire view registers
+// on mount and unregisters on unmount, so stray notes never sound while
+// you're elsewhere in the app.
+export interface MidiNoteHandler {
+  noteOn: (midi: number, velocity: number) => void;
+  noteOff: (midi: number) => void;
+}
+
+let noteHandler: MidiNoteHandler | null = null;
+
+export function registerMidiNoteHandler(h: MidiNoteHandler | null): void {
+  noteHandler = h;
+}
+
 function handleMessage(deviceId: string, msg: MIDIMessageEvent): void {
   if (!msg.data || msg.data.length < 3) return;
   const [statusByte, data1, data2] = msg.data;
   const status = statusByte & 0xf0;
   const channel = statusByte & 0x0f;
+
+  // Forward raw notes to the live instrument (0x90 vel 0 = note-off).
+  if (noteHandler) {
+    if (status === 0x90 && data2 > 0) noteHandler.noteOn(data1, data2 / 127);
+    else if (status === 0x80 || (status === 0x90 && data2 === 0)) noteHandler.noteOff(data1);
+  }
 
   let id = "";
   let value = 0;

@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useSettingsStore } from "@/state/settingsStore";
 import { useUIStore } from "@/state/uiStore";
+import { openHeadphoneWizard } from "@/components/Settings/HeadphoneWizard";
 
 interface Step {
   title: string;
   body: string;
   cta?: string;
   view?: "playground" | "tractor" | "calibration" | "presets" | "settings";
+  /** Custom CTA side effect (used instead of / alongside a view switch). */
+  action?: () => void;
 }
 
 const STEPS: Step[] = [
@@ -15,6 +18,13 @@ const STEPS: Step[] = [
     title: "Welcome to Kill-Chain",
     body:
       "Sculpt the sound, calibrate it to your ears, blend presets, and watch the music react in real time. Built around the Sony WH-1000XM6, but works with anything.",
+  },
+  {
+    title: "What are you listening on?",
+    body:
+      "Kill-Chain corrects for your exact headphones. Pick your model from the ~130-profile catalog, import an AutoEq profile for anything else, or use a generic target. You can change this any time in Settings.",
+    cta: "Set up my cans",
+    action: () => openHeadphoneWizard(),
   },
   {
     title: "Sculptor — your fire-control bench",
@@ -110,25 +120,26 @@ export function OnboardingTour() {
               {step > 0 && (
                 <button
                   onClick={() => setStep(step - 1)}
-                  className="rounded-lg border border-white/12 hover:bg-white/5 px-3 py-2 text-xs font-medium"
+                  className="kc-btn kc-btn--sm kc-btn--ghost"
                 >
                   Back
                 </button>
               )}
-              {s.cta && s.view && (
+              {s.cta && (s.view || s.action) && (
                 <>
                   <button
                     onClick={() => setStep(step + 1)}
-                    className="rounded-lg border border-white/12 hover:bg-white/5 px-3 py-2 text-xs font-medium"
+                    className="kc-btn kc-btn--sm kc-btn--ghost"
                   >
                     Next
                   </button>
                   <button
                     onClick={() => {
-                      setView(s.view!);
+                      if (s.view) setView(s.view);
+                      s.action?.();
                       setStep(step + 1);
                     }}
-                    className="rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 px-3 py-2 text-xs font-semibold text-cyan"
+                    className="kc-btn kc-btn--sm kc-btn--accent"
                   >
                     {s.cta}
                   </button>
@@ -137,7 +148,7 @@ export function OnboardingTour() {
               {step < STEPS.length - 1 && !s.cta && (
                 <button
                   onClick={() => setStep(step + 1)}
-                  className="rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 px-3 py-2 text-xs font-semibold text-cyan"
+                  className="kc-btn kc-btn--sm kc-btn--accent"
                 >
                   Next
                 </button>
@@ -145,7 +156,7 @@ export function OnboardingTour() {
               {step === STEPS.length - 1 && (
                 <button
                   onClick={close}
-                  className="rounded-lg border border-cyan/60 bg-cyan/20 hover:bg-cyan/30 px-4 py-2 text-xs font-semibold text-cyan"
+                  className="kc-btn kc-btn--sm kc-btn--primary"
                 >
                   Begin operations
                 </button>

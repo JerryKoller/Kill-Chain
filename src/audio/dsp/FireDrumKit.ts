@@ -66,12 +66,14 @@ export function makeSafetyClipCurve(range = SAFETY_CLIP_RANGE): Float32Array<Arr
 
 export class FireDrumKit {
   readonly output: GainNode;
+  /** Sample-deck one-shots sum here (own mixer strip since v1.6). */
+  readonly sampleOutput: GainNode;
   private readonly clipPad: GainNode;
   private readonly clip: WaveShaperNode;
   private readonly ctx: AudioContext;
   private noiseBuf: AudioBuffer | null = null;
 
-  constructor(ctx: AudioContext, dest: AudioNode) {
+  constructor(ctx: AudioContext, dest: AudioNode, sampleDest?: AudioNode) {
     this.ctx = ctx;
     this.output = ctx.createGain();
     this.output.gain.value = 0.9 * DRUM_TRIM;
@@ -96,6 +98,12 @@ export class FireDrumKit {
     this.clip.curve = makeSafetyClipCurve();
     this.clip.oversample = "2x";
     this.output.connect(this.clipPad).connect(this.clip).connect(dest);
+    // Sample deck: same trim, its own destination (falls back to the drum
+    // bus when the engine doesn't split them). The shared kit clipper is
+    // skipped — the Fire master limiter + bus clipper downstream cover it.
+    this.sampleOutput = ctx.createGain();
+    this.sampleOutput.gain.value = 0.9 * DRUM_TRIM;
+    this.sampleOutput.connect(sampleDest ?? dest);
   }
 
   setLevel(v: number): void {
@@ -117,15 +125,25 @@ export class FireDrumKit {
     return this.samples.has(lane);
   }
 
-  /** Generic one-shot buffer trigger (sample lanes / pads). */
-  playBuffer(buffer: AudioBuffer, when: number, velocity = 1, level = 1): void {
+  /**
+   * Generic one-shot buffer trigger. Drum-lane sample overrides ride the
+   * drum output; the SAMPLE DECK passes `toSampleBus` to land on its own
+   * mixer strip (v1.6).
+   */
+  playBuffer(
+    buffer: AudioBuffer,
+    when: number,
+    velocity = 1,
+    level = 1,
+    toSampleBus = false,
+  ): void {
     const t = Math.max(this.ctx.currentTime, when);
     const v = clamp(velocity, 0.05, 1) * clamp(level, 0, 1.5);
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     const g = this.ctx.createGain();
     g.gain.value = v;
-    src.connect(g).connect(this.output);
+    src.connect(g).connect(toSampleBus ? this.sampleOutput : this.output);
     src.onended = () => {
       try { src.disconnect(); } catch { /* ignore */ }
       try { g.disconnect(); } catch { /* ignore */ }

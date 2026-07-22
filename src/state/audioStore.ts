@@ -3,6 +3,9 @@ import type { ParametricBand, SoundParams } from "@/audio/types";
 import { NEUTRAL_PARAMS, normalizeParams, paramsAreNeutral } from "@/audio/types";
 import { getEngine } from "@/audio/AudioEngine";
 import { RESTORE_OFF, restoreActive, type RestoreParams } from "@/audio/dsp/Reconstructor";
+// Deferred-use import (functions are only called inside actions) — safe
+// despite the module cycle chainSnapshot → audioStore.
+import { applyChain, captureChain, type ChainSnapshot } from "@/lib/chainSnapshot";
 import type { RoomId } from "@/audio/dsp/HRTFRooms";
 import { XM6_CORRECTION_BANDS, XM6_DEFAULT_OUTPUT_GAIN_DB } from "@/audio/xm6Profile";
 import { HEADPHONES } from "@/audio/headphoneProfiles";
@@ -17,7 +20,10 @@ export interface AudioState {
   correctionEnabled: boolean;
   outputGainDb: number;
   bypass: boolean;
-  abSnapshot: SoundParams | null;
+  /** Full-chain A/B: side "A" of the compare (v1.5 — was params-only). */
+  abSnapshot: ChainSnapshot | null;
+  /** Measured loudness (short-term LUFS) of the stored A side, if known. */
+  abLufs: number | null;
   history: SoundParams[];
   future: SoundParams[];
 
@@ -57,6 +63,11 @@ export interface AudioState {
   clarity: number;
   setClarity: (amount: number) => void;
 
+  /** v2.1 — repair-stack A/B: true-bypass Restoration → Clarity → Sculptor EQ
+   *  (session-only, never captured in snapshots). */
+  repairBypass: boolean;
+  setRepairBypass: (b: boolean) => void;
+
   undo: () => void;
   redo: () => void;
   resetToNeutral: () => void;
@@ -90,6 +101,9 @@ function engageFxChain(
   getEngine().setBypass(false);
 }
 
+/** One-shot guard: persisted headphone profile applied on first engine boot. */
+let bootProfileApplied = false;
+
 export const useAudioStore = create<AudioState>((set, get) => ({
   status: "idle",
   params: { ...NEUTRAL_PARAMS },
@@ -98,6 +112,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   outputGainDb: XM6_DEFAULT_OUTPUT_GAIN_DB,
   bypass: true,
   abSnapshot: null,
+  abLufs: null,
   history: [],
   future: [],
 
@@ -108,11 +123,24 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   balanceDelayMs: 0,
   restore: { ...RESTORE_OFF },
   clarity: 0,
+  repairBypass: false,
 
   ensureReady: async () => {
     const engine = getEngine();
     set({ status: "loading" });
     await engine.resume();
+    // v1.5: restore the persisted correction profile (built-in OR imported
+    // custom — the wizard injects those into HEADPHONES before this runs).
+    // Previously the store always booted on XM6 bands regardless of the
+    // saved pick. Only do this once, before any session tweaks exist.
+    if (!bootProfileApplied) {
+      bootProfileApplied = true;
+      const hpId = useSettingsStore.getState().headphone;
+      const hp = HEADPHONES[hpId];
+      if (hp && hpId !== "xm6") {
+        set({ correctionBands: hp.bands, outputGainDb: hp.outputGainDb });
+      }
+    }
     engine.applyParams(get().params);
     engine.replaceCorrectionBands(get().correctionBands);
     engine.setOutputGainDb(get().outputGainDb);
@@ -193,17 +221,45 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     getEngine().setCorrectionEnabled(next);
   },
 
-  storeAB: () => set({ abSnapshot: { ...get().params } }),
+  storeAB: () => {
+    // Full-chain snapshot + start the loudness meter so the NEXT swap can be
+    // level-matched (short-term LUFS needs a few seconds of history).
+    const engine = getEngine();
+    if (!get().abSnapshot) engine.ensureLufsMeter();
+    const lufs = engine.lufs.shortTermLufs;
+    set({
+      abSnapshot: captureChain(),
+      abLufs: lufs > -70 ? lufs : null,
+    });
+  },
 
   swapAB: () => {
     const snap = get().abSnapshot;
     if (!snap) return;
-    const cur = { ...get().params };
-    set({ params: snap, abSnapshot: cur });
-    getEngine().applyParams(snap);
+    const engine = getEngine();
+    // Loudness of the OUTGOING side, measured live right now.
+    const curLufs = engine.lufs.shortTermLufs;
+    const outgoing = captureChain();
+    const incomingLufs = get().abLufs;
+    applyChain(snap);
+    // Level match: trim the output gain so the incoming side plays at the
+    // outgoing side's loudness — comparisons stay fair ("louder ≠ better").
+    if (curLufs > -70 && incomingLufs !== null) {
+      const trim = Math.max(-6, Math.min(6, curLufs - incomingLufs));
+      if (Math.abs(trim) > 0.25) {
+        get().setOutputGain(snap.outputGainDb + trim);
+      }
+    }
+    set({
+      abSnapshot: outgoing,
+      abLufs: curLufs > -70 ? curLufs : null,
+    });
   },
 
-  clearAB: () => set({ abSnapshot: null }),
+  clearAB: () => {
+    if (get().abSnapshot) getEngine().releaseLufsMeter();
+    set({ abSnapshot: null, abLufs: null });
+  },
 
   setOutputGain: (db) => {
     set({ outputGainDb: db });
@@ -256,6 +312,12 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     getEngine().setClarity(clarity);
   },
 
+  setRepairBypass: (b) => {
+    if (get().repairBypass === b) return;
+    set({ repairBypass: b });
+    getEngine().setRepairBypass(b);
+  },
+
   undo: () => {
     const { history, params, future } = get();
     if (history.length === 0) return;
@@ -302,8 +364,10 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       balanceDelayMs: 0,
       restore: { ...RESTORE_OFF },
       clarity: 0,
+      repairBypass: false,
     });
     const engine = getEngine();
+    engine.setRepairBypass(false);
     engine.setBypass(true);
     engine.setCorrectionEnabled(false);
     engine.applyParams(NEUTRAL_PARAMS);

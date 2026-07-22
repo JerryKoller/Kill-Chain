@@ -61,6 +61,9 @@ export type EngineSource =
   | { kind: "mic"; stream: MediaStream }
   | { kind: "none" };
 
+/** Fire Command mixer parts (v1.6): Synth A/B, drum kit, sample deck. */
+export type FireMixPart = "a" | "b" | "drums" | "samples";
+
 export interface AnalyserSnapshot {
   freq: Uint8Array<ArrayBuffer>;
   time: Uint8Array<ArrayBuffer>;
@@ -151,6 +154,15 @@ export class AudioEngine {
   private readonly fireBus: GainNode;
   private readonly fireBusPad: GainNode;
   private readonly fireBusClip: WaveShaperNode;
+  /** Per-part Fire mixer chains (v1.6): part gain → pan → (duck) → fireBus. */
+  private readonly firePart: Record<FireMixPart, { gain: GainNode; pan: StereoPannerNode }>;
+  /** Sidechain duck gain on the combined Synth A+B path (kick pump). */
+  readonly fireDuck: GainNode;
+  /** Fire master fader (pre-limiter). */
+  private readonly fireMasterGain: GainNode;
+  /** Fire master limiter — glue/safety on the summed Fire output. */
+  private readonly fireLimiter: DynamicsCompressorNode;
+  private fireLimiterEnabled = true;
 
   readonly analyserPost: AnalyserNode;
   readonly analyserPre: AnalyserNode;
@@ -289,14 +301,44 @@ export class AudioEngine {
     this.fireBusClip = this.ctx.createWaveShaper();
     this.fireBusClip.curve = makeSafetyClipCurve();
     this.fireBusClip.oversample = "2x";
-    this.fireBus.connect(this.fireBusPad).connect(this.fireBusClip).connect(this.inputBus);
+    // v1.6 mixer: fireBus → master fader → master limiter → pad → clipper.
+    // The limiter (same recipe as finalLimiter, slightly deeper threshold)
+    // glues the four parts; the WaveShaper stays as the true ceiling.
+    this.fireMasterGain = this.ctx.createGain();
+    this.fireLimiter = this.ctx.createDynamicsCompressor();
+    this.fireLimiter.threshold.value = -3.0;
+    this.fireLimiter.knee.value = 0;
+    this.fireLimiter.ratio.value = 20;
+    this.fireLimiter.attack.value = 0.002;
+    this.fireLimiter.release.value = 0.08;
+    this.fireBus.connect(this.fireMasterGain);
+    this.fireMasterGain.connect(this.fireLimiter);
+    this.fireLimiter.connect(this.fireBusPad);
+    this.fireBusPad.connect(this.fireBusClip).connect(this.inputBus);
     // Clean tap of the summed synth+drums (post-clipper, pre-chain) — the
     // Fire Command WAV export records from here.
     this.fireTap = this.ctx.createGain();
     this.fireBusClip.connect(this.fireTap);
-    this.fireCommand = new FireCommandSynth(this.ctx, this.fireBus);
-    // Fire Command drum machine — same routing as the synth.
-    this.fireDrums = new FireDrumKit(this.ctx, this.fireBus);
+
+    // Per-part strips: gain → pan; synths pass the shared sidechain duck.
+    const mkPart = () => {
+      const gain = this.ctx.createGain();
+      const pan = this.ctx.createStereoPanner();
+      gain.connect(pan);
+      return { gain, pan };
+    };
+    this.firePart = { a: mkPart(), b: mkPart(), drums: mkPart(), samples: mkPart() };
+    this.fireDuck = this.ctx.createGain();
+    this.firePart.a.pan.connect(this.fireDuck);
+    this.firePart.b.pan.connect(this.fireDuck);
+    this.fireDuck.connect(this.fireBus);
+    this.firePart.drums.pan.connect(this.fireBus);
+    this.firePart.samples.pan.connect(this.fireBus);
+
+    this.fireCommand = new FireCommandSynth(this.ctx, this.firePart.a.gain);
+    // Fire Command drum machine — lanes on the drum strip, the sample deck
+    // one-shots on their own strip.
+    this.fireDrums = new FireDrumKit(this.ctx, this.firePart.drums.gain, this.firePart.samples.gain);
 
     this.connectGraph();
   }
@@ -308,7 +350,7 @@ export class AudioEngine {
    */
   get fireCommandB(): FireCommandSynth {
     if (!this._fireCommandB) {
-      this._fireCommandB = new FireCommandSynth(this.ctx, this.fireBus);
+      this._fireCommandB = new FireCommandSynth(this.ctx, this.firePart.b.gain);
     }
     return this._fireCommandB;
   }
@@ -316,6 +358,56 @@ export class AudioEngine {
   /** Synth B if it has been created, without instantiating it. */
   peekFireCommandB(): FireCommandSynth | null {
     return this._fireCommandB;
+  }
+
+  // ────────── Fire Command mixer (v1.6) ──────────
+
+  /** Set one part strip: level (0..1.5), pan (-1..1), effective mute. */
+  setFirePartMix(part: FireMixPart, level: number, pan: number, muted: boolean): void {
+    const p = this.firePart[part];
+    const t = this.ctx.currentTime;
+    p.gain.gain.setTargetAtTime(muted ? 0 : Math.max(0, Math.min(1.5, level)), t, 0.02);
+    p.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), t, 0.02);
+  }
+
+  /** Fire master fader (pre-limiter). */
+  setFireMasterMix(level: number, muted: boolean): void {
+    this.fireMasterGain.gain.setTargetAtTime(
+      muted ? 0 : Math.max(0, Math.min(1.5, level)),
+      this.ctx.currentTime,
+      0.02,
+    );
+  }
+
+  /** Toggle the Fire master limiter (the safety clipper always stays). */
+  setFireLimiterEnabled(on: boolean): void {
+    if (on === this.fireLimiterEnabled) return;
+    this.fireLimiterEnabled = on;
+    try { this.fireMasterGain.disconnect(); } catch { /* ignore */ }
+    if (on) this.fireMasterGain.connect(this.fireLimiter);
+    else this.fireMasterGain.connect(this.fireBusPad);
+  }
+
+  /**
+   * Sidechain duck (v1.6): dip the Synth A+B path to `1 - amount` at `when`
+   * and ramp back to unity over `releaseSec` — scheduled sample-accurately
+   * alongside the drum trigger that causes it.
+   */
+  fireDuckTrigger(when: number, amount: number, releaseSec: number): void {
+    const g = this.fireDuck.gain;
+    const t = Math.max(this.ctx.currentTime, when);
+    const dip = Math.max(0.02, 1 - Math.max(0, Math.min(1, amount)));
+    // cancelAndHoldAtTime keeps an in-flight release ramp from snapping.
+    const gg = g as AudioParam & { cancelAndHoldAtTime?: (t: number) => void };
+    if (typeof gg.cancelAndHoldAtTime === "function") gg.cancelAndHoldAtTime(t);
+    else g.cancelScheduledValues(t);
+    g.setValueAtTime(dip, t);
+    g.linearRampToValueAtTime(1, t + Math.max(0.02, releaseSec));
+  }
+
+  /** Post-pan tap point for one Fire part (stems export). */
+  getFirePartTap(part: FireMixPart): AudioNode {
+    return this.firePart[part].pan;
   }
 
   // ────────── connection topology ──────────
@@ -827,6 +919,18 @@ export class AudioEngine {
   /** Clarity Engine amount (0 = transparent wire). */
   setClarity(amount: number): void {
     this.clarity.setAmount(amount);
+  }
+
+  /**
+   * v2.1 repair-stack A/B — true-bypass the whole repair stack (Restoration
+   * Bay → Clarity → Sculptor EQ) in one click-safe crossfade, leaving the
+   * rest of the chain (dynamics, width, rooms…) running. Store state is
+   * untouched, so releasing the compare restores the exact same sound.
+   */
+  setRepairBypass(b: boolean): void {
+    this.reconstruct.setBypassed(b);
+    this.clarity.setBypassed(b);
+    this.userEQ.setBypassed(b);
   }
 
   getClarity(): number {

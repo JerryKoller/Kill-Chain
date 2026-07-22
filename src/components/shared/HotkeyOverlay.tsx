@@ -1,10 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useUIStore } from "@/state/uiStore";
-import { HOTKEYS } from "@/hooks/useGlobalHotkeys";
+import { useHotkeyStore } from "@/state/hotkeyStore";
+import { getHotkeyCheatSheet } from "@/hooks/useGlobalHotkeys";
 
 export function HotkeyOverlay() {
   const open = useUIStore((s) => s.hotkeyOverlayOpen);
+  const bindings = useHotkeyStore((s) => s.bindings);
+  const hotkeys = useMemo(() => getHotkeyCheatSheet(bindings), [bindings]);
   const close = () => useUIStore.getState().setHotkeyOverlay(false);
 
   useEffect(() => {
@@ -47,7 +50,7 @@ export function HotkeyOverlay() {
               </button>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-              {HOTKEYS.map((h) => (
+              {hotkeys.map((h) => (
                 <div
                   key={h.label}
                   className="flex items-center justify-between gap-3 py-1 border-b border-white/[0.04]"

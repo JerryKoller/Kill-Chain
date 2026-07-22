@@ -16,9 +16,25 @@ const bridge = {
       filters: { name: string; extensions: string[] }[],
     ): Promise<{ path: string; text: string } | null> =>
       ipcRenderer.invoke("file:openText", filters),
+    /** Multi-select audio picker (batch restore). Returns file paths. */
+    openAudioMulti: (): Promise<string[]> =>
+      ipcRenderer.invoke("dialog:openAudioMulti"),
+    /** Single output-folder picker. Returns the folder path or null. */
+    pickOutputFolder: (): Promise<string | null> =>
+      ipcRenderer.invoke("dialog:pickOutputFolder"),
+    /** Dialog-free write into an already-picked folder. Returns full path. */
+    writeIn: (dir: string, name: string, dataBase64: string): Promise<string | null> =>
+      ipcRenderer.invoke("file:writeIn", { dir, name, dataBase64 }),
   },
   shellOpen: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open", url),
+  crash: {
+    /** Append a renderer error to the local crash log (opt-in gated). */
+    log: (source: string, message: string): void =>
+      ipcRenderer.send("crash:renderer", { source, message }),
+    /** Reveal crash.log in the OS file explorer. */
+    openLog: (): Promise<void> => ipcRenderer.invoke("crash:openLog"),
+  },
   window: {
     minimize: () => ipcRenderer.invoke("window:minimize"),
     maximize: () => ipcRenderer.invoke("window:maximize"),
@@ -119,6 +135,39 @@ const bridge = {
       const handler = (_e: unknown, cmd: string) => cb(cmd);
       ipcRenderer.on("remote:cmd", handler);
       return () => ipcRenderer.removeListener("remote:cmd", handler);
+    },
+  },
+
+  viz: {
+    /** List displays for the broadcast window's "open on" picker. */
+    displays: (): Promise<
+      { id: number; label: string; width: number; height: number; primary: boolean }[]
+    > => ipcRenderer.invoke("viz:displays"),
+    /** Open (or re-open) the broadcast window with the given options. */
+    open: (opts: {
+      displayId?: number;
+      fullscreen?: boolean;
+      alwaysOnTop?: boolean;
+      transparent?: boolean;
+    }): Promise<boolean> => ipcRenderer.invoke("viz:open", opts),
+    close: (): Promise<void> => ipcRenderer.invoke("viz:close"),
+    isOpen: (): Promise<boolean> => ipcRenderer.invoke("viz:isOpen"),
+    /** From the broadcast window itself: toggle its OS fullscreen. */
+    setFullscreen: (full: boolean): Promise<void> =>
+      ipcRenderer.invoke("viz:setFullscreen", full),
+    /** Main window → broadcast window analyser frame (fire-and-forget). */
+    sendFrame: (frame: unknown): void => ipcRenderer.send("viz:frame", frame),
+    /** Broadcast window: subscribe to streamed frames. Returns unsubscribe. */
+    onFrame: (cb: (frame: unknown) => void) => {
+      const handler = (_e: unknown, f: unknown) => cb(f);
+      ipcRenderer.on("viz:frame", handler);
+      return () => ipcRenderer.removeListener("viz:frame", handler);
+    },
+    /** Main window: notified when the broadcast window closes. */
+    onClosed: (cb: () => void) => {
+      const handler = () => cb();
+      ipcRenderer.on("viz:closed", handler);
+      return () => ipcRenderer.removeListener("viz:closed", handler);
     },
   },
 

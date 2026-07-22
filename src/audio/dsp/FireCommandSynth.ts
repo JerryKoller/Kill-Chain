@@ -20,11 +20,16 @@ import {
   WAVETABLE_IDS,
   SUBFRAMES,
   harmonicsAt,
+  applyWarp,
 } from "./wavetables";
 
 export type FireFilterType = "lowpass" | "bandpass" | "highpass" | "notch";
 export type SubWave = "sine" | "triangle" | "square" | "sawtooth";
 export type LfoWave = "sine" | "triangle" | "sawtooth" | "square" | "sample-hold";
+/** Live-input harmonizer companion mode (v1.7). */
+export type HarmonyMode = "off" | "third" | "fifth" | "octave" | "triad";
+/** Spectral FX unit mode (v1.7, STFT AudioWorklet). */
+export type SpectralMode = "off" | "freeze" | "smear" | "gate" | "shift";
 export type LfoDest = "off" | "pitch" | "filter" | "pan" | "volume";
 export type DriveMode = "soft" | "tube" | "fold" | "hard" | "fuzz";
 
@@ -72,6 +77,13 @@ export interface FirePatch {
   oscCOctave: number;
   oscCDetune: number;
   oscCLevel: number;
+  // ── Spectral warps (v1.7): shared across all three wavetable oscillators ──
+  /** -1..1 stretch/compress of the harmonic series (0 = off). */
+  warpStretch: number;
+  /** -1..1 even/odd harmonic tilt (0 = off). */
+  warpTilt: number;
+  /** 0..1 periodic comb notching across the harmonics (0 = off). */
+  warpComb: number;
   // ── Unison ──
   unison: number;
   unisonDetune: number;
@@ -104,6 +116,13 @@ export interface FirePatch {
   ampRelease: number;
   /** 0..1 velocity → amp depth. 1 = full tracking (legacy behavior), 0 = fixed level. */
   velAmount: number;
+  // ── Lowpass gate (v1.7, Aalto-style vactrol) ──
+  /** LPG mode replaces the amp/filter ADSR with a struck vactrol envelope. */
+  lpgOn: boolean;
+  /** Ring-out time of the strike, seconds (0.05..2.5). */
+  lpgDecay: number;
+  /** 0..1 — how much the gate colors the tone (drives cutoff with the strike). */
+  lpgColor: number;
   // ── Filter ADSR ──
   filtAttack: number;
   filtDecay: number;
@@ -129,6 +148,10 @@ export interface FirePatch {
   pitchEnvTime: number;
   mono: boolean;
   glide: number;
+  // ── Harmonizer (v1.7): scale-locked companion notes on live input ──
+  harmonyMode: HarmonyMode;
+  /** 0..1 velocity scale on the companion notes. */
+  harmonyLevel: number;
   // ── Drive / Crush / Tone / Punch ──
   drive: number;
   driveMode: DriveMode;
@@ -149,6 +172,12 @@ export interface FirePatch {
   // ── Reverb ──
   reverbSize: number;
   reverbMix: number;
+  // ── Spectral FX (v1.7): STFT worklet between reverb and autopan ──
+  spectralMode: SpectralMode;
+  /** 0..1 mode intensity (freeze hold, smear time, gate threshold, shift ±). */
+  spectralAmount: number;
+  /** 0..1 dry/wet, latency-matched inside the worklet. 0 = hard bypass. */
+  spectralMix: number;
   // ── Macros ──
   macro1: number;
   macro2: number;
@@ -642,18 +671,46 @@ class Voice {
     const va = clamp(p.velAmount ?? 1, 0, 1);
     const peak = clamp(1 - va * (1 - clamp(velocity, 0, 1)), 0, 1);
 
-    this.ampEnv.offset.cancelScheduledValues(t);
-    this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
-    this.ampEnv.offset.linearRampToValueAtTime(peak, t + Math.max(0.001, p.ampAttack));
-    this.ampEnv.offset.setTargetAtTime(peak * p.ampSustain, t + Math.max(0.001, p.ampAttack), Math.max(0.005, p.ampDecay / 3));
+    if (p.lpgOn) {
+      // ── Lowpass gate (v1.7): a struck vactrol drives BOTH the VCA and the
+      // cutoff instead of the ADSR pair. 1–3 ms strike (harder hits snap
+      // faster, like a real photoresistor), exponential ring-out, and the
+      // filter tracking the envelope scaled by lpgColor — loud is bright,
+      // quiet is dark, which is the entire Buchla/Aalto sound.
+      const decay = clamp(p.lpgDecay ?? 0.4, 0.05, 2.5);
+      const color = clamp(p.lpgColor ?? 0.7, 0, 1);
+      const strike = 0.001 + (1 - clamp(velocity, 0, 1)) * 0.002; // 1..3 ms
 
-    const base = this.baseCutoff(p);
-    this.filter.frequency.setValueAtTime(base, t);
-    const peakOff = clamp(base * Math.pow(2, p.filterEnvAmount * 4), 20, 20000) - base;
-    this.filterEnv.offset.cancelScheduledValues(t);
-    this.filterEnv.offset.setValueAtTime(0, t);
-    this.filterEnv.offset.linearRampToValueAtTime(peakOff, t + Math.max(0.001, p.filtAttack));
-    this.filterEnv.offset.setTargetAtTime(peakOff * p.filtSustain, t + Math.max(0.001, p.filtAttack), Math.max(0.005, p.filtDecay / 3));
+      this.ampEnv.offset.cancelScheduledValues(t);
+      this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
+      this.ampEnv.offset.linearRampToValueAtTime(peak, t + strike);
+      this.ampEnv.offset.setTargetAtTime(0, t + strike, decay / 3);
+
+      const base = this.baseCutoff(p);
+      // Fully-open peak brightens with velocity; the closed floor darkens
+      // with color. At color 0 the gate is a plain VCA (cutoff stays put).
+      const openHz = clamp(base * Math.pow(2, (1 + 2 * clamp(velocity, 0, 1)) * color), 20, 18000);
+      const floorHz = clamp(base * Math.pow(2, -4.5 * color), 30, 18000);
+      this.filter.frequency.setValueAtTime(base, t);
+      this.filterEnv.offset.cancelScheduledValues(t);
+      this.filterEnv.offset.setValueAtTime(floorHz - base, t);
+      this.filterEnv.offset.linearRampToValueAtTime(openHz - base, t + strike);
+      // The filter closes slightly ahead of the amplitude — vactrol lag.
+      this.filterEnv.offset.setTargetAtTime(floorHz - base, t + strike, (decay / 3) * 0.8);
+    } else {
+      this.ampEnv.offset.cancelScheduledValues(t);
+      this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
+      this.ampEnv.offset.linearRampToValueAtTime(peak, t + Math.max(0.001, p.ampAttack));
+      this.ampEnv.offset.setTargetAtTime(peak * p.ampSustain, t + Math.max(0.001, p.ampAttack), Math.max(0.005, p.ampDecay / 3));
+
+      const base = this.baseCutoff(p);
+      this.filter.frequency.setValueAtTime(base, t);
+      const peakOff = clamp(base * Math.pow(2, p.filterEnvAmount * 4), 20, 20000) - base;
+      this.filterEnv.offset.cancelScheduledValues(t);
+      this.filterEnv.offset.setValueAtTime(0, t);
+      this.filterEnv.offset.linearRampToValueAtTime(peakOff, t + Math.max(0.001, p.filtAttack));
+      this.filterEnv.offset.setTargetAtTime(peakOff * p.filtSustain, t + Math.max(0.001, p.filtAttack), Math.max(0.005, p.filtDecay / 3));
+    }
 
     this.pitchEnv.offset.cancelScheduledValues(t);
     if (p.pitchEnvAmount !== 0) {
@@ -670,6 +727,14 @@ class Voice {
     const now = this.ctx.currentTime;
     const t = Math.max(now, when ?? now);
     this.releaseAt = t;
+    if (p.lpgOn) {
+      // LPG notes ring out on their own strike decay — note-off doesn't cut
+      // them, it just schedules cleanup once the vactrol has fully closed.
+      const decay = clamp(p.lpgDecay ?? 0.4, 0.05, 2.5);
+      const tail = (t - now) + decay * 4 + 0.15;
+      this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
+      return;
+    }
     const rel = Math.max(0.01, p.ampRelease);
     const future = t > now + 0.001;
     // For scheduled (future) releases, hold the envelope's ramp value at `t`
@@ -805,6 +870,33 @@ class Voice {
   }
 }
 
+/**
+ * One addModule per AudioContext, shared by both synth instances (A and B).
+ * The worklet lives as a plain JS asset in public/worklets so the same
+ * relative URL resolves in the Vite dev server AND next to dist/index.html
+ * in the packaged Electron build (file://). Resolves false — never throws —
+ * so a failed load degrades to a permanent clean bypass.
+ */
+const spectralModuleReady = new WeakMap<BaseAudioContext, Promise<boolean>>();
+function loadSpectralModule(ctx: AudioContext): Promise<boolean> {
+  let p = spectralModuleReady.get(ctx);
+  if (!p) {
+    p = (async () => {
+      try {
+        if (!ctx.audioWorklet) return false;
+        const url = new URL("worklets/spectral-processor.js", document.baseURI).toString();
+        await ctx.audioWorklet.addModule(url);
+        return true;
+      } catch (err) {
+        console.warn("[FireCommand] spectral worklet failed to load — FX bypassed:", err);
+        return false;
+      }
+    })();
+    spectralModuleReady.set(ctx, p);
+  }
+  return p;
+}
+
 export class FireCommandSynth {
   readonly output: GainNode;
   readonly lfo1: LfoBank;
@@ -862,6 +954,11 @@ export class FireCommandSynth {
   private readonly reverbDry: GainNode;
   private readonly reverbWet: GainNode;
   private readonly reverbOut: GainNode;
+  // ── Spectral FX (v1.7) — dry branch is unity until the worklet engages ──
+  private readonly spectralDry: GainNode;
+  private readonly spectralSend: GainNode;
+  private spectralNode: AudioWorkletNode | null = null;
+  private spectralState: "idle" | "loading" | "ready" | "failed" = "idle";
   private readonly autopan: StereoPannerNode;
   private readonly gateGain: GainNode;
   // Mid/side stereo width (stereoWidth): L/R → M=(L+R)/2, S=(L-R)/2, then
@@ -1007,6 +1104,9 @@ export class FireCommandSynth {
     this.reverbWet = ctx.createGain();
     this.reverbWet.gain.value = 0;
     this.reverbOut = ctx.createGain();
+    this.spectralDry = ctx.createGain();
+    this.spectralSend = ctx.createGain();
+    this.spectralSend.gain.value = 0;
     this.autopan = ctx.createStereoPanner();
     this.gateGain = ctx.createGain();
     // widthIn pins the stream to true stereo ("speakers" up-mix) so the
@@ -1078,7 +1178,12 @@ export class FireCommandSynth {
     this.tone.connect(this.punchComp).connect(this.punchMakeup).connect(this.reverbIn);
     this.reverbIn.connect(this.reverbDry).connect(this.reverbOut);
     this.reverbIn.connect(this.reverbConv).connect(this.reverbWet).connect(this.reverbOut);
-    this.reverbOut.connect(this.autopan);
+    // Spectral FX sits between reverb and autopan (freezing reverb tails is
+    // the point). At spectralMode "off" the signal takes the plain dry gain —
+    // zero added latency, zero worklet cost; the worklet is loaded lazily on
+    // first activation and the two branches crossfade.
+    this.reverbOut.connect(this.spectralDry).connect(this.autopan);
+    this.reverbOut.connect(this.spectralSend);
     this.autopan.connect(this.gateGain);
     // gate → width (M/S) → master
     this.gateGain.connect(this.widthIn);
@@ -1116,6 +1221,7 @@ export class FireCommandSynth {
     // default (dry) patch.
     this.applyBusParams(this.patch);
     this.applyLfoParams(this.patch);
+    this.applySpectral(this.patch);
 
     this.modTimer = setInterval(this.updateMod, 1000 / 60);
   }
@@ -1210,7 +1316,58 @@ export class FireCommandSynth {
   }
 
   private bankFor(id: string): PeriodicWave[] {
+    return this.activeBankFor(id);
+  }
+
+  private baseBankFor(id: string): PeriodicWave[] {
     return this.banks.get(id) ?? this.banks.get("saw")!;
+  }
+
+  // ── Spectral warps (v1.7) ──
+  // Base banks stay cached forever; a non-zero warp lazily renders a WARPED
+  // bank per in-use table (32 createPeriodicWave calls each), invalidated
+  // whenever the warp signature changes. Knob drags are debounced (~80 ms)
+  // so scrubbing doesn't re-render 96 waves per mousemove.
+  private readonly warpedBanks = new Map<string, PeriodicWave[]>();
+  private warpedSig = "";
+  private warpTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private hasWarp(p: FirePatch): boolean {
+    return Math.abs(p.warpStretch ?? 0) > 0.001
+      || Math.abs(p.warpTilt ?? 0) > 0.001
+      || (p.warpComb ?? 0) > 0.001;
+  }
+
+  private activeBankFor(id: string): PeriodicWave[] {
+    const p = this.patch;
+    if (!this.hasWarp(p)) return this.baseBankFor(id);
+    const sig = `${p.warpStretch}|${p.warpTilt}|${p.warpComb}`;
+    if (sig !== this.warpedSig) {
+      this.warpedBanks.clear();
+      this.warpedSig = sig;
+    }
+    const key = this.banks.has(id) ? id : "saw";
+    let bank = this.warpedBanks.get(key);
+    if (!bank) {
+      bank = [];
+      for (let k = 0; k < SUBFRAMES; k++) {
+        const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+        const { real, imag } = harmonicsAt(key, f);
+        const warped = applyWarp(imag, p.warpStretch, p.warpTilt, p.warpComb);
+        bank.push(this.ctx.createPeriodicWave(real, warped, { disableNormalization: false }));
+      }
+      this.warpedBanks.set(key, bank);
+    }
+    return bank;
+  }
+
+  /** Swap all live voices onto the (possibly warped) banks for the current patch. */
+  private applyWarpBanks(): void {
+    for (const v of this.voices) {
+      v.setBankA(this.activeBankFor(this.patch.oscATable));
+      v.setBankB(this.activeBankFor(this.patch.oscBTable));
+      v.setBankC(this.activeBankFor(this.patch.oscCTable));
+    }
   }
 
   /**
@@ -1573,6 +1730,7 @@ export class FireCommandSynth {
     this.recomputeMatrix();
     this.applyBusParams(this.patch);
     this.applyLfoParams(this.patch);
+    this.applySpectral(this.patch);
     for (const v of this.voices) {
       v.setBankA(this.bankFor(this.patch.oscATable));
       v.setBankB(this.bankFor(this.patch.oscBTable));
@@ -1607,6 +1765,16 @@ export class FireCommandSynth {
         for (const v of this.voices) v.setBankB(this.bankFor(p.oscBTable)); break;
       case "oscCTable":
         for (const v of this.voices) v.setBankC(this.bankFor(p.oscCTable)); break;
+      case "spectralMode": case "spectralAmount": case "spectralMix":
+        this.applySpectral(p); break;
+      case "warpStretch": case "warpTilt": case "warpComb":
+        // Debounced: knob scrubs settle before the warped banks re-render.
+        if (this.warpTimer) clearTimeout(this.warpTimer);
+        this.warpTimer = setTimeout(() => {
+          this.warpTimer = null;
+          this.applyWarpBanks();
+        }, 80);
+        break;
       case "subWave":
         for (const v of this.voices) v.setSubWave(p.subWave); break;
       case "oscALevel": case "oscBLevel": case "oscCLevel": case "subLevel": case "noiseLevel":
@@ -1739,6 +1907,57 @@ export class FireCommandSynth {
     }
   }
 
+  /**
+   * Engage / retune / bypass the spectral FX worklet.
+   *
+   * The worklet module + node are created lazily the FIRST time a patch
+   * actually turns the effect on, then kept for the synth's lifetime. When
+   * active, the dry gain crossfades to 0 and the whole bus flows through the
+   * STFT (which adds 2048 samples ≈ 43 ms of latency — dry/wet inside the
+   * worklet is latency-matched, so the mix knob never combs). When off, the
+   * plain dry branch carries the signal and the worklet idles in bypass.
+   */
+  private applySpectral(p: FirePatch): void {
+    const mode = p.spectralMode ?? "off";
+    const mix = clamp(p.spectralMix ?? 0, 0, 1);
+    const active = mode !== "off" && mix > 0.001;
+    if (active && this.spectralState === "idle") {
+      this.spectralState = "loading";
+      void loadSpectralModule(this.ctx).then((ok) => {
+        if (!ok) { this.spectralState = "failed"; return; }
+        try {
+          this.spectralNode = new AudioWorkletNode(this.ctx, "kc-spectral", {
+            numberOfInputs: 1,
+            numberOfOutputs: 1,
+            outputChannelCount: [2],
+            channelCount: 2,
+            channelCountMode: "explicit",
+            channelInterpretation: "speakers",
+          });
+        } catch (err) {
+          console.warn("[FireCommand] spectral node creation failed — FX bypassed:", err);
+          this.spectralState = "failed";
+          return;
+        }
+        this.spectralSend.connect(this.spectralNode).connect(this.autopan);
+        this.spectralState = "ready";
+        // Re-run against the CURRENT patch — it may have changed (or turned
+        // the effect back off) while addModule was in flight.
+        this.applySpectral(this.patch);
+      });
+    }
+    const t = this.ctx.currentTime;
+    const on = active && this.spectralState === "ready" && this.spectralNode !== null;
+    this.spectralDry.gain.setTargetAtTime(on ? 0 : 1, t, 0.03);
+    this.spectralSend.gain.setTargetAtTime(on ? 1 : 0, t, 0.03);
+    this.spectralNode?.port.postMessage({
+      mode,
+      amount: clamp(p.spectralAmount ?? 0.6, 0, 1),
+      mix,
+      bypass: !on,
+    });
+  }
+
   private applyLfoParams(p: FirePatch): void {
     this.applyOneLfo(this.lfo1, p.lfo1Wave, p.lfo1Rate, p.lfo1Depth, p.lfo1Dest);
     this.applyOneLfo(this.lfo2, p.lfo2Wave, p.lfo2Rate, p.lfo2Depth, p.lfo2Dest);
@@ -1765,23 +1984,27 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   oscATable: "basic", oscAPos: 0.66, oscAEnv: 0, oscALfo: 0, oscAOctave: 0, oscADetune: 0, oscALevel: 0.75,
   oscBTable: "saw", oscBPos: 0.4, oscBEnv: 0, oscBLfo: 0, oscBOctave: 0, oscBDetune: 8, oscBLevel: 0.5,
   oscCTable: "harmonic", oscCPos: 0.4, oscCEnv: 0, oscCLfo: 0, oscCOctave: -1, oscCDetune: 0, oscCLevel: 0,
+  warpStretch: 0, warpTilt: 0, warpComb: 0,
   unison: 3, unisonDetune: 14, unisonWidth: 0.5,
   subWave: "sine", subLevel: 0.3, noiseLevel: 0, noiseColor: 0,
   fmAmount: 0, fmRatio: 2, fmBtoA: 0, ringAmount: 0, ringFreq: 220,
   filterType: "lowpass", filterCutoff: 2600, filterResonance: 3, filterEnvAmount: 0.4, filterKeyTrack: 0.3,
   filterDrive: 0,
   ampAttack: 0.01, ampDecay: 0.25, ampSustain: 0.8, ampRelease: 0.35, velAmount: 1,
+  lpgOn: false, lpgDecay: 0.4, lpgColor: 0.7,
   filtAttack: 0.01, filtDecay: 0.3, filtSustain: 0.5, filtRelease: 0.3,
   modAttack: 0.02, modDecay: 0.5, modSustain: 0.3, modRelease: 0.4,
   lfo1Wave: "sine", lfo1Rate: 5, lfo1Depth: 0, lfo1Dest: "off",
   lfo2Wave: "triangle", lfo2Rate: 0.5, lfo2Depth: 0, lfo2Dest: "off",
   pitchEnvAmount: 0, pitchEnvTime: 0.2,
   mono: false, glide: 0.06,
+  harmonyMode: "off", harmonyLevel: 0.6,
   drive: 0.08, driveMode: "soft", crush: 0, tone: 15000, punch: 0,
   phaserRate: 0.4, phaserDepth: 0.6, phaserMix: 0,
   chorusRate: 0.6, chorusDepth: 0.4, chorusMix: 0.25,
   delayTime: 0.28, delayFeedback: 0.3, delayMix: 0,
   reverbSize: 2.2, reverbMix: 0,
+  spectralMode: "off", spectralAmount: 0.6, spectralMix: 0.5,
   macro1: 0, macro2: 0, macro3: 0, macro4: 0,
   modMatrix: makeModMatrix(),
   drift: 0,

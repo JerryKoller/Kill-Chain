@@ -153,14 +153,18 @@ function KnobImpl({
   const indicatorY =
     cy - Math.cos((angle * Math.PI) / 180) * (r - 2);
 
-  // Tick ring: 11 marks across the sweep; the one under the needle ignites.
+  // Tick ring (Knob v2): 21 fine marks across the sweep. Marks inside the
+  // travelled arc glow as a dim trail; the one under the needle ignites.
   const ticks = [];
-  for (let i = 0; i <= 10; i++) {
-    const a = -135 + (i / 10) * 270;
-    const lit = Math.abs(a - angle) <= 13.5;
+  for (let i = 0; i <= 20; i++) {
+    const a = -135 + (i / 20) * 270;
+    const lit = Math.abs(a - angle) <= 7;
+    const inTrail = bipolar
+      ? (angle >= arcCenter ? a >= arcCenter && a <= angle : a <= arcCenter && a >= angle)
+      : a <= angle;
     const rad = (a * Math.PI) / 180;
     const r0 = r + 5;
-    const r1 = r + (lit ? 10 : 8);
+    const r1 = r + (lit ? 10 : i % 5 === 0 ? 9 : 7.5);
     ticks.push(
       <line
         key={i}
@@ -168,7 +172,7 @@ function KnobImpl({
         y1={cy - Math.cos(rad) * r0}
         x2={cx + Math.sin(rad) * r1}
         y2={cy - Math.cos(rad) * r1}
-        stroke={lit ? color : "rgba(255,255,255,0.14)"}
+        stroke={lit ? color : inTrail ? `${color}55` : "rgba(255,255,255,0.13)"}
         strokeWidth={lit ? 2 : 1}
         strokeLinecap="round"
         style={{ transition: "stroke 120ms ease" }}
@@ -217,7 +221,10 @@ function KnobImpl({
               </feMerge>
             </filter>
           </defs>
-          <circle cx={cx} cy={cy} r={r + 2} fill={`url(#bg-${color})`} stroke="rgba(255,255,255,0.07)" />
+          {/* Machined bezel: hairline outer ring + brushed inner face. */}
+          <circle cx={cx} cy={cy} r={r + 2.5} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={1} />
+          <circle cx={cx} cy={cy} r={r + 2} fill={`url(#bg-${color})`} stroke="rgba(0,0,0,0.5)" />
+          <circle cx={cx} cy={cy} r={r - 6} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
           {ticks}
           <path
             d={trackPath}
@@ -255,7 +262,7 @@ function KnobImpl({
         </svg>
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div
-            className={`text-[11px] font-mono transition-all ${dragging ? "text-white" : "text-dim"}`}
+            className={`text-[11px] font-mono tabular-nums transition-all ${dragging ? "text-white" : "text-dim"}`}
             style={
               dragging
                 ? { textShadow: `0 0 8px ${color}`, transform: "scale(1.25)" }

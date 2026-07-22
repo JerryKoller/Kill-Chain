@@ -8,6 +8,8 @@ import { useEqStore, eqIsActive } from "@/state/eqStore";
 import { useDimensionStore } from "@/state/dimensionStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { getEngine, peekEngine } from "@/audio/AudioEngine";
+import { restoreActive } from "@/audio/dsp/Reconstructor";
+import { useAppliedTractor } from "@/lib/tractorApplied";
 import type { SoundParams } from "@/audio/types";
 
 /**
@@ -194,9 +196,7 @@ export function KillChainView() {
     if (muted[stage.id]) return "muted";
     if (stage.id === "correction") return correctionEnabled ? "active" : "neutral";
     if (stage.id === "restore") {
-      return restore.hf > 0 || restore.body > 0 || restore.decrunch > 0 || restore.hiss > 0
-        ? "active"
-        : "neutral";
+      return restoreActive(restore) ? "active" : "neutral";
     }
     if (stage.id === "clarityEngine") return clarityAmt > 0.01 ? "active" : "neutral";
     if (stage.id === "graphic") return eqIsActive(eqBands) ? "active" : "neutral";
@@ -218,18 +218,19 @@ export function KillChainView() {
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <button
             onClick={() => setBypass(!bypass)}
-            className={`rounded-xl px-4 py-2 text-xs font-bold tracking-wide uppercase border transition ${
-              bypass
-                ? "border-rose-400/50 bg-rose-500/10 text-rose-200"
-                : "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_18px_rgb(var(--c-cyan)/0.3)]"
+            className={`kc-btn relative font-bold tracking-wide uppercase text-xs ${
+              bypass ? "kc-btn--danger" : "kc-btn--accent kc-on"
             }`}
             title="Master A/B — bit-transparent passthrough vs the full chain"
           >
+            {!bypass && <span key="engaged" className="kc-breach" aria-hidden />}
             {bypass ? "○ Chain bypassed" : "● Chain engaged"}
           </button>
 
           <Meter label="IN" value={meters.in} />
           <Meter label="OUT" value={meters.out} />
+
+          <TractorLockStat />
 
           <div className="flex-1" />
 
@@ -252,7 +253,7 @@ export function KillChainView() {
             <button
               key={s.label}
               onClick={() => setView(s.id)}
-              className={`text-left rounded-xl border px-3 py-2.5 transition ${
+              className={`text-left rounded-xl border px-3 py-2.5 transition kc-lift ${
                 s.live
                   ? "border-cyan/50 bg-cyan/[0.08] shadow-[0_0_16px_rgb(var(--c-cyan)/0.15)]"
                   : "border-white/10 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/20"
@@ -446,5 +447,32 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
       <span className="text-[9px] uppercase tracking-widest text-white/35">{label}</span>
       <span className="text-xs font-mono tabular-nums text-white/85">{value}</span>
     </div>
+  );
+}
+
+/** v2.3 — the engaged Tractor lock, surfaced on the chain map. */
+function TractorLockStat() {
+  const applied = useAppliedTractor();
+  const setView = useUIStore((s) => s.setView);
+  if (!applied) return null;
+  return (
+    <button
+      onClick={() => setView("tractor")}
+      className="flex items-center gap-2 rounded-lg border border-cyan/30 bg-cyan/[0.06] px-2.5 py-1 hover:bg-cyan/[0.12] transition"
+      title={`Tractor lock engaged${applied.sourceName ? ` — ${applied.sourceName}` : ""}${
+        applied.contentLabel ? ` (${applied.contentLabel})` : ""
+      } — click to open Tractor Beam`}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full bg-cyan animate-pulse"
+        style={{ boxShadow: "0 0 6px rgb(var(--c-cyan))" }}
+      />
+      <span className="flex flex-col text-left">
+        <span className="text-[9px] uppercase tracking-widest text-cyan/70">Tractor lock</span>
+        <span className="text-xs font-mono tabular-nums text-cyan">
+          {applied.matchPct != null ? `${applied.matchPct}% match` : applied.fullChain ? "full chain" : "EQ"}
+        </span>
+      </span>
+    </button>
   );
 }

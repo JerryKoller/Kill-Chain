@@ -4,8 +4,10 @@ import { GlassPanel } from "@/components/shared/GlassPanel";
 import { Knob } from "@/components/shared/Knob";
 import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
-import { restoreActive } from "@/audio/dsp/Reconstructor";
+import { restoreActive, RESTORE_OFF, RESTORE_PROFILES } from "@/audio/dsp/Reconstructor";
 import { analyzeForRestore } from "@/lib/restoreAnalyze";
+import { useRepairStore } from "@/state/repairStore";
+import { BatchRestorePanel } from "./BatchRestorePanel";
 
 /**
  * Restoration Bay — repairs damaged / low-bitrate audio (240p-era YouTube
@@ -47,6 +49,7 @@ export function RestorePanel() {
       } else {
         if (Object.keys(res.params).length > 0) setRestore(res.params);
         setReadout(res.notes);
+        if (res.cutoffHz !== null) useRepairStore.getState().setCutoffHz(res.cutoffHz);
         toast("Restoration Bay calibrated to the source");
       }
     } catch {
@@ -102,7 +105,7 @@ export function RestorePanel() {
                 </button>
                 <button
                   onClick={() => {
-                    setRestore({ hf: 0, body: 0, decrunch: 0, hiss: 0 });
+                    setRestore({ ...RESTORE_OFF });
                     setReadout(null);
                   }}
                   className="rounded-xl border border-white/15 bg-white/[0.03] hover:bg-white/[0.06] px-4 py-2.5 text-sm font-semibold transition"
@@ -113,6 +116,33 @@ export function RestorePanel() {
                   Play the damaged source (a routed YouTube video works), hit Auto-read, then
                   fine-tune by ear. Everything here is real-time — nothing is re-encoded.
                 </div>
+              </div>
+
+              {/* v2.1 damage profiles — one-click starting points per damage class */}
+              <div className="mb-5 flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] uppercase tracking-[0.25em] text-dim mr-1">
+                  Damage profile
+                </span>
+                {RESTORE_PROFILES.map((prof) => (
+                  <button
+                    key={prof.id}
+                    onClick={() => {
+                      setRestore({ ...prof.params });
+                      setReadout(null);
+                      toast(`${prof.label} profile loaded — fine-tune by ear`);
+                    }}
+                    className="rounded-lg border border-sky-400/35 bg-sky-500/10 hover:bg-sky-500/20 px-3 py-1.5 text-xs font-semibold text-sky-300 transition"
+                    title={prof.blurb}
+                  >
+                    {prof.label}
+                  </button>
+                ))}
+                <span
+                  className="rounded-lg border border-white/12 bg-white/[0.02] px-3 py-1.5 text-xs font-semibold text-white/45"
+                  title="Whatever the knobs say right now — every knob stays hand-tunable"
+                >
+                  Custom
+                </span>
               </div>
 
               {readout && (
@@ -158,7 +188,58 @@ export function RestorePanel() {
                   hint="Close down steady noise floors"
                   blurb="A dynamic shelf that ducks constant hiss but opens instantly for real cymbals and air."
                 />
+                <RestoreKnob
+                  value={restore.dehum}
+                  onChange={(v) => setRestore({ dehum: v })}
+                  color="#ffd257"
+                  label="De-hum"
+                  hint="Kill 50/60 Hz mains hum"
+                  blurb="A notch ladder on the mains fundamental + harmonics. Auto-detects 50 vs 60 Hz while playing."
+                />
+                <RestoreKnob
+                  value={restore.declick}
+                  onChange={(v) => setRestore({ declick: v })}
+                  color="#ff5b8a"
+                  label="De-click"
+                  hint="Clamp pops & crackle"
+                  blurb="An adaptive transient clamp riding above the music's own level — only genuine spikes get caught."
+                />
+                <RestoreKnob
+                  value={restore.widen}
+                  onChange={(v) => setRestore({ widen: v })}
+                  color="#48cfff"
+                  label="Widen"
+                  hint="Synthesized stereo for mono"
+                  blurb="Manufactures a stereo image for mono uploads with complementary spectral combs — lows stay centered."
+                />
+                <RestoreKnob
+                  value={restore.declip}
+                  onChange={(v) => setRestore({ declip: v })}
+                  color="#ff4d6d"
+                  label="De-clip"
+                  hint="Round out flattened peaks"
+                  blurb="Inverse-saturation expansion rebuilds the tops hard clipping shaved off, and softens the buzz they left behind."
+                />
+                <RestoreKnob
+                  value={restore.voice}
+                  onChange={(v) => setRestore({ voice: v })}
+                  color="#57d9a3"
+                  label="Voice Rescue"
+                  hint="Pull a buried voice forward"
+                  blurb="Floor cut, de-boom, presence lift and a speech leveler — intelligibility for bad recordings and off-mic speakers."
+                />
+                <RestoreKnob
+                  value={restore.phase}
+                  onChange={(v) => setRestore({ phase: v })}
+                  color="#c9a2ff"
+                  label="Phase Repair"
+                  hint="Fix broken stereo images"
+                  blurb="Anchors out-of-phase bass in mono and folds the image down when the channels fight — no more comb-filtered mono."
+                />
               </div>
+
+              {/* Offline batch processing (v2) */}
+              <BatchRestorePanel liveParams={restore} />
             </div>
           </motion.div>
         )}

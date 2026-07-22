@@ -15,6 +15,8 @@
 
 // ─── shared types ────────────────────────────────────────────────────────────
 
+import type { IntelSnapshot } from "./visualIntel";
+
 export type RGB = [number, number, number];
 
 export interface ThemePalette {
@@ -59,6 +61,14 @@ export interface RenderFrame {
   /** Currently playing track/media title ("" when unknown). */
   title: string;
   reduced: boolean;
+  /**
+   * Shared Visual Intelligence snapshot (v1.8): BPM + beat/bar phase, band
+   * onsets (kick/snare/hat/vocal), stereo width & phase correlation, section
+   * estimate, engage pulse and the per-track palette. Filled by the ONE
+   * analysis pipeline (main window) or deserialized from IPC (broadcast) —
+   * renderers must never run their own detectors.
+   */
+  intel: IntelSnapshot;
 }
 
 export interface ModeRenderer {
@@ -142,6 +152,78 @@ function bandPeak(freq: Uint8Array, b0: number, b1: number): number {
 }
 
 const MONO_FONT = "JetBrains Mono, Consolas, monospace";
+
+// Reactor's data core speaks in half-width katakana + mono digits — a
+// deliberately different face from the rest of the app (Windows ships the
+// glyphs in MS Gothic; the stack degrades to mono elsewhere).
+const MATRIX_FONT = '"MS Gothic", "Yu Gothic", "Meiryo", "JetBrains Mono", monospace';
+const KATA_START = 0xff66;
+const KATA_SPAN = 0xff9d - KATA_START;
+function kataChar(): string {
+  return String.fromCharCode(KATA_START + ((Math.random() * KATA_SPAN) | 0));
+}
+
+// ─── shared Kill-Chain flavor passes (drawn OVER any mode by the hosts) ─────
+
+/**
+ * Tactical HUD framing: corner brackets + tick marks. Cheap (8 strokes),
+ * alpha follows the music so the frame breathes instead of sitting static.
+ */
+export function drawTacticalFrame(f: RenderFrame): void {
+  const { g, W, H } = f;
+  const m = 14;
+  const L = Math.min(46, Math.min(W, H) * 0.06);
+  const a = 0.14 + f.intel.energy * 0.12 + f.beat * 0.1;
+  g.strokeStyle = `rgba(140,200,230,${a.toFixed(3)})`;
+  g.lineWidth = 1;
+  g.beginPath();
+  // four corner brackets
+  g.moveTo(m, m + L); g.lineTo(m, m); g.lineTo(m + L, m);
+  g.moveTo(W - m - L, m); g.lineTo(W - m, m); g.lineTo(W - m, m + L);
+  g.moveTo(W - m, H - m - L); g.lineTo(W - m, H - m); g.lineTo(W - m - L, H - m);
+  g.moveTo(m + L, H - m); g.lineTo(m, H - m); g.lineTo(m, H - m - L);
+  g.stroke();
+  // bar-phase tick crawling along the top edge (only when the clock is locked)
+  if (f.intel.bpm > 0 && f.intel.bpmConf > 0.2) {
+    const x = m + L + (W - 2 * (m + L)) * f.intel.barPhase;
+    g.strokeStyle = `rgba(140,200,230,${(a * 2).toFixed(3)})`;
+    g.beginPath();
+    g.moveTo(x, m - 3);
+    g.lineTo(x, m + 5);
+    g.stroke();
+  }
+}
+
+/**
+ * Breach pulse — fired by the intel layer whenever Kill Chain engages or
+ * disengages: an expanding double shock ring + brief edge flash. Drawn over
+ * the active mode by both hosts; self-skips when the pulse has decayed.
+ */
+export function drawEngagePulse(f: RenderFrame): void {
+  const p = f.intel.engagePulse;
+  if (p < 0.02) return;
+  const { g, W, H } = f;
+  const cx = W / 2;
+  const cy = H / 2;
+  const t = 1 - p; // 0 at trigger → 1 fully decayed
+  const maxR = Math.hypot(W, H) * 0.6;
+  const r = 20 + t * maxR;
+  g.save();
+  g.strokeStyle = `rgba(255,96,64,${(p * 0.8).toFixed(3)})`;
+  g.lineWidth = 2 + p * 3;
+  g.beginPath();
+  g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.stroke();
+  g.strokeStyle = `rgba(150,210,240,${(p * 0.5).toFixed(3)})`;
+  g.lineWidth = 1.2;
+  g.beginPath();
+  g.arc(cx, cy, r * 0.78, 0, Math.PI * 2);
+  g.stroke();
+  // edge flash
+  g.fillStyle = `rgba(255,120,80,${(p * p * 0.1).toFixed(3)})`;
+  g.fillRect(0, 0, W, H);
+  g.restore();
+}
 
 // ─── 1 · SPECTRUM ARRAY ─────────────────────────────────────────────────────
 // Tactical HUD bar spectrum: log frequency scale, dB grid hairlines,
@@ -473,22 +555,64 @@ export function createRadialReactor(
   let dataTimer = 0;
   let dataCursor = 0;
 
+  // Digital rain — katakana columns falling through the core disc. Beats
+  // spawn fresh columns; column speed rides the track energy.
+  interface RainCol { x: number; y: number; speed: number; len: number; glyphs: string[]; hot: number }
+  const rain: RainCol[] = [];
+  const MAX_RAIN = 16;
+  function spawnRain(radius: number) {
+    if (rain.length >= MAX_RAIN) return;
+    const len = 5 + ((Math.random() * 9) | 0);
+    rain.push({
+      x: (Math.random() * 2 - 1) * radius * 0.85,
+      y: -radius - Math.random() * radius,
+      speed: radius * (0.55 + Math.random() * 0.9),
+      len,
+      glyphs: Array.from({ length: len }, kataChar),
+      hot: 1,
+    });
+  }
+
+  /** One line of core intel. Mixes real telemetry with katakana static. */
   function makeToken(f: RenderFrame): string {
-    const pick = (Math.random() * 7) | 0;
+    const kata = (n: number) => Array.from({ length: n }, kataChar).join("");
+    const pick = (Math.random() * 14) | 0;
     switch (pick) {
       case 0: {
         // A shard of the actual title, uppercased — the track bleeding through.
         const t = f.title.replace(/\s+/g, " ").trim().toUpperCase();
-        if (t.length < 3) return `SIG ${HEX[(Math.random() * 16) | 0]}${HEX[(Math.random() * 16) | 0]}`;
+        if (t.length < 3) return `SIG ${HEX[(Math.random() * 16) | 0]}${HEX[(Math.random() * 16) | 0]} ${kata(3)}`;
         const len = 6 + ((Math.random() * 8) | 0);
         const at = (Math.random() * Math.max(1, t.length - len)) | 0;
         return t.slice(at, at + len);
       }
-      case 1: return `LOW ${((f.low * 100) | 0).toString().padStart(2, "0")}%`;
-      case 2: return `MID ${((f.mid * 100) | 0).toString().padStart(2, "0")}%`;
-      case 3: return `AIR ${((f.high * 100) | 0).toString().padStart(2, "0")}%`;
-      case 4: return f.lufs <= -99 ? "SIG LOST" : `${f.lufs.toFixed(1)} LU`;
-      case 5: return `CTR ${(220 + f.centroid * 7800 | 0)}Hz`;
+      case 1: return `LOW ${((f.low * 100) | 0).toString().padStart(2, "0")}% ${kata(2)}`;
+      case 2: return `MID ${((f.mid * 100) | 0).toString().padStart(2, "0")}% ${kata(2)}`;
+      case 3: return `AIR ${((f.high * 100) | 0).toString().padStart(2, "0")}% ${kata(2)}`;
+      case 4: return f.lufs <= -99 ? `SIG LOST ${kata(4)}` : `${f.lufs.toFixed(1)} LU`;
+      case 5: return `CTR ${(220 + f.centroid * 7800) | 0}Hz`;
+      case 6: {
+        const bpm = f.intel.bpm;
+        return bpm > 0 && f.intel.bpmConf > 0.25
+          ? `TEMPO LOCK ${bpm.toFixed(0)} ${kata(2)}`
+          : `TEMPO SCAN ${kata(4)}`;
+      }
+      case 7: return `PHASE ${f.intel.phaseCorr >= 0 ? "+" : ""}${f.intel.phaseCorr.toFixed(2)}`;
+      case 8: return `SECTOR ${f.intel.section.toUpperCase()}`;
+      case 9: {
+        const drums = [];
+        if (f.intel.kick > 0.25) drums.push("KCK");
+        if (f.intel.snare > 0.25) drums.push("SNR");
+        if (f.intel.hat > 0.25) drums.push("HAT");
+        return drums.length ? `HIT ${drums.join("·")}` : `SWEEP ${kata(3)}`;
+      }
+      case 10: return `GRID ${(Math.random() * 90) | 0}°${(Math.random() * 60) | 0}'${(Math.random() * 60) | 0}"`;
+      case 11: {
+        let b = "";
+        for (let i = 0; i < 8; i++) b += Math.random() < 0.5 ? "0" : "1";
+        return `${b} ${kata(2)}`;
+      }
+      case 12: return kata(8 + ((Math.random() * 6) | 0));
       default: {
         let s = "0x";
         for (let i = 0; i < 6; i++) s += HEX[(Math.random() * 16) | 0];
@@ -610,6 +734,36 @@ export function createRadialReactor(
         g.fill();
       }
 
+      // ── Digital rain through the core disc (clipped to the circle). ──
+      if (glowR > 20 && !reduced) {
+        if (f.beatHit) { spawnRain(glowR); spawnRain(glowR); }
+        if (rain.length < 6 && Math.random() < dt * 3) spawnRain(glowR);
+        const cell = Math.max(9, glowR * 0.085);
+        g.save();
+        g.beginPath();
+        g.arc(cx, cy, glowR, 0, Math.PI * 2);
+        g.clip();
+        g.font = `${cell | 0}px ${MATRIX_FONT}`;
+        g.textAlign = "center";
+        for (let i = rain.length - 1; i >= 0; i--) {
+          const c = rain[i];
+          c.y += c.speed * dt * (0.6 + f.rms * 1.8 + f.beat * 0.8);
+          c.hot = Math.max(0.35, c.hot - dt * 0.4);
+          // Glyphs mutate as they fall — the signature matrix shimmer.
+          if (Math.random() < dt * 14) c.glyphs[(Math.random() * c.len) | 0] = kataChar();
+          for (let jj = 0; jj < c.len; jj++) {
+            const gy = c.y - jj * cell;
+            if (gy < -glowR || gy > glowR) continue;
+            const head = jj === 0;
+            const a = head ? 0.95 * c.hot : (1 - jj / c.len) * 0.42 * c.hot;
+            g.fillStyle = head ? "rgba(235,255,240,0.9)" : rgba(pal.cyan, a);
+            g.fillText(c.glyphs[jj], cx + c.x, cy + gy);
+          }
+          if (c.y - c.len * cell > glowR) rain.splice(i, 1);
+        }
+        g.restore();
+      }
+
       // LUFS readout (string rebuilt only when the value moves ≥ 0.1 LU)
       if (Math.abs(f.lufs - lastLufs) >= 0.1) {
         lastLufs = f.lufs;
@@ -631,7 +785,7 @@ export function createRadialReactor(
         dataAge[dataCursor] = 0;
         dataCursor = (dataCursor + 1) % DATA_SLOTS;
       }
-      g.font = `${Math.max(9, unit * 0.016) | 0}px ${MONO_FONT}`;
+      g.font = `${Math.max(10, unit * 0.017) | 0}px ${MATRIX_FONT}`;
       for (let i = 0; i < DATA_SLOTS; i++) {
         if (dataAge[i] > 1.6) continue;
         dataAge[i] += dt;
@@ -768,12 +922,13 @@ export function createWaterfallSpectrogram(
 }
 
 // ─── 5 · STRIKE FIELD ───────────────────────────────────────────────────────
-// A musical warzone. The crosshair HUNTS: it picks a target, races to it,
-// locks, and the next beat FIRES — the munition depends on what the music
-// did (bass = artillery shell + screen shake, mids = cluster strike, highs =
-// flak burst). Sustained highs stream tracer fire from the screen corner;
-// mid onsets crackle small-arms bursts around the target. Fixed-size pools,
-// zero GC churn.
+// A war fought to the beat. Hostile contacts (drones, jets, tanks, comm
+// towers, blimps) patrol the grid; the crosshair hunts the nearest LIVE
+// contact, tracks it while it moves, locks, and the next beat on the BPM
+// grid FIRES. Kicks launch arcing missiles from the corners, snares call
+// cluster strikes, hats burst flak. Downed aircraft fall as burning wrecks;
+// a ground skyline flashes with artillery on heavy kicks; drops unleash a
+// full salvo. Fixed-size pools, zero GC churn.
 
 export function createStrikeField(pal: ThemePalette): ModeRenderer {
   const MAX = 640;
@@ -802,14 +957,50 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
   const cqStr = new Float32Array(CQ);
   let cqCursor = 0;
 
-  // Muzzle streaks (artillery trails from the corner to the target).
-  const MZ = 3;
-  const mzX0 = new Float32Array(MZ);
-  const mzY0 = new Float32Array(MZ);
-  const mzX1 = new Float32Array(MZ);
-  const mzY1 = new Float32Array(MZ);
-  const mzAge = new Float32Array(MZ).fill(9);
-  let mzCursor = 0;
+  // Missiles — arcing munitions launched from a corner, timed so the WARHEAD
+  // lands exactly on the next beat tick (launch leads the beat by the flight
+  // time). Quadratic arc: origin → control → target.
+  const MS = 4;
+  const msX0 = new Float32Array(MS);
+  const msY0 = new Float32Array(MS);
+  const msCX = new Float32Array(MS);
+  const msCY = new Float32Array(MS);
+  const msX1 = new Float32Array(MS);
+  const msY1 = new Float32Array(MS);
+  const msT = new Float32Array(MS).fill(9); // 0..1 progress, ≥9 = idle
+  const msDur = new Float32Array(MS).fill(1);
+  const msTarget = new Int8Array(MS).fill(-1); // contact index to damage on impact
+  let msCursor = 0;
+
+  // Hostile contacts — the things being shot down.
+  // kind: 0 drone · 1 jet · 2 tank · 3 comm tower · 4 blimp
+  const CT = 7;
+  const ctKind = new Uint8Array(CT);
+  const ctX = new Float32Array(CT); // normalized
+  const ctY = new Float32Array(CT);
+  const ctVX = new Float32Array(CT);
+  const ctHp = new Int8Array(CT);
+  const ctAlive = new Uint8Array(CT);
+  const ctPhase = new Float32Array(CT);
+  const ctTag = new Array<string>(CT).fill("");
+  const CT_NAMES = ["UAV", "FALCON", "ARMOR", "RELAY", "ZEPPELIN"];
+  let ctSerial = 1;
+  let spawnCooldown = 0;
+
+  // Falling wrecks — downed aircraft burn on the way to the ground.
+  const WK = 4;
+  const wkX = new Float32Array(WK);
+  const wkY = new Float32Array(WK);
+  const wkVX = new Float32Array(WK);
+  const wkVY = new Float32Array(WK);
+  const wkRot = new Float32Array(WK);
+  const wkLife = new Float32Array(WK).fill(0);
+  let wkCursor = 0;
+
+  const GROUND = 0.88; // normalized y of the ground line
+  let horizonFlash = 0; // artillery glow on the skyline (kick-driven)
+  // Deterministic skyline: heights hashed so resize doesn't reshuffle it.
+  const skyH = (i: number) => 0.35 + (Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1) * 0.65;
 
   const lut = gradientLut(
     [
@@ -835,6 +1026,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
   let chY = 0.5; // normalized coords (survive resizes)
   let tgX = 0.5;
   let tgY = 0.5;
+  let chTarget = -1; // contact index the crosshair is hunting
   let chState: 0 | 1 | 2 = 0; // 0 seek · 1 locked · 2 cooldown
   let stateT = 0;
   let kills = 0;
@@ -843,6 +1035,10 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
   let tracerTimer = 0;
   let prevMid = 0;
   let shake = 0;
+  // v1.8 intel choreography: drop salvo queue + section tracking.
+  let prevSection = "";
+  let salvoQueue = 0;
+  let salvoTimer = 0;
 
   function spawnParticles(
     x: number, y: number, strength: number, kind: 0 | 1 | 2, count: number, reduced: boolean,
@@ -873,18 +1069,108 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
     rbig[r] = big ? 1 : 0;
   }
 
+  function spawnContact(energetic: boolean): void {
+    let slot = -1;
+    for (let i = 0; i < CT; i++) if (!ctAlive[i]) { slot = i; break; }
+    if (slot < 0) return;
+    // Energetic sections favour fast movers; quiet ones favour static targets.
+    const roll = Math.random();
+    const kind = energetic
+      ? roll < 0.35 ? 1 : roll < 0.65 ? 0 : roll < 0.85 ? 2 : 4
+      : roll < 0.3 ? 0 : roll < 0.55 ? 3 : roll < 0.8 ? 2 : 4;
+    ctKind[slot] = kind;
+    ctPhase[slot] = Math.random() * 10;
+    ctTag[slot] = `${CT_NAMES[kind]}-${(ctSerial++ % 90) + 10}`;
+    ctAlive[slot] = 1;
+    switch (kind) {
+      case 0: // drone: hovers mid-air, jitters
+        ctX[slot] = 0.15 + Math.random() * 0.7;
+        ctY[slot] = 0.18 + Math.random() * 0.4;
+        ctVX[slot] = (Math.random() - 0.5) * 0.03;
+        ctHp[slot] = 1;
+        break;
+      case 1: // jet: streaks across the sky
+        ctVX[slot] = (Math.random() < 0.5 ? 1 : -1) * (0.09 + Math.random() * 0.08);
+        ctX[slot] = ctVX[slot] > 0 ? -0.05 : 1.05;
+        ctY[slot] = 0.12 + Math.random() * 0.3;
+        ctHp[slot] = 1;
+        break;
+      case 2: // tank: crawls along the ground
+        ctVX[slot] = (Math.random() < 0.5 ? 1 : -1) * (0.008 + Math.random() * 0.008);
+        ctX[slot] = ctVX[slot] > 0 ? -0.04 : 1.04;
+        ctY[slot] = GROUND;
+        ctHp[slot] = 2;
+        break;
+      case 3: // comm tower: static ground installation
+        ctX[slot] = 0.1 + Math.random() * 0.8;
+        ctY[slot] = GROUND;
+        ctVX[slot] = 0;
+        ctHp[slot] = 2;
+        break;
+      default: // blimp: slow drift, high altitude, soaks hits
+        ctVX[slot] = (Math.random() < 0.5 ? 1 : -1) * 0.012;
+        ctX[slot] = ctVX[slot] > 0 ? -0.08 : 1.08;
+        ctY[slot] = 0.1 + Math.random() * 0.14;
+        ctHp[slot] = 3;
+        break;
+    }
+  }
+
+  /** Pick the nearest live contact and start hunting it. */
   function retarget(): void {
-    tgX = 0.14 + Math.random() * 0.72;
-    tgY = 0.14 + Math.random() * 0.68;
+    let best = -1;
+    let bestD = 1e9;
+    for (let i = 0; i < CT; i++) {
+      if (!ctAlive[i]) continue;
+      const d = Math.abs(ctX[i] - chX) + Math.abs(ctY[i] - chY);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    chTarget = best;
+    if (best < 0) {
+      tgX = 0.14 + Math.random() * 0.72;
+      tgY = 0.14 + Math.random() * 0.68;
+    }
     chState = 0;
     stateT = 0;
+  }
+
+  /** Damage a contact; on kill spawn the appropriate death (wreck / boom). */
+  function damageContact(idx: number, W: number, H: number, reduced: boolean): void {
+    if (idx < 0 || !ctAlive[idx]) return;
+    ctHp[idx]--;
+    const x = ctX[idx] * W;
+    const y = ctY[idx] * H;
+    if (ctHp[idx] > 0) {
+      // Wounded — sparks, keeps flying.
+      spawnParticles(x, y, 0.5, 0, 12, reduced);
+      ring(x, y, false);
+      return;
+    }
+    ctAlive[idx] = 0;
+    kills++;
+    const airborne = ctKind[idx] === 0 || ctKind[idx] === 1 || ctKind[idx] === 4;
+    spawnParticles(x, y, 1, 0, airborne ? 30 : 40, reduced);
+    ring(x, y, true);
+    if (airborne && !reduced) {
+      // Falling wreck with a burning trail.
+      const w = wkCursor;
+      wkCursor = (wkCursor + 1) % WK;
+      wkX[w] = x;
+      wkY[w] = y;
+      wkVX[w] = ctVX[idx] * W * 2 + (Math.random() - 0.5) * 60;
+      wkVY[w] = 30;
+      wkRot[w] = Math.random() * Math.PI * 2;
+      wkLife[w] = 3;
+    }
+    if (idx === chTarget) chTarget = -1;
   }
 
   return {
     resize(_W: number, _H: number) {
       plife.fill(0);
       rlife.fill(0);
-      mzAge.fill(9);
+      msT.fill(9);
+      wkLife.fill(0);
       cqDelay.fill(-1);
     },
 
@@ -903,6 +1189,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
       g.translate(shX, shY);
 
       // tactical grid, brightening on the beat envelope
+      const it = f.intel;
       const spacing = 48;
       g.lineWidth = 1;
       g.strokeStyle = f.beat > 0.25 ? gridHot : gridCol;
@@ -917,20 +1204,73 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
       }
       g.stroke();
 
-      // ── Crosshair hunt/lock/fire cycle ──
+      // BPM-locked bar sweep: a radar line crawls the grid once per bar and
+      // slams bright on the downbeat.
+      const gridLocked = it.bpm > 0 && it.bpmConf > 0.3;
+      if (gridLocked) {
+        const sx = it.barPhase * W;
+        const sweepA = 0.1 + (it.barTick ? 0.5 : 0) + Math.max(0, 0.25 - it.beatPhase * 0.6);
+        g.strokeStyle = rgba(pal.cyan, Math.min(0.6, sweepA));
+        g.lineWidth = it.beatPhase < 0.1 ? 2 : 1;
+        g.beginPath();
+        g.moveTo(sx, 0);
+        g.lineTo(sx, H);
+        g.stroke();
+      }
+
+      // ── Contact management: keep the sky populated to match the music ──
+      const energetic = it.section === "drop" || it.section === "buildup";
+      const budget =
+        it.section === "drop" ? 5 :
+        it.section === "buildup" ? 4 :
+        it.section === "breakdown" || it.section === "idle" ? 2 : 3;
+      let aliveCount = 0;
+      for (let i = 0; i < CT; i++) if (ctAlive[i]) aliveCount++;
+      spawnCooldown -= dt;
+      if (aliveCount < budget && spawnCooldown <= 0 && f.rms > 0.003) {
+        spawnCooldown = 0.5 + Math.random() * 0.8;
+        spawnContact(energetic);
+      }
+      // Movement per kind.
+      for (let i = 0; i < CT; i++) {
+        if (!ctAlive[i]) continue;
+        ctPhase[i] += dt;
+        ctX[i] += ctVX[i] * dt * (ctKind[i] === 1 ? (1 + f.rms) : 1);
+        if (ctKind[i] === 0) {
+          // drone hover jitter + slow bob
+          ctY[i] += Math.sin(ctPhase[i] * 2.2) * dt * 0.015;
+          ctX[i] += Math.sin(ctPhase[i] * 1.4) * dt * 0.02;
+        }
+        // Off-screen movers despawn quietly (never the crosshair's target mid-lock).
+        if ((ctX[i] < -0.12 || ctX[i] > 1.12) && ctVX[i] !== 0) {
+          ctAlive[i] = 0;
+          if (chTarget === i) chTarget = -1;
+        }
+      }
+
+      // ── Crosshair hunt/lock/fire cycle — hunts LIVE contacts ──
       stateT += dt;
+      if (chTarget < 0 || !ctAlive[chTarget]) retarget();
+      if (chTarget >= 0 && ctAlive[chTarget]) {
+        // Track the moving target continuously (lock survives movement).
+        tgX = ctX[chTarget];
+        tgY = ctY[chTarget] - (ctKind[chTarget] === 3 ? 0.06 : 0); // aim at the mast head
+      }
       const seekK = 1 - Math.exp(-dt * (reduced ? 3 : 5.5));
       if (chState === 0) {
         chX += (tgX - chX) * seekK;
         chY += (tgY - chY) * seekK;
-        if (Math.abs(tgX - chX) + Math.abs(tgY - chY) < 0.012) {
+        if (Math.abs(tgX - chX) + Math.abs(tgY - chY) < 0.02) {
           chState = 1;
           stateT = 0;
         }
         // Bored of a target that never gets a beat? Move on.
         if (stateT > 3.5) retarget();
-      } else if (chState === 1 && stateT > 4) {
-        retarget();
+      } else if (chState === 1) {
+        // Locked: ride the target.
+        chX += (tgX - chX) * seekK * 1.6;
+        chY += (tgY - chY) * seekK * 1.6;
+        if (stateT > 4) retarget();
       } else if (chState === 2 && stateT > 0.28) {
         retarget();
       }
@@ -938,44 +1278,126 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
       const cxp = chX * W;
       const cyp = chY * H;
 
-      // FIRE on the beat while locked.
-      if (f.beatHit && chState === 1) {
+      // ── DROP EVENT: entering a drop unloads a full salvo across the grid ──
+      if (it.section !== prevSection) {
+        if (it.section === "drop" && prevSection !== "") {
+          salvoQueue = reduced ? 3 : 6;
+          salvoTimer = 0;
+          shake = 14;
+        }
+        prevSection = it.section;
+      }
+      if (salvoQueue > 0) {
+        salvoTimer -= dt;
+        if (salvoTimer <= 0) {
+          salvoTimer = 0.11;
+          salvoQueue--;
+          const sxp = (0.12 + Math.random() * 0.76) * W;
+          const syp = (0.12 + Math.random() * 0.72) * H;
+          spawnParticles(sxp, syp, 0.9, 0, 30, reduced);
+          ring(sxp, syp, true);
+          horizonFlash = 1;
+        }
+      }
+
+      // ── FIRE CONTROL ──
+      // The munition (chosen by the strongest drum onset) detonates ON the
+      // beat. With a confident BPM grid the missile launches EARLY, leading
+      // the beat by its flight time so the warhead lands exactly on the tick;
+      // without the grid, strikes fall back to the adaptive onset detector.
+      const impactAt = (ix: number, iy: number, targetIdx: number) => {
         chState = 2;
         stateT = 0;
-        kills++;
         const strength = Math.min(1, f.low * 1.4 + f.rms * 0.8 + 0.25);
-        // Which munition? The loudest band decides.
-        if (f.low >= f.mid && f.low >= f.high) {
-          // ARTILLERY SHELL: muzzle streak from the nearest corner, big
-          // double ring, heavy shake.
-          const corner = cxp < W / 2 ? W : 0;
-          const m = mzCursor;
-          mzCursor = (mzCursor + 1) % MZ;
-          mzX0[m] = corner;
-          mzY0[m] = H + 20;
-          mzX1[m] = cxp;
-          mzY1[m] = cyp;
-          mzAge[m] = 0;
-          spawnParticles(cxp, cyp, strength, 0, 34 + ((strength * 22) | 0), reduced);
-          ring(cxp, cyp, true);
-          ring(cxp, cyp, false);
+        const drums = it.kick + it.snare + it.hat;
+        const kickCall = drums > 0.1 ? it.kick >= it.snare && it.kick >= it.hat : f.low >= f.mid && f.low >= f.high;
+        const snareCall = drums > 0.1 ? it.snare >= it.hat : f.mid >= f.high;
+        if (kickCall) {
+          // WARHEAD: big double ring, heavy shake, artillery on the horizon.
+          spawnParticles(ix, iy, strength, 0, 34 + ((strength * 22) | 0), reduced);
+          ring(ix, iy, true);
+          ring(ix, iy, false);
           shake = 9 + strength * 8;
-        } else if (f.mid >= f.high) {
+          horizonFlash = Math.max(horizonFlash, 0.8);
+        } else if (snareCall) {
           // CLUSTER STRIKE: three bomblets land staggered around the target.
           for (let i = 0; i < 3; i++) {
             const q = cqCursor;
             cqCursor = (cqCursor + 1) % CQ;
-            cqX[q] = cxp + (Math.random() - 0.5) * 130;
-            cqY[q] = cyp + (Math.random() - 0.5) * 110;
+            cqX[q] = ix + (Math.random() - 0.5) * 130;
+            cqY[q] = iy + (Math.random() - 0.5) * 110;
             cqDelay[q] = i * 0.09;
             cqStr[q] = strength * (0.55 + Math.random() * 0.3);
           }
           shake = 5;
         } else {
-          // FLAK: white starburst high above the target.
-          spawnParticles(cxp, cyp - H * 0.12, strength, 2, 26, reduced);
-          ring(cxp, cyp - H * 0.12, false);
+          // FLAK: white starburst bursting around the target.
+          spawnParticles(ix, iy - H * 0.04, strength, 2, 26, reduced);
+          ring(ix, iy - H * 0.04, false);
           shake = 4;
+        }
+        damageContact(targetIdx, W, H, reduced);
+      };
+
+      let missileInFlight = false;
+      for (let i = 0; i < MS; i++) if (msT[i] <= 1) missileInFlight = true;
+
+      if (gridLocked && chState === 1 && !missileInFlight && it.beatPhase >= 0.68 && it.beatPhase < 0.97) {
+        // Launch from the bottom corner nearest the target, arcing high.
+        const period = 60 / it.bpm;
+        const m = msCursor;
+        msCursor = (msCursor + 1) % MS;
+        msX0[m] = cxp < W / 2 ? W + 16 : -16;
+        msY0[m] = H + 16;
+        msX1[m] = cxp;
+        msY1[m] = cyp;
+        msCX[m] = (msX0[m] + cxp) / 2;
+        msCY[m] = Math.min(msY0[m], cyp) - H * (0.2 + Math.random() * 0.15);
+        msDur[m] = Math.max(0.09, (1 - it.beatPhase) * period);
+        msT[m] = 0;
+        msTarget[m] = chTarget;
+      } else if (!gridLocked && f.beatHit && chState === 1) {
+        // No tempo lock — instant strike on the onset.
+        impactAt(cxp, cyp, chTarget);
+      }
+
+      // Missiles in flight: advance along the arc, draw exhaust, detonate at
+      // t = 1 — which lands on the beat tick by construction.
+      for (let i = 0; i < MS; i++) {
+        if (msT[i] > 1) continue;
+        msT[i] += dt / msDur[i];
+        const t = Math.min(1, msT[i]);
+        const omt = 1 - t;
+        const mx = omt * omt * msX0[i] + 2 * omt * t * msCX[i] + t * t * msX1[i];
+        const my = omt * omt * msY0[i] + 2 * omt * t * msCY[i] + t * t * msY1[i];
+        const tt = Math.max(0, t - 0.1);
+        const omtt = 1 - tt;
+        const tx = omtt * omtt * msX0[i] + 2 * omtt * tt * msCX[i] + tt * tt * msX1[i];
+        const ty = omtt * omtt * msY0[i] + 2 * omtt * tt * msCY[i] + tt * tt * msY1[i];
+        g.strokeStyle = ringBigCol;
+        g.globalAlpha = 0.85;
+        g.lineWidth = 2.5;
+        g.beginPath();
+        g.moveTo(tx, ty);
+        g.lineTo(mx, my);
+        g.stroke();
+        g.globalAlpha = 1;
+        g.fillStyle = flakCol;
+        g.fillRect(mx - 1.5, my - 1.5, 3, 3);
+        if (!reduced && Math.random() < dt * 40) {
+          const k = cursor;
+          cursor = (cursor + 1) % MAX;
+          px[k] = mx;
+          py[k] = my;
+          pvx[k] = (Math.random() - 0.5) * 30;
+          pvy[k] = (Math.random() - 0.5) * 30 + 20;
+          pttl[k] = 0.35;
+          plife[k] = pttl[k];
+          pkind[k] = 0;
+        }
+        if (msT[i] >= 1) {
+          msT[i] = 9;
+          impactAt(msX1[i], msY1[i], msTarget[i]);
         }
       }
 
@@ -1039,20 +1461,169 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
         pkind[k] = 0;
       }
 
-      // Muzzle streaks.
-      for (let i = 0; i < MZ; i++) {
-        if (mzAge[i] > 0.16) continue;
-        mzAge[i] += dt;
-        const a = Math.max(0, 1 - mzAge[i] / 0.16);
-        g.strokeStyle = ringBigCol;
-        g.globalAlpha = a * 0.8;
-        g.lineWidth = 2.5;
-        g.beginPath();
-        g.moveTo(mzX0[i], mzY0[i]);
-        g.lineTo(mzX1[i], mzY1[i]);
-        g.stroke();
+      // ── Ground skyline: dark silhouette strip with artillery flashes ──
+      const gy = GROUND * H;
+      horizonFlash = Math.max(0, horizonFlash - dt * 2.2);
+      if (horizonFlash > 0.01 && !reduced) {
+        const hf = g.createLinearGradient(0, gy - H * 0.16, 0, gy);
+        hf.addColorStop(0, "rgba(4,5,10,0)");
+        hf.addColorStop(1, rgba(pal.amber, horizonFlash * 0.28));
+        g.fillStyle = hf;
+        g.fillRect(0, gy - H * 0.16, W, H * 0.16);
       }
-      g.globalAlpha = 1;
+      g.fillStyle = "rgba(2,3,6,0.92)";
+      g.fillRect(0, gy, W, H - gy);
+      // Buildings (deterministic heights — stable across frames/resizes).
+      g.fillStyle = "rgba(8,10,16,0.95)";
+      const bw = Math.max(26, W / 30);
+      for (let i = 0; i * bw < W; i++) {
+        const bh = skyH(i) * H * 0.055;
+        g.fillRect(i * bw, gy - bh, bw - 3, bh);
+      }
+      g.strokeStyle = rgba(pal.cyan, 0.2);
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(0, gy);
+      g.lineTo(W, gy);
+      g.stroke();
+
+      // ── Searchlights sweeping from the ground (brighten with the highs) ──
+      if (!reduced && f.rms > 0.01) {
+        for (let s = 0; s < 2; s++) {
+          const baseX = s === 0 ? W * 0.16 : W * 0.84;
+          const a = -Math.PI / 2 + Math.sin(f.now * 0.00023 + s * 2.4) * 0.55;
+          const bx = baseX + Math.cos(a) * H * 0.9;
+          const by = gy + Math.sin(a) * H * 0.9;
+          const sl = g.createLinearGradient(baseX, gy, bx, by);
+          sl.addColorStop(0, rgba(pal.cyan, 0.1 + f.high * 0.14));
+          sl.addColorStop(1, "rgba(4,5,10,0)");
+          g.strokeStyle = sl;
+          g.lineWidth = 14;
+          g.beginPath();
+          g.moveTo(baseX, gy);
+          g.lineTo(bx, by);
+          g.stroke();
+        }
+      }
+
+      // ── Hostile contacts: silhouettes with designation tags ──
+      g.font = `8px ${MONO_FONT}`;
+      g.textAlign = "center";
+      const czUnit = Math.min(W, H);
+      for (let i = 0; i < CT; i++) {
+        if (!ctAlive[i]) continue;
+        const x = ctX[i] * W;
+        const y = ctY[i] * H;
+        const s = Math.max(9, czUnit * 0.016); // half-size of the silhouette
+        const hostile = rgba(pal.plasma, 0.85);
+        const hurt = ctHp[i] === 1 && (ctKind[i] === 2 || ctKind[i] === 3 || ctKind[i] === 4);
+        g.strokeStyle = hurt ? rgba(pal.amber, 0.9) : hostile;
+        g.lineWidth = 1.4;
+        g.beginPath();
+        switch (ctKind[i]) {
+          case 0: { // drone: X-frame quad with rotor tips
+            g.moveTo(x - s, y - s); g.lineTo(x + s, y + s);
+            g.moveTo(x + s, y - s); g.lineTo(x - s, y + s);
+            g.stroke();
+            g.beginPath();
+            g.arc(x - s, y - s, s * 0.34, 0, Math.PI * 2);
+            g.arc(x + s, y - s, s * 0.34, 0, Math.PI * 2);
+            g.stroke();
+            break;
+          }
+          case 1: { // jet: delta wing pointing along velocity
+            const dir = ctVX[i] >= 0 ? 1 : -1;
+            g.moveTo(x + dir * s * 1.5, y);
+            g.lineTo(x - dir * s, y - s * 0.7);
+            g.lineTo(x - dir * s * 0.5, y);
+            g.lineTo(x - dir * s, y + s * 0.7);
+            g.closePath();
+            g.stroke();
+            // vapor trail
+            g.strokeStyle = rgba(pal.cyan, 0.18);
+            g.beginPath();
+            g.moveTo(x - dir * s * 1.6, y);
+            g.lineTo(x - dir * s * 5, y);
+            g.stroke();
+            break;
+          }
+          case 2: { // tank: hull + turret + barrel, sits on the ground line
+            const ty2 = gy - s * 0.5;
+            g.rect(x - s, ty2 - s * 0.5, s * 2, s * 0.55);
+            g.rect(x - s * 0.4, ty2 - s * 0.95, s * 0.8, s * 0.45);
+            g.moveTo(x + s * 0.4, ty2 - s * 0.75);
+            g.lineTo(x + s * 1.6 * (ctVX[i] >= 0 ? 1 : -1), ty2 - s * 0.85);
+            g.stroke();
+            break;
+          }
+          case 3: { // comm tower: mast + dish, blinking beacon
+            g.moveTo(x - s * 0.7, gy);
+            g.lineTo(x, gy - s * 2.4);
+            g.lineTo(x + s * 0.7, gy);
+            g.moveTo(x - s * 0.45, gy - s * 0.9);
+            g.lineTo(x + s * 0.45, gy - s * 0.9);
+            g.stroke();
+            if ((f.now * 0.002 + i) % 2 < 1) {
+              g.fillStyle = rgba(pal.plasma, 0.95);
+              g.fillRect(x - 1.5, gy - s * 2.4 - 3, 3, 3);
+            }
+            break;
+          }
+          default: { // blimp: fat ellipse + tail fins + gondola
+            g.ellipse(x, y, s * 1.7, s * 0.75, 0, 0, Math.PI * 2);
+            g.stroke();
+            g.beginPath();
+            const dir = ctVX[i] >= 0 ? -1 : 1;
+            g.moveTo(x + dir * s * 1.6, y - s * 0.6);
+            g.lineTo(x + dir * s * 2.3, y);
+            g.lineTo(x + dir * s * 1.6, y + s * 0.6);
+            g.stroke();
+            g.strokeRect(x - s * 0.3, y + s * 0.75, s * 0.6, s * 0.35);
+            break;
+          }
+        }
+        // Designation tag under the contact (the crosshair's mark runs hot).
+        g.fillStyle = i === chTarget ? rgba(pal.amber, 0.85) : rgba(pal.cyan, 0.4);
+        g.fillText(ctTag[i], x, (ctKind[i] === 2 || ctKind[i] === 3 ? gy : y + s * 1.6) + 12);
+      }
+
+      // ── Falling wrecks: burning debris tumbling to the ground ──
+      for (let i = 0; i < WK; i++) {
+        if (wkLife[i] <= 0) continue;
+        wkLife[i] -= dt;
+        wkVY[i] += 340 * dt; // gravity
+        wkX[i] += wkVX[i] * dt;
+        wkY[i] += wkVY[i] * dt;
+        wkRot[i] += dt * 4;
+        if (wkY[i] >= gy) {
+          // Ground impact — final burst.
+          spawnParticles(wkX[i], gy, 0.7, 0, 20, reduced);
+          ring(wkX[i], gy, false);
+          horizonFlash = Math.max(horizonFlash, 0.5);
+          wkLife[i] = 0;
+          continue;
+        }
+        const ws = 5;
+        g.save();
+        g.translate(wkX[i], wkY[i]);
+        g.rotate(wkRot[i]);
+        g.strokeStyle = rgba(pal.amber, 0.9);
+        g.lineWidth = 1.6;
+        g.strokeRect(-ws, -ws * 0.4, ws * 2, ws * 0.8);
+        g.restore();
+        // burning trail
+        if (!reduced && Math.random() < dt * 30) {
+          const k = cursor;
+          cursor = (cursor + 1) % MAX;
+          px[k] = wkX[i];
+          py[k] = wkY[i];
+          pvx[k] = (Math.random() - 0.5) * 40;
+          pvy[k] = -20 - Math.random() * 40;
+          pttl[k] = 0.5;
+          plife[k] = pttl[k];
+          pkind[k] = 0;
+        }
+      }
 
       // expanding shock rings (shells get a fat double-walled ring)
       for (let i = 0; i < RINGS; i++) {
@@ -1154,12 +1725,18 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
       g.font = `9px ${MONO_FONT}`;
       g.textAlign = "left";
       g.fillStyle = labelCol;
+      const tgTag = chTarget >= 0 && ctAlive[chTarget] ? ` ${ctTag[chTarget]}` : "";
       g.fillText(
-        locked ? "TARGET LOCKED — AWAITING BEAT" : chState === 2 ? "IMPACT CONFIRMED" : "ACQUIRING…",
+        locked
+          ? `LOCK${tgTag} — BIRD AWAY ON BEAT`
+          : chState === 2
+            ? "SPLASH — TARGET DOWN"
+            : `ACQUIRING${tgTag}…`,
         8, 14,
       );
       g.textAlign = "right";
-      g.fillText(`STRIKES ${kills}`, W - 8, 14);
+      const tempoTag = gridLocked ? ` · ${it.bpm.toFixed(0)} BPM GRID` : "";
+      g.fillText(`KILLS ${kills} · ${it.section.toUpperCase()}${tempoTag}`, W - 8, 14);
     },
   };
 }
@@ -1201,7 +1778,30 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
   let rot = 0;      // global field rotation
   let hue = 0;      // colour cycle phase 0..1
   let boost = 0;    // warp overdrive (beat slam, decays)
+  // v1.8: stereo camera + section segmentation state.
+  let camX = 0;
+  let camY = 0;
+  let camPhase = 0;
+  let prevSection = "";
+  let sectionFlash = 0;
   let seeded = false;
+
+  // v2.2 variation: wireframe ring GATES fly past on each bar, tumbling
+  // DEBRIS drifts through the field, and entering a drop fires a short
+  // HYPERJUMP (warp overload + streak stretch + white-out).
+  const GATES = 6;
+  const gateT = new Float32Array(GATES).fill(9); // 0..1 depth progress
+  const gateRot = new Float32Array(GATES);
+  const gateSides = new Uint8Array(GATES);
+  let gateCursor = 0;
+  let prevBarTick = false;
+  const DEBRIS = 8;
+  const dbAng = new Float32Array(DEBRIS);
+  const dbRad = new Float32Array(DEBRIS);
+  const dbSpin = new Float32Array(DEBRIS);
+  const dbSides = new Uint8Array(DEBRIS);
+  let dbSeeded = false;
+  let jump = 0;
   const seed = () => {
     for (let i = 0; i < N; i++) {
       ang[i] = Math.random() * Math.PI * 2;
@@ -1229,15 +1829,59 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
       const maxR = Math.hypot(W, H) * 0.55;
 
       // Kaleidoscope motion: rotation follows brightness, hue never rests,
-      // and a hard beat slams the throttle open for a moment.
-      if (f.beatHit) boost = Math.min(1.6, boost + 0.55 + f.low * 0.6);
+      // and a hard beat slams the throttle open for a moment. When the BPM
+      // clock is confident the slams land exactly on the grid.
+      const it = f.intel;
+      const gridLocked = it.bpm > 0 && it.bpmConf > 0.3;
+      const beatSlam = gridLocked ? it.beatTick : f.beatHit;
+      if (beatSlam) boost = Math.min(1.6, boost + 0.55 + f.low * 0.6);
       boost = Math.max(0, boost - dt * 1.7);
       if (!reduced) {
         rot += dt * (0.06 + f.centroid * 0.5 + f.beat * 0.35);
         hue = (hue + dt * (0.05 + f.high * 0.25)) % 1;
       }
-      const twistK = Math.sin(f.now * 0.00013) * 1.4; // slow breathing spiral
-      const warp = (0.16 + f.rms * 2.4 + f.beat * 1.5 + boost) * (reduced ? 0.45 : 1);
+
+      // Section segmentation: chorus/drop entries snap the hue a quarter turn
+      // and flash the whole field; breakdowns cool the throttle. A drop
+      // additionally punches a HYPERJUMP — a moment of overloaded warp.
+      if (it.section !== prevSection) {
+        if (prevSection !== "" && (it.section === "drop" || it.section === "buildup")) {
+          hue = (hue + 0.25) % 1;
+          sectionFlash = 1;
+          boost = Math.min(2, boost + 0.8);
+          if (it.section === "drop" && !reduced) jump = 1;
+        }
+        prevSection = it.section;
+      }
+      sectionFlash = Math.max(0, sectionFlash - dt * 1.6);
+      jump = Math.max(0, jump - dt * 1.4);
+      const sectionDrag = it.section === "breakdown" ? 0.55 : 1;
+
+      // Bar gates: a wireframe ring spawns deep in the tunnel on each bar
+      // and flies past the camera (sides vary so no two gates look alike).
+      if (gridLocked && it.barTick && !prevBarTick && !reduced) {
+        gateT[gateCursor] = 0.02;
+        gateRot[gateCursor] = Math.random() * Math.PI;
+        gateSides[gateCursor] = 5 + ((Math.random() * 4) | 0);
+        gateCursor = (gateCursor + 1) % GATES;
+      }
+      prevBarTick = it.barTick;
+
+      // Stereo camera: width swings the eye off-axis, phase-correlation
+      // wobble adds drift. Near stars sweep harder than far ones (true depth
+      // parallax below).
+      camPhase += dt * (0.35 + it.width * 0.9);
+      const spread = unit * (0.02 + it.width * 0.13) * (reduced ? 0.4 : 1);
+      const camTX = Math.sin(camPhase) * spread;
+      const camTY = Math.cos(camPhase * 0.73) * spread * 0.6;
+      const camK = 1 - Math.exp(-dt * 2.2);
+      camX += (camTX - camX) * camK;
+      camY += (camTY - camY) * camK;
+
+      const twistK = Math.sin(f.now * 0.00013) * (1.4 + it.width * 0.8);
+      const warp =
+        (0.16 + f.rms * 2.4 + f.beat * 1.5 + boost) * (reduced ? 0.45 : 1) * sectionDrag *
+        (1 + jump * 3.2);
       const bandLvl = [f.low, f.mid, f.high];
       const hueShift = (hue * 16) | 0;
 
@@ -1255,12 +1899,18 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
         const bright = 0.12 + lvl * 1.5;
         if (bright < 0.16) continue;
         // Spiral twist: stars near the core lead/lag the field rotation.
+        // Depth parallax: the camera offset fades with distance (small r =
+        // deep in the tunnel barely moves; close stars sweep with the eye).
         const a0 = ang[i] + rot + twistK * (1 - r0);
         const a1 = ang[i] + rot + twistK * (1 - r1);
-        const x0 = cx + Math.cos(a0) * r0 * maxR;
-        const y0 = cy + Math.sin(a0) * r0 * maxR;
-        const x1 = cx + Math.cos(a1) * r1 * maxR;
-        const y1 = cy + Math.sin(a1) * r1 * maxR;
+        const px0 = cx + camX * r0;
+        const py0 = cy + camY * r0;
+        const px1 = cx + camX * r1;
+        const py1 = cy + camY * r1;
+        const x0 = px0 + Math.cos(a0) * r0 * maxR;
+        const y0 = py0 + Math.sin(a0) * r0 * maxR;
+        const x1 = px1 + Math.cos(a1) * r1 * maxR;
+        const y1 = py1 + Math.sin(a1) * r1 * maxR;
         const lut = bandCols[band[i]];
         g.strokeStyle = lut[Math.min(32, ((Math.min(1, bright) * 16) | 0) + hueShift)];
         g.globalAlpha = Math.min(1, (0.1 + r1) * bright);
@@ -1285,8 +1935,91 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
         g.stroke();
       }
 
-      // Beat shock rings racing outward down the tunnel.
-      if (f.beatHit) {
+      // ── Bar gates: wireframe polygon rings racing up the tunnel ──
+      for (let i = 0; i < GATES; i++) {
+        if (gateT[i] > 1.2) continue;
+        gateT[i] += dt * (0.35 + warp * 0.22);
+        const t = gateT[i];
+        const rr = Math.pow(t, 2.2) * maxR * 1.15;
+        if (rr < 3) continue;
+        const alpha = Math.min(1, t * 4) * Math.max(0, 1.2 - t) * 0.55;
+        const sides = gateSides[i];
+        const ga = gateRot[i] + rot * 0.4;
+        g.strokeStyle = rgba(pal.plasma, alpha);
+        g.lineWidth = 1.2 + t * 3;
+        g.beginPath();
+        for (let v = 0; v <= sides; v++) {
+          const a = ga + (v / sides) * Math.PI * 2;
+          const x = cx + camX * t + Math.cos(a) * rr;
+          const y = cy + camY * t + Math.sin(a) * rr;
+          if (v === 0) g.moveTo(x, y);
+          else g.lineTo(x, y);
+        }
+        g.stroke();
+        // Vertex beacons.
+        g.fillStyle = rgba(pal.cyan, alpha * 1.3);
+        for (let v = 0; v < sides; v++) {
+          const a = ga + (v / sides) * Math.PI * 2;
+          const x = cx + camX * t + Math.cos(a) * rr;
+          const y = cy + camY * t + Math.sin(a) * rr;
+          g.fillRect(x - 1.5, y - 1.5, 3, 3);
+        }
+      }
+
+      // ── Tumbling debris: sparse wireframe rocks drifting past ──
+      if (!reduced) {
+        if (!dbSeeded) {
+          for (let i = 0; i < DEBRIS; i++) {
+            dbAng[i] = Math.random() * Math.PI * 2;
+            dbRad[i] = 0.15 + Math.random() * 0.9;
+            dbSpin[i] = (Math.random() - 0.5) * 3;
+            dbSides[i] = 3 + ((Math.random() * 3) | 0);
+          }
+          dbSeeded = true;
+        }
+        for (let i = 0; i < DEBRIS; i++) {
+          dbRad[i] *= 1 + warp * 0.5 * dt * (0.3 + dbRad[i]);
+          if (dbRad[i] > 1.25) {
+            dbAng[i] = Math.random() * Math.PI * 2;
+            dbRad[i] = 0.05 + Math.random() * 0.15;
+            dbSpin[i] = (Math.random() - 0.5) * 3;
+            dbSides[i] = 3 + ((Math.random() * 3) | 0);
+          }
+          const r = dbRad[i];
+          if (r < 0.12) continue;
+          const a = dbAng[i] + rot + twistK * (1 - r);
+          const x = cx + camX * r + Math.cos(a) * r * maxR;
+          const y = cy + camY * r + Math.sin(a) * r * maxR;
+          const size = 2 + r * unit * 0.02;
+          const spin = f.now * 0.001 * dbSpin[i];
+          g.strokeStyle = rgba(pal.amber, Math.min(0.7, r * 0.9));
+          g.lineWidth = 1.1;
+          g.beginPath();
+          for (let v = 0; v <= dbSides[i]; v++) {
+            const va = spin + (v / dbSides[i]) * Math.PI * 2;
+            const vx = x + Math.cos(va) * size;
+            const vy = y + Math.sin(va) * size;
+            if (v === 0) g.moveTo(vx, vy);
+            else g.lineTo(vx, vy);
+          }
+          g.stroke();
+        }
+      }
+
+      // Hyperjump white-out: a bloom that swallows the tunnel for a beat.
+      if (jump > 0.01) {
+        const j = jump * jump;
+        const jg = g.createRadialGradient(cx + camX, cy + camY, 0, cx + camX, cy + camY, maxR);
+        jg.addColorStop(0, `rgba(235,245,255,${j * 0.55})`);
+        jg.addColorStop(0.4, rgba(pal.cyan, j * 0.25));
+        jg.addColorStop(1, "rgba(4,5,10,0)");
+        g.fillStyle = jg;
+        g.fillRect(0, 0, W, H);
+      }
+
+      // Beat shock rings racing outward down the tunnel (grid-locked when
+      // the BPM clock is confident, so they land dead on the beat).
+      if (beatSlam) {
         ringAge[ringCursor] = 0;
         ringCursor = (ringCursor + 1) % RINGS;
       }
@@ -1300,20 +2033,26 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
         g.globalAlpha = Math.max(0, 1 - t) * 0.7;
         g.lineWidth = 1 + t * 6;
         g.beginPath();
-        g.arc(cx, cy, rr, 0, Math.PI * 2);
+        g.arc(cx + camX * t, cy + camY * t, rr, 0, Math.PI * 2);
         g.stroke();
       }
       g.globalAlpha = 1;
 
-      // Breathing core.
+      // Section-entry flash: the whole tunnel mouth ignites for a moment.
+      if (sectionFlash > 0.01) {
+        g.fillStyle = rgba(pal.plasma, sectionFlash * sectionFlash * 0.12);
+        g.fillRect(0, 0, W, H);
+      }
+
+      // Breathing core (rides the camera so the vanishing point tracks it).
       const coreR = unit * (0.035 + f.low * 0.05 + f.beat * 0.02);
-      const grad = g.createRadialGradient(cx, cy, 0, cx, cy, coreR * 3);
+      const grad = g.createRadialGradient(cx + camX, cy + camY, 0, cx + camX, cy + camY, coreR * 3);
       grad.addColorStop(0, rgba(pal.cyan, 0.5 + f.beat * 0.4));
       grad.addColorStop(0.4, coreCol);
       grad.addColorStop(1, "rgba(4,5,10,0)");
       g.fillStyle = grad;
       g.beginPath();
-      g.arc(cx, cy, coreR * 3, 0, Math.PI * 2);
+      g.arc(cx + camX, cy + camY, coreR * 3, 0, Math.PI * 2);
       g.fill();
     },
   };
@@ -1483,6 +2222,9 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
   const RIBBONS = 4;
   const phase = new Float32Array(RIBBONS);
   const smooth = new Float32Array(RIBBONS);
+  // v1.8 inertia: each ribbon's energy is a damped spring, not a lowpass —
+  // beats KICK it and it overshoots + settles like a physical curtain.
+  const vel = new Float32Array(RIBBONS);
   const xs = new Float32Array(POINTS);
   const ys = new Float32Array(POINTS);
 
@@ -1514,7 +2256,12 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
       g.fillRect(0, 0, W, H);
 
       // Beat → a light pillar ignites somewhere along the sky and washes out.
-      if (f.beatHit && !reduced) {
+      // BPM-locked when the shared clock is confident, so pillars land in
+      // strict time; kick onsets fire them too for extra punch.
+      const it = f.intel;
+      const gridLocked = it.bpm > 0 && it.bpmConf > 0.3;
+      const beatNow = gridLocked ? it.beatTick : f.beatHit;
+      if ((beatNow || it.kickHit) && !reduced) {
         plX[plCursor] = W * (0.08 + Math.random() * 0.84);
         plAge[plCursor] = 0;
         plHue[plCursor] = (Math.random() * RIBBONS) | 0;
@@ -1535,11 +2282,18 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
       }
 
       const bands = [f.low, f.mid * 0.9 + f.low * 0.1, f.mid, f.high];
-      const smoothK = 1 - Math.exp(-dt * 8);
+      // reflection floor: ribbons mirror into still water below this line
+      const floorY = H * 0.94;
 
       for (let rb = 0; rb < RIBBONS; rb++) {
         const lvl = Math.min(1, bands[rb] * 1.9);
-        smooth[rb] += (lvl - smooth[rb]) * smoothK;
+        // damped spring (inertia): beats kick the velocity, mass settles
+        const springK = reduced ? 30 : 55;
+        const dampK = reduced ? 8 : 6.5;
+        vel[rb] += (lvl - smooth[rb]) * springK * dt;
+        if (beatNow) vel[rb] += 0.9 + f.low * 1.2;
+        vel[rb] *= Math.exp(-dt * dampK);
+        smooth[rb] = Math.max(0, Math.min(1.4, smooth[rb] + vel[rb] * dt));
         const energy = smooth[rb];
         // Lows drift slow and huge; airs flicker fast and tight.
         phase[rb] += dt * (0.25 + rb * 0.35 + energy * (1.6 + rb * 0.7) + f.beat * 1.1);
@@ -1584,6 +2338,19 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
         for (let i = 1; i < POINTS; i++) g.lineTo(xs[i], ys[i]);
         g.stroke();
         g.shadowBlur = 0;
+
+        // still-water reflection: the crest mirrored under the floor line,
+        // dimmer and squashed — reads as a lake under the aurora.
+        if (!reduced) {
+          g.strokeStyle = rgba(c, (0.1 + energy * 0.2) * 0.8);
+          g.lineWidth = 1 + energy * 1.6;
+          g.beginPath();
+          g.moveTo(xs[0], floorY + (floorY - ys[0]) * 0.22);
+          for (let i = 1; i < POINTS; i++) {
+            g.lineTo(xs[i], floorY + (floorY - ys[i]) * 0.22);
+          }
+          g.stroke();
+        }
       }
 
       // Star dust twinkling with the high band (deterministic positions).

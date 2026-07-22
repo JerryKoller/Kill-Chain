@@ -17,11 +17,17 @@ export type View =
   | "glossary"
   | "settings";
 
+/** v2.2 — toast flavors drive the status dot on the KCToast pill. */
+export type ToastKind = "info" | "success" | "warn" | "error";
+
 interface UIState {
   view: View;
   setView: (view: View) => void;
   toastMessage: string | null;
-  toast: (msg: string) => void;
+  toastKind: ToastKind;
+  /** Re-keyed per toast so a repeat message still replays the entrance. */
+  toastSeq: number;
+  toast: (msg: string, kind?: ToastKind) => void;
   hotkeyOverlayOpen: boolean;
   setHotkeyOverlay: (open: boolean) => void;
   toggleHotkeyOverlay: () => void;
@@ -51,9 +57,15 @@ export const useUIStore = create<UIState>((set, get) => ({
     try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ }
   },
   toastMessage: null,
-  toast: (msg) => {
-    set({ toastMessage: msg });
-    setTimeout(() => set({ toastMessage: null }), 2400);
+  toastKind: "info",
+  toastSeq: 0,
+  toast: (msg, kind = "info") => {
+    const seq = get().toastSeq + 1;
+    set({ toastMessage: msg, toastKind: kind, toastSeq: seq });
+    setTimeout(() => {
+      // Only clear if a newer toast hasn't replaced this one.
+      if (get().toastSeq === seq) set({ toastMessage: null });
+    }, 2400);
   },
   hotkeyOverlayOpen: false,
   setHotkeyOverlay: (open) => set({ hotkeyOverlayOpen: open }),

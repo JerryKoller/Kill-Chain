@@ -77,24 +77,6 @@
   --c-grid-2: rgba(255, 90, 54, 0.05);
 }
 
-:root[data-theme="military"] {
-  color-scheme: dark;
-  --c-ink: 10 12 9;
-  --c-void: 18 20 15;
-  --c-cyan: 196 180 84;
-  --c-plasma: 217 119 43;
-  --c-violet: 124 150 70;
-  --c-lime: 179 229 126;
-  --c-amber: 255 203 107;
-  --c-text: #e9ead6;
-  --c-text-dim: #9aa085;
-  --c-panel: rgba(220, 220, 160, 0.035);
-  --c-panel-strong: rgba(220, 220, 160, 0.06);
-  --c-border: rgba(210, 210, 160, 0.09);
-  --c-grid-1: rgba(196, 180, 84, 0.05);
-  --c-grid-2: rgba(124, 150, 70, 0.05);
-}
-
 :root[data-theme="abyss"] {
   color-scheme: dark;
   --c-ink: 5 8 14;
@@ -113,42 +95,6 @@
   --c-grid-2: rgba(51, 214, 255, 0.05);
 }
 
-:root[data-theme="toxic"] {
-  color-scheme: dark;
-  --c-ink: 6 9 6;
-  --c-void: 11 16 11;
-  --c-cyan: 91 255 157;
-  --c-plasma: 202 255 51;
-  --c-violet: 47 224 160;
-  --c-lime: 157 255 91;
-  --c-amber: 232 255 91;
-  --c-text: #e6ffe9;
-  --c-text-dim: #86a890;
-  --c-panel: rgba(120, 255, 160, 0.04);
-  --c-panel-strong: rgba(120, 255, 160, 0.07);
-  --c-border: rgba(120, 255, 160, 0.10);
-  --c-grid-1: rgba(91, 255, 157, 0.06);
-  --c-grid-2: rgba(202, 255, 51, 0.05);
-}
-
-:root[data-theme="ember"] {
-  color-scheme: dark;
-  --c-ink: 11 7 5;
-  --c-void: 19 12 8;
-  --c-cyan: 255 138 59;
-  --c-plasma: 255 64 64;
-  --c-violet: 255 91 46;
-  --c-lime: 255 210 59;
-  --c-amber: 255 182 72;
-  --c-text: #ffece0;
-  --c-text-dim: #b89a86;
-  --c-panel: rgba(255, 150, 90, 0.04);
-  --c-panel-strong: rgba(255, 150, 90, 0.07);
-  --c-border: rgba(255, 150, 90, 0.10);
-  --c-grid-1: rgba(255, 91, 46, 0.06);
-  --c-grid-2: rgba(255, 138, 59, 0.05);
-}
-
 :root[data-theme="mono"] {
   color-scheme: dark;
   --c-ink: 8 8 10;
@@ -165,79 +111,6 @@
   --c-border: rgba(255, 255, 255, 0.10);
   --c-grid-1: rgba(255, 255, 255, 0.05);
   --c-grid-2: rgba(255, 255, 255, 0.04);
-}
-
-:root[data-theme="neon"] {
-  color-scheme: dark;
-  --c-ink: 6 6 12;
-  --c-void: 11 11 22;
-  --c-cyan: 34 232 255;
-  --c-plasma: 255 43 214;
-  --c-violet: 122 59 255;
-  --c-lime: 157 255 91;
-  --c-amber: 255 182 72;
-  --c-text: #e7e9ff;
-  --c-text-dim: #9aa0c7;
-  --c-panel: rgba(255, 255, 255, 0.04);
-  --c-panel-strong: rgba(255, 255, 255, 0.07);
-  --c-border: rgba(255, 255, 255, 0.06);
-  --c-grid-1: rgba(122, 59, 255, 0.07);
-  --c-grid-2: rgba(34, 232, 255, 0.07);
-}
-
-:root[data-theme="studio"] {
-  color-scheme: dark;
-  --c-ink: 14 17 22;
-  --c-void: 22 26 34;
-  --c-cyan: 78 201 255;
-  --c-plasma: 255 122 138;
-  --c-violet: 142 155 255;
-  --c-lime: 179 229 126;
-  --c-amber: 255 203 107;
-  --c-text: #e8ecf4;
-  --c-text-dim: #98a0b3;
-  --c-panel: rgba(255, 255, 255, 0.03);
-  --c-panel-strong: rgba(255, 255, 255, 0.06);
-  --c-border: rgba(255, 255, 255, 0.06);
-  --c-grid-1: rgba(78, 201, 255, 0.04);
-  --c-grid-2: rgba(255, 122, 138, 0.04);
-}
-
-:root[data-theme="vinyl"] {
-  color-scheme: dark;
-  --c-ink: 21 14 8;
-  --c-void: 28 21 13;
-  --c-cyan: 255 178 96;
-  --c-plasma: 255 111 60;
-  --c-violet: 200 122 58;
-  --c-lime: 214 200 122;
-  --c-amber: 255 208 122;
-  --c-text: #f5e6cf;
-  --c-text-dim: #b8a07f;
-  --c-panel: rgba(255, 220, 180, 0.04);
-  --c-panel-strong: rgba(255, 220, 180, 0.07);
-  --c-border: rgba(255, 220, 180, 0.10);
-  --c-grid-1: rgba(255, 178, 96, 0.05);
-  --c-grid-2: rgba(255, 111, 60, 0.05);
-}
-
-/* Gunmetal — desaturated cool steel. Sharp, minimal, near-monochrome. */
-:root[data-theme="gunmetal"] {
-  color-scheme: dark;
-  --c-ink: 9 10 12;
-  --c-void: 16 18 21;
-  --c-cyan: 142 160 178;
-  --c-plasma: 214 96 84;
-  --c-violet: 110 124 142;
-  --c-lime: 150 178 150;
-  --c-amber: 198 178 132;
-  --c-text: #e6e9ee;
-  --c-text-dim: #868d99;
-  --c-panel: rgba(200, 212, 228, 0.03);
-  --c-panel-strong: rgba(200, 212, 228, 0.06);
-  --c-border: rgba(200, 212, 228, 0.08);
-  --c-grid-1: rgba(142, 160, 178, 0.045);
-  --c-grid-2: rgba(110, 124, 142, 0.04);
 }
 
 /* Carbon — industrial near-black with one sharp molten-amber accent. */
@@ -420,7 +293,9 @@ select option:checked {
   }
 
   /* Classification-style module tag — "KC-01" markers next to view titles.
-     Mono, squared, hairline border: reads like a panel designation plate. */
+     Mono, squared, hairline border: reads like a panel designation plate.
+     v2.2: rides the module accent (--kc-accent falls back to the theme
+     primary outside a data-module scope). */
   .module-tag {
     font-family: "JetBrains Mono", Consolas, monospace;
     font-size: 9px;
@@ -428,10 +303,10 @@ select option:checked {
     letter-spacing: 0.18em;
     text-transform: uppercase;
     padding: 3px 6px 2px;
-    border: 1px solid rgb(var(--c-cyan) / 0.35);
+    border: 1px solid rgb(var(--kc-accent, var(--c-cyan)) / 0.35);
     border-radius: 3px;
-    color: rgb(var(--c-cyan) / 0.9);
-    background: rgb(var(--c-cyan) / 0.06);
+    color: rgb(var(--kc-accent, var(--c-cyan)) / 0.9);
+    background: rgb(var(--kc-accent, var(--c-cyan)) / 0.06);
     white-space: nowrap;
   }
 
@@ -450,7 +325,7 @@ select option:checked {
     position: absolute;
     width: 9px;
     height: 9px;
-    border-color: rgb(var(--c-cyan) / 0.28);
+    border-color: rgb(var(--kc-accent, var(--c-cyan)) / 0.28);
     border-style: solid;
     pointer-events: none;
     z-index: 1;

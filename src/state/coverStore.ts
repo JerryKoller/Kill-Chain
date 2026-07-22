@@ -21,7 +21,12 @@ const queue: string[] = [];
 let active = 0;
 const order: string[] = [];
 const MAX_ACTIVE = 3;
-const CAP = 500;
+let cap = 500;
+
+/** Raise the LRU cap (album-art grid shows far more covers than the list). */
+export function raiseCoverCapacity(n: number): void {
+  if (n > cap) cap = n;
+}
 
 export const useCoverStore = create<CoverState>((set, get) => {
   async function parse(path: string): Promise<string> {
@@ -52,7 +57,7 @@ export const useCoverStore = create<CoverState>((set, get) => {
   }
 
   function evictIfNeeded() {
-    while (order.length > CAP) {
+    while (order.length > cap) {
       const old = order.shift();
       if (!old) break;
       const url = get().covers[old];

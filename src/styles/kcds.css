@@ -1,0 +1,491 @@
+/* ════════════════════════════════════════════════════════════════════════
+   KCDS — Kill Chain Design System (v2.2)
+
+   One shared vocabulary for the whole instrument: spacing, radius,
+   elevation, glow, typography, motion — plus the component classes the
+   KC* React primitives (src/components/kcds/) render with.
+
+   RULES
+   · Module accents are RGB channel triplets (like --c-*) so they can take
+     opacity via rgb(var(--kc-accent) / a).
+   · Every glow scales off the global --glow multiplier (Settings → Glow).
+   · Every animation must die under :root.kc-reduced (see globals.css) —
+     only use CSS animations/transitions, never JS position loops.
+   ════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Spacing ladder (px) ── */
+  --kc-s1: 4px;
+  --kc-s2: 8px;
+  --kc-s3: 12px;
+  --kc-s4: 16px;
+  --kc-s5: 24px;
+  --kc-s6: 32px;
+
+  /* ── Radius ── */
+  --kc-r-xs: 6px;
+  --kc-r-sm: 8px;
+  --kc-r-md: 12px;
+  --kc-r-lg: 16px;
+  --kc-r-pill: 999px;
+
+  /* ── Elevation (layered panels) ── */
+  --kc-elev-1: 0 8px 20px -12px rgba(0, 0, 0, 0.55);
+  --kc-elev-2: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 18px 40px -22px rgba(0, 0, 0, 0.6);
+  --kc-elev-3: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 30px 70px -28px rgba(0, 0, 0, 0.75);
+
+  /* ── Motion ── */
+  --kc-fast: 120ms;
+  --kc-med: 190ms;
+  --kc-slow: 320ms;
+  --kc-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --kc-snap: cubic-bezier(0.2, 1.4, 0.4, 1);
+
+  /* ── Module accent — defaults to the theme primary ── */
+  --kc-accent: var(--c-cyan);
+}
+
+/* ── Module accents ──────────────────────────────────────────────────────
+   One restrained accent per major area, set by data-module on the view
+   container (App.tsx). Used ONLY for headers, active controls and key
+   feedback — never for body text or full panels.
+   Monochrome mode (Settings → Appearance) collapses all of them back to
+   the theme primary via :root.kc-monochrome. */
+[data-module="library"]     { --kc-accent: 96 190 226; }
+[data-module="fire"]        { --kc-accent: 255 122 61; }
+[data-module="airspace"]    { --kc-accent: 106 172 255; }
+[data-module="playground"]  { --kc-accent: 122 216 152; }
+[data-module="tractor"]     { --kc-accent: 186 134 255; }
+[data-module="calibration"] { --kc-accent: 92 212 200; }
+[data-module="morphlab"]    { --kc-accent: 232 126 208; }
+[data-module="reactor"]     { --kc-accent: 255 96 96; }
+[data-module="dimension"]   { --kc-accent: 136 152 255; }
+[data-module="chain"]       { --kc-accent: 255 178 76; }
+[data-module="scope"]       { --kc-accent: 118 206 255; }
+[data-module="trainer"]     { --kc-accent: 238 198 96; }
+[data-module="presets"]     { --kc-accent: 206 176 126; }
+
+:root.kc-monochrome [data-module] {
+  --kc-accent: var(--c-cyan);
+}
+
+/* ── Typography hierarchy ── */
+.kc-title {
+  font-size: 1.5rem;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--c-text);
+}
+.kc-sub {
+  font-size: 0.8rem;
+  color: var(--c-text-dim);
+  letter-spacing: 0.02em;
+}
+.kc-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: var(--c-text-dim);
+}
+.kc-label-accent {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.28em;
+  color: rgb(var(--kc-accent) / 0.85);
+}
+.kc-value {
+  font-family: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--c-text);
+}
+
+/* ── KCButton ─────────────────────────────────────────────────────────── */
+.kc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--kc-r-md);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  color: var(--c-text);
+  transition:
+    background var(--kc-fast) var(--kc-ease),
+    border-color var(--kc-fast) var(--kc-ease),
+    color var(--kc-fast) var(--kc-ease),
+    box-shadow var(--kc-fast) var(--kc-ease),
+    transform var(--kc-fast) var(--kc-snap);
+  user-select: none;
+  white-space: nowrap;
+}
+.kc-btn:hover { transform: translateY(-1px); }
+.kc-btn:active { transform: translateY(0.5px) scale(0.985); }
+.kc-btn:disabled,
+.kc-btn[aria-disabled="true"] {
+  opacity: 0.38;
+  pointer-events: none;
+}
+.kc-btn--sm { padding: 5px 10px; font-size: 0.7rem; border-radius: var(--kc-r-sm); }
+
+.kc-btn--primary {
+  color: rgb(var(--c-ink));
+  background: linear-gradient(160deg, rgb(var(--kc-accent)) 0%, rgb(var(--kc-accent) / 0.82) 100%);
+  border-color: rgb(var(--kc-accent) / 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 0 calc(20px * var(--glow)) rgb(var(--kc-accent) / calc(0.45 * var(--glow)));
+}
+.kc-btn--primary:hover { filter: brightness(1.07); }
+
+.kc-btn--ghost {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+.kc-btn--ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.13);
+}
+
+.kc-btn--accent {
+  color: rgb(var(--kc-accent));
+  background: rgb(var(--kc-accent) / 0.08);
+  border-color: rgb(var(--kc-accent) / 0.35);
+}
+.kc-btn--accent:hover {
+  background: rgb(var(--kc-accent) / 0.15);
+  border-color: rgb(var(--kc-accent) / 0.55);
+}
+
+.kc-btn--danger {
+  color: rgb(var(--c-plasma));
+  background: rgb(var(--c-plasma) / 0.07);
+  border-color: rgb(var(--c-plasma) / 0.3);
+}
+.kc-btn--danger:hover {
+  background: rgb(var(--c-plasma) / 0.14);
+  border-color: rgb(var(--c-plasma) / 0.5);
+}
+
+/* Engaged/latched state — shared by buttons & segmented options. */
+.kc-btn.kc-on,
+.kc-btn[aria-pressed="true"] {
+  color: rgb(var(--kc-accent));
+  background: rgb(var(--kc-accent) / 0.14);
+  border-color: rgb(var(--kc-accent) / 0.55);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--kc-accent) / 0.25),
+    0 0 calc(16px * var(--glow)) rgb(var(--kc-accent) / calc(0.4 * var(--glow)));
+}
+
+/* ── KCSegmented ──────────────────────────────────────────────────────── */
+.kc-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--kc-r-md);
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--c-border);
+}
+.kc-seg-btn {
+  padding: 5px 12px;
+  border-radius: calc(var(--kc-r-md) - 4px);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--c-text-dim);
+  transition:
+    color var(--kc-fast) var(--kc-ease),
+    background var(--kc-fast) var(--kc-ease),
+    box-shadow var(--kc-fast) var(--kc-ease);
+  white-space: nowrap;
+}
+.kc-seg-btn:hover { color: var(--c-text); }
+.kc-seg-btn.kc-on {
+  color: rgb(var(--kc-accent));
+  background: rgb(var(--kc-accent) / 0.13);
+  box-shadow: inset 0 0 0 1px rgb(var(--kc-accent) / 0.35);
+}
+
+/* ── KCToggle (switch) ────────────────────────────────────────────────── */
+.kc-toggle {
+  position: relative;
+  width: 38px;
+  height: 21px;
+  border-radius: var(--kc-r-pill);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background var(--kc-med) var(--kc-ease), border-color var(--kc-med) var(--kc-ease);
+  flex: none;
+  cursor: pointer;
+}
+.kc-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #cfd4e0;
+  transition: transform var(--kc-med) var(--kc-snap), background var(--kc-med) var(--kc-ease);
+}
+.kc-toggle.kc-on {
+  background: rgb(var(--kc-accent) / 0.3);
+  border-color: rgb(var(--kc-accent) / 0.6);
+}
+.kc-toggle.kc-on::after {
+  transform: translateX(17px);
+  background: rgb(var(--kc-accent));
+  box-shadow: 0 0 calc(10px * var(--glow)) rgb(var(--kc-accent) / calc(0.7 * var(--glow)));
+}
+
+/* ── KCChip ───────────────────────────────────────────────────────────── */
+.kc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--kc-r-pill);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--c-text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--c-border);
+  transition:
+    color var(--kc-fast) var(--kc-ease),
+    background var(--kc-fast) var(--kc-ease),
+    border-color var(--kc-fast) var(--kc-ease);
+  white-space: nowrap;
+}
+button.kc-chip:hover { color: var(--c-text); border-color: rgba(255, 255, 255, 0.16); }
+.kc-chip.kc-on {
+  color: rgb(var(--kc-accent));
+  background: rgb(var(--kc-accent) / 0.12);
+  border-color: rgb(var(--kc-accent) / 0.5);
+}
+
+/* ── KCSlider (range input) ───────────────────────────────────────────── */
+.kc-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 5px;
+  border-radius: var(--kc-r-pill);
+  /* Fill percentage painted by the component via --kc-fill. */
+  background: linear-gradient(
+    90deg,
+    rgb(var(--kc-accent) / 0.85) 0%,
+    rgb(var(--kc-accent) / 0.85) var(--kc-fill, 50%),
+    rgba(255, 255, 255, 0.09) var(--kc-fill, 50%)
+  );
+  cursor: pointer;
+  transition: height var(--kc-fast) var(--kc-ease);
+}
+.kc-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgb(var(--kc-accent));
+  border: 2px solid rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 calc(10px * var(--glow)) rgb(var(--kc-accent) / calc(0.6 * var(--glow)));
+  transition: transform var(--kc-fast) var(--kc-snap);
+}
+.kc-slider:hover::-webkit-slider-thumb,
+.kc-slider:active::-webkit-slider-thumb { transform: scale(1.18); }
+.kc-slider:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── KCToast ──────────────────────────────────────────────────────────── */
+.kc-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: var(--kc-r-md);
+  font-size: 0.82rem;
+  color: var(--c-text);
+  background: linear-gradient(180deg, var(--c-panel-strong), rgba(0, 0, 0, 0.55));
+  border: 1px solid var(--c-border);
+  backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: var(--kc-elev-3);
+}
+.kc-toast::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: rgb(var(--kc-accent));
+  box-shadow: 0 0 8px rgb(var(--kc-accent) / 0.8);
+}
+.kc-toast--success::before { background: rgb(var(--c-lime)); box-shadow: 0 0 8px rgb(var(--c-lime) / 0.8); }
+.kc-toast--warn::before    { background: rgb(var(--c-amber)); box-shadow: 0 0 8px rgb(var(--c-amber) / 0.8); }
+.kc-toast--error::before   { background: rgb(var(--c-plasma)); box-shadow: 0 0 8px rgb(var(--c-plasma) / 0.8); }
+
+/* ── KCEmptyState ─────────────────────────────────────────────────────── */
+.kc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 24px;
+  text-align: center;
+  border-radius: var(--kc-r-lg);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.015);
+}
+.kc-empty svg { opacity: 0.4; }
+
+/* ── Interactive-card hover lift ──────────────────────────────────────── */
+.kc-lift {
+  transition:
+    transform var(--kc-med) var(--kc-ease),
+    box-shadow var(--kc-med) var(--kc-ease),
+    border-color var(--kc-med) var(--kc-ease);
+}
+.kc-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--kc-elev-2);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+/* ── Loading skeleton ─────────────────────────────────────────────────── */
+.kc-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--kc-r-sm);
+  background: rgba(255, 255, 255, 0.05);
+}
+.kc-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  animation: kc-skeleton-sweep 1.6s var(--kc-ease) infinite;
+}
+@keyframes kc-skeleton-sweep {
+  100% { transform: translateX(100%); }
+}
+
+/* ── Breach pulse — one-shot engage confirmation ──────────────────────────
+   Mount an element with .kc-breach (re-key it per engage) and it replays. */
+.kc-breach {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  border: 1px solid rgb(var(--kc-accent) / 0.9);
+  animation: kc-breach 0.7s var(--kc-ease) forwards;
+}
+@keyframes kc-breach {
+  0% { opacity: 0.9; transform: scale(0.97); }
+  100% { opacity: 0; transform: scale(1.12); }
+}
+
+/* ── Optional texture layers (Settings → Appearance, off by default) ──── */
+.kc-fx-scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 80;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0 3px,
+    rgba(0, 0, 0, 0.14) 3px 4px
+  );
+  mix-blend-mode: multiply;
+  opacity: 0.5;
+}
+.kc-fx-grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 80;
+  opacity: 0.08;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.7 0'/></filter><rect width='100%' height='100%' filter='url(%23g)'/></svg>");
+}
+
+/* ── Sidebar nav (KCDS pass) ──────────────────────────────────────────── */
+.kc-nav-item {
+  position: relative;
+  text-align: left;
+  padding: 9px 12px 9px 14px;
+  border-radius: var(--kc-r-md);
+  border: 1px solid transparent;
+  transition:
+    background var(--kc-fast) var(--kc-ease),
+    border-color var(--kc-fast) var(--kc-ease);
+}
+.kc-nav-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.kc-nav-item.kc-on {
+  background: rgb(var(--kc-accent) / 0.07);
+  border-color: rgb(var(--kc-accent) / 0.28);
+}
+/* Active rail — a vertical accent bar on the left edge. */
+.kc-nav-item.kc-on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 22%;
+  bottom: 22%;
+  width: 2.5px;
+  border-radius: var(--kc-r-pill);
+  background: rgb(var(--kc-accent));
+  box-shadow: 0 0 calc(10px * var(--glow)) rgb(var(--kc-accent) / calc(0.8 * var(--glow)));
+}
+.kc-nav-icon {
+  width: 19px;
+  height: 19px;
+  flex: none;
+  color: rgba(255, 255, 255, 0.5);
+  transition: color var(--kc-fast) var(--kc-ease);
+}
+.kc-nav-item:hover .kc-nav-icon { color: rgba(255, 255, 255, 0.8); }
+.kc-nav-item.kc-on .kc-nav-icon {
+  color: rgb(var(--kc-accent));
+  filter: drop-shadow(0 0 calc(6px * var(--glow)) rgb(var(--kc-accent) / calc(0.7 * var(--glow))));
+}
+
+/* ── Theme preview cards (Settings → Appearance) ──────────────────────── */
+.kc-theme-card {
+  position: relative;
+  border-radius: var(--kc-r-lg);
+  border: 1px solid var(--c-border);
+  overflow: hidden;
+  text-align: left;
+  transition:
+    border-color var(--kc-med) var(--kc-ease),
+    transform var(--kc-med) var(--kc-ease),
+    box-shadow var(--kc-med) var(--kc-ease);
+}
+.kc-theme-card:hover { transform: translateY(-2px); box-shadow: var(--kc-elev-2); }
+.kc-theme-card.kc-on {
+  border-color: rgb(var(--kc-accent) / 0.7);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--kc-accent) / 0.35),
+    0 0 calc(22px * var(--glow)) rgb(var(--kc-accent) / calc(0.35 * var(--glow)));
+}
+
+/* Reduced motion: kill the decorative loops KCDS adds. (The global
+   :root.kc-reduced rule in globals.css already zeroes durations; this
+   covers OS-level prefers-reduced-motion for infinite loops.) */
+@media (prefers-reduced-motion: reduce) {
+  .kc-skeleton::after { animation: none; }
+  .kc-breach { animation-duration: 0.01ms; opacity: 0; }
+  .kc-btn:hover,
+  .kc-lift:hover,
+  .kc-theme-card:hover { transform: none; }
+}

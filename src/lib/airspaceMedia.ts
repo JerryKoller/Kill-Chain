@@ -31,6 +31,57 @@ export interface AirspaceMediaSnapshot {
   paused: boolean;
   live: boolean;
   volume: number;
+  /** Page URL the media lives on — used for stable per-source identity. */
+  pageUrl: string;
+}
+
+/**
+ * A stable identity for what's playing in Airspace, for keying per-source
+ * memory (Mission Log). Prefers a platform media id extracted from the URL
+ * (YouTube video id, Spotify/SoundCloud track path, Twitch channel) over the
+ * volatile page title.
+ */
+export function airspaceSourceId(snap: AirspaceMediaSnapshot): string | null {
+  const fromUrl = mediaIdFromUrl(snap.pageUrl);
+  if (fromUrl) return fromUrl;
+  if (snap.title) {
+    const artist = snap.artist ? `${snap.artist}|` : "";
+    return `air:title:${artist}${snap.title}`;
+  }
+  return null;
+}
+
+function mediaIdFromUrl(pageUrl: string): string | null {
+  try {
+    const u = new URL(pageUrl);
+    const host = u.hostname.replace(/^www\./, "");
+    if (/(^|\.)youtube\.com$/.test(u.hostname)) {
+      const id =
+        u.searchParams.get("v") ??
+        (u.pathname.startsWith("/shorts/") ? u.pathname.split("/")[2] : null);
+      return id ? `air:yt:${id}` : null;
+    }
+    if (host === "youtu.be") {
+      const id = u.pathname.split("/")[1];
+      return id ? `air:yt:${id}` : null;
+    }
+    if (host === "open.spotify.com") {
+      // /track/ID, /episode/ID, /album/ID … — the path IS the identity.
+      const m = u.pathname.match(/^\/(track|episode|album|playlist)\/([A-Za-z0-9]+)/);
+      return m ? `air:sp:${m[1]}:${m[2]}` : null;
+    }
+    if (host === "soundcloud.com") {
+      const parts = u.pathname.split("/").filter(Boolean);
+      return parts.length >= 2 ? `air:sc:${parts.slice(0, 2).join("/")}` : null;
+    }
+    if (host === "twitch.tv") {
+      const ch = u.pathname.split("/")[1];
+      return ch ? `air:tw:${ch}` : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 let webview: WebviewHandle | null = null;
@@ -106,6 +157,7 @@ const READ_SNAPSHOT = `(() => {
     paused: !!media.paused,
     live: !!dur && !isFinite(dur),
     volume: typeof media.volume === "number" ? media.volume : 1,
+    pageUrl: location.href || "",
   };
 })()`;
 

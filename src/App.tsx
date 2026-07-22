@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Suspense, lazy, useEffect, useState } from "react";
 import { TitleBar } from "@/components/Layout/TitleBar";
+import { MissionHUD } from "@/components/Layout/MissionHUD";
 import { Sidebar } from "@/components/Layout/Sidebar";
 import { TransportBar } from "@/components/Layout/TransportBar";
 // The default view loads eagerly; every other tool is code-split so startup
@@ -25,17 +26,23 @@ const SettingsView = lazy(() => import("@/components/Settings/SettingsView").the
 // embedded browser — and its audio — keeps running while other tools are open.
 const AirspaceView = lazy(() => import("@/components/Airspace/AirspaceView").then((m) => ({ default: m.AirspaceView })));
 import { MiniPlayer } from "@/components/Layout/MiniPlayer";
+import { KCToastHost } from "@/components/kcds";
 import { OnboardingTour } from "@/components/Onboarding/OnboardingTour";
+// Side effect: injects user-imported headphone profiles into the catalog
+// before anything looks up HEADPHONES[settings.headphone].
+import { HeadphoneWizard } from "@/components/Settings/HeadphoneWizard";
+import { WhatsNewPanel } from "@/components/shared/WhatsNewPanel";
+import { initCrashReporting } from "@/lib/crashReporting";
 import { HotkeyOverlay } from "@/components/shared/HotkeyOverlay";
 import { useUIStore } from "@/state/uiStore";
 import { useAudioStore } from "@/state/audioStore";
 import { useSettingsStore } from "@/state/settingsStore";
 import { useEqStore } from "@/state/eqStore";
 import { useGlobalHotkeys } from "@/hooks/useGlobalHotkeys";
+import { useDeviceWatch } from "@/hooks/useDeviceWatch";
 import { useFileDrop } from "@/hooks/useFileDrop";
 import { useCompanionMode } from "@/hooks/useCompanionMode";
 import { useRemoteServer } from "@/hooks/useRemoteServer";
-import { useAutoFlatten } from "@/hooks/useAutoFlatten";
 import { useLufsNormalize } from "@/hooks/useLufsNormalize";
 import { useMidi } from "@/hooks/useMidi";
 import { useReactiveAmbience } from "@/hooks/useReactiveAmbience";
@@ -50,7 +57,6 @@ export default function App() {
   useEffect(() => {
     if (view === "airspace") setAirspaceMounted(true);
   }, [view]);
-  const toast = useUIStore((s) => s.toastMessage);
   const ensureReady = useAudioStore((s) => s.ensureReady);
   const theme = useSettingsStore((s) => s.theme);
   const accent = useSettingsStore((s) => s.accent);
@@ -60,6 +66,8 @@ export default function App() {
   const onboardingDone = useSettingsStore((s) => s.onboardingDone);
   const bgFx = useSettingsStore((s) => s.bgFx);
   const forceReduced = useSettingsStore((s) => s.forceReducedMotion);
+  const moduleColor = useSettingsStore((s) => s.moduleColor);
+  const fxOverlay = useSettingsStore((s) => s.fxOverlay);
 
   // Reduce-motion override: a root class that CSS (and the visualizer) obey
   // even when the OS setting is off.
@@ -67,19 +75,37 @@ export default function App() {
     document.documentElement.classList.toggle("kc-reduced", forceReduced);
   }, [forceReduced]);
 
+  // v2.2 — monochrome mode collapses every module accent to the theme primary.
+  useEffect(() => {
+    document.documentElement.classList.toggle("kc-monochrome", !moduleColor);
+  }, [moduleColor]);
+
   useGlobalHotkeys();
+  useDeviceWatch();
   useFileDrop();
   useCompanionMode();
   useRemoteServer();
-  useAutoFlatten();
   useLufsNormalize();
   useMidi();
   useReactiveAmbience();
   useUiSounds();
 
-  // Hands-free Tractor Beam: re-locks on track/video changes when armed.
+  // MISSION STATE (v2.4): the ONE source-change pipeline. Owns memory
+  // restore, Auto-Lock and Auto-Flatten in strict priority order — replaces
+  // the separate Mission Log watcher / Auto-Lock poll / Auto-Flatten hook.
   useEffect(() => {
     void import("@/lib/tractorAutoLock").then((m) => m.initTractorAutoLock());
+    void import("@/state/missionStateStore").then((m) => m.initMissionState());
+    // DEV only: expose the live module graph to the smoke suite (no-op in prod).
+    void import("@/lib/testHooks").then((m) => m.installTestHooks());
+  }, []);
+
+  // Error hooks are always installed; they only log when the user opted in.
+  useEffect(() => {
+    initCrashReporting();
+    // v2.4: watch the AudioContext for surprise suspensions and surface
+    // storage/device/export failures in the Mission HUD.
+    void import("@/lib/appHealth").then((m) => m.initAppHealth());
   }, []);
 
   useEffect(() => {
@@ -166,6 +192,7 @@ export default function App() {
       )}
 
       <TitleBar />
+      <MissionHUD />
 
       {/* Density: zoom the ENTIRE workspace (sidebar + views + transport) so
           "Compact" genuinely compacts the app instead of just shrinking the
@@ -180,11 +207,13 @@ export default function App() {
                 key={view}
                 // Opacity + translate only: animating filter:blur forced a
                 // full-view repaint per frame, and 350 ms felt sluggish when
-                // hopping between tools.
-                initial={{ opacity: 0, y: 12 }}
+                // hopping between tools. This is THE shared view transition —
+                // reduced motion collapses it to a plain swap.
+                data-module={view}
+                initial={forceReduced ? false : { opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.18, ease: [0.2, 0.7, 0.2, 1] }}
+                exit={forceReduced ? undefined : { opacity: 0, y: -6 }}
+                transition={{ duration: forceReduced ? 0 : 0.18, ease: [0.2, 0.7, 0.2, 1] }}
                 className="min-h-full"
               >
                 {/* Each view gets its own ErrorBoundary so a crash in one
@@ -226,20 +255,15 @@ export default function App() {
         </main>
       </div>
 
-      <AnimatePresence>
-        {toast && (
-          <motion.div
-            initial={{ y: 24, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 24, opacity: 0 }}
-            className="pointer-events-none absolute bottom-28 left-1/2 -translate-x-1/2 glass-strong px-4 py-2 rounded-xl text-sm z-[60]"
-          >
-            {toast}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <KCToastHost />
+
+      {/* Optional texture layer (Settings → Appearance). Off by default. */}
+      {fxOverlay === "scanlines" && <div className="kc-fx-scanlines" aria-hidden />}
+      {fxOverlay === "grain" && <div className="kc-fx-grain" aria-hidden />}
 
       <HotkeyOverlay />
+      <HeadphoneWizard />
+      <WhatsNewPanel />
       {!onboardingDone && <OnboardingTour />}
     </div>
   );

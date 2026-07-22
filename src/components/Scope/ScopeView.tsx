@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { getEngine } from "@/audio/AudioEngine";
+import { saveScopeReport, type ScopeCapture } from "@/lib/scopeReport";
+import { useUIStore } from "@/state/uiStore";
 
 // ─── display range constants ─────────────────────────────────────────────────
 const FREQ_MARKS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
@@ -61,6 +63,16 @@ export function ScopeView() {
 
   const statsRef = useRef<ScopeStats>(EMPTY_STATS);
   const [stats, setStats] = useState<ScopeStats>(EMPTY_STATS);
+
+  // Before/After report captures — the draw loop fulfils requests since it
+  // owns the hi-res spectrum buffers.
+  const captureReqRef = useRef<"before" | "after" | null>(null);
+  const capturesRef = useRef<{ before?: ScopeCapture; after?: ScopeCapture }>({});
+  const [captured, setCaptured] = useState<{ before: boolean; after: boolean }>({
+    before: false,
+    after: false,
+  });
+  const toast = useUIStore((s) => s.toast);
 
   useEffect(() => {
     const engine = getEngine();
@@ -610,6 +622,30 @@ export function ScopeView() {
         statsRef.current = {
           rmsDb, peakDb, crest, centroid, corr, widthPct, dynamics: dyn, balance,
         };
+
+        // ── BEFORE/AFTER report capture (fulfilled here — stats are fresh) ──
+        const req = captureReqRef.current;
+        if (req) {
+          captureReqRef.current = null;
+          capturesRef.current[req] = {
+            spectrumDb: postDb.slice(),
+            nyquist: nyq,
+            lufsShort: lufs.shortTermLufs,
+            lufsIntegrated: lufs.integratedLufs,
+            peakDb,
+            rmsDb,
+            crest,
+            centroid,
+            corr,
+            widthPct,
+            dynamics: dyn,
+            at: Date.now(),
+          };
+          setCaptured({
+            before: !!capturesRef.current.before,
+            after: !!capturesRef.current.after,
+          });
+        }
       }
     };
 
@@ -666,15 +702,43 @@ export function ScopeView() {
             </AnimatePresence>
             <button
               onClick={() => setShowInput((v) => !v)}
-              className={`text-[10px] uppercase tracking-widest px-3 py-1.5 rounded-xl border transition ${
-                showInput
-                  ? "border-violet/50 bg-violet/10 text-violet-300"
-                  : "border-white/10 text-white/45 hover:border-white/25"
-              }`}
+              className={`kc-btn kc-btn--sm kc-btn--ghost ${showInput ? "kc-on" : ""}`}
               title="Toggle pre-EQ input overlay on spectrum"
             >
               Input overlay
             </button>
+
+            {/* Before/After report (v1.5) */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => { captureReqRef.current = "before"; toast("Capturing BEFORE…"); }}
+                className={`kc-btn kc-btn--sm kc-btn--ghost ${captured.before ? "kc-on" : ""}`}
+                title="Capture the current spectrum + stats as the BEFORE side (do this with your changes bypassed or before tweaking)"
+              >
+                {captured.before ? "✓ Before" : "⊙ Before"}
+              </button>
+              <button
+                onClick={() => { captureReqRef.current = "after"; toast("Capturing AFTER…"); }}
+                className={`kc-btn kc-btn--sm kc-btn--ghost ${captured.after ? "kc-on" : ""}`}
+                title="Capture the current spectrum + stats as the AFTER side"
+              >
+                {captured.after ? "✓ After" : "⊙ After"}
+              </button>
+              <button
+                disabled={!captured.before || !captured.after}
+                onClick={() => {
+                  const { before, after } = capturesRef.current;
+                  if (!before || !after) return;
+                  void saveScopeReport(before, after).then((path) => {
+                    if (path) toast("Report exported — spectrum overlay + loudness stats");
+                  });
+                }}
+                className="kc-btn kc-btn--sm kc-btn--accent"
+                title="Render a shareable before/after PNG report (spectrum overlay + LUFS / crest / width / centroid deltas)"
+              >
+                ⇩ Report
+              </button>
+            </div>
           </div>
         </div>
       </div>

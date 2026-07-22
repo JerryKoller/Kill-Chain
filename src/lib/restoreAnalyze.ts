@@ -11,6 +11,12 @@
  *     body-rebuild suggested.
  *   · CRUNCH BUMP — energy piling up in 2.8-5.5 kHz above its neighbours
  *     (codec crunch / clipping harshness) maps onto de-crunch.
+ *   · MAINS HUM (v2) — a 50 or 60 Hz spike (plus harmonics) sticking out of
+ *     the low-end floor maps onto de-hum.
+ *   · CLICKS (v2) — time-domain sample spikes far above each frame's RMS
+ *     map onto de-click.
+ *   · MONO SOURCE (v2) — near-perfect L/R correlation suggests the Widen
+ *     (pseudo-stereo) knob.
  *
  * Returns suggested knob positions + human-readable notes, or null when
  * nothing audible passed through while listening.
@@ -22,6 +28,10 @@ import type { RestoreParams } from "@/audio/dsp/Reconstructor";
 export interface RestoreSuggestion {
   params: Partial<RestoreParams>;
   cutoffHz: number | null;
+  /** Detected mains-hum fundamental, if any. */
+  humHz: 50 | 60 | null;
+  /** True when the source measures essentially mono. */
+  mono: boolean;
   notes: string[];
 }
 
@@ -39,10 +49,33 @@ export async function analyzeForRestore(
   an.smoothingTimeConstant = 0;
   engine.preTap.connect(an);
 
+  // v2 taps: per-channel analysers for correlation (mono detection) and a
+  // time-domain view for click counting.
+  const splitter = ctx.createChannelSplitter(2);
+  const anL = ctx.createAnalyser();
+  const anR = ctx.createAnalyser();
+  anL.fftSize = 2048;
+  anR.fftSize = 2048;
+  anL.smoothingTimeConstant = 0;
+  anR.smoothingTimeConstant = 0;
+  engine.preTap.connect(splitter);
+  splitter.connect(anL, 0);
+  splitter.connect(anR, 1);
+  const bufL = new Float32Array(2048);
+  const bufR = new Float32Array(2048);
+
   const bins = an.frequencyBinCount;
   const frame = new Float32Array(bins);
   const maxHold = new Float32Array(bins).fill(-180);
   const ticks = Math.max(10, Math.round((seconds * 1000) / 100));
+
+  let corrSum = 0;
+  let corrN = 0;
+  let clickFrames = 0;
+  let loudFrames = 0;
+  // v2.1: clipping fingerprint — flat-top plateaus + starved crest factor.
+  let plateauShare = 0;
+  let crestSum = 0;
 
   try {
     for (let i = 0; i < ticks; i++) {
@@ -52,10 +85,44 @@ export async function analyzeForRestore(
       for (let k = 0; k < bins; k++) {
         if (frame[k] > maxHold[k]) maxHold[k] = frame[k];
       }
+
+      // Correlation + click scan on this tick's time-domain window.
+      anL.getFloatTimeDomainData(bufL);
+      anR.getFloatTimeDomainData(bufR);
+      let dot = 0;
+      let eL = 0;
+      let eR = 0;
+      let peak = 0;
+      for (let k = 0; k < bufL.length; k++) {
+        dot += bufL[k] * bufR[k];
+        eL += bufL[k] * bufL[k];
+        eR += bufR[k] * bufR[k];
+        const a = Math.abs(bufL[k]);
+        if (a > peak) peak = a;
+      }
+      const rms = Math.sqrt(eL / bufL.length);
+      if (rms > 0.004) {
+        loudFrames++;
+        corrSum += dot / Math.sqrt(Math.max(1e-12, eL * eR));
+        corrN++;
+        // A frame whose peak towers over its own RMS carries a click/pop.
+        if (peak > Math.max(0.1, rms * 7.5)) clickFrames++;
+        // Clipping: samples camped on the frame's own peak plateau. A clean
+        // waveform touches its peak once; a clipped one sits on it.
+        let flat = 0;
+        const lip = peak * 0.985;
+        for (let k = 0; k < bufL.length; k++) {
+          if (Math.abs(bufL[k]) >= lip) flat++;
+        }
+        plateauShare += flat / bufL.length;
+        crestSum += 20 * Math.log10(Math.max(1.0001, peak / rms));
+      }
     }
   } finally {
     try { engine.preTap.disconnect(an); } catch { /* ignore */ }
+    try { engine.preTap.disconnect(splitter); } catch { /* ignore */ }
     try { an.disconnect(); } catch { /* ignore */ }
+    try { splitter.disconnect(); } catch { /* ignore */ }
   }
 
   const binHz = ctx.sampleRate / an.fftSize;
@@ -135,9 +202,61 @@ export async function analyzeForRestore(
     notes.push("Harsh 3-5 kHz build-up (codec crunch) — dynamic de-crunch engaged.");
   }
 
+  // ── v2: mains hum ──
+  // A hum spike must tower over the neighbouring low-end floor. The floor is
+  // read AROUND (not at) the candidate bins so the hum can't hide itself.
+  let humHz: (50 | 60) | null = null;
+  {
+    const floor = (levelAt(30, 44) + levelAt(72, 92)) / 2;
+    const at50 = levelAt(46, 54);
+    const at60 = levelAt(56, 65);
+    const spike50 = at50 - floor;
+    const spike60 = at60 - floor;
+    const best = Math.max(spike50, spike60);
+    if (best > 14 && Math.max(at50, at60) > ref - 30) {
+      humHz = spike50 >= spike60 ? 50 : 60;
+      params.dehum = clamp01((best - 14) / 20 + 0.35);
+      notes.push(`${humHz} Hz mains hum detected — notch ladder engaged.`);
+    }
+  }
+
+  // ── v2: clicks / crackle ──
+  if (loudFrames >= 5) {
+    const clickShare = clickFrames / loudFrames;
+    if (clickShare > 0.08) {
+      params.declick = clamp01((clickShare - 0.08) / 0.3 + 0.25);
+      notes.push("Pops / crackle detected — de-click clamp engaged.");
+    }
+  }
+
+  // ── v2: mono source ──
+  const mono = corrN >= 5 && corrSum / corrN > 0.985;
+  if (mono) {
+    notes.push("Source is mono (or near-mono) — try the Widen knob for synthesized stereo.");
+  }
+
+  // ── v2.1: hard clipping / crushed master ──
+  if (loudFrames >= 5) {
+    const flatAvg = plateauShare / loudFrames;
+    const crestAvg = crestSum / loudFrames;
+    if (flatAvg > 0.02 && crestAvg < 11) {
+      params.declip = clamp01((flatAvg - 0.02) / 0.08 + (11 - crestAvg) / 12 + 0.2);
+      notes.push("Flattened peaks (hard clipping / crushed master) — soft de-clip rounds them back out.");
+    }
+  }
+
+  // ── v2.1: anti-phase stereo damage ──
+  if (corrN >= 5) {
+    const corrAvg = corrSum / corrN;
+    if (corrAvg < -0.1) {
+      params.phase = clamp01(-corrAvg * 0.8 + 0.25);
+      notes.push("Anti-phase stereo image (cancels in mono) — phase repair anchors it.");
+    }
+  }
+
   if (Object.keys(params).length === 0) {
     notes.push("This source measures healthy — nothing to repair.");
   }
 
-  return { params, cutoffHz, notes };
+  return { params, cutoffHz, humHz, mono, notes };
 }

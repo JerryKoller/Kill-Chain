@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
 import { useAudioStore } from "@/state/audioStore";
+import { useFireSequencerStore, inScale } from "@/state/fireSequencerStore";
+import type { ScaleId } from "@/state/fireSequencerStore";
+import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
 import {
   DEFAULT_FIRE_PATCH,
   makeModMatrix,
@@ -13,6 +16,7 @@ import {
   type ModRoute,
   type ModSource,
   type ModDest,
+  type HarmonyMode,
 } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset } from "@/audio/dsp/firePresetBank";
@@ -566,6 +570,14 @@ function randomPatch(): FirePatch {
     unison: pick([1, 1, 3, 3, 5]),
     unisonDetune: Math.round(rand(8, 28)),
     unisonWidth: rand(0.3, 0.95),
+    warpStretch: chance(0.18) ? rand(-0.5, 0.6) : 0,
+    warpTilt: chance(0.18) ? rand(-0.6, 0.6) : 0,
+    warpComb: chance(0.12) ? rand(0.15, 0.6) : 0,
+    lpgOn: chance(0.12),
+    lpgDecay: rand(0.15, 1.1),
+    lpgColor: rand(0.4, 0.95),
+    harmonyMode: "off",
+    harmonyLevel: 0.6,
     subWave: pick(SUB_WAVES),
     subLevel: chance(0.6) ? rand(0.2, 0.7) : 0,
     noiseLevel: chance(0.2) ? rand(0.05, 0.25) : 0,
@@ -622,6 +634,7 @@ function randomPatch(): FirePatch {
     delayMix: chance(0.5) ? rand(0.15, 0.35) : 0,
     reverbSize: rand(1.5, 4.5),
     reverbMix: lush ? rand(0.2, 0.45) : (chance(0.4) ? rand(0.1, 0.25) : 0),
+    spectralMode: "off", spectralAmount: 0.6, spectralMix: 0.5,
     macro1: rand(0, 1), macro2: rand(0, 1), macro3: 0, macro4: 0,
     modMatrix: makeModMatrix(routes),
     drift: chance(0.5) ? rand(0.1, 0.5) : 0,
@@ -732,6 +745,11 @@ export interface FireCommandState extends PersistShape {
   importPatch: (patch: unknown, arp?: unknown) => void;
   /** Deploy a random preset from the factory bank. Returns what it picked. */
   randomPreset: () => FirePreset;
+  /**
+   * Morph pad (v1.6): push a blended patch into the synth. No history entry —
+   * the pad takes ONE snapshot per gesture itself. commit=true also persists.
+   */
+  applyMorphPatch: (patch: FirePatch, commit: boolean) => void;
   savePreset: (name: string) => string;
   deleteUserPreset: (id: string) => void;
   renameUserPreset: (id: string, name: string) => void;
@@ -750,6 +768,44 @@ export interface FireCommandState extends PersistShape {
 const genId = (): string =>
   `u${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
+// ── Harmonizer (v1.7) ──
+// Companion notes for live input, locked to the sequencer's scale controls.
+// Live-only: sequenced notes already have Conform/duplicate for harmonies.
+
+/** Step `degrees` scale tones upward from `midi` (chromatic-safe). */
+function scaleToneUp(midi: number, degrees: number, root: number, scaleId: ScaleId): number {
+  let m = midi;
+  for (let d = 0; d < degrees; d++) {
+    let next = m + 1;
+    while (next <= m + 12 && !inScale(next, root, scaleId)) next++;
+    m = next;
+  }
+  return m;
+}
+
+function harmonyCompanions(midi: number, mode: HarmonyMode): number[] {
+  if (mode === "off") return [];
+  if (mode === "octave") return [midi + 12];
+  const seq = useFireSequencerStore.getState();
+  const { scaleRoot, scaleId } = seq;
+  if (scaleId === "off") {
+    // Chromatic fallback: fixed major-ish intervals.
+    if (mode === "third") return [midi + 4];
+    if (mode === "fifth") return [midi + 7];
+    return [midi + 4, midi + 7];
+  }
+  // Companions land on scale tones relative to the played note (which may
+  // itself be off-scale — the walk still finds the next tones above it).
+  const third = scaleToneUp(midi, 2, scaleRoot, scaleId);
+  const fifth = scaleToneUp(midi, 4, scaleRoot, scaleId);
+  if (mode === "third") return [third];
+  if (mode === "fifth") return [fifth];
+  return [third, fifth];
+}
+
+/** Live input midi → its sounding companion notes (for matching note-offs). */
+const harmonyHeld = new Map<number, number[]>();
+
 export const useFireCommandStore = create<FireCommandState>((set, get) => {
   const persist = () => schedulePersist(get());
 
@@ -760,6 +816,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     arpCurrent: null,
 
     setParam: (key, value) => {
+      // Knob drags stream setParam per mousemove — coalesce by param name.
+      pushFireHistory(`param:${String(key)}`);
       const patch = { ...get().patch, [key]: value };
       set({ patch, presetId: "custom" });
       getEngine().fireCommand.set(key, value);
@@ -781,6 +839,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const user = factory ? null : get().userPresets.find((p) => p.id === id);
       const src = factory ?? user;
       if (!src) return;
+      pushFireHistory();
       // Merge over defaults: user presets saved before newer patch fields
       // existed (fmBtoA, noiseColor, filterDrive, stereoWidth, velAmount…)
       // load with legacy-exact behavior.
@@ -799,6 +858,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     randomize: () => {
+      pushFireHistory();
       const patch = randomPatch();
       set({ patch, presetId: "custom" });
       getEngine().fireCommand.setPatch(patch);
@@ -806,6 +866,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     mutate: () => {
+      pushFireHistory();
       // Evolution, not a reroll: nudge the sound-shaping parameters a few
       // percent around where they are. Wavetables, octaves, unison count and
       // routing stay put, so the patch keeps its identity but grows quirks.
@@ -853,6 +914,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     importPatch: (rawPatch, rawArp) => {
+      pushFireHistory();
       const patch = { ...DEFAULT_FIRE_PATCH, ...(rawPatch as Partial<FirePatch>) };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
       const arp: ArpSettings = rawArp && typeof rawArp === "object"
@@ -877,7 +939,14 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       return preset;
     },
 
+    applyMorphPatch: (patch, commit) => {
+      set({ patch: structuredClone(patch), presetId: "custom" });
+      getEngine().fireCommand.setPatch(get().patch);
+      if (commit) persist();
+    },
+
     savePreset: (name) => {
+      pushFireHistory();
       const s = get();
       const id = genId();
       const preset: SavedPreset = {
@@ -893,6 +962,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     deleteUserPreset: (id) => {
+      pushFireHistory();
       const s = get();
       set({
         userPresets: s.userPresets.filter((p) => p.id !== id),
@@ -904,6 +974,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     renameUserPreset: (id, name) => {
       const trimmed = name.trim();
       if (!trimmed) return;
+      pushFireHistory();
       set({
         userPresets: get().userPresets.map((p) => (p.id === id ? { ...p, name: trimmed } : p)),
       });
@@ -911,6 +982,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     setMaxVoices: (n) => {
+      pushFireHistory("maxVoices");
       const v = Math.round(clamp(n, 4, 48));
       set({ maxVoices: v });
       getEngine().fireCommand.setMaxVoices(v);
@@ -924,6 +996,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       if (s.heldNotes.length === 0 && s.arpOrder.length === 0) {
         void import("@/lib/sourceArbiter").then(({ claimSource }) => claimSource("fire"));
       }
+      // v1.6: capture into the piano roll when REC is armed + playing.
+      // All live inputs funnel through here (QWERTY, on-screen keys, MIDI).
+      useFireSequencerStore.getState().recordNoteOn(midi, velocity);
       if (s.arp.enabled) {
         // Feed the arp pattern; the scheduler sounds the notes.
         const freshLatch = s.arp.hold && s.heldNotes.length === 0;
@@ -938,23 +1013,40 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const engine = getEngine();
       void engine.resume();
       engine.fireCommand.noteOn(midi, velocity);
+      // Harmonizer (v1.7): scale-locked companions ride along at reduced
+      // velocity. Live input only — the sequencer schedules notes directly.
+      const mode = s.patch.harmonyMode ?? "off";
+      if (mode !== "off" && !harmonyHeld.has(midi)) {
+        const comps = harmonyCompanions(midi, mode).filter((c) => c <= 127);
+        const lvl = clamp(s.patch.harmonyLevel ?? 0.6, 0, 1);
+        for (const c of comps) engine.fireCommand.noteOn(c, velocity * lvl);
+        harmonyHeld.set(midi, comps);
+      }
       if (!s.heldNotes.includes(midi)) set({ heldNotes: [...s.heldNotes, midi] });
     },
 
     noteOff: (midi) => {
       const s = get();
+      useFireSequencerStore.getState().recordNoteOff(midi);
       if (s.arp.enabled) {
         const heldNotes = s.heldNotes.filter((n) => n !== midi);
         const arpOrder = s.arp.hold ? s.arpOrder : s.arpOrder.filter((n) => n !== midi);
         set({ heldNotes, arpOrder });
         return;
       }
-      getEngine().fireCommand.noteOff(midi);
+      const engine = getEngine();
+      engine.fireCommand.noteOff(midi);
+      const comps = harmonyHeld.get(midi);
+      if (comps) {
+        harmonyHeld.delete(midi);
+        for (const c of comps) engine.fireCommand.noteOff(c);
+      }
       set({ heldNotes: s.heldNotes.filter((n) => n !== midi) });
     },
 
     panic: () => {
       stopArpScheduler();
+      harmonyHeld.clear();
       getEngine().fireCommand.allNotesOff();
       set({ heldNotes: [], arpOrder: [], arpCurrent: null });
       // Keep arp enabled flag, just restart the (now-empty) scheduler if on.
@@ -977,6 +1069,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     setArp: (patch) => {
+      pushFireHistory("arp");
       const prev = get().arp;
       const arp: ArpSettings = { ...prev, ...patch };
       // Turning hold off drops latched notes that aren't physically held.
@@ -1010,4 +1103,40 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       if (s.arp.enabled) startArpScheduler(get, set);
     },
   };
+});
+
+// ── undo/redo provider (v1.6) ──
+// The synth's undoable slice: patch, arp, presets. Live performance state
+// (held notes, octave, FX routing) is deliberately excluded.
+registerFireHistoryProvider("fireCommand", {
+  capture: () => {
+    const s = useFireCommandStore.getState();
+    return {
+      patch: s.patch,
+      arp: s.arp,
+      presetId: s.presetId,
+      userPresets: s.userPresets,
+      maxVoices: s.maxVoices,
+    };
+  },
+  restore: (snap) => {
+    stopArpScheduler();
+    useFireCommandStore.setState({
+      ...(snap as Partial<FireCommandState>),
+      arpOrder: [],
+      arpCurrent: null,
+    });
+    const s = useFireCommandStore.getState();
+    const fc = getEngine().fireCommand;
+    fc.allNotesOff();
+    fc.setPatch(s.patch);
+    fc.setMaxVoices(s.maxVoices);
+    if (s.arp.enabled) {
+      startArpScheduler(
+        useFireCommandStore.getState,
+        (p) => useFireCommandStore.setState(p),
+      );
+    }
+    schedulePersist(s);
+  },
 });

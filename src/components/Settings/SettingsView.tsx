@@ -13,26 +13,48 @@ import {
   type DeviceType,
   type HeadphoneProfile,
 } from "@/audio/headphoneProfiles";
+import { openHeadphoneWizard } from "@/components/Settings/HeadphoneWizard";
+import { HotkeysSection } from "@/components/Settings/HotkeysSection";
+import { useCustomHeadphonesStore } from "@/state/customHeadphonesStore";
+import { openWhatsNew } from "@/components/shared/WhatsNewPanel";
+import { APP_VERSION } from "@/lib/appVersion";
 import { useUIStore } from "@/state/uiStore";
 import { useMidiStore, type MidiTarget } from "@/state/midiStore";
 import { SOUND_PARAM_META, type SoundParams } from "@/audio/types";
 import { getEngine } from "@/audio/AudioEngine";
 import { usePlayerStore } from "@/state/playerStore";
+import { useMissionLogStore } from "@/state/missionLogStore";
+import { isAutoLockArmed, setAutoLock, onAutoLockChange } from "@/lib/tractorAutoLock";
 
-const THEMES: { id: ThemeId; name: string; blurb: string; swatches: string[] }[] = [
-  { id: "nightops", name: "Kill-Chain · Night Ops", blurb: "Default. The signature look — tactical green, tracer amber, gunmetal black.", swatches: ["#78c678", "#e07840", "#629670"] },
-  { id: "obsidian", name: "Obsidian", blurb: "Black steel and blood — dark and menacing.", swatches: ["#54b4d6", "#ff4040", "#7a5cff"] },
-  { id: "gunmetal", name: "Gunmetal", blurb: "Desaturated cool steel. Sharp and near-monochrome.", swatches: ["#8ea0b2", "#d66054", "#6e7c8e"] },
-  { id: "carbon", name: "Carbon", blurb: "Industrial near-black with one molten amber edge.", swatches: ["#e68a3a", "#e85430", "#966e50"] },
-  { id: "crimson", name: "Crimson", blurb: "Aggressive black and molten red.", swatches: ["#ff5a36", "#ff2d6f", "#b23bff"] },
-  { id: "military", name: "Olive Drab", blurb: "Field olive, gold, and steel.", swatches: ["#c4b454", "#d9772b", "#7c9646"] },
-  { id: "abyss", name: "Abyss", blurb: "Deep ocean blue-black, cold and quiet.", swatches: ["#33d6ff", "#3b7bff", "#6a5bff"] },
-  { id: "toxic", name: "Toxic", blurb: "Hazmat black with acid green.", swatches: ["#5bff9d", "#caff33", "#2fe0a0"] },
-  { id: "ember", name: "Ember", blurb: "Charcoal and burning orange.", swatches: ["#ff8a3b", "#ff4040", "#ff5b2e"] },
-  { id: "mono", name: "Mono", blurb: "Brutalist grayscale, one red warning.", swatches: ["#e2e4eb", "#ff4d4d", "#969cb0"] },
-  { id: "neon", name: "Neon", blurb: "Cyberpunk magenta and cyan.", swatches: ["#22e8ff", "#ff2bd6", "#7a3bff"] },
-  { id: "studio", name: "Studio", blurb: "Cool engineering aesthetic, less glow.", swatches: ["#4ec9ff", "#ff7a8a", "#8e9bff"] },
-  { id: "vinyl", name: "Vinyl", blurb: "Warm sepia, paper labels, low-glare.", swatches: ["#ffb260", "#ff6f3c", "#c87a3a"] },
+/**
+ * v2.2 — six curated themes (13 were culled). The palette fields mirror the
+ * CSS variable blocks in globals.css so the preview cards can render a live
+ * miniature of the shell in each theme without switching it on.
+ */
+const THEMES: {
+  id: ThemeId;
+  name: string;
+  blurb: string;
+  signature?: boolean;
+  ink: string;
+  voidC: string;
+  accent: string;
+  plasma: string;
+  text: string;
+}[] = [
+  { id: "nightops", name: "Night Ops", blurb: "The signature look — tactical green, tracer amber, gunmetal black.", signature: true, ink: "rgb(6 8 7)", voidC: "rgb(12 15 13)", accent: "rgb(120 198 120)", plasma: "rgb(224 120 64)", text: "#e3ebe2" },
+  { id: "obsidian", name: "Obsidian", blurb: "Black steel and cold blue — precise and menacing.", signature: true, ink: "rgb(7 8 11)", voidC: "rgb(13 15 19)", accent: "rgb(84 180 214)", plasma: "rgb(255 64 64)", text: "#e8eaf2" },
+  { id: "carbon", name: "Carbon", blurb: "Industrial near-black with one molten amber edge.", signature: true, ink: "rgb(8 8 9)", voidC: "rgb(14 14 16)", accent: "rgb(230 138 58)", plasma: "rgb(232 84 48)", text: "#ecebe8" },
+  { id: "abyss", name: "Abyss", blurb: "Deep ocean blue-black, cold and quiet.", ink: "rgb(5 8 14)", voidC: "rgb(10 14 22)", accent: "rgb(51 214 255)", plasma: "rgb(59 123 255)", text: "#dce8ff" },
+  { id: "crimson", name: "Crimson", blurb: "Aggressive black and molten red.", ink: "rgb(9 6 6)", voidC: "rgb(18 10 10)", accent: "rgb(255 90 54)", plasma: "rgb(255 45 111)", text: "#f6e7e7" },
+  { id: "mono", name: "Mono", blurb: "Brutalist grayscale, one red warning.", ink: "rgb(8 8 10)", voidC: "rgb(16 16 19)", accent: "rgb(226 228 235)", plasma: "rgb(255 77 77)", text: "#f0f1f5" },
+];
+
+/** Glow presets (Settings → Appearance). The slider still allows any value. */
+const GLOW_PRESETS: { name: string; value: number; blurb: string }[] = [
+  { name: "Sharp", value: 0.12, blurb: "Flat, print-like, minimal bloom" },
+  { name: "Balanced", value: 0.4, blurb: "The stock look" },
+  { name: "Dreamy", value: 0.75, blurb: "Soft haze on every light source" },
 ];
 
 const ACCENTS: { id: AccentId; name: string; color: string }[] = [
@@ -52,11 +74,22 @@ const DENSITIES: { scale: number; name: string }[] = [
   { scale: 0.84, name: "Dense" },
 ];
 
+/** v2.4 — Settings rationalized into four groups. */
+type SettingsTab = "audio" | "automation" | "appearance" | "advanced";
+
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "audio", label: "Audio" },
+  { id: "automation", label: "Automation" },
+  { id: "appearance", label: "Appearance" },
+  { id: "advanced", label: "Advanced" },
+];
+
 export function SettingsView() {
   const settings = useSettingsStore();
   const setHeadphoneProfile = useAudioStore((s) => s.setHeadphoneProfile);
   const toast = useUIStore((s) => s.toast);
 
+  const [tab, setTab] = useState<SettingsTab>("audio");
   const [btDevices, setBtDevices] = useState<BluetoothDeviceInfo[]>([]);
   const [defaultOut, setDefaultOut] = useState<string | null>(null);
   const [remoteUrl, setRemoteUrl] = useState<string | null>(null);
@@ -101,35 +134,49 @@ export function SettingsView() {
 
   return (
     <div className="flex flex-col gap-3 pb-4">
-      <ActionBar title="Settings" code="KC-14" subtitle="Theme, gear, comms, and preferences" />
+      <ActionBar title="Settings" code="KC-14" subtitle="Audio · Automation · Appearance · Advanced" />
 
-      {/* THEMES */}
+      {/* v2.4 — settings rationalized into four groups */}
+      <div className="kc-seg self-start">
+        {SETTINGS_TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`kc-seg-btn ${tab === t.id ? "kc-on" : ""}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "appearance" && (<>
+      {/* THEMES — live miniature previews */}
       <GlassPanel intense className="p-5">
-        <Section title="Theme" sub="Visual personality across all panels" />
+        <Section title="Theme" sub="Six curated looks — each card is a live preview" />
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
           {THEMES.map((t) => (
             <button
               key={t.id}
               onClick={() => settings.set("theme", t.id)}
-              className={`rounded-2xl p-4 border text-left transition ${
-                settings.theme === t.id
-                  ? "border-cyan/60 bg-cyan/10"
-                  : "border-white/10 hover:border-white/25 hover:bg-white/[0.03]"
-              }`}
+              className={`kc-theme-card ${settings.theme === t.id ? "kc-on" : ""}`}
             >
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-base font-semibold">{t.name}</div>
-                <div className="flex gap-1">
-                  {t.swatches.map((c) => (
-                    <span
-                      key={c}
-                      className="w-4 h-4 rounded-full border border-white/15"
-                      style={{ background: c }}
-                    />
-                  ))}
+              <ThemePreview t={t} />
+              <div className="p-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold">{t.name}</span>
+                  {t.signature && (
+                    <span className="module-tag" style={{ fontSize: 8 }}>
+                      SIGNATURE
+                    </span>
+                  )}
+                  {settings.theme === t.id && (
+                    <span className="ml-auto text-[9px] uppercase tracking-[0.2em] text-cyan">
+                      Active
+                    </span>
+                  )}
                 </div>
+                <div className="text-[11px] text-dim leading-snug mt-1">{t.blurb}</div>
               </div>
-              <div className="text-[11px] text-dim leading-snug">{t.blurb}</div>
             </button>
           ))}
         </div>
@@ -163,6 +210,18 @@ export function SettingsView() {
               <div className="text-[11px] uppercase tracking-[0.25em] text-dim">Glow / bloom</div>
               <div className="text-xs font-mono text-white/70">{Math.round(settings.uiGlow * 100)}%</div>
             </div>
+            <div className="flex gap-2 mb-2">
+              {GLOW_PRESETS.map((g) => (
+                <button
+                  key={g.name}
+                  onClick={() => settings.set("uiGlow", g.value)}
+                  title={g.blurb}
+                  className={`kc-chip ${Math.abs(settings.uiGlow - g.value) < 0.011 ? "kc-on" : ""}`}
+                >
+                  {g.name}
+                </button>
+              ))}
+            </div>
             <input
               type="range"
               min={0}
@@ -170,7 +229,8 @@ export function SettingsView() {
               step={0.05}
               value={settings.uiGlow}
               onChange={(e) => settings.set("uiGlow", Number(e.target.value))}
-              className="w-full accent-cyan"
+              className="kc-slider w-full"
+              style={{ ["--kc-fill" as string]: `${settings.uiGlow * 100}%` }}
             />
             <div className="text-[10px] text-dim mt-1">Lower = sharper, flatter, less neon.</div>
           </div>
@@ -217,8 +277,38 @@ export function SettingsView() {
             sub="The SYSTEM ARM sequence sound on launch"
           />
         </div>
+
+        {/* v2.2 — module identity + texture layer */}
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <ToggleCard
+            on={settings.moduleColor}
+            onToggle={() => settings.toggle("moduleColor")}
+            title="Module colors"
+            sub="Each tool wears its own accent on headers and active controls. Off = monochrome on the theme color."
+          />
+          <div className="rounded-xl border border-white/10 p-3">
+            <div className="text-sm font-medium mb-0.5">Texture layer</div>
+            <div className="text-[11px] text-dim mb-2">
+              Optional CRT scanlines or film grain over the whole UI.
+            </div>
+            <div className="kc-seg">
+              {(["off", "scanlines", "grain"] as const).map((id) => (
+                <button
+                  key={id}
+                  onClick={() => settings.set("fxOverlay", id)}
+                  className={`kc-seg-btn capitalize ${settings.fxOverlay === id ? "kc-on" : ""}`}
+                >
+                  {id}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       </GlassPanel>
 
+      </>)}
+
+      {tab === "audio" && (<>
       {/* HEADPHONES */}
       <HeadphonesSection
         active={settings.headphone}
@@ -281,7 +371,11 @@ export function SettingsView() {
           Refresh
         </button>
       </GlassPanel>
+      </>)}
 
+      {tab === "automation" && <AutomationSection />}
+
+      {tab === "advanced" && (<>
       {/* REMOTE */}
       <GlassPanel intense className="p-5">
         <Section
@@ -358,16 +452,111 @@ export function SettingsView() {
             </div>
           )}
           <ToggleRow
-            label="Auto-flatten new tracks"
-            sub="Analyse the first 10 seconds of every loaded track and gently tilt the EQ to flatten its average spectrum"
-            value={settings.autoFlatten}
-            onChange={() => settings.toggle("autoFlatten")}
-          />
-          <ToggleRow
             label="Mini-player mode"
             sub="Collapse window into a compact always-on-top strip (also: press W)"
             value={settings.miniMode}
             onChange={() => settings.toggle("miniMode")}
+          />
+          <ToggleRow
+            label="Crash reporting (local)"
+            sub="Log app errors and crashes to a crash.log on this machine. Nothing is uploaded — remote reporting stays off unless a Sentry DSN is baked into the build."
+            value={settings.crashReports}
+            onChange={() => settings.toggle("crashReports")}
+          />
+          {settings.crashReports && window.playground?.crash && (
+            <button
+              onClick={() => void window.playground.crash?.openLog()}
+              className="w-full text-xs text-dim hover:text-cyan"
+            >
+              Open crash log folder
+            </button>
+          )}
+          <button
+            onClick={() => openWhatsNew()}
+            className="w-full text-xs text-dim hover:text-cyan mt-3"
+          >
+            What's new in {APP_VERSION}
+          </button>
+          <button
+            onClick={() => {
+              settings.set("onboardingDone", false);
+              toast("Onboarding will run next launch (or now)");
+            }}
+            className="w-full text-xs text-dim hover:text-cyan mt-1"
+          >
+            Re-run onboarding tour
+          </button>
+        </div>
+      </GlassPanel>
+
+      {/* HOTKEYS remap table */}
+      <HotkeysSection />
+
+      {/* MIDI mapping */}
+      <MidiSection />
+
+      {/* v2.4 — engine recovery + session portability */}
+      <AdvancedActions />
+      </>)}
+    </div>
+  );
+}
+
+/**
+ * v2.4 AUTOMATION — every "the app changes the sound on its own" switch in
+ * one place, with the Mission State priority order spelled out.
+ */
+function AutomationSection() {
+  const settings = useSettingsStore();
+  const toast = useUIStore((s) => s.toast);
+  const autoRestore = useMissionLogStore((s) => s.autoRestore);
+  const setAutoRestore = useMissionLogStore((s) => s.setAutoRestore);
+  const entryCount = useMissionLogStore((s) => Object.keys(s.entries).length);
+  const exportSession = useMissionLogStore((s) => s.exportSession);
+  const importSession = useMissionLogStore((s) => s.importSession);
+
+  const [autoLock, setAutoLockState] = useState(isAutoLockArmed());
+  useEffect(() => onAutoLockChange(setAutoLockState), []);
+
+  return (
+    <>
+      <GlassPanel intense className="p-5">
+        <Section
+          title="Mission State"
+          sub="One pipeline reacts to a source change, in strict priority order. Higher entries always win."
+        />
+        <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3 text-[12px] leading-relaxed">
+          <span className="text-amber-300/90 font-semibold">Manual override</span>
+          <span className="text-dim"> › </span>
+          <span className="text-cyan font-semibold">Saved source memory</span>
+          <span className="text-dim"> › </span>
+          <span className="text-cyan/80 font-semibold">Auto-Lock</span>
+          <span className="text-dim"> › </span>
+          <span className="text-white/60 font-semibold">Auto-Flatten</span>
+          <div className="text-[11px] text-dim mt-1.5">
+            Touching any chain control by hand puts the current source on manual
+            hold — automation stands down until the source changes. A new source
+            settles for ~2.5 s before the pipeline runs.
+          </div>
+        </div>
+        <div className="mt-3 space-y-1">
+          <ToggleRow
+            label="Restore saved source memory"
+            sub={`Re-apply a logged chain when its source plays again (${entryCount} saved)`}
+            value={autoRestore}
+            onChange={() => setAutoRestore(!autoRestore)}
+          />
+          <ToggleRow
+            label="Tractor Auto-Lock"
+            sub="Scan new sources and apply a health-guarded full-chain lock automatically. Existing locks restore instantly without a scan."
+            value={autoLock}
+            onChange={() => setAutoLock(!autoLock)}
+          />
+          <ToggleRow
+            label="Auto-flatten new tracks"
+            sub="Default automation: gently tilt the EQ toward a flat average spectrum. Only runs when nothing above applied."
+            value={settings.autoFlatten}
+            onChange={() => settings.toggle("autoFlatten")}
           />
           <div className="flex items-center justify-between gap-4 p-3 rounded-xl">
             <div>
@@ -402,21 +591,80 @@ export function SettingsView() {
               {settings.lufsTargetDb !== null ? "On" : "Off"}
             </button>
           </div>
-          <button
-            onClick={() => {
-              settings.set("onboardingDone", false);
-              toast("Onboarding will run next launch (or now)");
-            }}
-            className="w-full text-xs text-dim hover:text-cyan mt-3"
-          >
-            Re-run onboarding tour
-          </button>
         </div>
       </GlassPanel>
 
-      {/* MIDI mapping */}
-      <MidiSection />
-    </div>
+      <GlassPanel intense className="p-5">
+        <Section
+          title="Session"
+          sub="Your per-source memories (chains + referenced Tractor locks) as one portable file"
+        />
+        <div className="mt-3 flex gap-2 flex-wrap">
+          <button
+            onClick={() => {
+              void exportSession().then((ok) =>
+                toast(ok ? "Session exported (.kcsession)" : "Nothing to export", ok ? "success" : "warn"),
+              );
+            }}
+            className="rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 px-3 py-1.5 text-xs text-cyan font-semibold"
+          >
+            Export session (.kcsession)
+          </button>
+          <button
+            onClick={() => {
+              void importSession().then((n) =>
+                toast(n > 0 ? `Imported ${n} source memories` : "No records imported", n > 0 ? "success" : "warn"),
+              );
+            }}
+            className="rounded-lg border border-white/15 hover:bg-white/5 px-3 py-1.5 text-xs"
+          >
+            Import session
+          </button>
+        </div>
+      </GlassPanel>
+    </>
+  );
+}
+
+/** v2.4 ADVANCED — engine recovery. */
+function AdvancedActions() {
+  const toast = useUIStore((s) => s.toast);
+  const [resetting, setResetting] = useState(false);
+  return (
+    <GlassPanel intense className="p-5">
+      <Section
+        title="Recovery"
+        sub="If audio gets stuck, desynced, or half-muted, rebuild the graph state without restarting the app"
+      />
+      <div className="mt-3 flex gap-2 flex-wrap items-center">
+        <button
+          disabled={resetting}
+          onClick={() => {
+            setResetting(true);
+            void import("@/lib/appHealth")
+              .then((m) => m.resetAudioEngine())
+              .finally(() => setResetting(false));
+          }}
+          className="rounded-lg border border-plasma/50 bg-plasma/10 hover:bg-plasma/20 px-4 py-2 text-sm text-plasma font-semibold disabled:opacity-50"
+        >
+          {resetting ? "Resetting…" : "Reset Audio Engine"}
+        </button>
+        <span className="text-[11px] text-dim max-w-md leading-snug">
+          Re-attaches the source, re-applies the output device, and re-syncs
+          every DSP stage from app state. Playback continues.
+        </span>
+        <button
+          onClick={() => {
+            localStorage.clear();
+            toast("Local storage cleared — restart the app", "warn");
+          }}
+          className="ml-auto rounded-lg border border-white/15 hover:bg-white/5 px-3 py-1.5 text-xs text-dim"
+          title="Wipes every saved setting, memory, preset and lock on this machine"
+        >
+          Factory reset (clear all data)
+        </button>
+      </div>
+    </GlassPanel>
   );
 }
 
@@ -435,7 +683,9 @@ function HeadphonesSection({
 }) {
   const [query, setQuery] = useState("");
   const [brand, setBrand] = useState<string>("All");
-  const brands = useMemo(() => ["All", ...headphoneBrands()], []);
+  // Re-list when the wizard imports/deletes a custom profile.
+  const customCount = useCustomHeadphonesStore((s) => s.profiles.length);
+  const brands = useMemo(() => ["All", ...headphoneBrands()], [customCount]);
   // Which device-type groups are collapsed. Everything except the active
   // profile's group starts collapsed so the (large) catalog stays scannable.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
@@ -463,7 +713,7 @@ function HeadphonesSection({
       type: t,
       items: byType.get(t)!,
     }));
-  }, [query, brand]);
+  }, [query, brand, customCount]);
 
   const searching = query.trim().length > 0;
   const total = groups.reduce((n, g) => n + g.items.length, 0);
@@ -490,6 +740,13 @@ function HeadphonesSection({
             <option key={b} value={b}>{b}</option>
           ))}
         </select>
+        <button
+          onClick={openHeadphoneWizard}
+          className="rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 px-3 py-2 text-xs font-semibold text-cyan whitespace-nowrap"
+          title="Guided setup: find your model, import an AutoEq profile, or pick a generic fallback"
+        >
+          I have these cans…
+        </button>
       </div>
       <div className="mt-3 flex flex-col gap-2 max-h-[420px] overflow-y-auto pr-1">
         {total === 0 && (
@@ -1606,6 +1863,61 @@ function DeviceTile({
       </div>
       <div className="text-[11px] text-dim mt-1 leading-snug">{sub}</div>
     </button>
+  );
+}
+
+/**
+ * Live theme preview — a miniature of the shell (title bar, sidebar rail,
+ * a glass panel with knob + meter bars) painted with the theme's actual
+ * palette. Selecting a card is the only way to switch, so the mock must be
+ * honest: colors come straight from the theme's CSS variable values.
+ */
+function ThemePreview({ t }: { t: (typeof THEMES)[number] }) {
+  return (
+    <div
+      className="h-24 w-full relative overflow-hidden"
+      style={{ background: t.ink }}
+      aria-hidden
+    >
+      {/* title bar */}
+      <div
+        className="absolute top-0 inset-x-0 h-3.5 flex items-center gap-1 px-2"
+        style={{ background: t.voidC }}
+      >
+        <span className="w-1 h-1 rounded-full" style={{ background: t.accent }} />
+        <span className="w-6 h-0.5 rounded-full" style={{ background: `${t.text}44` }} />
+      </div>
+      {/* sidebar rail */}
+      <div className="absolute left-0 top-3.5 bottom-0 w-8 p-1 flex flex-col gap-1" style={{ background: `${t.voidC}` }}>
+        <span className="h-1.5 rounded-sm" style={{ background: t.accent, opacity: 0.9 }} />
+        <span className="h-1.5 rounded-sm" style={{ background: `${t.text}22` }} />
+        <span className="h-1.5 rounded-sm" style={{ background: `${t.text}22` }} />
+        <span className="h-1.5 rounded-sm" style={{ background: `${t.text}22` }} />
+      </div>
+      {/* main panel */}
+      <div
+        className="absolute left-10 right-2 top-6 bottom-2 rounded-md border p-1.5 flex items-end gap-1"
+        style={{ background: `${t.voidC}`, borderColor: `${t.text}1e` }}
+      >
+        {/* knob */}
+        <span
+          className="w-5 h-5 rounded-full border-2 mr-1 shrink-0 self-center"
+          style={{ borderColor: t.accent, boxShadow: `0 0 6px ${t.accent}` }}
+        />
+        {/* meter bars */}
+        {[0.5, 0.8, 0.35, 0.65, 0.9, 0.45, 0.7].map((h, i) => (
+          <span
+            key={i}
+            className="flex-1 rounded-sm"
+            style={{
+              height: `${h * 100}%`,
+              background: i === 4 ? t.plasma : t.accent,
+              opacity: i === 4 ? 0.85 : 0.6,
+            }}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 

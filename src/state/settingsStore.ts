@@ -1,19 +1,29 @@
 import { create } from "zustand";
 
+/**
+ * v2.2 — the theme roster was culled from 13 to 6: three signature themes
+ * (Night Ops, Obsidian, Carbon) plus three alternates (Abyss, Crimson,
+ * Mono). Removed ids are migrated to their nearest surviving look in
+ * `load()` so existing installs keep a coherent appearance.
+ */
 export type ThemeId =
+  | "nightops"
   | "obsidian"
-  | "crimson"
-  | "military"
-  | "abyss"
-  | "toxic"
-  | "ember"
-  | "mono"
-  | "neon"
-  | "studio"
-  | "vinyl"
-  | "gunmetal"
   | "carbon"
-  | "nightops";
+  | "abyss"
+  | "crimson"
+  | "mono";
+
+/** Where each retired theme lands (v2.2 migration). */
+export const LEGACY_THEME_MAP: Record<string, ThemeId> = {
+  military: "nightops",
+  toxic: "nightops",
+  ember: "carbon",
+  vinyl: "carbon",
+  neon: "abyss",
+  studio: "obsidian",
+  gunmetal: "mono",
+};
 
 /** Optional accent override applied on top of the active theme. */
 export type AccentId =
@@ -69,6 +79,11 @@ export interface SettingsState {
   forceReducedMotion: boolean;
   /** Ambient background orbs + grid field. */
   bgFx: boolean;
+  /** v2.2 — per-module accent colors (headers/active controls). When false
+   *  the whole app runs monochrome on the theme primary. */
+  moduleColor: boolean;
+  /** v2.2 — optional texture layer over the UI. Off by default. */
+  fxOverlay: "off" | "scanlines" | "grain";
   /** Auto-flatten new tracks (analyse + tilt EQ on load). */
   autoFlatten: boolean;
   /** Loudness target in LUFS for auto-normalize. null = disabled. */
@@ -101,6 +116,11 @@ export interface SettingsState {
    *                       (line-in, USB mic, another virtual cable, etc.).
    */
   audioInputSource: string;
+  /** Opt-in error/crash logging (local crash.log; Sentry only if a DSN is
+   *  configured at build time). Default OFF — nothing leaves the machine. */
+  crashReports: boolean;
+  /** Last app version whose "What's new" panel was shown. */
+  lastSeenVersion: string;
 
   set: <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => void;
   toggle: (
@@ -114,7 +134,9 @@ export interface SettingsState {
       | "loopbackEchoAck"
       | "bootSound"
       | "forceReducedMotion"
-      | "bgFx",
+      | "bgFx"
+      | "moduleColor"
+      | "crashReports",
   ) => void;
 }
 
@@ -139,12 +161,16 @@ const DEFAULTS: Omit<SettingsState, "set" | "toggle"> = {
   bootSound: true,
   forceReducedMotion: false,
   bgFx: true,
+  moduleColor: true,
+  fxOverlay: "off",
   autoFlatten: false,
   lufsTargetDb: null,
   remotePort: 0,
   audioOutputDeviceId: "",
   loopbackEchoAck: false,
   audioInputSource: "",
+  crashReports: false,
+  lastSeenVersion: "",
 };
 
 function load(): typeof DEFAULTS {
@@ -161,6 +187,10 @@ function load(): typeof DEFAULTS {
       merged.uiScale = DEFAULTS.uiScale;
       merged.appearanceRev = APPEARANCE_REV;
     }
+    // v2.2 theme cull: retired ids fall back to their nearest survivor.
+    if (LEGACY_THEME_MAP[merged.theme as string]) {
+      merged.theme = LEGACY_THEME_MAP[merged.theme as string];
+    }
     return merged;
   } catch {
     return { ...DEFAULTS };
@@ -171,8 +201,11 @@ function persist(state: typeof DEFAULTS): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    /* ignore */
+  } catch (err) {
+    // v2.4: storage failures surface in the Mission HUD instead of vanishing.
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Settings", err),
+    );
   }
 }
 

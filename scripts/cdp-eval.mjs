@@ -2,7 +2,7 @@
 // Usage: node scripts/cdp-eval.mjs <expression-file.js | inline-expression> [--shot out.png]
 import { readFileSync, writeFileSync } from "node:fs";
 
-const PORT = 9223;
+const PORT = Number(process.env.CDP_PORT || 9223);
 const arg = process.argv[2];
 const shotIdx = process.argv.indexOf("--shot");
 const shotPath = shotIdx > 0 ? process.argv[shotIdx + 1] : null;

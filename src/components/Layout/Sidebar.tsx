@@ -1,58 +1,102 @@
-import { motion } from "framer-motion";
 import { useUIStore, type View } from "@/state/uiStore";
 import { useSettingsStore } from "@/state/settingsStore";
 import { HEADPHONES } from "@/audio/headphoneProfiles";
 import { SpectrumStrip } from "@/components/Layout/SpectrumStrip";
 import { useTabActivity, type TabActivity } from "@/hooks/useTabActivity";
+import { useEffect, useState, type ComponentType, type SVGProps } from "react";
+import {
+  IconAirspace,
+  IconArmory,
+  IconCalibration,
+  IconChain,
+  IconDimension,
+  IconEars,
+  IconFire,
+  IconGlossary,
+  IconLibrary,
+  IconMorph,
+  IconReactor,
+  IconScope,
+  IconSculptor,
+  IconSettings,
+  IconTractor,
+} from "@/components/kcds";
 
 interface NavDef {
   id: View;
   label: string;
   sub: string;
-  icon: string;
+  Icon: ComponentType<SVGProps<SVGSVGElement>>;
 }
 
 /**
- * Tools grouped by battlefield role (issue #4):
+ * Tools grouped by battlefield role:
  *   Generators  — things that PRODUCE sound
  *   Modulators  — things that SHAPE the sound passing through
  *   Utilities   — recon, training and stored loadouts
+ * v2.2: custom KCDS SVG icons replace the emoji glyphs, and each entry
+ * lights in its own module accent when active.
  */
 const GROUPS: { title: string; items: NavDef[] }[] = [
   {
     title: "Generators",
     items: [
-      { id: "library", label: "Library", sub: "Track arsenal", icon: "♫" },
-      { id: "fire", label: "Fire Command", sub: "Tactical synthesizer", icon: "⏣" },
-      { id: "airspace", label: "Airspace", sub: "Browse the web thru EQ", icon: "⌖" },
+      { id: "library", label: "Library", sub: "Track arsenal", Icon: IconLibrary },
+      { id: "fire", label: "Fire Command", sub: "Tactical synthesizer", Icon: IconFire },
+      { id: "airspace", label: "Airspace", sub: "Browse the web thru EQ", Icon: IconAirspace },
     ],
   },
   {
     title: "Modulators",
     items: [
-      { id: "playground", label: "Sculptor", sub: "Shape the signal", icon: "◐" },
-      { id: "tractor", label: "Tractor Beam", sub: "Lock EQ onto a track", icon: "◉" },
-      { id: "calibration", label: "Calibration", sub: "Zero in to your ears", icon: "◎" },
-      { id: "morphlab", label: "Morph Lab", sub: "Blend in 2D", icon: "◍" },
-      { id: "reactor", label: "Reactor", sub: "Perform live", icon: "◈" },
-      { id: "dimension", label: "3rd Dimension", sub: "Deploy sound in a room", icon: "⬡" },
+      { id: "playground", label: "Sculptor", sub: "Shape the signal", Icon: IconSculptor },
+      { id: "tractor", label: "Tractor Beam", sub: "Lock EQ onto a track", Icon: IconTractor },
+      { id: "calibration", label: "Calibration", sub: "Zero in to your ears", Icon: IconCalibration },
+      { id: "morphlab", label: "Morph Lab", sub: "Blend in 2D", Icon: IconMorph },
+      { id: "reactor", label: "Reactor", sub: "Perform live", Icon: IconReactor },
+      { id: "dimension", label: "3rd Dimension", sub: "Deploy sound in a room", Icon: IconDimension },
     ],
   },
   {
     title: "Utilities",
     items: [
-      { id: "chain", label: "Kill Chain", sub: "Live signal flow map", icon: "⛓" },
-      { id: "scope", label: "Scope", sub: "Recon the signal", icon: "⊡" },
-      { id: "trainer", label: "Golden Ears", sub: "Sharpen your hearing", icon: "♪" },
-      { id: "presets", label: "Armory", sub: "Sound loadouts", icon: "❖" },
+      { id: "chain", label: "Kill Chain", sub: "Live signal flow map", Icon: IconChain },
+      { id: "scope", label: "Scope", sub: "Recon the signal", Icon: IconScope },
+      { id: "trainer", label: "Golden Ears", sub: "Sharpen your hearing", Icon: IconEars },
+      { id: "presets", label: "Armory", sub: "Sound loadouts", Icon: IconArmory },
     ],
   },
 ];
 
 const SECONDARY: NavDef[] = [
-  { id: "glossary", label: "Glossary", sub: "Field manual", icon: "?" },
-  { id: "settings", label: "Settings", sub: "Comms · gear · theme", icon: "⚙" },
+  { id: "glossary", label: "Glossary", sub: "Field manual", Icon: IconGlossary },
+  { id: "settings", label: "Settings", sub: "Comms · gear · theme", Icon: IconSettings },
 ];
+
+/** Live output-device label for the profile card (falls back to "System default"). */
+function useOutputDeviceName(): string {
+  const deviceId = useSettingsStore((s) => s.audioOutputDeviceId);
+  const [name, setName] = useState("System default");
+  useEffect(() => {
+    let alive = true;
+    if (!deviceId) {
+      setName("System default");
+      return;
+    }
+    navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((list) => {
+        if (!alive) return;
+        const dev = list.find((d) => d.kind === "audiooutput" && d.deviceId === deviceId);
+        setName(dev?.label || "Selected output");
+      })
+      .catch(() => setName("Selected output"));
+    return () => {
+      alive = false;
+    };
+  }, [deviceId]);
+  return name;
+}
 
 export function Sidebar() {
   const view = useUIStore((s) => s.view);
@@ -60,13 +104,12 @@ export function Sidebar() {
   const headphoneId = useSettingsStore((s) => s.headphone);
   const headphone = HEADPHONES[headphoneId] ?? HEADPHONES.xm6;
   const activity = useTabActivity();
+  const outputName = useOutputDeviceName();
 
   return (
     <aside className="w-56 shrink-0 p-3 flex flex-col gap-2 min-h-0">
       <div className="px-3 pt-2 pb-3 shrink-0">
-        <div className="text-[10px] tracking-[0.4em] uppercase text-white/40">
-          Tactical Audio Engine
-        </div>
+        <div className="kc-label text-white/40">Tactical Audio Engine</div>
         <div className="mt-1 text-lg font-display neon-text font-bold tracking-[0.12em] uppercase">
           Kill-Chain
         </div>
@@ -76,7 +119,9 @@ export function Sidebar() {
       <div className="flex-1 min-h-0 overflow-y-auto sidebar-scroll flex flex-col gap-1 -mr-1 pr-1">
         {GROUPS.map((group, gi) => (
           <nav key={group.title} className="flex flex-col gap-1">
-            <div className={`px-3 ${gi === 0 ? "pt-0" : "pt-2"} pb-0.5 text-[9px] uppercase tracking-[0.3em] text-white/30 select-none`}>
+            <div
+              className={`px-3 ${gi === 0 ? "pt-0" : "pt-2"} pb-0.5 text-[9px] uppercase tracking-[0.3em] text-white/30 select-none`}
+            >
               {group.title}
             </div>
             {group.items.map((item) => (
@@ -109,13 +154,13 @@ export function Sidebar() {
       </div>
 
       <div className="shrink-0 px-3 pt-3">
-        <div className="text-[10px] uppercase tracking-[0.25em] text-white/40 mb-2">
-          Correction profile
-        </div>
+        <div className="kc-label text-white/40 mb-2">Active device</div>
         <div className="glass p-3 rounded-xl">
-          <div className="text-sm font-semibold">{headphone.name}</div>
-          <div className="text-[11px] text-dim mt-1 leading-relaxed">
-            {headphone.brand} - correction profile loaded.
+          <div className="text-sm font-semibold truncate" title={outputName}>
+            {outputName}
+          </div>
+          <div className="text-[11px] text-dim mt-1 leading-relaxed truncate" title={headphone.name}>
+            Profile · {headphone.name}
           </div>
         </div>
         <button
@@ -130,17 +175,17 @@ export function Sidebar() {
 }
 
 /**
- * Activity dot (issue #5): cyan pulses with the audio when a tab is
- * GENERATING sound (opacity rides the shared --beat-glow var, so it breathes
- * with the actual signal at zero extra render cost); violet glows steady when
- * the tab is MODULATING the output.
+ * Activity dot: cyan pulses with the audio when a tab is GENERATING sound
+ * (opacity rides the shared --beat-glow var, so it breathes with the actual
+ * signal at zero extra render cost); violet glows steady when the tab is
+ * MODULATING the output.
  */
 function ActivityDot({ kind }: { kind: TabActivity }) {
   if (!kind) return null;
   const gen = kind === "gen";
   return (
     <span
-      className="absolute top-1.5 left-1.5 w-1.5 h-1.5 rounded-full pointer-events-none"
+      className="absolute top-1.5 left-2 w-1.5 h-1.5 rounded-full pointer-events-none"
       title={gen ? "Producing sound" : "Modulating the output"}
       style={
         gen
@@ -170,39 +215,23 @@ function NavItem({
   activity: TabActivity;
   onClick: () => void;
 }) {
+  const { Icon } = item;
   return (
     <button
       onClick={onClick}
       data-ui-sound="none" // voiced centrally: view switch plays the tab tick
+      data-module={item.id}
       aria-current={active ? "page" : undefined}
-      className={`relative group text-left px-3 py-2.5 rounded-xl transition border ${
-        active
-          ? "bg-white/5 border-white/15"
-          : "border-transparent hover:bg-white/[0.03] hover:border-white/10"
-      }`}
+      className={`kc-nav-item group ${active ? "kc-on" : ""}`}
     >
-      {active && (
-        <motion.div
-          layoutId="sidebar-active"
-          className="absolute inset-0 rounded-xl pointer-events-none"
-          style={{
-            boxShadow:
-              "inset 0 0 0 1px rgb(var(--c-violet) / 0.45), " +
-              "0 0 calc(24px + var(--beat-glow, 0) * 20px) rgb(var(--c-cyan) / calc(0.25 + var(--beat-glow, 0) * 0.35))",
-          }}
-          transition={{ type: "spring", stiffness: 380, damping: 32 }}
-        />
-      )}
       <ActivityDot kind={activity} />
       <div className="flex items-center gap-3 relative">
-        <div className={`text-lg ${active ? "text-cyan" : "text-white/55 group-hover:text-white/80"}`}>
-          {item.icon}
-        </div>
-        <div>
-          <div className={`text-sm font-medium ${active ? "text-white" : "text-white/80"}`}>
+        <Icon className="kc-nav-icon" aria-hidden />
+        <div className="min-w-0">
+          <div className={`text-sm font-medium truncate ${active ? "text-white" : "text-white/80"}`}>
             {item.label}
           </div>
-          <div className="text-[10px] text-dim tracking-wide">{item.sub}</div>
+          <div className="text-[10px] text-dim tracking-wide truncate">{item.sub}</div>
         </div>
       </div>
     </button>

@@ -331,17 +331,17 @@ function HearingTestCard({ onOpen }: { onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
-      className="w-full rounded-2xl border border-cyan/30 bg-cyan/[0.04] hover:border-cyan/60 hover:bg-cyan/[0.08] px-4 py-3.5 text-left transition flex items-center gap-3"
+      className="w-full kc-lift rounded-2xl border border-cyan/30 bg-cyan/[0.04] hover:border-cyan/60 hover:bg-cyan/[0.08] px-4 py-3.5 text-left flex items-center gap-3"
     >
       <span className="text-2xl text-cyan leading-none shrink-0">◐</span>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-semibold flex items-center gap-2">
           Hearing Test
-          <span className="text-[9px] uppercase tracking-widest text-dim border border-white/12 rounded-full px-2 py-0.5">
+          <span className="kc-chip">
             ~2 min · both ears
           </span>
           {lastTest && (
-            <span className="text-[9px] uppercase tracking-widest text-cyan/70 border border-cyan/25 rounded-full px-2 py-0.5">
+            <span className="kc-chip kc-on">
               last: {new Date(lastTest.testedAt).toLocaleDateString()}
             </span>
           )}

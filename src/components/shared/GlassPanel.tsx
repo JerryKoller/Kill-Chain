@@ -4,21 +4,38 @@ import { forwardRef, type ReactNode } from "react";
 export interface GlassPanelProps extends HTMLMotionProps<"div"> {
   glow?: boolean;
   intense?: boolean;
+  /** v2.2 — interactive card: adds the shared hover lift. */
+  lift?: boolean;
   children?: ReactNode;
 }
 
+/**
+ * GlassPanel v2 (KCDS) — same API as v1, plus `lift` for interactive cards.
+ * Intense (primary) panels keep the corner tick marks, which now follow the
+ * module accent (see .panel-ticks in globals.css), and gain a hairline
+ * accent edge along the top so key panels read as "powered".
+ */
 export const GlassPanel = forwardRef<HTMLDivElement, GlassPanelProps>(
-  function GlassPanel({ glow, intense, className = "", children, ...rest }, ref) {
-    // Intense (primary) panels get corner tick marks — a quiet
-    // fire-control-display framing cue on the panels that matter.
+  function GlassPanel({ glow, intense, lift, className = "", children, ...rest }, ref) {
     const tone = intense ? "glass-strong panel-ticks" : "glass";
     const glowCls = glow ? "ring-neon" : "";
+    const liftCls = lift ? "kc-lift" : "";
     return (
       <motion.div
         ref={ref}
-        className={`relative overflow-hidden rounded-2xl ${tone} ${glowCls} ${className}`}
+        className={`relative overflow-hidden rounded-2xl ${tone} ${glowCls} ${liftCls} ${className}`}
         {...rest}
       >
+        {intense && (
+          <div
+            aria-hidden
+            className="absolute top-0 left-4 right-4 h-px pointer-events-none"
+            style={{
+              background:
+                "linear-gradient(90deg, transparent, rgb(var(--kc-accent, var(--c-cyan)) / 0.35) 30%, rgb(var(--kc-accent, var(--c-cyan)) / 0.35) 70%, transparent)",
+            }}
+          />
+        )}
         {children}
       </motion.div>
     );

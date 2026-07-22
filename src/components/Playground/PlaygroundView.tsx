@@ -14,6 +14,9 @@ import { ProToolsPanel } from "./ProToolsPanel";
 import { LoFiPanel } from "./LoFiPanel";
 import { RestorePanel } from "./RestorePanel";
 import { ClarityPanel } from "./ClarityPanel";
+import { RepairStackPanel } from "./RepairStackPanel";
+import { TargetLockPanel } from "./TargetLockPanel";
+import { BouncePanel } from "./BouncePanel";
 import { AdvancedMeter } from "@/components/Metering/AdvancedMeter";
 import { HEADPHONES } from "@/audio/headphoneProfiles";
 import { useSettingsStore } from "@/state/settingsStore";
@@ -44,6 +47,9 @@ export function PlaygroundView() {
         code="KC-01"
         subtitle="Shape the signal — every band, slider, and toggle locks into a savable loadout"
       />
+
+      {/* ─── v2.1 Repair Stack: ordered stages, one A/B, warnings, spectrogram ─── */}
+      <RepairStackPanel />
 
       {/* ─── Top row: configurable parametric EQ + quick actions ─── */}
       <div className="grid grid-cols-12 gap-3">
@@ -219,6 +225,12 @@ export function PlaygroundView() {
 
       {/* ─── Restoration Bay (collapsible) ─── */}
       <RestorePanel />
+
+      {/* ─── Target Lock reference match (v2.1, collapsible) ─── */}
+      <TargetLockPanel />
+
+      {/* ─── Bounce / processed export (v2.1, collapsible) ─── */}
+      <BouncePanel />
 
       {/* ─── Lo-Fi tape (collapsible) ─── */}
       <LoFiPanel />

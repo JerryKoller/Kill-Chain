@@ -13,12 +13,23 @@ declare global {
         openText: (
           filters: { name: string; extensions: string[] }[],
         ) => Promise<{ path: string; text: string } | null>;
+        openAudioMulti?: () => Promise<string[]>;
+        pickOutputFolder?: () => Promise<string | null>;
+        writeIn?: (
+          dir: string,
+          name: string,
+          dataBase64: string,
+        ) => Promise<string | null>;
       };
       /**
        * Open an http(s) / ms-settings:* / file:// URL via the OS default
        * handler. Other schemes are refused by the main process.
        */
       shellOpen?: (url: string) => Promise<void>;
+      crash?: {
+        log: (source: string, message: string) => void;
+        openLog: () => Promise<void>;
+      };
       window: {
         minimize: () => Promise<void>;
         maximize: () => Promise<void>;
@@ -66,6 +77,21 @@ declare global {
         getStatus: () => Promise<{ running: boolean; port: number; url: string } | null>;
         onCommand?: (cb: (cmd: string) => void) => () => void;
       };
+      viz?: {
+        displays: () => Promise<VizDisplayInfo[]>;
+        open: (opts: {
+          displayId?: number;
+          fullscreen?: boolean;
+          alwaysOnTop?: boolean;
+          transparent?: boolean;
+        }) => Promise<boolean>;
+        close: () => Promise<void>;
+        isOpen: () => Promise<boolean>;
+        setFullscreen: (full: boolean) => Promise<void>;
+        sendFrame: (frame: unknown) => void;
+        onFrame: (cb: (frame: unknown) => void) => () => void;
+        onClosed: (cb: () => void) => () => void;
+      };
       system?: {
         getStats: () => Promise<SystemStats>;
         getGpuInfo: () => Promise<SystemGpuInfo>;
@@ -95,6 +121,14 @@ declare global {
     connected: boolean;
     battery: number | null;
     codec: string | null;
+  }
+
+  interface VizDisplayInfo {
+    id: number;
+    label: string;
+    width: number;
+    height: number;
+    primary: boolean;
   }
 
   interface LibraryFileEntry {

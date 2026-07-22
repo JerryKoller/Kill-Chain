@@ -43,6 +43,32 @@ export interface VoiceSpec {
   anchor?: boolean;
 }
 
+// ── Listener pose (v2.0 6DOF head tracking + Walk Mode) ────────────────────
+
+export interface ListenerPose {
+  /** Radians; positive = facing right of front. */
+  yaw: number;
+  /** Radians; positive = looking up. */
+  pitch: number;
+  /** Radians; positive = right ear toward the floor. */
+  roll: number;
+  /** Listener position in room metres (0,0,0 = room centre). */
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Tempo readout supplied by the shared analysis service (BPM-aware motion). */
+export interface TempoInfo {
+  bpm: number;
+  /** 0..1 estimator confidence. */
+  conf: number;
+  /** 0..1 position inside the current beat. */
+  beatPhase: number;
+  /** 0..1 position inside the current 4-beat bar. */
+  barPhase: number;
+}
+
 // ── Motion mode (autonomous, audio-reactive movement) ─────────────────────
 
 export type MotionPattern = "orbit" | "flyby" | "swarm" | "pendulum";
@@ -63,6 +89,10 @@ export interface MotionConfig {
   /** Pin the low bands (sub/bass) dead centre — moving bass smears phase and
    *  wrecks the fundament; anchored lows are what make motion sound HI-FI. */
   anchorLows: boolean;
+  /** v2.0 — lock the formation to the track's BPM grid (via tempo provider):
+   *  the constellation turns exactly one revolution every four bars and
+   *  presses in on every beat. */
+  bpmSync?: boolean;
 }
 
 export interface MotionVoiceReadout {
@@ -190,6 +220,19 @@ export class Spatializer3D {
   private readonly wetGain: GainNode;
   private readonly roomConvolver: ConvolverNode;
 
+  // ── Acoustic Engine v2: discrete shoebox early reflections ──
+  // Six first-order image-source taps (two side walls, floor, ceiling,
+  // front and back wall), each with its own delay, attenuation and HRTF
+  // panner at the image position — real direction-of-arrival cues the
+  // convolver (now the diffuse LATE tail only) can't provide.
+  private readonly erTaps: {
+    delay: DelayNode;
+    gain: GainNode;
+    panner: PannerNode;
+  }[] = [];
+  private readonly erInput: GainNode;
+  private readonly erGain: GainNode;
+
   // Per-ear analysers on the binaural output (truthful L/R meters in the UI).
   private readonly earSplitter: ChannelSplitterNode;
   private readonly earLeft: AnalyserNode;
@@ -206,9 +249,19 @@ export class Spatializer3D {
   /** User space/wet scale — 0 bone dry … 1 double the computed room wet. */
   private space = 0.5;
 
+  /** v2.0 — full listener pose (6DOF head tracking + Walk Mode). */
+  private readonly pose: ListenerPose = { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0 };
+
+  /** v2.0 — BPM/beat feed from the shared analysis service (visualIntel). */
+  private tempoProvider: (() => TempoInfo | null) | null = null;
+  private lastBarPhase: number | null = null;
+
   // Motion mode plumbing.
   private motionTimer: ReturnType<typeof setInterval> | null = null;
   private motionCfg: MotionConfig | null = null;
+  /** Easing target — numeric motion params glide toward this per tick
+   *  (v1.5: preset/knob changes morph instead of snapping). */
+  private motionCfgTarget: MotionConfig | null = null;
   private readonly motionState = new Map<string, MotionVoiceState>();
   private motionLastTick = 0;
   private formationTheta = 0;
@@ -268,6 +321,31 @@ export class Spatializer3D {
     this.roomConvolver = ctx.createConvolver();
     this.voiceBus.connect(this.dryGain).connect(this.output);
     this.voiceBus.connect(this.roomConvolver).connect(this.wetGain).connect(this.output);
+
+    // Early-reflection network: mono programme → 6 image-source taps.
+    // Fed from the MONO bus (source material, pre-panning) so each bounce
+    // is re-localised by its own HRTF panner at the image position.
+    this.erInput = ctx.createGain();
+    this.erInput.gain.value = 1;
+    this.monoBus.connect(this.erInput);
+    this.erGain = ctx.createGain();
+    this.erGain.gain.value = 0;
+    this.erGain.connect(this.output);
+    for (let i = 0; i < 6; i++) {
+      const delay = ctx.createDelay(0.25);
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      const panner = ctx.createPanner();
+      panner.panningModel = "HRTF";
+      panner.distanceModel = "inverse";
+      panner.refDistance = REF_DISTANCE_M;
+      panner.maxDistance = 100;
+      // Distance loss is baked into the tap gain (image-path attenuation);
+      // the panner only supplies direction so the two don't stack.
+      panner.rolloffFactor = 0;
+      this.erInput.connect(delay).connect(gain).connect(panner).connect(this.erGain);
+      this.erTaps.push({ delay, gain, panner });
+    }
     // Distance-normalised makeup: the physical 1/d law makes far speakers
     // genuinely quiet, so overall loudness is normalised against the average
     // speaker distance (recomputeMakeup). Relative levels between speakers
@@ -287,7 +365,7 @@ export class Spatializer3D {
     this.earRightBuf = new Uint8Array(this.earRight.fftSize) as Uint8Array<ArrayBuffer>;
 
     this.setRoom(this.room.width, this.room.height, this.room.depth, this.absorption);
-    this.setListenerYaw(0);
+    this.applyListener();
   }
 
   private busFor(feed: VoiceFeed): GainNode {
@@ -436,6 +514,7 @@ export class Spatializer3D {
       }
     }
     this.recomputeMakeup();
+    this.updateEarlyReflections();
   }
 
   /**
@@ -444,15 +523,72 @@ export class Spatializer3D {
    * remain physically true to the 1/d law.
    */
   private recomputeMakeup(): void {
+    const p = this.pose;
     let sum = 0;
     let count = 0;
     for (const v of this.voices.values()) {
-      sum += distanceGain(Math.hypot(v.x, v.y, v.z));
+      sum += distanceGain(Math.hypot(v.x - p.x, v.y - p.y, v.z - p.z));
       count++;
     }
     const avg = count > 0 ? sum / count : 1;
     const target = Math.max(1, Math.min(4, 1.25 / avg));
     this.output.gain.setTargetAtTime(target, this.ctx.currentTime, 0.08);
+  }
+
+  /**
+   * Acoustic Engine v2 — re-aim the six early-reflection taps.
+   *
+   * Image-source model: the ensemble's acoustic centroid S is mirrored
+   * across each of the six room surfaces; each image S′ becomes an HRTF
+   * voice whose delay is the extra path (|S′−L| − |S−L|)/c relative to the
+   * direct sound and whose level is the wall reflectivity √(1−ᾱ) times the
+   * spreading ratio (1+|S−L|)/(1+|S′−L|). Because both L (the listener,
+   * which walks) and S′ (which scales with the room) are live positions,
+   * front/back and room-size perception track the geometry for free.
+   */
+  private updateEarlyReflections(): void {
+    if (this.erTaps.length !== 6) return;
+    const { width, height, depth } = this.room;
+    const hx = width / 2, hy = height / 2, hz = depth / 2;
+    const L = this.pose;
+
+    // Acoustic centroid of the non-LFE voices (sub position carries almost
+    // no directional information). Falls back to a front-stage source.
+    let sx = 0, sy = 0, sz = 0, count = 0;
+    for (const v of this.voices.values()) {
+      if (v.feed === "lfe") continue;
+      sx += v.x; sy += v.y; sz += v.z;
+      count++;
+    }
+    if (count > 0) {
+      sx /= count; sy /= count; sz /= count;
+    } else {
+      sz = -Math.max(1.5, hz * 0.6);
+    }
+
+    const refl = Math.sqrt(Math.max(0, 1 - this.absorption));
+    const direct = Math.max(0.3, Math.hypot(sx - L.x, sy - L.y, sz - L.z));
+    // Mirror S across: left/right walls (x), floor/ceiling (y), front/back (z).
+    const images: [number, number, number][] = [
+      [-2 * hx - sx, sy, sz],
+      [2 * hx - sx, sy, sz],
+      [sx, -2 * hy - sy, sz],
+      [sx, 2 * hy - sy, sz],
+      [sx, sy, -2 * hz - sz],
+      [sx, sy, 2 * hz - sz],
+    ];
+    const t = this.ctx.currentTime;
+    images.forEach(([ix, iy, iz], i) => {
+      const tap = this.erTaps[i];
+      const path = Math.max(direct + 0.05, Math.hypot(ix - L.x, iy - L.y, iz - L.z));
+      const delaySec = Math.min(0.24, (path - direct) / SPEED_OF_SOUND_MPS);
+      const amp = Math.min(1, refl * ((1 + direct) / (1 + path)));
+      tap.delay.delayTime.setTargetAtTime(delaySec, t, 0.05);
+      tap.gain.gain.setTargetAtTime(amp, t, 0.05);
+      tap.panner.positionX.setTargetAtTime(ix, t, 0.05);
+      tap.panner.positionY.setTargetAtTime(iy, t, 0.05);
+      tap.panner.positionZ.setTargetAtTime(iz, t, 0.05);
+    });
   }
 
   /** Cheap live update for a single voice (drag handlers). */
@@ -495,9 +631,20 @@ export class Spatializer3D {
   // pattern a sharp onset launches a fast pass right by the head — a truck
   // rolling past, a jet overhead, a synth line strafing the room.
 
+  /**
+   * v2.0 — plug in the shared analysis service. When a MotionConfig has
+   * `bpmSync` on, the formation phase-locks to the track's bar grid and the
+   * constellation presses in on every beat.
+   */
+  setTempoProvider(fn: (() => TempoInfo | null) | null): void {
+    this.tempoProvider = fn;
+    if (!fn) this.lastBarPhase = null;
+  }
+
   /** Start (or reconfigure) autonomous motion of the current voices. */
   startMotion(cfg: MotionConfig): void {
     this.motionCfg = { ...cfg };
+    this.motionCfgTarget = null;
     this.rebuildMotionStates();
     if (this.motionTimer === null) {
       this.motionLastTick = performance.now();
@@ -505,13 +652,19 @@ export class Spatializer3D {
     }
   }
 
-  /** Live-update the motion parameters without resetting phases. */
+  /** Live-update the motion parameters without resetting phases. Numeric
+   *  params GLIDE to their new values (~0.5 s) so preset switches and knob
+   *  drags morph the constellation instead of snapping it. */
   setMotionConfig(cfg: MotionConfig): void {
     if (!this.motionCfg) {
       this.startMotion(cfg);
       return;
     }
-    this.motionCfg = { ...cfg };
+    // Pattern + anchor + BPM-sync changes are discrete — apply immediately.
+    this.motionCfg.pattern = cfg.pattern;
+    this.motionCfg.anchorLows = cfg.anchorLows;
+    this.motionCfg.bpmSync = cfg.bpmSync;
+    this.motionCfgTarget = { ...cfg };
   }
 
   stopMotion(): void {
@@ -520,6 +673,7 @@ export class Spatializer3D {
       this.motionTimer = null;
     }
     this.motionCfg = null;
+    this.motionCfgTarget = null;
     this.motionState.clear();
   }
 
@@ -575,6 +729,28 @@ export class Spatializer3D {
     const dt = Math.min(0.1, (now - this.motionLastTick) / 1000);
     this.motionLastTick = now;
 
+    // Ease numeric params toward the pending target (~0.5 s time constant).
+    const tgt = this.motionCfgTarget;
+    if (tgt) {
+      const k = 1 - Math.exp(-dt / 0.5);
+      cfg.speed += (tgt.speed - cfg.speed) * k;
+      cfg.intensity += (tgt.intensity - cfg.intensity) * k;
+      cfg.reactivity += (tgt.reactivity - cfg.reactivity) * k;
+      cfg.cohesion += (tgt.cohesion - cfg.cohesion) * k;
+      const settled =
+        Math.abs(tgt.speed - cfg.speed) +
+        Math.abs(tgt.intensity - cfg.intensity) +
+        Math.abs(tgt.reactivity - cfg.reactivity) +
+        Math.abs(tgt.cohesion - cfg.cohesion) < 0.004;
+      if (settled) {
+        cfg.speed = tgt.speed;
+        cfg.intensity = tgt.intensity;
+        cfg.reactivity = tgt.reactivity;
+        cfg.cohesion = tgt.cohesion;
+        this.motionCfgTarget = null;
+      }
+    }
+
     // Fresh voices may have appeared (structure resync) — track them.
     if (this.motionState.size !== this.voices.size) this.rebuildMotionStates();
     const n = Math.max(1, this.motionState.size);
@@ -593,7 +769,30 @@ export class Spatializer3D {
     // The FORMATION: one shared rotation the bands can lock into. Cohesion
     // blends each band between its own trajectory and its formation slot —
     // at 1.0 the whole constellation turns as a single, musical unit.
-    this.formationTheta += (0.1 + cfg.speed * 0.85) * dt;
+    //
+    // v2.0 BPM sync: instead of free-running, the formation advances with
+    // the track's bar phase (one full revolution every four bars) and the
+    // whole constellation "presses in" on each beat — motion ON the grid.
+    let beatPress = 0;
+    let bpmLocked = false;
+    if (cfg.bpmSync && this.tempoProvider) {
+      const tempo = this.tempoProvider();
+      if (tempo && tempo.bpm > 0 && tempo.conf > 0.2) {
+        bpmLocked = true;
+        if (this.lastBarPhase !== null) {
+          let adv = tempo.barPhase - this.lastBarPhase;
+          if (adv < -0.5) adv += 1;
+          adv = Math.max(0, Math.min(0.25, adv));
+          this.formationTheta += adv * (Math.PI / 2) * (0.5 + cfg.speed);
+        }
+        this.lastBarPhase = tempo.barPhase;
+        beatPress = Math.pow(Math.max(0, 1 - tempo.beatPhase * 2.5), 2);
+      }
+    }
+    if (!bpmLocked) {
+      this.lastBarPhase = null;
+      this.formationTheta += (0.1 + cfg.speed * 0.85) * dt;
+    }
     const cohesion = Math.max(0, Math.min(1, cfg.cohesion));
 
     let movingRank = 0;
@@ -732,6 +931,9 @@ export class Spatializer3D {
         if (cfg.pattern !== "pendulum") st.theta = theta;
       }
 
+      // BPM-locked beat press: the constellation leans in on every beat.
+      if (beatPress > 0) r *= 1 - 0.22 * cfg.intensity * beatPress;
+
       r = Math.max(minR, Math.min(maxR, r));
       const x = Math.sin(theta) * r;
       const z = -Math.cos(theta) * r;
@@ -752,20 +954,75 @@ export class Spatializer3D {
 
   /** Aim the listener (the character's facing direction) by yaw in radians. */
   setListenerYaw(yaw: number): void {
+    this.setListenerPose({ yaw });
+  }
+
+  /**
+   * v2.0 — full 6DOF listener pose. The soundfield stays fixed to the ROOM:
+   * every voice keeps its room position while the listener's head moves and
+   * rotates through it (this is what makes head tracking + Walk Mode read as
+   * "the room is real", not "the mix is spinning").
+   *
+   * Rotation order: yaw (about +Y) → pitch (about the rotated +X, positive =
+   * looking up) → roll (about the facing axis, positive = right ear down).
+   */
+  setListenerPose(patch: Partial<ListenerPose>): void {
+    const p = this.pose;
+    if (patch.yaw !== undefined) p.yaw = patch.yaw;
+    if (patch.pitch !== undefined) p.pitch = Math.max(-1.45, Math.min(1.45, patch.pitch));
+    if (patch.roll !== undefined) p.roll = Math.max(-Math.PI, Math.min(Math.PI, patch.roll));
+    // Keep the head inside the room (small margin off the walls).
+    const mx = Math.max(0.2, this.room.width / 2 - 0.25);
+    const my = Math.max(0.2, this.room.height / 2 - 0.15);
+    const mz = Math.max(0.2, this.room.depth / 2 - 0.25);
+    if (patch.x !== undefined) p.x = Math.max(-mx, Math.min(mx, patch.x));
+    if (patch.y !== undefined) p.y = Math.max(-my, Math.min(my, patch.y));
+    if (patch.z !== undefined) p.z = Math.max(-mz, Math.min(mz, patch.z));
+    this.applyListener();
+    const moved = patch.x !== undefined || patch.y !== undefined || patch.z !== undefined;
+    if (moved) {
+      this.recomputeMakeup();
+      this.updateEarlyReflections();
+    }
+  }
+
+  getListenerPose(): ListenerPose {
+    return { ...this.pose };
+  }
+
+  private applyListener(): void {
+    const { yaw, pitch, roll, x, y, z } = this.pose;
     const l = this.ctx.listener;
     const t = this.ctx.currentTime;
-    const fx = Math.sin(yaw);
-    const fz = -Math.cos(yaw);
-    // Smoothed so dragging the facing slider is zipper/click-free.
-    l.positionX.setTargetAtTime(0, t, 0.03);
-    l.positionY.setTargetAtTime(0, t, 0.03);
-    l.positionZ.setTargetAtTime(0, t, 0.03);
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const cr = Math.cos(roll), sr = Math.sin(roll);
+    // Yaw rotation consistent with setListenerYaw's convention
+    // ((0,0,-1) → (sin yaw, 0, -cos yaw)): (a,b,c) → (a·cy − c·sy, b, a·sy + c·cy).
+    // Pitch first (positive = looking up): forward (0,0,-1) → (0, sp, -cp),
+    // up (0,1,0) → (0, cp, sp). Then yaw:
+    const fx = cp * sy;
+    const fy = sp;
+    const fz = -cp * cy;
+    const upP = { x: -sp * sy, y: cp, z: sp * cy };
+    // Roll spins up around the forward axis (Rodrigues; forward ⊥ upP, so the
+    // k·v term vanishes). Positive roll leans the head right (right ear down).
+    const kxu = fy * upP.z - fz * upP.y;
+    const kyu = fz * upP.x - fx * upP.z;
+    const kzu = fx * upP.y - fy * upP.x;
+    const upx = upP.x * cr + kxu * sr;
+    const upy = upP.y * cr + kyu * sr;
+    const upz = upP.z * cr + kzu * sr;
+    // Smoothed so head-tracker jitter and slider drags are zipper-free.
+    l.positionX.setTargetAtTime(x, t, 0.03);
+    l.positionY.setTargetAtTime(y, t, 0.03);
+    l.positionZ.setTargetAtTime(z, t, 0.03);
     l.forwardX.setTargetAtTime(fx, t, 0.03);
-    l.forwardY.setTargetAtTime(0, t, 0.03);
+    l.forwardY.setTargetAtTime(fy, t, 0.03);
     l.forwardZ.setTargetAtTime(fz, t, 0.03);
-    l.upX.setTargetAtTime(0, t, 0.03);
-    l.upY.setTargetAtTime(1, t, 0.03);
-    l.upZ.setTargetAtTime(0, t, 0.03);
+    l.upX.setTargetAtTime(upx, t, 0.03);
+    l.upY.setTargetAtTime(upy, t, 0.03);
+    l.upZ.setTargetAtTime(upz, t, 0.03);
   }
 
   /** RMS level per ear in [0,1] straight off the binaural output. */
@@ -802,23 +1059,37 @@ export class Spatializer3D {
       this.roomKey = key;
       this.roomConvolver.buffer = this.synthRoomIR();
     }
+    this.updateEarlyReflections();
     this.updateWet();
   }
 
   /**
-   * Wet level tracks the actual reverberance of the room (dead studio stays
-   * dry, live hall blooms), scaled by the user's Space control and pulled
-   * WAY down in Headphone Stage — near-field intimacy wants direct sound.
+   * Space blends three signals: the dry HRTF render (always unity — the
+   * localisation backbone), the discrete early reflections (geometry /
+   * distance perception) and the convolver's diffuse late tail (size /
+   * envelopment). Both wet legs track the room's actual reverberance and
+   * are pulled WAY down in Headphone Stage — near-field intimacy wants
+   * direct sound.
    */
   private updateWet(): void {
     const rt60 = Math.min(
       2.5,
       computeRT60(this.room.width, this.room.height, this.room.depth, this.absorption),
     );
-    const base = Math.max(0.04, Math.min(0.3, 0.04 + rt60 * 0.11));
+    const t = this.ctx.currentTime;
     const stageScale = this.stage === "head" ? 0.35 : 1;
+    // Late tail — as before.
+    const base = Math.max(0.04, Math.min(0.3, 0.04 + rt60 * 0.11));
     const wet = base * (this.space * 2) * stageScale;
-    this.wetGain.gain.setTargetAtTime(wet, this.ctx.currentTime, 0.1);
+    this.wetGain.gain.setTargetAtTime(wet, t, 0.1);
+    // Early reflections rise faster than the tail at low Space settings
+    // (they carry the useful spatial information; the tail carries mud) and
+    // level off past the physical midpoint.
+    const refl = Math.sqrt(Math.max(0, 1 - this.absorption));
+    const erBase = 0.10 + refl * 0.16;
+    const erCurve = Math.min(1.25, this.space * 2.5);
+    const er = erBase * erCurve * (this.stage === "head" ? 0.5 : 1);
+    this.erGain.gain.setTargetAtTime(er, t, 0.1);
   }
 
   /** Room Stage (physical placement) vs Headphone Stage (near-field). */
@@ -879,8 +1150,11 @@ export class Spatializer3D {
     for (let ch = 0; ch < 2; ch++) {
       const data = buf.getChannelData(ch);
 
+      // v2.0: first-order bounces moved to the discrete HRTF-panned ER
+      // network (updateEarlyReflections) — the convolver keeps only the
+      // second-order taps and the diffuse tail so bounces never double up.
       surfaces.forEach((s, i) => {
-        for (let order = 1; order <= 2; order++) {
+        for (let order = 2; order <= 2; order++) {
           const pathM = 2 * s.d * order;
           const at = Math.floor((pathM / SPEED_OF_SOUND_MPS) * sr);
           if (at >= n) continue;

@@ -65,7 +65,9 @@ export function DrumMachine() {
       const step = Math.floor(getPlayheadStep(bpm, bars));
       if (step === lastStep) return;
       lastStep = step;
-      el.style.transform = `translateX(calc(${step} * (var(--step-w) + 3px)))`;
+      // -1 = song mode is sounding a DIFFERENT section — hide the head.
+      el.style.opacity = step < 0 ? "0" : "1";
+      el.style.transform = `translateX(calc(${Math.max(0, step)} * (var(--step-w) + 3px)))`;
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
@@ -108,6 +110,20 @@ export function DrumMachine() {
       className="select-none"
       style={{ ["--step-w" as string]: totalSteps > 32 ? "16px" : "22px" }}
     >
+      {/* kit toolbar (v1.6) */}
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <button
+          onClick={() => {
+            useFireSequencerStore.getState().generateDrumFill();
+            useUIStore.getState().toast("Fill dropped on the last bar — press again to reroll, Ctrl+Z to undo");
+          }}
+          className="px-2.5 py-1 rounded-lg border border-amber-400/40 bg-amber-400/8 text-amber-300 text-[10px] uppercase tracking-[0.12em] hover:bg-amber-400/18 transition"
+          title="Fill generator: rewrites the last bar — snare ramp, tom tumble, kick thin-out, crash on the loop point. Every press is a new roll of the dice."
+        >
+          ⚡ Fill last bar
+        </button>
+      </div>
+
       {/* step ruler + playhead */}
       <div className="relative ml-[86px] mb-1 h-3 overflow-hidden">
         <div className="flex gap-[3px]">

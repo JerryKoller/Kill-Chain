@@ -1,33 +1,35 @@
 /**
  * tractorAutoLock — hands-free Tractor Beam.
  *
- * When armed, watches what's actually playing:
- *   · Airspace media (webview title changes — new YouTube video, next episode)
- *   · local file player (track changes)
+ * v2.4: this module no longer runs its own poll/settle timers. MISSION STATE
+ * (missionStateStore) owns the single source-settle pipeline and calls
+ * `autoLockScan()` when its priority rules say a fresh scan is warranted
+ * (armed + no manual hold + no saved memory + no existing lock record).
  *
- * On a change it waits a beat for the audio to settle, listens to the live
- * signal for ~9 s, derives a fresh smart-profile correction (audio
- * fingerprint + the new title as a hint) and applies the FULL chain — EQ
- * curve plus the beyond-EQ master moves. Every track gets its own lock
- * without touching the Tractor view.
- *
- * The armed flag persists across sessions. All work is serialized: a track
- * change during a measurement aborts and restarts it.
+ * What stays here: the armed flag (persisted), its change listeners, and the
+ * scan itself — listen to the live signal for ~9 s, build a full-chain lock
+ * manifest (health-guarded), apply it, and record it in the Lock Library so
+ * the source restores instantly next time.
  */
 
-import { deriveCorrection, sampleCurveDb } from "@/lib/tractorBeam";
 import { measureLive } from "@/lib/tractorLive";
 
 const KEY = "kc-tractor-autolock-v1";
 
 let armed = false;
-let started = false;
-let currentRun: AbortController | null = null;
-let settleTimer: ReturnType<typeof setTimeout> | null = null;
-let lastSig = "";
+let loaded = false;
 const listeners = new Set<(on: boolean) => void>();
 
+function ensureLoaded(): void {
+  if (loaded || typeof window === "undefined") return;
+  loaded = true;
+  try {
+    armed = window.localStorage.getItem(KEY) === "1";
+  } catch { /* ignore */ }
+}
+
 export function isAutoLockArmed(): boolean {
+  ensureLoaded();
   return armed;
 }
 
@@ -37,99 +39,116 @@ export function onAutoLockChange(cb: (on: boolean) => void): () => void {
 }
 
 export function setAutoLock(on: boolean): void {
+  ensureLoaded();
   armed = on;
   try {
     window.localStorage.setItem(KEY, on ? "1" : "0");
   } catch { /* ignore */ }
-  if (!on) {
-    currentRun?.abort();
-    currentRun = null;
-    if (settleTimer) clearTimeout(settleTimer);
-    settleTimer = null;
-  } else {
-    lastSig = ""; // re-lock whatever is playing right now
-    void pollSignal();
-  }
   for (const cb of listeners) cb(on);
 }
 
-/** What's playing right now, as a change-detection signature + title hint. */
-async function readSignal(): Promise<{ sig: string; title: string; active: boolean }> {
-  const { useAirspaceStore } = await import("@/state/airspaceStore");
-  const { usePlayerStore } = await import("@/state/playerStore");
-  const air = useAirspaceStore.getState().media;
-  const p = usePlayerStore.getState();
-  // Airspace media wins while it's routed (loopback active) and playing.
-  if (air && !air.paused && p.loopbackActive && air.title) {
-    return { sig: `air:${air.title}`, title: air.title, active: true };
-  }
-  if (p.status === "playing" && p.src) {
-    const title = p.metadata.title ?? p.fileName ?? "";
-    return { sig: `file:${p.src}`, title, active: true };
-  }
-  return { sig: "", title: "", active: false };
+/** Kept for boot-order compatibility: loads the persisted armed flag. The
+ *  watcher itself now lives in missionStateStore (initMissionState). */
+export function initTractorAutoLock(): void {
+  ensureLoaded();
 }
 
-async function relock(title: string): Promise<void> {
-  currentRun?.abort();
-  const ac = new AbortController();
-  currentRun = ac;
+export type AutoLockOutcome = "applied" | "silent" | "aborted" | "failed";
+
+/**
+ * One full Auto-Lock scan: measure the live signal (~9 s), derive the
+ * full-chain manifest with the health guard, apply every layer, and persist
+ * a Lock Library record for instant restore. Serialized by the caller
+ * (MISSION STATE aborts a run when the source changes mid-scan).
+ */
+export async function autoLockScan(
+  title: string,
+  signal: AbortSignal,
+): Promise<AutoLockOutcome> {
   const { useUIStore } = await import("@/state/uiStore");
   try {
-    const m = await measureLive({ seconds: 9, signal: ac.signal });
-    if (ac.signal.aborted || m.silent) return;
-    const { useEqStore } = await import("@/state/eqStore");
+    const m = await measureLive({ seconds: 9, signal });
+    if (signal.aborted) return "aborted";
+    if (m.silent) return "silent";
     const { useAudioStore } = await import("@/state/audioStore");
     const { useSettingsStore } = await import("@/state/settingsStore");
     const { HEADPHONES } = await import("@/audio/headphoneProfiles");
-    const result = deriveCorrection(m, {
+    const { buildLockManifest, applyLockManifest, ALL_LAYERS } = await import(
+      "@/lib/tractorLock"
+    );
+    // The full manifest path — restoration / clarity / trim included, with
+    // the health guard capping strength on already-clean masters.
+    const manifest = buildLockManifest(m, {
       headphone: HEADPHONES[useSettingsStore.getState().headphone] ?? HEADPHONES.xm6,
       correctionEnabled: useAudioStore.getState().correctionEnabled,
       targetId: "smart",
       strength: 0.85,
       titleHint: title,
     });
-    if (ac.signal.aborted || result.silent) return;
-    useEqStore.getState().applyGainCurve((f) => sampleCurveDb(result.curve, f));
-    if (Object.keys(result.masterMoves).length > 0) {
-      useAudioStore.getState().setParams(result.masterMoves);
-    }
-    const label = result.content?.label ?? "signal";
-    useUIStore.getState().toast(`◎ Auto-lock retuned — ${label}`);
+    if (signal.aborted) return "aborted";
+    if (manifest.silent) return "silent";
+    // Flag the apply as automation so the manual-override watcher doesn't
+    // mistake our own store writes for a user edit (which would abort us).
+    const { runAsAutomation } = await import("@/state/missionStateStore");
+    await runAsAutomation(() => applyLockManifest(manifest, ALL_LAYERS, title || null));
+    if (signal.aborted) return "aborted";
+
+    // Record the lock so this source restores instantly next time.
+    void saveAutoLockRecord(m, manifest, title);
+
+    const label = manifest.contentLabel ?? "signal";
+    const capped = manifest.strengthLimited ? " (healthy master — gentle)" : "";
+    useUIStore.getState().toast(`◎ Auto-lock retuned — ${label}${capped}`);
+    return "applied";
   } catch {
-    /* engine tap unavailable / aborted — silent */
-  } finally {
-    if (currentRun === ac) currentRun = null;
+    return signal.aborted ? "aborted" : "failed";
   }
 }
 
-async function pollSignal(): Promise<void> {
-  if (!armed) return;
-  const { sig, title, active } = await readSignal();
-  if (!active) {
-    lastSig = "";
-    return;
-  }
-  if (sig === lastSig) return;
-  lastSig = sig;
-  // New material: give the stream a moment to stabilise (intros, ads ending,
-  // volume normalisation) before listening.
-  if (settleTimer) clearTimeout(settleTimer);
-  settleTimer = setTimeout(() => {
-    if (armed) void relock(title);
-  }, 2500);
-}
-
-/** Wire the watchers once (call at boot; safe to call again). */
-export function initTractorAutoLock(): void {
-  if (started || typeof window === "undefined") return;
-  started = true;
+/** Persist an auto-lock into the Lock Library under the current source key. */
+async function saveAutoLockRecord(
+  m: import("@/lib/tractorBeam").TractorMeasurement,
+  manifest: import("@/lib/tractorLock").LockManifest,
+  title: string,
+): Promise<void> {
   try {
-    armed = window.localStorage.getItem(KEY) === "1";
-  } catch { /* ignore */ }
-  // A light poll beats wiring three store subscriptions with dynamic imports;
-  // 1.5 s latency is invisible next to the 2.5 s settle window.
-  window.setInterval(() => {
-    if (armed) void pollSignal();
-  }, 1500);
+    const { useLockLibraryStore, lockKeyForCurrentSource, measurementFingerprint } =
+      await import("@/state/lockLibraryStore");
+    const { ALL_LAYERS } = await import("@/lib/tractorLock");
+    const src = await lockKeyForCurrentSource();
+    const ident = src ?? {
+      key: `live:${title || "unknown"}`,
+      kind: "live" as const,
+      name: title || "Live capture",
+      sub: "",
+    };
+    const now = Date.now();
+    useLockLibraryStore.getState().upsert({
+      ...ident,
+      favorite: false,
+      savedAt: now,
+      updatedAt: now,
+      measurement: {
+        ...m,
+        levelsDb: m.levelsDb.map((v) => Math.round(v * 100) / 100),
+      },
+      targetId: manifest.targetId,
+      strength: manifest.strength,
+      vetoes: [],
+      curveEdits: {},
+      layers: { ...ALL_LAYERS },
+      curve: manifest.curve,
+      masterMoves: manifest.masterMoves,
+      restore: manifest.restore,
+      clarity: manifest.clarity,
+      outputTrimDb: manifest.outputTrimDb,
+      matchBeforePct: manifest.matchBeforePct,
+      matchAfterPct: manifest.matchAfterPct,
+      contentLabel: manifest.contentLabel,
+      fingerprint: measurementFingerprint(m),
+      v: 1,
+    });
+  } catch {
+    /* library unavailable — the lock still applied */
+  }
 }

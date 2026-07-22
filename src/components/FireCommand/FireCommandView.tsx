@@ -12,9 +12,14 @@ import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
 import { getEngine } from "@/audio/AudioEngine";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
-import type { FirePatch, LfoWave, FireFilterType, LfoDest, SubWave, DriveMode, ModSource, ModDest } from "@/audio/dsp/FireCommandSynth";
+import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
+import type { FirePatch, LfoWave, FireFilterType, LfoDest, SubWave, DriveMode, ModSource, ModDest, ModRoute, HarmonyMode, SpectralMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { PresetBrowser } from "./PresetBrowser";
+import { MixerPanel } from "./MixerPanel";
+import { ModPatchGrid } from "./ModPatchGrid";
+import { FireMorphPad } from "./FireMorphPad";
+import { undoFire, redoFire, useFireHistoryStore } from "@/lib/fireHistory";
 
 const FIRE = "#ff6a3d"; // primary
 const ICE = "#62b6ff"; // LFOs
@@ -49,6 +54,33 @@ const fmtBpm = (v: number) => `${Math.round(v)}`;
 const fmtInt = (v: number) => `${Math.round(v)}`;
 const fmtHzRate = (v: number) => `${v.toFixed(2)}Hz`;
 
+function UndoRedoButtons() {
+  const undoDepth = useFireHistoryStore((s) => s.undoDepth);
+  const redoDepth = useFireHistoryStore((s) => s.redoDepth);
+  const btn = (enabled: boolean) =>
+    `rounded-lg border px-2.5 py-1 text-xs transition ${
+      enabled
+        ? "border-white/12 bg-white/5 hover:bg-white/10 text-white/80"
+        : "border-white/5 bg-white/[0.02] text-white/25 cursor-default"
+    }`;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        onClick={() => undoFire()}
+        disabled={undoDepth === 0}
+        className={btn(undoDepth > 0)}
+        title="Undo (Ctrl+Z) — piano roll, drums, samples and patch edits share one timeline"
+      >↶ Undo</button>
+      <button
+        onClick={() => redoFire()}
+        disabled={redoDepth === 0}
+        className={btn(redoDepth > 0)}
+        title="Redo (Ctrl+Y)"
+      >↷ Redo</button>
+    </div>
+  );
+}
+
 export function FireCommandView() {
   const presetId = useFireCommandStore((s) => s.presetId);
   const octave = useFireCommandStore((s) => s.octave);
@@ -80,7 +112,20 @@ export function FireCommandView() {
 
   useEffect(() => {
     useFireCommandStore.getState().sync();
+    // Persisted mixer/limiter/duck state lands on the engine buses (v1.6).
+    useFireSequencerStore.getState().syncFireMixer();
     return () => useFireCommandStore.getState().panic();
+  }, []);
+
+  // v1.6: a USB MIDI keyboard plays Synth A live while this view is open
+  // (same noteOn/noteOff path as QWERTY — arp-aware, record-armed capture).
+  useEffect(() => {
+    void useMidiStore.getState().startListening();
+    registerMidiNoteHandler({
+      noteOn: (midi, vel) => useFireCommandStore.getState().noteOn(midi, vel),
+      noteOff: (midi) => useFireCommandStore.getState().noteOff(midi),
+    });
+    return () => registerMidiNoteHandler(null);
   }, []);
 
   useEffect(() => {
@@ -92,6 +137,21 @@ export function FireCommandView() {
       return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
     };
     const onDown = (e: KeyboardEvent) => {
+      // Undo/redo across the whole Fire workspace (v1.6). Bound here rather
+      // than globally so Ctrl+Z elsewhere in the app keeps native behavior.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !isText(e.target)) {
+        const k = e.key.toLowerCase();
+        if (k === "z" && !e.shiftKey) {
+          e.preventDefault();
+          if (!undoFire()) useUIStore.getState().toast("Nothing to undo");
+          return;
+        }
+        if (k === "y" || (k === "z" && e.shiftKey)) {
+          e.preventDefault();
+          if (!redoFire()) useUIStore.getState().toast("Nothing to redo");
+          return;
+        }
+      }
       if (e.ctrlKey || e.metaKey || e.altKey || isText(e.target)) return;
       const k = e.key.toLowerCase();
       const store = useFireCommandStore.getState();
@@ -186,6 +246,7 @@ export function FireCommandView() {
             title="Evolve the CURRENT sound: every shaping parameter drifts a few percent. Hammer it to walk somewhere new — the patch keeps its identity but grows quirks."
           >🧬 Mutate</button>
           <div className="flex-1" />
+          <UndoRedoButtons />
           <button
             onClick={() => setBrowserOpen(true)}
             className="rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 px-3 py-1 text-xs text-white/80 transition"
@@ -196,6 +257,12 @@ export function FireCommandView() {
 
       {/* Pattern sequencer: piano roll + drum grid */}
       <SequencerPanel />
+
+      {/* Bus mixer + sidechain (v1.6) */}
+      <MixerPanel />
+
+      {/* Patch morph pad (v1.6) */}
+      <FireMorphPad />
 
       {/* HERO: wavetable displays + scope */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
@@ -232,6 +299,7 @@ export function FireCommandView() {
             onChange={(v) => setParam("mono", v === "mono")}
             options={[{ id: "poly", label: "Poly" }, { id: "mono", label: "Mono" }]}
           />
+          <HarmonyPicker />
           <button
             onClick={() => setRouteThroughFx(!fxOn)}
             className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
@@ -267,6 +335,24 @@ export function FireCommandView() {
         <OscPanel group="c" />
       </div>
 
+      {/* Spectral warps (v1.7): Razor-style harmonic reshaping of all 3 oscs */}
+      <Section
+        title="Spectral Warp"
+        color="#ffcf5c"
+        collapseKey="fire.sec.warp"
+        right={
+          <span className="text-[9px] text-dim normal-case tracking-normal">
+            reshapes the harmonics of all three wavetable oscillators
+          </span>
+        }
+      >
+        <KnobRow>
+          <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
+          <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
+          <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color="#ffcf5c" />
+        </KnobRow>
+      </Section>
+
       {/* Mixer/Unison + Filter */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
         <Section title="Mixer · Unison" color={FIRE} right={
@@ -299,14 +385,8 @@ export function FireCommandView() {
 
       {/* Envelopes */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-        <Section title="Amp Envelope" color={GRN}>
-          <KnobRow>
-            <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
-            <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
-            <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
-            <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
-            <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
-          </KnobRow>
+        <Section title="Amp Envelope" color={GRN} right={<LpgToggle />}>
+          <LpgAwareAmpRow />
         </Section>
         <Section title="Mod Envelope → Morph" color={GRN}>
           <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
@@ -378,6 +458,7 @@ export function FireCommandView() {
             <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={ICE} />
           </KnobRow>
         </Section>
+        <SpectralPanel />
       </div>
 
       {/* Less-used sections — collapsible, folded away by default */}
@@ -724,8 +805,48 @@ const SELECT_CLS = "bg-black/40 border border-white/15 rounded-lg px-2 py-1 text
 function ModMatrixPanel() {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const setModRoute = useFireCommandStore((s) => s.setModRoute);
+  // v1.7: the patch GRID is the primary view; the slot list stays for
+  // precise numeric edits.
+  const [view, setView] = useState<"grid" | "list">(() =>
+    (localStorage.getItem("fire.matrixView") as "grid" | "list") ?? "grid",
+  );
+  const pickView = (v: "grid" | "list") => {
+    setView(v);
+    try { localStorage.setItem("fire.matrixView", v); } catch { /* ignore */ }
+  };
   return (
-    <Section title="Modulation Matrix" color={GRN} collapseKey="matrix" defaultCollapsed>
+    <Section
+      title="Modulation Matrix"
+      color={GRN}
+      collapseKey="matrix"
+      defaultCollapsed
+      right={
+        <Seg<"grid" | "list">
+          value={view}
+          onChange={pickView}
+          options={[{ id: "grid", label: "⊞ Grid" }, { id: "list", label: "☰ Slots" }]}
+          color={GRN}
+        />
+      }
+    >
+      {view === "grid" ? (
+        <ModPatchGrid />
+      ) : (
+        <ModMatrixRows matrix={matrix} setModRoute={setModRoute} />
+      )}
+    </Section>
+  );
+}
+
+function ModMatrixRows({
+  matrix,
+  setModRoute,
+}: {
+  matrix: ModRoute[];
+  setModRoute: (index: number, partial: Partial<ModRoute>) => void;
+}) {
+  return (
+    <>
       <div className="space-y-1.5">
         {matrix.map((r, i) => {
           const active = r.source !== "none" && r.dest !== "none";
@@ -761,7 +882,7 @@ function ModMatrixPanel() {
         })}
       </div>
       <div className="mt-2 text-[10px] text-dim">{matrix.length} slots · pick a source &amp; destination, then dial bipolar depth. Velocity / Key Track / Mod Env are per-note.</div>
-    </Section>
+    </>
   );
 }
 
@@ -917,6 +1038,151 @@ function FParamKnob({
   return <Dial label={label} value={value} min={min} max={max} curve={curve} integer={integer} bipolar={bipolar} format={format} def={def} color={color} size={size} onChange={onChange} />;
 }
 
+/**
+ * Harmonizer picker (v1.7) — scale-locked companion notes on live input.
+ * Follows the sequencer's Root/Scale controls; sequenced notes are untouched.
+ */
+function HarmonyPicker() {
+  const mode = useFireCommandStore((s) => s.patch.harmonyMode);
+  const level = useFireCommandStore((s) => s.patch.harmonyLevel);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  return (
+    <div
+      className="flex items-center gap-1.5"
+      title="Harmonizer: every key you play brings scale-locked companion notes (uses the piano roll's Root + Scale). Live input only."
+    >
+      <span className="text-[10px] uppercase tracking-widest text-dim">Harmony</span>
+      <Seg<HarmonyMode>
+        value={mode ?? "off"}
+        onChange={(v) => setParam("harmonyMode", v)}
+        options={[
+          { id: "off", label: "Off" },
+          { id: "third", label: "3rd" },
+          { id: "fifth", label: "5th" },
+          { id: "octave", label: "Oct" },
+          { id: "triad", label: "Triad" },
+        ]}
+        color={GRN}
+      />
+      {mode !== "off" && (
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={level ?? 0.6}
+          onChange={(e) => setParam("harmonyLevel", Number(e.target.value))}
+          className="w-[56px]"
+          style={{ accentColor: GRN }}
+          aria-label="Harmony level"
+          title={`Companion note level: ${Math.round((level ?? 0.6) * 100)}%`}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Spectral FX panel (v1.7) — the STFT worklet between reverb and autopan.
+ * The amount knob means something different per mode, so the label follows.
+ */
+const SPECTRAL_VIOLET = "#c98bff";
+function SpectralPanel() {
+  const mode = useFireCommandStore((s) => s.patch.spectralMode);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const m = mode ?? "off";
+  const amountLabel = m === "freeze" ? "Hold" : m === "smear" ? "Time" : m === "gate" ? "Thresh" : m === "shift" ? "Shift" : "Amount";
+  return (
+    <Section
+      title="Spectral"
+      color={SPECTRAL_VIOLET}
+      right={
+        <Seg<SpectralMode>
+          value={m}
+          onChange={(v) => setParam("spectralMode", v)}
+          options={[
+            { id: "off", label: "Off" },
+            { id: "freeze", label: "Freeze" },
+            { id: "smear", label: "Smear" },
+            { id: "gate", label: "Gate" },
+            { id: "shift", label: "Shift" },
+          ]}
+          color={SPECTRAL_VIOLET}
+        />
+      }
+    >
+      {m === "off" ? (
+        <div className="text-[10px] text-dim leading-relaxed px-1 py-2">
+          FFT effect on the synth bus — <span className="text-white/60">Freeze</span> holds the
+          spectrum (reverb tails become pads), <span className="text-white/60">Smear</span> washes
+          it out, <span className="text-white/60">Gate</span> keeps only the loudest partials,{" "}
+          <span className="text-white/60">Shift</span> slides every partial up or down.
+        </div>
+      ) : (
+        <KnobRow>
+          <FParamKnob
+            paramKey="spectralAmount"
+            label={amountLabel}
+            min={0} max={1}
+            bipolar={m === "shift"}
+            format={m === "shift" ? (v) => `${v < 0.5 ? "−" : "+"}${Math.round(Math.abs(v * 2 - 1) * 100)}%` : fmtPct}
+            def={m === "shift" ? 0.5 : 0.6}
+            color={SPECTRAL_VIOLET}
+          />
+          <FParamKnob paramKey="spectralMix" label="Mix" min={0} max={1} format={fmtPct} def={0.5} color={SPECTRAL_VIOLET} />
+        </KnobRow>
+      )}
+    </Section>
+  );
+}
+
+/** Lowpass-gate switch (v1.7) — swaps the amp ADSR for a struck vactrol. */
+function LpgToggle() {
+  const lpgOn = useFireCommandStore((s) => s.patch.lpgOn);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  return (
+    <button
+      onClick={() => setParam("lpgOn", !lpgOn)}
+      className={`h-6 px-2.5 rounded-md text-[10px] font-bold border transition ${
+        lpgOn
+          ? "border-[#ffcf5c]/70 bg-[#ffcf5c]/15 text-[#ffe4a0]"
+          : "border-white/10 bg-white/[0.03] text-white/40 hover:text-white/70"
+      }`}
+      title="Lowpass gate (Aalto-style): notes become struck vactrol plucks — one strike drives both loudness AND brightness, so loud is bright and quiet is dark. Replaces the ADSR while on."
+    >
+      {lpgOn ? "● LPG" : "○ LPG"}
+    </button>
+  );
+}
+
+/** Amp panel body: ADSR knobs normally, strike controls in LPG mode. */
+function LpgAwareAmpRow() {
+  const lpgOn = useFireCommandStore((s) => s.patch.lpgOn);
+  if (lpgOn) {
+    return (
+      <>
+        <KnobRow>
+          <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} color="#ffcf5c" size={46} />
+          <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} color="#ffcf5c" size={46} />
+          <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
+        </KnobRow>
+        <div className="mt-1 text-[10px] text-dim">
+          Vactrol mode: every note is a struck pluck that rings out on its own. Color = how much the strike drives the filter.
+        </div>
+      </>
+    );
+  }
+  return (
+    <KnobRow>
+      <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
+      <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
+      <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
+      <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
+      <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
+    </KnobRow>
+  );
+}
+
 function FSeg<T extends string>({ paramKey, options, color }: { paramKey: keyof FirePatch; options: { id: T; label: string }[]; color?: string }) {
   const value = useFireCommandStore((s) => s.patch[paramKey]) as T;
   const set = useFireCommandStore((s) => s.setParam) as (k: keyof FirePatch, v: T) => void;
@@ -1027,14 +1293,16 @@ function Stepper({ onClick, children }: { onClick: () => void; children: React.R
 }
 
 function Seg<T extends string>({ value, onChange, options, color }: { value: T; onChange: (v: T) => void; options: { id: T; label: string }[]; color?: string }) {
+  // KCDS segmented geometry/motion, but keeps Fire Command's per-section
+  // color override (the accent tint that identifies each engine panel).
   return (
-    <div className="inline-flex rounded-xl bg-black/30 border border-white/10 p-0.5 flex-wrap">
+    <div className="kc-seg flex-wrap">
       {options.map((o) => (
         <button
           key={o.id}
           onClick={() => onChange(o.id)}
-          className={`px-2 py-1 rounded-lg text-xs font-medium transition ${value === o.id ? "text-white" : "text-white/55 hover:text-white/85"}`}
-          style={value === o.id ? { background: `${color ?? FIRE}28`, boxShadow: `inset 0 0 0 1px ${color ?? FIRE}66` } : undefined}
+          className={`kc-seg-btn ${value === o.id ? "text-white" : ""}`}
+          style={value === o.id ? { background: `${color ?? FIRE}28`, boxShadow: `inset 0 0 0 1px ${color ?? FIRE}66`, color: "#fff" } : undefined}
         >{o.label}</button>
       ))}
     </div>

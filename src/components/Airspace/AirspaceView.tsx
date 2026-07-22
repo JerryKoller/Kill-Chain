@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/state/settingsStore";
 import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
 import { NeonButton } from "@/components/shared/NeonButton";
+import { MissionLogPanel } from "@/components/MissionLog/MissionLogPanel";
 import { registerAirspaceWebview } from "@/lib/airspaceMedia";
 import { optionsForMode, type AirMode } from "@/lib/airspaceModes";
 
@@ -82,6 +83,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
   const [canBack, setCanBack] = useState(false);
   const [canForward, setCanForward] = useState(false);
   const [adsBlocked, setAdsBlocked] = useState(0);
+  const [missionLogOpen, setMissionLogOpen] = useState(false);
 
   // Push the persisted AdBlock preference into the main process once, then
   // keep the blocked-counter fresh while the view is on screen.
@@ -162,8 +164,12 @@ export function AirspaceView({ visible }: { visible: boolean }) {
       }
     };
     // A crashed guest (heavy video pages + capture) leaves a dead grey
-    // webview forever — reload it so browsing recovers on its own.
+    // webview forever — reload it so browsing recovers on its own, and
+    // raise a Mission HUD issue so the crash isn't silent (v2.4).
     const onGuestGone = () => {
+      void import("@/lib/appHealth").then(({ reportWebviewCrash }) =>
+        reportWebviewCrash(),
+      );
       window.setTimeout(() => {
         try { el.reload(); } catch { /* element detached */ }
       }, 400);
@@ -347,7 +353,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
           </form>
 
           {/* Cinema / Music voicing — media-type DSP for the browser */}
-          <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+          <div className="kc-seg">
             {(["off", "cinema", "music"] as AirMode[]).map((m) => (
               <button
                 key={m}
@@ -362,13 +368,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
                         : "Music mode — punch, air and balance voiced for music",
                   );
                 }}
-                className={`px-2 py-1 text-[10px] uppercase tracking-[0.12em] rounded-md transition ${
-                  airMode === m
-                    ? m === "off"
-                      ? "bg-white/12 text-white"
-                      : "bg-cyan/20 text-cyan"
-                    : "text-white/45 hover:text-white/80"
-                }`}
+                className={`kc-seg-btn ${airMode === m ? "kc-on" : ""}`}
                 title={
                   m === "off"
                     ? "No extra voicing"
@@ -388,11 +388,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
               setAdblock(!adblock);
               toast(adblock ? "AdBlock disengaged" : "AdBlock engaged — ads and trackers are intercepted");
             }}
-            className={`text-[10px] uppercase tracking-[0.15em] px-2.5 py-1.5 rounded-lg border transition ${
-              adblock
-                ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-300"
-                : "border-white/10 bg-white/[0.03] text-white/45 hover:text-white/80"
-            }`}
+            className={`kc-btn kc-btn--sm kc-btn--ghost ${adblock ? "kc-on" : ""}`}
             title={
               adblock
                 ? `AdBlock on — ${adsBlocked} requests shot down this session. Blocks ad/tracker domains network-wide; some in-player video ads (e.g. YouTube) are served from the same servers as the video and can slip through.`
@@ -402,17 +398,32 @@ export function AirspaceView({ visible }: { visible: boolean }) {
             {adblock ? `⛨ ${adsBlocked}` : "⛨ off"}
           </button>
 
+          {/* Mission Log: save the current chain for this video / stream */}
+          <button
+            onClick={() => {
+              void import("@/state/missionLogStore").then(async (m) => {
+                const name = await m.logCurrentSource();
+                if (name) toast(`◎ Logged chain for "${name}"`);
+                else toast("Route audio through Kill-Chain and start playback first");
+              });
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMissionLogOpen(true);
+            }}
+            className="kc-btn kc-btn--sm kc-btn--accent"
+            title="Log the current chain to the Mission Log for this video/stream — restored automatically next time it plays. Right-click to browse the log."
+          >
+            ◎ Log
+          </button>
+
           {/* PiP toggle (issue #6) */}
           <button
             onClick={() => {
               setPip(!pip);
               toast(pip ? "Picture-in-picture off" : "Picture-in-picture on — leave this tab to see the mini view");
             }}
-            className={`text-[10px] uppercase tracking-[0.15em] px-2.5 py-1.5 rounded-lg border transition ${
-              pip
-                ? "border-cyan/50 bg-cyan/10 text-cyan"
-                : "border-white/10 bg-white/[0.03] text-white/45 hover:text-white/80"
-            }`}
+            className={`kc-btn kc-btn--sm kc-btn--ghost ${pip ? "kc-on" : ""}`}
             title="Picture-in-picture: keep a floating mini view of this browser while you work in other tabs"
           >
             ⧉ PiP
@@ -450,11 +461,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
                 onClick={() => setAirOpt(opt.id, !on)}
                 data-ui-sound="toggle"
                 data-ui-on={on ? "true" : "false"}
-                className={`text-[11px] px-2.5 py-1.5 rounded-lg border transition ${
-                  on
-                    ? "border-cyan/50 bg-cyan/10 text-cyan"
-                    : "border-white/10 bg-white/[0.03] text-white/45 hover:text-white/80"
-                }`}
+                className={`kc-chip ${on ? "kc-on" : ""}`}
                 title={opt.desc}
               >
                 {on ? "●" : "○"} {opt.label}
@@ -476,7 +483,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
             <span key={b.id} className="group relative inline-flex">
               <button
                 onClick={() => navigate(b.url)}
-                className="text-[10px] uppercase tracking-[0.15em] px-2.5 py-1 rounded-lg border border-white/10 bg-white/[0.03] text-white/70 hover:text-cyan hover:border-white/25 transition"
+                className="kc-chip"
                 title={b.url}
               >
                 {b.label}
@@ -541,6 +548,8 @@ export function AirspaceView({ visible }: { visible: boolean }) {
           style={{ display: "flex", width: "100%", height: "100%" }}
         />
       </div>
+
+      {missionLogOpen && <MissionLogPanel onClose={() => setMissionLogOpen(false)} />}
     </div>
   );
 }

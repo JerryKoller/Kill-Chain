@@ -9,19 +9,21 @@ import {
   type VisualizerMode,
 } from "@/state/visualizerStore";
 import {
-  createSpectrumArray,
-  createWaveformScope,
-  createRadialReactor,
-  createWaterfallSpectrogram,
-  createStrikeField,
-  createWarpTunnel,
-  createPulseLattice,
-  createAuroraFlow,
+  drawEngagePulse,
+  drawTacticalFrame,
   type ModeRenderer,
   type RenderFrame,
   type ThemePalette,
   type RGB,
 } from "./renderers";
+import { createModeRenderer } from "./modeFactory";
+import { getVisualIntel } from "./visualIntel";
+import {
+  isBroadcasting,
+  onBroadcastChange,
+  startBroadcast,
+  stopBroadcast,
+} from "@/lib/vizBroadcast";
 
 /**
  * Full-panel visualizer for the Library — a portal overlay that fills the
@@ -89,6 +91,39 @@ export function VisualizerOverlay() {
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const idleTimer = useRef<number>(0);
+
+  // ── broadcast mode (second-window) state ──
+  const [broadcasting, setBroadcasting] = useState(isBroadcasting);
+  const [bcOpen, setBcOpen] = useState(false);
+  const [displays, setDisplays] = useState<VizDisplayInfo[]>([]);
+  const [bcDisplayId, setBcDisplayId] = useState<number | undefined>(undefined);
+  const [bcFullscreen, setBcFullscreen] = useState(false);
+  const [bcOnTop, setBcOnTop] = useState(true);
+  const [bcTransparent, setBcTransparent] = useState(false);
+
+  // v1.8: pre/post-chain comparison inset + low-rate intel HUD readout
+  const [abCompare, setAbCompare] = useState(false);
+  const abCompareRef = useRef(false);
+  useEffect(() => {
+    abCompareRef.current = abCompare;
+  }, [abCompare]);
+  const [hudIntel, setHudIntel] = useState({ bpm: 0, section: "idle" });
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const s = getVisualIntel().snapshot;
+      setHudIntel((prev) => {
+        const bpm = s.bpmConf > 0.2 ? Math.round(s.bpm) : 0;
+        if (prev.bpm === bpm && prev.section === s.section) return prev;
+        return { bpm, section: s.section };
+      });
+    }, 500);
+    return () => window.clearInterval(id);
+  }, []);
+  useEffect(() => onBroadcastChange(setBroadcasting), []);
+  useEffect(() => {
+    if (!bcOpen) return;
+    void window.playground?.viz?.displays().then((d) => setDisplays(d ?? []));
+  }, [bcOpen]);
 
   // Reduced motion: calmer default mode + toned-down renderers. Honors BOTH
   // the OS setting and the in-app Settings → Reduce motion override.
@@ -185,52 +220,26 @@ export function VisualizerOverlay() {
     if (!g) return;
 
     const engine = getEngine();
-    const analyser = engine.analyserPost; // shared post-EQ/limiter tap
     engine.ensureLufsMeter(); // ref-counted CPU meter for the Reactor core
 
-    // All hot-path buffers allocated exactly once per mount.
-    const binCount = analyser.frequencyBinCount;
-    const freq = new Uint8Array(binCount) as Uint8Array<ArrayBuffer>;
-    const time = new Uint8Array(analyser.fftSize) as Uint8Array<ArrayBuffer>;
-    const prevFreq = new Uint8Array(binCount);
-    const sampleRate = engine.ctx.sampleRate;
+    // THE shared analysis pipeline — the intel service owns every analyser
+    // pull and detector; this loop only reads its snapshot.
+    const intel = getVisualIntel();
+    intel.start();
+    const binCount = intel.binCount;
+    const sampleRate = intel.sampleRate;
     const palette = readPalette();
 
-    // Beat detector state (spectral flux + low-band energy, both against
-    // slow adaptive averages so it tracks any genre/loudness).
-    const nyq = sampleRate / 2;
-    const lowBins = Math.max(4, Math.round((180 / nyq) * binCount));
-    const fluxBins = Math.max(lowBins, Math.round((400 / nyq) * binCount));
-    // Band edges for the mid/high/centroid readouts the renderers consume.
-    const midLoBin = Math.max(lowBins + 1, Math.round((400 / nyq) * binCount));
-    const midHiBin = Math.min(binCount - 1, Math.round((2500 / nyq) * binCount));
-    const highLoBin = Math.min(binCount - 2, Math.round((4000 / nyq) * binCount));
-    let lowAvg = 0;
-    let fluxAvg = 0;
-    let beatEnv = 0;
-    let beatCooldown = 0;
+    // Pre-chain inset buffer (display-only read of the existing pre analyser;
+    // pulled ONLY while the A/B inset is open).
+    const preAnalyser = engine.analyserPre;
+    const preFreq = new Uint8Array(preAnalyser.frequencyBinCount) as Uint8Array<ArrayBuffer>;
 
     const slots = new Map<VisualizerMode, RendererSlot>();
     const getSlot = (m: VisualizerMode): RendererSlot => {
       let s = slots.get(m);
       if (!s) {
-        const r =
-          m === "spectrum"
-            ? createSpectrumArray(palette, binCount, sampleRate)
-            : m === "scope"
-              ? createWaveformScope(palette)
-              : m === "radial"
-                ? createRadialReactor(palette, binCount, sampleRate)
-                : m === "waterfall"
-                  ? createWaterfallSpectrogram(palette, binCount, sampleRate)
-                  : m === "tunnel"
-                    ? createWarpTunnel(palette)
-                    : m === "lattice"
-                      ? createPulseLattice(palette, binCount, sampleRate)
-                      : m === "aurora"
-                        ? createAuroraFlow(palette)
-                        : createStrikeField(palette);
-        s = { r, w: -1, h: -1 };
+        s = { r: createModeRenderer(m, palette, binCount, sampleRate), w: -1, h: -1 };
         slots.set(m, s);
       }
       return s;
@@ -241,8 +250,8 @@ export function VisualizerOverlay() {
       g,
       W: 0,
       H: 0,
-      freq,
-      time,
+      freq: intel.freq,
+      time: intel.time,
       binCount,
       sampleRate,
       dt: 1 / 60,
@@ -257,6 +266,7 @@ export function VisualizerOverlay() {
       lufs: -120,
       title: "",
       reduced: false,
+      intel: intel.snapshot,
     };
 
     // DPR-aware sizing via ResizeObserver (canvas fills the overlay).
@@ -307,76 +317,22 @@ export function VisualizerOverlay() {
 
       if (cssW < 2 || cssH < 2) return;
 
-      // ── pull data from the SHARED analyser (no audio-graph work) ──
-      analyser.getByteFrequencyData(freq);
-      analyser.getByteTimeDomainData(time);
-
-      // full-band RMS from the time block
-      let sumSq = 0;
-      for (let i = 0; i < time.length; i++) {
-        const v = (time[i] - 128) / 128;
-        sumSq += v * v;
-      }
-      const rms = Math.sqrt(sumSq / time.length);
-
-      // low-band energy + spectral flux vs adaptive baselines
-      let lowSum = 0;
-      for (let i = 1; i <= lowBins; i++) lowSum += freq[i];
-      const low = lowSum / (lowBins * 255);
-      let fluxSum = 0;
-      for (let i = 1; i <= fluxBins; i++) {
-        const d = freq[i] - prevFreq[i];
-        if (d > 0) fluxSum += d;
-      }
-      prevFreq.set(freq);
-      const flux = fluxSum / (fluxBins * 255);
-
-      // mid / high band energies + spectral centroid (single pass).
-      let midSum = 0;
-      for (let i = midLoBin; i <= midHiBin; i++) midSum += freq[i];
-      const midE = midSum / (Math.max(1, midHiBin - midLoBin + 1) * 255);
-      let highSum = 0;
-      for (let i = highLoBin; i < binCount; i++) highSum += freq[i];
-      const highE = highSum / (Math.max(1, binCount - highLoBin) * 255);
-      let centNum = 0;
-      let centDen = 0;
-      for (let i = 1; i < binCount; i += 2) {
-        const v = freq[i];
-        centNum += v * i;
-        centDen += v;
-      }
-      const centroid = centDen > 0 ? Math.min(1, (centNum / centDen / binCount) * 3.2) : 0;
-
+      // ── ONE analysis pass (shared intel pipeline), then draw ──
+      intel.update(now);
+      const s = intel.snapshot;
       const dt = Math.min(0.05, dtMs / 1000);
-      const adaptK = 1 - Math.exp(-dt / 1.4); // ~1.4 s time constant
-      lowAvg += (low - lowAvg) * adaptK;
-      fluxAvg += (flux - fluxAvg) * adaptK;
 
-      beatCooldown -= dt;
-      let beatHit = false;
-      if (
-        beatCooldown <= 0 &&
-        low > 0.05 &&
-        (flux > fluxAvg * 1.9 + 0.01 || low > lowAvg * 1.35 + 0.03)
-      ) {
-        beatHit = true;
-        beatEnv = 1;
-        beatCooldown = 0.13;
-      }
-      beatEnv *= Math.exp(-dt * 5.5);
-
-      // ── fill the frame bag & draw the active mode ──
       frame.W = cssW;
       frame.H = cssH;
       frame.dt = dt;
       frame.now = now;
-      frame.rms = rms;
-      frame.low = low;
-      frame.mid = midE;
-      frame.high = highE;
-      frame.centroid = centroid;
-      frame.beatHit = beatHit;
-      frame.beat = beatEnv;
+      frame.rms = s.rms;
+      frame.low = s.low;
+      frame.mid = s.mid;
+      frame.high = s.high;
+      frame.centroid = s.centroid;
+      frame.beatHit = s.beatHit;
+      frame.beat = s.beat;
       frame.lufs = engine.lufs.momentaryLufs;
       frame.title = titleRef.current;
       frame.reduced = reducedRef.current;
@@ -389,6 +345,49 @@ export function VisualizerOverlay() {
         slot.h = cssH;
       }
       slot.r.draw(frame);
+
+      // Kill-Chain flavor passes over every mode.
+      drawTacticalFrame(frame);
+      drawEngagePulse(frame);
+
+      // Pre/post-chain comparison inset (optional, bottom-right).
+      if (abCompareRef.current) {
+        preAnalyser.getByteFrequencyData(preFreq);
+        const iw = Math.min(300, cssW * 0.3);
+        const ih = 84;
+        const ix = cssW - iw - 16;
+        const iy = cssH - ih - 42;
+        g.fillStyle = "rgba(4,6,10,0.72)";
+        g.fillRect(ix, iy, iw, ih);
+        g.strokeStyle = "rgba(140,200,230,0.3)";
+        g.lineWidth = 1;
+        g.strokeRect(ix, iy, iw, ih);
+        const plotBins = 96;
+        // pre-chain trace (amber) vs post-chain trace (cyan), log-ish sweep
+        for (let pass = 0; pass < 2; pass++) {
+          const src = pass === 0 ? preFreq : intel.freq;
+          const srcBins = pass === 0 ? preFreq.length : binCount;
+          g.strokeStyle = pass === 0 ? "rgba(255,176,72,0.75)" : "rgba(84,200,240,0.9)";
+          g.lineWidth = 1.2;
+          g.beginPath();
+          for (let i = 0; i < plotBins; i++) {
+            const tN = i / (plotBins - 1);
+            const bin = Math.min(srcBins - 1, Math.max(1, Math.round(Math.pow(tN, 2.2) * (srcBins - 1))));
+            const v = src[bin] / 255;
+            const x = ix + 4 + tN * (iw - 8);
+            const y = iy + ih - 4 - v * (ih - 18);
+            if (i === 0) g.moveTo(x, y);
+            else g.lineTo(x, y);
+          }
+          g.stroke();
+        }
+        g.font = `8px JetBrains Mono, monospace`;
+        g.textAlign = "left";
+        g.fillStyle = "rgba(255,176,72,0.8)";
+        g.fillText("PRE-CHAIN", ix + 6, iy + 11);
+        g.fillStyle = "rgba(84,200,240,0.9)";
+        g.fillText("POST-CHAIN", ix + 62, iy + 11);
+      }
 
       // degrade check
       const cost = performance.now() - t0;
@@ -423,6 +422,7 @@ export function VisualizerOverlay() {
       document.removeEventListener("visibilitychange", onVisibility);
       ro.disconnect();
       engine.releaseLufsMeter();
+      intel.stop();
     };
   }, []);
 
@@ -457,10 +457,37 @@ export function VisualizerOverlay() {
         </div>
         <div className="kc-vz-track-title">{title}</div>
         {artist && <div className="kc-vz-track-artist">{artist}</div>}
+        <div className="kc-vz-track-label" style={{ marginTop: 4 }}>
+          {hudIntel.bpm > 0 ? `${hudIntel.bpm} BPM · ` : ""}
+          {hudIntel.section.toUpperCase()}
+        </div>
       </div>
 
-      {/* top-right: fullscreen + close */}
+      {/* top-right: broadcast + fullscreen + close */}
       <div className="kc-vz-corner kc-vz-actions">
+        {window.playground?.viz && (
+          <button
+            className="kc-vz-btn"
+            onClick={() => {
+              if (broadcasting) stopBroadcast();
+              else setBcOpen((v) => !v);
+            }}
+            title={
+              broadcasting
+                ? "Close the broadcast window"
+                : "Open a second window for streaming / OBS capture / another monitor"
+            }
+          >
+            {broadcasting ? "◉ END BROADCAST" : "⧉ BROADCAST"}
+          </button>
+        )}
+        <button
+          className="kc-vz-btn"
+          onClick={() => setAbCompare((v) => !v)}
+          title="Toggle the pre-chain vs post-chain spectrum comparison inset"
+        >
+          {abCompare ? "◪ A/B ON" : "◫ A/B"}
+        </button>
         <button
           className="kc-vz-btn"
           onClick={toggleFullscreen}
@@ -475,6 +502,76 @@ export function VisualizerOverlay() {
         >
           ✕ CLOSE
         </button>
+
+        {/* broadcast launch options */}
+        {bcOpen && !broadcasting && (
+          <div
+            className="absolute right-0 top-10 w-64 rounded-xl border border-white/15 bg-black/85 backdrop-blur-md p-3 text-left"
+            style={{ fontFamily: "JetBrains Mono, monospace" }}
+          >
+            <div className="text-[9px] uppercase tracking-[0.3em] text-white/40 mb-2">
+              Broadcast window
+            </div>
+            {displays.length > 1 && (
+              <select
+                value={bcDisplayId ?? ""}
+                onChange={(e) =>
+                  setBcDisplayId(e.target.value === "" ? undefined : Number(e.target.value))
+                }
+                className="w-full mb-2 bg-white/5 border border-white/15 rounded-lg px-2 py-1.5 text-xs focus:outline-none"
+              >
+                <option value="">Primary display</option>
+                {displays.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.label} ({d.width}×{d.height}){d.primary ? " · primary" : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+            <label className="flex items-center gap-2 text-xs text-white/70 py-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={bcFullscreen}
+                onChange={(e) => setBcFullscreen(e.target.checked)}
+              />
+              Borderless fullscreen
+            </label>
+            <label className="flex items-center gap-2 text-xs text-white/70 py-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={bcOnTop}
+                onChange={(e) => setBcOnTop(e.target.checked)}
+              />
+              Always on top (OBS capture)
+            </label>
+            <label className="flex items-center gap-2 text-xs text-white/70 py-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={bcTransparent}
+                onChange={(e) => setBcTransparent(e.target.checked)}
+              />
+              Transparent background (overlay)
+            </label>
+            <button
+              className="w-full mt-2 rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 px-3 py-1.5 text-xs font-semibold text-cyan transition"
+              onClick={() => {
+                setBcOpen(false);
+                void startBroadcast({
+                  displayId: bcDisplayId,
+                  fullscreen: bcFullscreen,
+                  alwaysOnTop: bcOnTop,
+                  transparent: bcTransparent,
+                });
+              }}
+            >
+              ⧉ Launch broadcast
+            </button>
+            <div className="text-[9px] text-white/35 mt-2 leading-relaxed">
+              In the window: ←/→ mode · F fullscreen · H pin HUD · S screenshot ·
+              Esc close. For OBS use Window Capture on "Kill-Chain — Broadcast".
+            </div>
+          </div>
+        )}
       </div>
 
       {/* bottom-center: segmented mode control */}

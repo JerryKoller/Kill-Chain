@@ -7,6 +7,11 @@ interface Props extends HTMLMotionProps<"button"> {
   children: ReactNode;
 }
 
+/**
+ * v2.2 — NeonButton now renders through KCDS button classes, so every
+ * existing call site picks up the shared interaction language (hover lift,
+ * press scale, accent-lit active state) without an API change.
+ */
 export function NeonButton({
   variant = "neon",
   active,
@@ -15,20 +20,14 @@ export function NeonButton({
   disabled,
   ...rest
 }: Props) {
-  const base =
-    variant === "neon"
-      ? "btn-neon"
-      : variant === "danger"
-        ? "btn-ghost text-red-300 hover:text-red-200"
-        : "btn-ghost";
-  const ring = active ? "ring-neon" : "";
+  const kind =
+    variant === "neon" ? "kc-btn--primary" : variant === "danger" ? "kc-btn--danger" : "kc-btn--ghost";
   const disabledCls = disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : "";
   return (
     <motion.button
-      whileHover={disabled ? undefined : { y: -1 }}
       whileTap={disabled ? undefined : { scale: 0.97 }}
       transition={{ type: "spring", stiffness: 500, damping: 32 }}
-      className={`${base} ${ring} ${disabledCls} ${className}`}
+      className={`kc-btn ${kind} ${active ? "kc-on" : ""} ${disabledCls} ${className}`}
       disabled={disabled}
       {...rest}
     >

@@ -13,10 +13,13 @@ import {
   type PresetCategory,
 } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
+import { MISSION_PACKS } from "@/audio/dsp/fireMissionPacks";
+import { loadProjectData } from "@/lib/fireStudio";
 
 const FIRE = "#ff6a3d";
 
 const CAT_COLOR: Record<string, string> = {
+  Missions: "#ffd166",
   Bass: "#ff5c2e",
   Lead: "#ffb648",
   Pluck: "#ffd166",
@@ -30,6 +33,7 @@ const CAT_COLOR: Record<string, string> = {
 
 const CAT_ICON: Record<string, string> = {
   All: "◈",
+  Missions: "🎯",
   Bass: "▁",
   Lead: "⚡",
   Pluck: "✦",
@@ -41,7 +45,7 @@ const CAT_ICON: Record<string, string> = {
   User: "★",
 };
 
-type Filter = "All" | PresetCategory | "User";
+type Filter = "All" | "Missions" | PresetCategory | "User";
 
 interface Card {
   id: string;
@@ -91,6 +95,7 @@ export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () =>
   const counts = useMemo(() => {
     const m = new Map<Filter, number>();
     m.set("All", cards.length);
+    m.set("Missions", MISSION_PACKS.length);
     for (const c of cards) m.set(c.category, (m.get(c.category) ?? 0) + 1);
     return m;
   }, [cards]);
@@ -118,7 +123,26 @@ export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () =>
     loadPreset(id);
   };
 
-  const rail: Filter[] = ["All", ...PRESET_CATEGORIES, "User"];
+  const rail: Filter[] = ["All", "Missions", ...PRESET_CATEGORIES, "User"];
+
+  const deployPack = (packId: string) => {
+    const pack = MISSION_PACKS.find((p) => p.id === packId);
+    if (!pack) return;
+    loadProjectData(pack.payload());
+    toast(`🎯 ${pack.name} deployed — patch, drums, sections and chain are live. Hit play.`);
+    onClose();
+  };
+
+  const missionItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return MISSION_PACKS;
+    return MISSION_PACKS.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q)
+        || p.desc.toLowerCase().includes(q)
+        || p.tagline.toLowerCase().includes(q),
+    );
+  }, [query]);
 
   return (
     <AnimatePresence>
@@ -218,6 +242,42 @@ export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () =>
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {filter === "Missions" ? (
+                  <div>
+                    <div className="mb-3 text-[11px] text-white/45 leading-relaxed">
+                      Mission packs load an ENTIRE production — synth patches, drum grids,
+                      note riffs, sections and the song chain — replacing what's loaded now.
+                      (Ctrl+Z brings your work back.)
+                    </div>
+                    {missionItems.length === 0 && (
+                      <div className="text-center text-sm text-dim py-10">No mission packs match your search.</div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {missionItems.map((p) => (
+                        <div
+                          key={p.id}
+                          onClick={() => deployPack(p.id)}
+                          className="group cursor-pointer rounded-xl border border-white/8 bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/20 p-3 transition"
+                          style={{ boxShadow: `inset 3px 0 0 ${p.color}` }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-white">{p.name}</span>
+                            <span
+                              className="text-[9px] font-mono px-1.5 py-0.5 rounded-md border"
+                              style={{ color: p.color, borderColor: `${p.color}55`, background: `${p.color}14` }}
+                            >{p.bpm} BPM</span>
+                            <span className="ml-auto opacity-0 group-hover:opacity-100 text-[10px] font-bold uppercase tracking-[0.15em] transition" style={{ color: p.color }}>
+                              Deploy ▸
+                            </span>
+                          </div>
+                          <div className="mt-0.5 text-[11px] font-semibold" style={{ color: `${p.color}cc` }}>{p.tagline}</div>
+                          <div className="mt-1 text-[11px] text-white/45 leading-snug">{p.desc}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 {groups.length === 0 && (
                   <div className="text-center text-sm text-dim py-10">
                     {filter === "User"
@@ -311,6 +371,8 @@ export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () =>
                     </div>
                   </div>
                 ))}
+                  </>
+                )}
               </div>
             </div>
 

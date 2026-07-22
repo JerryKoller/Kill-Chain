@@ -35,6 +35,7 @@ import {
   type ScaleId,
 } from "@/state/fireSequencerStore";
 import { playUi } from "@/audio/uiSounds";
+import { useUIStore } from "@/state/uiStore";
 
 const ROW_H = 14;    // px per semitone row
 const GUTTER = 46;   // piano key gutter width
@@ -91,6 +92,13 @@ export function PianoRoll() {
   const marqueeRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragSession | null>(null);
   const lastLenRef = useRef(2);
+  // Velocity lane (v1.7): a discoverable strip under the roll.
+  const velCanvasRef = useRef<HTMLCanvasElement>(null);
+  const velScrollRef = useRef<HTMLDivElement>(null);
+  const velPaintingRef = useRef(false);
+  const [velOpen, setVelOpen] = useState(true);
+  // Live audition while dragging a note across pitches (throttle by pitch).
+  const lastAudMidiRef = useRef<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   // Horizontal zoom (px per 16th) + the roll's own height — both live-tweakable.
   const [cellW, setCellW] = useState(26);
@@ -236,7 +244,9 @@ export function PianoRoll() {
       raf = requestAnimationFrame(loop);
       if (document.hidden) return;
       const step = getPlayheadStep(bpm, bars);
-      el.style.transform = `translateX(${GUTTER + step * CELL_W}px)`;
+      // -1 = song mode is sounding a DIFFERENT section — hide the head.
+      el.style.opacity = step < 0 ? "0" : "1";
+      el.style.transform = `translateX(${GUTTER + Math.max(0, step) * CELL_W}px)`;
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
@@ -439,6 +449,11 @@ export function PianoRoll() {
       } else {
         const newMidi = clamp(snapPitch(d.orig.midi + dSemis), MIDI_BOT, MIDI_TOP);
         updateNote(d.noteId!, { step: Math.max(0, d.orig.step + dSteps), midi: newMidi });
+        // Hear the pitch as you drag (fires once per row crossed).
+        if (newMidi !== d.orig.midi && newMidi !== lastAudMidiRef.current) {
+          lastAudMidiRef.current = newMidi;
+          audition(newMidi, d.orig.vel, d.orig.ch);
+        }
       }
     } else if (d.mode === "resize" && d.orig) {
       const endStep = (x - GUTTER) / CELL_W;
@@ -462,11 +477,113 @@ export function PianoRoll() {
       if (el) el.style.opacity = "0";
       return;
     }
-    if (d.mode === "move" && d.moved && d.noteId) {
+    lastAudMidiRef.current = null;
+    if (d.mode === "move" && d.moved && d.noteId && d.groupOrig) {
+      // Group drags stay silent during the move — confirm the landing pitch.
       const n = useFireSequencerStore.getState().notes.find((nn) => nn.id === d.noteId);
       if (n && d.orig && n.midi !== d.orig.midi) audition(n.midi, n.vel, n.ch);
     }
   };
+
+  // ── velocity lane (v1.7) ──
+  const VEL_H = 56;
+
+  const velDraw = useCallback(() => {
+    if (!velOpen) return;
+    const canvas = velCanvasRef.current;
+    if (!canvas) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (canvas.width !== gridW * dpr || canvas.height !== VEL_H * dpr) {
+      canvas.width = gridW * dpr;
+      canvas.height = VEL_H * dpr;
+      canvas.style.width = `${gridW}px`;
+      canvas.style.height = `${VEL_H}px`;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, gridW, VEL_H);
+
+    // grid
+    for (let s = 0; s <= totalSteps; s++) {
+      const x = GUTTER + s * CELL_W;
+      ctx.fillStyle = s % STEPS_PER_BAR === 0
+        ? "rgba(255,120,60,0.22)"
+        : s % 4 === 0
+          ? "rgba(255,255,255,0.07)"
+          : "rgba(255,255,255,0.025)";
+      ctx.fillRect(x, 0, 1, VEL_H);
+    }
+
+    // one stem+cap per note, colored by channel, brightness = velocity
+    const barW = Math.max(4, Math.min(CELL_W - 3, 9));
+    for (const n of [...notes].sort((a, b) => a.step - b.step)) {
+      const x = GUTTER + n.step * CELL_W + 1;
+      const h = Math.max(2, n.vel * (VEL_H - 8));
+      const y = VEL_H - 3 - h;
+      const sel = selectedIds.has(n.id);
+      const isB = n.ch === 1;
+      const alpha = 0.35 + n.vel * 0.6;
+      ctx.fillStyle = isB ? `rgba(98,182,255,${alpha})` : `rgba(255,120,60,${alpha})`;
+      ctx.fillRect(x, y, barW, h);
+      ctx.fillStyle = sel
+        ? "rgba(255,235,190,0.95)"
+        : isB
+          ? "rgba(140,200,255,0.9)"
+          : "rgba(255,170,110,0.9)";
+      ctx.fillRect(x, y, barW, 2.5);
+    }
+
+    // gutter label
+    ctx.fillStyle = "rgba(8,6,10,0.96)";
+    ctx.fillRect(0, 0, GUTTER, VEL_H);
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "8.5px ui-monospace, monospace";
+    ctx.textBaseline = "middle";
+    ctx.fillText("VEL", 6, VEL_H / 2);
+    ctx.fillStyle = "rgba(255,120,60,0.5)";
+    ctx.fillRect(GUTTER - 2, 0, 2, VEL_H);
+  }, [velOpen, notes, selectedIds, gridW, totalSteps, CELL_W]);
+
+  useEffect(() => { velDraw(); }, [velDraw]);
+
+  const velHit = (x: number): RollNote | null => {
+    const barW = Math.max(4, Math.min(CELL_W - 3, 9));
+    let best: RollNote | null = null;
+    let bestDist = Infinity;
+    for (const n of notes) {
+      const bx = GUTTER + n.step * CELL_W + 1;
+      const center = bx + barW / 2;
+      const dist = Math.abs(x - center);
+      if (x >= bx - 3 && x <= bx + barW + 3 && dist < bestDist) {
+        best = n;
+        bestDist = dist;
+      }
+    }
+    return best;
+  };
+
+  const velPaint = (e: React.PointerEvent) => {
+    const rect = velCanvasRef.current!.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (x < GUTTER) return;
+    const hit = velHit(x);
+    if (!hit) return;
+    const vel = clamp(1 - (y - 3) / (VEL_H - 8), 0.05, 1);
+    updateNote(hit.id, { vel });
+  };
+
+  const onVelPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    velPaintingRef.current = true;
+    velPaint(e);
+  };
+  const onVelPointerMove = (e: React.PointerEvent) => {
+    if (velPaintingRef.current) velPaint(e);
+  };
+  const onVelPointerUp = () => { velPaintingRef.current = false; };
 
   // Deletion happens in the pointer handlers (eraser drag) — just keep the
   // browser menu out of the way.
@@ -555,6 +672,48 @@ export function PianoRoll() {
         >
           {scaleSnap ? "⚿ Snap" : "○ Snap"}
         </button>
+        {/* Key assists (v1.6) */}
+        <button
+          onClick={() => {
+            const hit = useFireSequencerStore.getState().detectAndApplyKey();
+            playUi("press");
+            useUIStore
+              .getState()
+              .toast(
+                hit
+                  ? `Detected ${NOTE_NAMES[hit.root]} ${SCALES.find((s) => s.id === hit.scaleId)?.label ?? ""} — scale set`
+                  : "Not enough notes to call a key yet",
+              );
+          }}
+          className="px-2 py-1 rounded-lg border border-white/10 bg-white/[0.03] text-white/60 hover:text-cyan text-[10px] uppercase tracking-[0.12em] transition"
+          title="Detect the key from the notes in the roll (Krumhansl profile match) and set the scale controls to it"
+        >
+          ◎ Detect key
+        </button>
+        <button
+          onClick={() => {
+            const moved = useFireSequencerStore.getState().conformNotesToScale();
+            playUi("press");
+            useUIStore
+              .getState()
+              .toast(
+                scaleId === "off"
+                  ? "Pick a scale first"
+                  : moved > 0
+                    ? `Conformed ${moved} note${moved === 1 ? "" : "s"} to the scale`
+                    : "Already all in scale",
+              );
+          }}
+          disabled={scaleId === "off"}
+          className={`px-2 py-1 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
+            scaleId === "off"
+              ? "border-white/8 text-white/25"
+              : "border-white/10 bg-white/[0.03] text-white/60 hover:text-emerald-300"
+          }`}
+          title="Move every out-of-scale note to its nearest scale tone (undo-able)"
+        >
+          ⇥ Conform
+        </button>
         <div className="w-px h-4 bg-white/10 mx-0.5" />
         <button
           onClick={() => { humanizeNotes(); playUi("press"); }}
@@ -591,6 +750,11 @@ export function PianoRoll() {
 
       <div
         ref={scrollRef}
+        onScroll={(e) => {
+          // Velocity lane tracks the roll's horizontal scroll 1:1.
+          const v = velScrollRef.current;
+          if (v) v.scrollLeft = e.currentTarget.scrollLeft;
+        }}
         className="relative overflow-auto rounded-xl border border-white/10 bg-black/45"
         style={{ height: rollH }}
       >
@@ -620,6 +784,34 @@ export function PianoRoll() {
             style={{ willChange: "transform, width, height" }}
           />
         </div>
+      </div>
+
+      {/* Velocity lane (v1.7): one bar per note — drag to paint loudness. */}
+      <div className="mt-1">
+        <button
+          onClick={() => setVelOpen(!velOpen)}
+          className="text-[10px] uppercase tracking-[0.25em] text-dim hover:text-white/70 transition"
+          title="Velocity lane: each bar is a note's loudness — drag across to paint. (Shift+drag on a note still works.)"
+        >
+          {velOpen ? "▾" : "▸"} Velocity
+        </button>
+        {velOpen && (
+          <div
+            ref={velScrollRef}
+            className="mt-1 overflow-hidden rounded-xl border border-white/10 bg-black/45"
+          >
+            <canvas
+              ref={velCanvasRef}
+              onPointerDown={onVelPointerDown}
+              onPointerMove={onVelPointerMove}
+              onPointerUp={onVelPointerUp}
+              onPointerCancel={onVelPointerUp}
+              onContextMenu={(e) => e.preventDefault()}
+              className="block touch-none select-none cursor-ns-resize"
+              aria-label="Velocity lane — drag over the bars to set note velocities"
+            />
+          </div>
+        )}
       </div>
 
       {/* Grab-handle: drag to resize the roll vertically. */}

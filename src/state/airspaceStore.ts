@@ -210,7 +210,8 @@ export const useAirspaceStore = create<AirspaceState>((set, get) => {
         prev.duration === m.duration &&
         prev.title === m.title &&
         prev.artwork === m.artwork &&
-        prev.volume === m.volume
+        prev.volume === m.volume &&
+        prev.pageUrl === m.pageUrl
       ) {
         return;
       }

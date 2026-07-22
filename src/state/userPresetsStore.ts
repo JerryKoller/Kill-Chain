@@ -1,8 +1,15 @@
 import { create } from "zustand";
 import type { SoundParams } from "@/audio/types";
 import { NEUTRAL_PARAMS } from "@/audio/types";
+import { RESTORE_OFF, type RestoreParams } from "@/audio/dsp/Reconstructor";
 
 const STORAGE_KEY = "audio-playground.userPresets.v1";
+
+/** v2.1 — optional repair layer saved alongside the tone params. */
+export interface PresetRepairLayer {
+  restore: RestoreParams;
+  clarity: number;
+}
 
 export interface UserPreset {
   id: string;
@@ -10,6 +17,9 @@ export interface UserPreset {
   emoji: string;
   accent: string;
   params: SoundParams;
+  /** v2.1 — Restoration Bay + Clarity, when the user chose to include them.
+   *  Absent/null on tone-only presets (all pre-2.1 presets). */
+  repair?: PresetRepairLayer | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -17,12 +27,33 @@ export interface UserPreset {
 interface UserPresetsState {
   presets: UserPreset[];
   /** Save a new preset; returns the new id. */
-  savePreset: (name: string, params: SoundParams, accent?: string, emoji?: string) => string;
+  savePreset: (
+    name: string,
+    params: SoundParams,
+    accent?: string,
+    emoji?: string,
+    repair?: PresetRepairLayer | null,
+  ) => string;
   /** Overwrite an existing preset's params (keeps name/emoji/accent). */
   overwrite: (id: string, params: SoundParams) => void;
   renamePreset: (id: string, name: string) => void;
   deletePreset: (id: string) => void;
   duplicatePreset: (id: string) => string | null;
+}
+
+const clamp01 = (v: unknown): number =>
+  typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+
+function sanitizeRepair(raw: unknown): PresetRepairLayer | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<PresetRepairLayer> & { restore?: Partial<RestoreParams> };
+  const restore: RestoreParams = { ...RESTORE_OFF };
+  if (r.restore && typeof r.restore === "object") {
+    for (const k of Object.keys(RESTORE_OFF) as (keyof RestoreParams)[]) {
+      restore[k] = clamp01(r.restore[k]);
+    }
+  }
+  return { restore, clarity: clamp01(r.clarity) };
 }
 
 function loadFromStorage(): UserPreset[] {
@@ -44,6 +75,7 @@ function loadFromStorage(): UserPreset[] {
         createdAt: Number(p.createdAt ?? Date.now()),
         updatedAt: Number(p.updatedAt ?? Date.now()),
         params: { ...NEUTRAL_PARAMS, ...(p.params ?? {}) } as SoundParams,
+        repair: sanitizeRepair(p.repair),
       }));
   } catch (err) {
     console.warn("[userPresets] failed to load from storage:", err);
@@ -77,7 +109,7 @@ function pickFrom<T>(arr: T[]): T {
 export const useUserPresetsStore = create<UserPresetsState>((set, get) => ({
   presets: loadFromStorage(),
 
-  savePreset: (name, params, accent, emoji) => {
+  savePreset: (name, params, accent, emoji, repair) => {
     const id = cryptoId();
     const now = Date.now();
     const preset: UserPreset = {
@@ -86,6 +118,7 @@ export const useUserPresetsStore = create<UserPresetsState>((set, get) => ({
       emoji: emoji ?? pickFrom(EMOJIS),
       accent: accent ?? pickFrom(ACCENTS),
       params: { ...params },
+      repair: repair ? { restore: { ...repair.restore }, clarity: repair.clarity } : null,
       createdAt: now,
       updatedAt: now,
     };
@@ -122,6 +155,6 @@ export const useUserPresetsStore = create<UserPresetsState>((set, get) => ({
   duplicatePreset: (id) => {
     const src = get().presets.find((p) => p.id === id);
     if (!src) return null;
-    return get().savePreset(`${src.name} copy`, src.params, src.accent, src.emoji);
+    return get().savePreset(`${src.name} copy`, src.params, src.accent, src.emoji, src.repair ?? null);
   },
 }));

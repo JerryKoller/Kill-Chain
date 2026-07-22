@@ -143,6 +143,15 @@ const clampParam = (v: number) => Math.max(-1, Math.min(1, v));
 let baseline: Partial<SoundParams> = {};
 
 /**
+ * The pre-overlay values of the params the active mode is touching right now
+ * (empty when no mode is engaged). ChainSnapshot uses this to capture the
+ * UNDERLYING params so re-applying the mode later doesn't stack the overlay.
+ */
+export function getActiveAirBaseline(): Partial<SoundParams> {
+  return { ...baseline };
+}
+
+/**
  * Apply (or clear, with mode "off") the Airspace voicing. Idempotent and
  * baseline-safe: always restores the previous overlay before applying the
  * next one, so repeated calls never stack.

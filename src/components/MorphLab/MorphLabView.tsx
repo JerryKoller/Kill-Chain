@@ -597,13 +597,13 @@ export function MorphLabView() {
               />
               <button
                 onClick={doSaveBlend}
-                className="rounded-lg bg-cyan/20 hover:bg-cyan/30 border border-cyan/50 px-4 py-2 text-sm font-semibold text-cyan transition"
+                className="kc-btn kc-btn--accent"
               >
                 Save
               </button>
               <button
                 onClick={() => setSaveOpen(false)}
-                className="rounded-lg border border-white/10 hover:border-white/25 hover:bg-white/5 px-3 py-2 text-sm text-white/70 transition"
+                className="kc-btn kc-btn--ghost"
               >
                 Cancel
               </button>
@@ -711,13 +711,7 @@ export function MorphLabView() {
                     ? "Record a gesture first (REC, then drag)"
                     : undefined
                 }
-                className={`rounded-xl border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-                  motionCfg.pattern === p
-                    ? "border-cyan/60 bg-cyan/15 text-cyan"
-                    : p === "gesture" && !gesture
-                      ? "border-white/8 text-white/25 cursor-not-allowed"
-                      : "border-white/12 bg-white/[0.04] text-white/75 hover:border-white/24"
-                }`}
+                className={`kc-btn kc-btn--sm kc-btn--ghost ${motionCfg.pattern === p ? "kc-on" : ""}`}
               >
                 {label}
               </button>
@@ -734,10 +728,8 @@ export function MorphLabView() {
                   setMotionCfg((p) => ({ ...p, pattern: "off" }));
                 }
               }}
-              className={`rounded-xl border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-                recArmed || recording
-                  ? "border-plasma/60 bg-plasma/15 text-plasma"
-                  : "border-white/12 bg-white/[0.04] text-white/75 hover:border-white/24"
+              className={`kc-btn kc-btn--sm ${
+                recArmed || recording ? "kc-btn--danger" : "kc-btn--ghost"
               }`}
               title="Arm, then drag the puck — the pass loops when you release"
             >
@@ -767,7 +759,10 @@ export function MorphLabView() {
                 onChange={(e) =>
                   setMotionCfg((p) => ({ ...p, rate: Number(e.target.value) }))
                 }
-                className="w-40 accent-cyan"
+                className="kc-slider w-40"
+                style={{
+                  ["--kc-fill" as string]: `${((motionCfg.rate - MOTION_RATE_MIN) / (MOTION_RATE_MAX - MOTION_RATE_MIN)) * 100}%`,
+                }}
               />
               <span className="text-[11px] font-mono text-dim w-14 text-right">
                 {rateLabel}
@@ -786,7 +781,8 @@ export function MorphLabView() {
                 onChange={(e) =>
                   setMotionCfg((p) => ({ ...p, depth: Number(e.target.value) }))
                 }
-                className="w-40 accent-cyan"
+                className="kc-slider w-40"
+                style={{ ["--kc-fill" as string]: `${motionCfg.depth * 100}%` }}
               />
               <span className="text-[11px] font-mono text-dim w-14 text-right">
                 {Math.round(motionCfg.depth * 100)}%
@@ -831,7 +827,7 @@ export function MorphLabView() {
                 </select>
                 <button
                   onClick={() => snapCorner(c)}
-                  className="shrink-0 rounded-lg border border-white/12 bg-white/[0.04] hover:border-cyan/50 hover:text-cyan px-2 py-2 text-[10px] uppercase tracking-wider text-white/65 transition"
+                  className="kc-btn kc-btn--sm kc-btn--ghost shrink-0"
                   title="Freeze the current sound into this corner"
                 >
                   ◉ Snap
@@ -896,11 +892,7 @@ export function MorphLabView() {
                         key={meta.key}
                         onClick={() => toggleLock(meta.key)}
                         title={meta.hint}
-                        className={`text-[9px] uppercase tracking-wider rounded-full border px-2 py-1 transition ${
-                          locked
-                            ? "border-amber/60 bg-amber/15 text-amber"
-                            : "border-white/10 text-white/45 hover:border-white/25 hover:text-white/70"
-                        }`}
+                        className={`kc-chip ${locked ? "kc-on" : ""}`}
                       >
                         {locked ? "⊘ " : ""}
                         {meta.label}
@@ -936,10 +928,8 @@ export function MorphLabView() {
                   window.setTimeout(() => setConfirmReset(false), 2400);
                 }
               }}
-              className={`rounded-lg border px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] font-semibold transition ${
-                confirmReset
-                  ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
-                  : "border-white/10 text-white/40 hover:text-rose-200/80 hover:border-rose-400/30"
+              className={`kc-btn kc-btn--sm ${
+                confirmReset ? "kc-btn--danger" : "kc-btn--ghost"
               }`}
             >
               {confirmReset ? "CONFIRM PURGE" : "✕ Reset lab"}
@@ -985,7 +975,7 @@ export function MorphLabView() {
             </div>
             <button
               onClick={randomizeSculpt}
-              className="mt-2 w-full h-11 rounded-xl border border-plasma/40 bg-plasma/10 hover:bg-plasma/20 text-sm font-semibold tracking-wide text-plasma transition"
+              className="kc-btn kc-btn--danger mt-2 w-full h-11"
             >
               Randomize sculpt
             </button>
@@ -1017,11 +1007,7 @@ function TwoTapButton({
           window.setTimeout(() => setArmed(false), 2400);
         }
       }}
-      className={`rounded-xl border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition ${
-        armed
-          ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
-          : "border-white/12 bg-white/[0.04] text-white/55 hover:border-white/24"
-      }`}
+      className={`kc-btn kc-btn--sm ${armed ? "kc-btn--danger" : "kc-btn--ghost"}`}
     >
       {armed ? confirmLabel : label}
     </button>
@@ -1040,7 +1026,7 @@ function MacroButton({
   return (
     <button
       onClick={onClick}
-      className="flex items-center justify-center gap-2 h-11 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/20 transition text-sm font-semibold tracking-wide text-white/90"
+      className="kc-btn kc-btn--ghost h-11"
     >
       <span
         className="inline-block w-1.5 h-1.5 rounded-full shrink-0"

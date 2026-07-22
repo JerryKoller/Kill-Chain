@@ -15,6 +15,7 @@ import {
   toggleAirspaceMedia,
 } from "@/lib/airspaceMedia";
 import { claimSource } from "@/lib/sourceArbiter";
+import { useAppliedTractor } from "@/lib/tractorApplied";
 
 export function TransportBar() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -132,19 +133,27 @@ export function TransportBar() {
       <audio ref={audioRef} className="hidden" />
 
       <div className="glass-strong rounded-2xl px-4 py-3 flex items-center gap-3 flex-wrap">
-        {/* Now playing — always visible so you know what's loaded */}
+        {/* Now playing — always visible so you know what's loaded. The
+            artwork wears an accent ring that breathes with the signal while
+            playback is live (rides --beat-glow, zero JS cost). */}
         <div
           className={`flex items-center gap-2.5 min-w-0 w-[210px] shrink-0 ${deck ? "cursor-pointer" : ""}`}
           onClick={deck ? () => setView("airspace") : undefined}
           title={deck ? "Playing in Airspace — click to open the browser" : undefined}
         >
           <div
-            className="relative w-10 h-10 rounded-lg border border-white/10 bg-white/[0.04] shrink-0 grid place-items-center text-base text-dim overflow-hidden"
-            style={
-              cover
+            className="relative w-11 h-11 rounded-xl border border-white/10 bg-white/[0.04] shrink-0 grid place-items-center text-base text-dim overflow-hidden"
+            style={{
+              ...(cover
                 ? { background: `center/cover no-repeat url("${cover}")` }
-                : undefined
-            }
+                : {}),
+              ...(isPlaying
+                ? {
+                    boxShadow:
+                      "0 0 0 1px rgb(var(--c-cyan) / calc(0.3 + var(--beat-glow, 0) * 0.4)), 0 0 calc(14px * var(--glow)) rgb(var(--c-cyan) / calc(0.5 * var(--glow)))",
+                  }
+                : {}),
+            }}
           >
             {!cover && (deck ? "▶" : "♪")}
             {deck && (
@@ -161,6 +170,7 @@ export function TransportBar() {
               {npSub}
             </div>
           </div>
+          <TractorStatusChip />
         </div>
 
         <NeonButton onClick={openFile} variant="ghost" className="text-xs">
@@ -250,7 +260,8 @@ export function TransportBar() {
           {loopbackActive ? "Disable Exterior Audio" : "Enable Exterior Audio"}
         </NeonButton>
 
-        <NeonButton
+        {/* Primary transport control — one round, accent-lit play/pause. */}
+        <button
           onClick={async () => {
             if (deck) {
               playUi("press");
@@ -269,7 +280,7 @@ export function TransportBar() {
             await toggle();
           }}
           data-ui-sound="none" // voiced in the handler: press when a track is loaded, denied buzz otherwise
-          className={`min-w-[100px] justify-center ${hasTrack ? "" : "opacity-45"}`}
+          className={`kc-btn kc-btn--primary !rounded-full !p-0 w-11 h-11 shrink-0 ${hasTrack ? "" : "opacity-45"}`}
           title={
             deck
               ? "Play / pause the media in Airspace"
@@ -277,14 +288,24 @@ export function TransportBar() {
                 ? "Play / pause (Space)"
                 : "No track loaded yet"
           }
+          aria-label={isPlaying ? "Pause" : "Play"}
         >
-          {isPlaying ? "Pause" : "Play"}
-        </NeonButton>
+          {isPlaying ? (
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+              <rect x="6" y="5" width="4" height="14" rx="1" />
+              <rect x="14" y="5" width="4" height="14" rx="1" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+              <path d="M8 5.4v13.2c0 .9 1 1.5 1.8 1L19 13a1.2 1.2 0 0 0 0-2L9.8 4.4c-.8-.5-1.8.1-1.8 1Z" />
+            </svg>
+          )}
+        </button>
 
         {!deck && (
           <button
             onClick={() => setLoop(!loop)}
-            className={`btn-ghost text-xs ${loop ? "text-cyan" : ""}`}
+            className={`kc-btn kc-btn--ghost kc-btn--sm ${loop ? "kc-on" : ""}`}
             title="Loop track"
           >
             ↻ Loop
@@ -320,17 +341,22 @@ export function TransportBar() {
               if (deck) setAirspaceMediaVolume(v);
               else setVolume(v);
             }}
-            className="w-full accent-cyan"
+            className="kc-slider w-full"
+            style={{ ["--kc-fill" as string]: `${(deck ? airMedia.volume : volume) * 100}%` }}
             title={deck ? "Volume of the Airspace media" : "Player volume"}
           />
         </div>
 
+        {/* Chain state — engaging replays the KCDS breach pulse. */}
         <button
           onClick={toggleBypass}
           data-ui-sound="none" // voiced centrally: bypass change plays engage/disengage
-          className={`btn-ghost text-xs ${bypass ? "text-plasma" : ""}`}
+          className={`kc-btn kc-btn--sm relative font-mono tracking-[0.14em] ${
+            bypass ? "kc-btn--danger" : "kc-btn--ghost text-lime border-lime/30 bg-lime/5"
+          }`}
           title="A/B bypass entire DSP chain"
         >
+          {!bypass && <span key="engaged" className="kc-breach" aria-hidden />}
           {bypass ? "BYPASSED" : "ENGAGED"}
         </button>
       </div>
@@ -421,4 +447,29 @@ function fmt(t: number): string {
   const m = Math.floor(t / 60);
   const s = Math.floor(t % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** v2.3 — live Tractor lock status, visible outside the Tractor view. */
+function TractorStatusChip() {
+  const applied = useAppliedTractor();
+  const setView = useUIStore((s) => s.setView);
+  if (!applied) return null;
+  const pct = applied.matchPct;
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        setView("tractor");
+      }}
+      className="shrink-0 flex items-center gap-1 rounded-full border border-cyan/35 bg-cyan/[0.08] px-2 py-0.5 hover:bg-cyan/[0.15] transition"
+      title={`Tractor lock engaged${applied.sourceName ? ` — ${applied.sourceName}` : ""}${
+        applied.contentLabel ? ` (${applied.contentLabel})` : ""
+      }${pct != null ? ` · ${pct}% match` : ""} — click to open Tractor Beam`}
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-cyan animate-pulse" style={{ boxShadow: "0 0 6px rgb(var(--c-cyan))" }} />
+      <span className="text-[9px] font-mono font-semibold text-cyan tabular-nums">
+        TB{pct != null ? ` ${pct}%` : ""}
+      </span>
+    </button>
+  );
 }

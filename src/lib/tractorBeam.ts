@@ -96,6 +96,11 @@ export interface TractorMeasurement {
   speechShare?: number;
   /** Energy fraction above 7 kHz (0..1). */
   airShare?: number;
+
+  // ── v2.3 Intelligence (optional — older saved measurements lack them) ──
+  /** Average spectral spread between the track's thirds (dB). High = the
+   *  intro/drop/outro disagree a lot — one global EQ fits less well. */
+  sectionSpreadDb?: number;
 }
 
 // ── Content classification (v4) ───────────────────────────────────────────
@@ -368,8 +373,9 @@ const finite = (x: number) => (Number.isFinite(x) ? x : 0);
  * Perceptual loudness weight per band, derived from A-weighting but applied
  * at half strength (10^(A/40)) so the deep bass still counts — full A-weight
  * would let the analysis ignore a booming 40 Hz shelf entirely.
+ * (Exported for v2.1 Target Lock, which weights its match the same way.)
  */
-function perceptualWeight(freq: number): number {
+export function perceptualWeight(freq: number): number {
   const f2 = freq * freq;
   const num = 12194 ** 2 * f2 * f2;
   const den =
@@ -515,6 +521,9 @@ interface WelchOut {
   crestDb?: number;
   dynRangeDb?: number;
   stereoCorr?: number | null;
+  /** v2.3 — per-third averaged power spectra (section-aware sampling). */
+  sectionPowers?: Float64Array[];
+  sectionCounts?: number[];
 }
 
 /**
@@ -617,9 +626,17 @@ async function welchSpectrum(
       : null;
 
   // Pass 2 — Hann + FFT + power-average the windows that contain signal.
+  // v2.3 section-aware sampling: each window is also binned into the third
+  // of the track it came from (early / middle / late), so long material
+  // reports how much its sections disagree — one global EQ fits a track
+  // whose intro, drop and outro share a balance far better than one whose
+  // sections diverge wildly.
   const hann = hannWindow();
   const re = new Float64Array(FFT_SIZE);
   const im = new Float64Array(FFT_SIZE);
+  const nBins = (FFT_SIZE >> 1) + 1;
+  const sectionPowers = [new Float64Array(nBins), new Float64Array(nBins), new Float64Array(nBins)];
+  const sectionCounts = [0, 0, 0];
   let used = 0;
   let sinceYield = 0;
   for (let p = 0; p < positions.length; p++) {
@@ -627,9 +644,14 @@ async function welchSpectrum(
     fillFrame(buffer, channels, positions[p], re, hann);
     im.fill(0);
     fftInPlace(re, im);
+    const third = Math.min(2, Math.floor((3 * positions[p]) / Math.max(1, len)));
+    const sp = sectionPowers[third];
     for (let k = 0; k < power.length; k++) {
-      power[k] += re[k] * re[k] + im[k] * im[k];
+      const e = re[k] * re[k] + im[k] * im[k];
+      power[k] += e;
+      sp[k] += e;
     }
+    sectionCounts[third]++;
     used++;
     if (++sinceYield >= WINDOW_CHUNK) {
       sinceYield = 0;
@@ -644,7 +666,14 @@ async function welchSpectrum(
   if (used > 0) {
     for (let k = 0; k < power.length; k++) power[k] /= used;
   }
-  return { power, windowsUsed: used, crestDb, dynRangeDb, stereoCorr };
+  for (let s = 0; s < 3; s++) {
+    const c = sectionCounts[s];
+    if (c > 0) for (let k = 0; k < nBins; k++) sectionPowers[s][k] /= c;
+  }
+  return {
+    power, windowsUsed: used, crestDb, dynRangeDb, stereoCorr,
+    sectionPowers, sectionCounts,
+  };
 }
 
 /** Energy fraction of `power`-domain band levels within [lo, hi] Hz. */
@@ -830,6 +859,31 @@ export async function measureTrack(
   }
   opts.onProgress?.({ stage: "Folding into bands…", fraction: 0.94 });
   const levelsDb = bandLevelsDb(welch.power, sr, centers);
+
+  // v2.3 section spread: fold each third's spectrum into the same 1/3-oct
+  // ladder and read the mean band-level disagreement between thirds.
+  let sectionSpreadDb: number | undefined;
+  if (welch.sectionPowers && welch.sectionCounts) {
+    const sections = welch.sectionPowers
+      .map((p, i) => ((welch.sectionCounts![i] ?? 0) >= 4 ? bandLevelsDb(p, sr, centers) : null))
+      .filter((x): x is number[] => x !== null);
+    if (sections.length >= 2) {
+      // Level-align each section (remove overall loudness differences) then
+      // measure the average per-band std-dev — pure spectral disagreement.
+      const aligned = sections.map((s) => {
+        const mean = s.reduce((a, b) => a + b, 0) / s.length;
+        return s.map((v) => v - mean);
+      });
+      let devSum = 0;
+      for (let i = 0; i < centers.length; i++) {
+        const vals = aligned.map((s) => s[i]);
+        const m = vals.reduce((a, b) => a + b, 0) / vals.length;
+        devSum += Math.sqrt(vals.reduce((a, v) => a + (v - m) * (v - m), 0) / vals.length);
+      }
+      sectionSpreadDb = devSum / centers.length;
+    }
+  }
+
   return {
     sampleRate: sr,
     analyzedSec,
@@ -843,6 +897,7 @@ export async function measureTrack(
     bassShare: bandEnergyShare(centers, levelsDb, 0, 150),
     speechShare: bandEnergyShare(centers, levelsDb, 300, 3400),
     airShare: bandEnergyShare(centers, levelsDb, 7000, 24000),
+    sectionSpreadDb,
   };
 }
 
@@ -1216,6 +1271,218 @@ export function deriveCorrection(
     content,
     masterMoves: master.moves,
     masterNotes: master.notes,
+  };
+}
+
+// ── v2.3 Tractor Intelligence: health / damage / dual confidence ──────────
+
+export interface DamageFlag {
+  id: "cutoff" | "crunch" | "thin";
+  label: string;
+  detail: string;
+  /** 0..1 — how bad it is. */
+  severity: number;
+}
+
+/**
+ * Everything Intelligence v2 reads beyond the correction itself:
+ * an "already mastered" guard, damage flags, split confidence values and a
+ * recommended strength ceiling. Pure and instant — derived from the same
+ * measurement (plus the derived result for target residuals).
+ */
+export interface TractorHealth {
+  /** 0..100 — how healthy the source already reads (100 = clean master). */
+  healthPct: number;
+  /** True when the source reads like a clean commercial master. */
+  mastered: boolean;
+  damage: DamageFlag[];
+  /** Highest 1/3-oct band still carrying content (Hz). Null when silent. */
+  cutoffHz: number | null;
+  /** How trustworthy the MEASUREMENT is (coverage, signal, section spread). */
+  measureConfidencePct: number;
+  /** How much correcting is likely to HELP (target residual + damage). */
+  benefitConfidencePct: number;
+  /** Recommended strength ceiling (0..1.5) — low for healthy sources. */
+  strengthCeiling: number;
+  /** Plain-language read of the source, one line per observation. */
+  notes: string[];
+}
+
+/** Highest 1/3-oct centre still carrying content within `windowDb` of peak. */
+export function measureBrickwallCutoff(
+  m: TractorMeasurement,
+  windowDb = 38,
+): number | null {
+  if (m.silent || m.centers.length === 0) return null;
+  const max = Math.max(...m.levelsDb);
+  for (let i = m.centers.length - 1; i >= 0; i--) {
+    if (m.centers[i] < 3000) break;
+    if (m.levelsDb[i] > max - windowDb) return m.centers[i];
+  }
+  return 3000;
+}
+
+/**
+ * Read the source's health: is it already a clean master (leave it alone),
+ * or damaged (cutoff / crunch / thin body) and worth a firmer hand?
+ */
+export function readTractorHealth(
+  m: TractorMeasurement,
+  result: TractorResult,
+): TractorHealth {
+  const empty: TractorHealth = {
+    healthPct: 0,
+    mastered: false,
+    damage: [],
+    cutoffHz: null,
+    measureConfidencePct: 0,
+    benefitConfidencePct: 0,
+    strengthCeiling: TRACTOR_MAX_STRENGTH,
+    notes: ["No measurable signal."],
+  };
+  if (m.silent || m.windowsUsed === 0) return empty;
+
+  const notes: string[] = [];
+  const damage: DamageFlag[] = [];
+  const centers = m.centers;
+  const levelsDb = m.levelsDb;
+  const lf = centers.map((f) => Math.log2(f));
+  const env = gaussianSmoothLog(levelsDb, lf, ENV_SIGMA_OCT);
+
+  // ── Damage: brickwall cutoff (lossy encode / muffled upload) ──
+  // Plenty of healthy masters roll off by ~13-14 kHz, so only a cutoff below
+  // 12.5 kHz (with meaningful severity) counts as damage.
+  const cutoffHz = measureBrickwallCutoff(m);
+  const nyquistish = m.sampleRate * 0.45;
+  if (cutoffHz !== null && cutoffHz < Math.min(12500, nyquistish * 0.85)) {
+    const sev = clamp01((12500 - cutoffHz) / 9000);
+    if (sev >= 0.08) {
+      damage.push({
+        id: "cutoff",
+        label: "HF cutoff",
+        detail: `Content stops near ${(cutoffHz / 1000).toFixed(1)} kHz — a low-bitrate encode or muffled capture. EQ can't boost what isn't there; HF Rebuild regenerates it.`,
+        severity: sev,
+      });
+    }
+  }
+
+  // ── Damage: crunch — 2.8-5.5 kHz piles up over its own envelope ──
+  const bandAvgOf = (vals: number[], lo: number, hi: number) => {
+    let s = 0;
+    let n = 0;
+    for (let i = 0; i < centers.length; i++) {
+      if (centers[i] >= lo && centers[i] <= hi) {
+        s += vals[i];
+        n++;
+      }
+    }
+    return n > 0 ? s / n : 0;
+  };
+  const resid = levelsDb.map((L, i) => L - env[i]);
+  const crunchExcess = bandAvgOf(resid, 2800, 5500);
+  const crest = m.crestDb;
+  if (crunchExcess > 1.6 || (crest !== undefined && crest < 8.5 && crunchExcess > 0.9)) {
+    const sev = clamp01((crunchExcess - 0.9) / 4 + (crest !== undefined && crest < 8.5 ? 0.25 : 0));
+    damage.push({
+      id: "crunch",
+      label: "Harsh build-up",
+      detail: `2.8-5.5 kHz runs ${crunchExcess.toFixed(1)} dB over the track's own envelope${crest !== undefined && crest < 8.5 ? ` on a crushed master (crest ${crest.toFixed(1)} dB)` : ""} — reads as digital crunch / clipping edge.`,
+      severity: sev,
+    });
+  }
+
+  // ── Damage: thin body — 60-180 Hz starved vs the envelope + spectrum tilt ──
+  const bodyDeficit = -bandAvgOf(resid, 60, 180);
+  const bass = m.bassShare ?? 0.35;
+  if (bodyDeficit > 2.2 && bass < 0.28) {
+    const sev = clamp01((bodyDeficit - 2.2) / 6 + (0.28 - bass));
+    damage.push({
+      id: "thin",
+      label: "Thin body",
+      detail: `Low end sits ${bodyDeficit.toFixed(1)} dB under the track's envelope with only ${Math.round(bass * 100)}% of energy below 150 Hz — a thin, small-speaker balance.`,
+      severity: sev,
+    });
+  }
+
+  // ── Already-mastered guard ──
+  // A clean master: comfortable constant-Q tilt, small residual vs its own
+  // envelope, sane crest, no damage flags.
+  const conf = levelsDb.map((L) => clamp01((L - (Math.max(...levelsDb) - 42)) / 14));
+  const pw = centers.map(perceptualWeight);
+  const w = conf.map((c, i) => c * pw[i]);
+  const slope = weightedSlope(lf, env, w);
+  const slopeOk = slope >= SLOPE_MIN - 0.4 && slope <= SLOPE_MAX + 0.4;
+  const damageScore = damage.reduce((s, d) => s + d.severity, 0);
+  const residualDb = MATCH_FLOOR_DB * (1 - result.matchBeforePct / 100);
+  const crestOk = crest === undefined || (crest > 8 && crest < 16);
+
+  let health =
+    62 +
+    (slopeOk ? 10 : -8) +
+    (crestOk ? 6 : -6) +
+    Math.max(-20, Math.min(20, (result.matchBeforePct - 62) * 0.55)) -
+    damageScore * 26;
+  const healthPct = Math.round(Math.max(0, Math.min(100, health)));
+  const mastered = healthPct >= 74 && damage.length === 0;
+
+  if (mastered) {
+    notes.push(
+      `Reads like a clean master — balance already sits ${result.matchBeforePct}% on target. Correction is capped so it stays a polish, not a remix.`,
+    );
+  } else if (damage.length > 0) {
+    notes.push(`${damage.length} damage signature${damage.length === 1 ? "" : "s"} detected — a firmer correction is justified.`);
+  } else if (result.matchBeforePct < 55) {
+    notes.push("Balance strays well off target with no specific damage — broad tonal correction will do the lifting.");
+  } else {
+    notes.push("Mostly healthy with minor tonal drift — a light correction is enough.");
+  }
+
+  // ── Section spread: long material whose sections disagree ──
+  const spread = m.sectionSpreadDb;
+  if (spread !== undefined && spread > 2.4 && m.analyzedSec > 120) {
+    notes.push(
+      `Sections disagree by ~${spread.toFixed(1)} dB (intro vs drop vs outro) — one global EQ is an average; confidence is reduced accordingly.`,
+    );
+  }
+
+  // ── Dual confidence ──
+  // Measurement quality: signal coverage × window count × section agreement.
+  let confSum = 0;
+  let confW = 0;
+  for (let i = 0; i < conf.length; i++) {
+    confSum += conf[i] * pw[i];
+    confW += pw[i];
+  }
+  const avgConf = confW > 1e-9 ? confSum / confW : 0;
+  const coverage = clamp01(m.windowsUsed / 48);
+  const sectionPenalty = spread !== undefined ? clamp01((spread - 1.8) / 5) * 0.3 : 0;
+  const measureConfidencePct = Math.round(
+    100 * avgConf * (0.5 + 0.5 * coverage) * (1 - sectionPenalty),
+  );
+
+  // Correction benefit: how far off target + how much damage there is —
+  // a clean master has little to gain however good the measurement.
+  const benefitConfidencePct = Math.round(
+    100 * clamp01(clamp01(residualDb / 4.2) * 0.7 + clamp01(damageScore / 1.2) * 0.45),
+  );
+
+  // ── Automatic strength ceiling ──
+  // Healthy sources get capped hard; damaged sources keep the full range.
+  const strengthCeiling = mastered
+    ? 0.45
+    : healthPct >= 60 && damage.length === 0
+      ? 0.8
+      : TRACTOR_MAX_STRENGTH;
+
+  return {
+    healthPct,
+    mastered,
+    damage,
+    cutoffHz,
+    measureConfidencePct,
+    benefitConfidencePct,
+    strengthCeiling,
+    notes,
   };
 }
 

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { ParametricBand } from "@/audio/types";
 import { paramsAreNeutral } from "@/audio/types";
 import { getEngine } from "@/audio/AudioEngine";
+import { restoreActive } from "@/audio/dsp/Reconstructor";
 import { useAudioStore } from "@/state/audioStore";
 
 /**
@@ -16,6 +17,9 @@ export interface EqBand {
   q: number; // 0.3 - 8
   type: BiquadFilterType;
   enabled: boolean;
+  /** v2.1 — dynamic mode: the band's gain rides a sidechain (cuts engage on
+   *  flares, boosts fill on dips) instead of sitting static. */
+  dynamic?: boolean;
 }
 
 export const EQ_MIN_BANDS = 1;
@@ -68,6 +72,7 @@ function load(): EqBand[] {
       q: clampQ(b.q),
       type: EQ_TYPES.includes(b.type) ? b.type : "peaking",
       enabled: b.enabled !== false,
+      dynamic: b.dynamic === true,
     }));
     return sortByFreq(mapped);
   } catch {
@@ -149,6 +154,7 @@ function toParametric(bands: EqBand[]): ParametricBand[] {
       gain: b.gain,
       q: b.q,
       type: b.type,
+      dynamic: b.dynamic === true,
     }));
 }
 
@@ -168,7 +174,7 @@ function syncEngage(active: boolean): void {
     !a.correctionEnabled &&
     a.room === "off" &&
     a.clarity === 0 &&
-    !(a.restore.hf > 0 || a.restore.body > 0 || a.restore.decrunch > 0 || a.restore.hiss > 0)
+    !restoreActive(a.restore)
   ) {
     a.setBypass(true);
   }
@@ -176,6 +182,10 @@ function syncEngage(active: boolean): void {
 
 interface EqStore {
   bands: EqBand[];
+  /** Shared band selection (session-only) — links the Sculptor's inspector
+   *  with 3rd Dimension's Band Mode so picking a band highlights it in both. */
+  selectedBandId: string | null;
+  selectBand: (id: string | null) => void;
   /** Push the full band list into the engine + re-evaluate bypass. */
   syncEngine: () => void;
   /** Add a band. Optionally place it at an exact freq/gain (e.g. a click). */
@@ -195,6 +205,7 @@ interface EqStore {
       q?: number;
       type?: BiquadFilterType;
       enabled?: boolean;
+      dynamic?: boolean;
     }>,
   ) => void;
   /** Retune EVERY existing band's gain from a curve sampler, preserving the
@@ -209,6 +220,9 @@ export const useEqStore = create<EqStore>((set, get) => {
     const sorted = sortByFreq(bands);
     persist(sorted);
     set({ bands: sorted });
+    // Drop a selection that points at a band that no longer exists.
+    const sel = get().selectedBandId;
+    if (sel && !sorted.some((b) => b.id === sel)) set({ selectedBandId: null });
     const engine = getEngine();
     if (rebuild) engine.setUserEQBands(toParametric(sorted));
     syncEngage(eqIsActive(sorted));
@@ -216,6 +230,12 @@ export const useEqStore = create<EqStore>((set, get) => {
 
   return {
     bands: load(),
+    selectedBandId: null,
+
+    selectBand: (id) => {
+      if (get().selectedBandId === id) return;
+      set({ selectedBandId: id });
+    },
 
     syncEngine: () => {
       const bands = get().bands;
@@ -281,6 +301,7 @@ export const useEqStore = create<EqStore>((set, get) => {
       if (patch.q !== undefined) next.q = clampQ(patch.q);
       if (patch.type !== undefined) { next.type = patch.type; rebuild = true; }
       if (patch.enabled !== undefined) { next.enabled = patch.enabled; rebuild = true; }
+      if (patch.dynamic !== undefined) { next.dynamic = patch.dynamic; rebuild = true; }
       const bands = cur.map((b, i) => (i === idx ? next : b));
       if (rebuild) {
         commit(bands, true);
@@ -296,6 +317,7 @@ export const useEqStore = create<EqStore>((set, get) => {
             gain: band.gain,
             q: band.q,
             type: band.type,
+            dynamic: band.dynamic === true,
           });
         }
         syncEngage(eqIsActive(bands));
@@ -347,6 +369,7 @@ export const useEqStore = create<EqStore>((set, get) => {
         q: clampQ(b.q ?? 1.1),
         type: b.type && EQ_TYPES.includes(b.type) ? b.type : "peaking",
         enabled: b.enabled !== false,
+        dynamic: b.dynamic === true,
       }));
       if (mapped.length === 0) return;
       commit(mapped, true);

@@ -14,7 +14,9 @@ export type VisualizerMode =
   | "strike"
   | "tunnel"
   | "lattice"
-  | "aurora";
+  | "aurora"
+  | "singularity"
+  | "cinema";
 
 export interface VisualizerModeInfo {
   id: VisualizerMode;
@@ -73,6 +75,18 @@ export const VISUALIZER_MODES: readonly VisualizerModeInfo[] = [
     name: "AURORA FLOW",
     tab: "Aurora",
     desc: "Bass, mids and air as flowing ribbons of light — calm, hypnotic, alive",
+  },
+  {
+    id: "singularity",
+    name: "SINGULARITY",
+    tab: "Singularity",
+    desc: "Raymarched energy core — bass shockwaves, bloom and chromatic bursts (WebGL)",
+  },
+  {
+    id: "cinema",
+    name: "CINEMA LOCK",
+    tab: "Cinema",
+    desc: "Auto-director: reads the track's structure and cuts between scenes on the bar",
   },
 ] as const;
 

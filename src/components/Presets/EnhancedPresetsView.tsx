@@ -9,6 +9,7 @@ import { useUIStore } from "@/state/uiStore";
 import { usePreviewSession } from "@/hooks/usePreviewSession";
 import { useUserPresetsStore, type UserPreset } from "@/state/userPresetsStore";
 import { useFavoritesStore } from "@/state/favoritesStore";
+import { SessionSnapshotsPanel } from "./SessionSnapshotsPanel";
 
 type AnyPreset = Preset | UserPreset;
 
@@ -78,8 +79,21 @@ export function EnhancedPresetsView() {
   const handleApplyPreset = (preset: AnyPreset) => {
     preview.commit();
     replaceParams(preset.params);
+    // v2.1 — presets saved with a repair layer also deploy Restoration +
+    // Clarity; tone-only presets leave the current repair setup alone.
+    const repair = isUser(preset) ? preset.repair : null;
+    if (repair) {
+      const a = useAudioStore.getState();
+      a.setRestore(repair.restore);
+      a.setClarity(repair.clarity);
+    }
     recordPresetUse(preset.id);
-    toast(`Applied: ${preset.name}`);
+    // v2.4 — SourceMemory references the loadout instead of copying it: the
+    // next Mission Log save for this source records the preset id.
+    void import("@/state/missionLogStore").then(({ noteArmoryApplied }) =>
+      noteArmoryApplied(isUser(preset) ? preset.id : null),
+    );
+    toast(repair ? `Applied: ${preset.name} (+ repair layer)` : `Applied: ${preset.name}`);
   };
 
   return (
@@ -89,6 +103,9 @@ export function EnhancedPresetsView() {
         code="KC-12"
         subtitle={`${PRESETS.length} issued loadouts · ${userPresets.length} of your own · ${collections.length} collections`}
       />
+
+      {/* Full-chain session snapshots (v1.5) */}
+      <SessionSnapshotsPanel />
 
       {/* Collections sidebar */}
       <div className="grid grid-cols-12 gap-3">
@@ -145,7 +162,7 @@ export function EnhancedPresetsView() {
                       toast("Collection created");
                     }
                   }}
-                  className="flex-1 px-2 py-1 bg-cyan-500/20 hover:bg-cyan-500/30 rounded text-xs font-semibold text-cyan-300 transition"
+                  className="kc-btn kc-btn--sm kc-btn--accent flex-1"
                 >
                   Create
                 </button>
@@ -154,7 +171,7 @@ export function EnhancedPresetsView() {
                     setShowNewCollection(false);
                     setNewCollectionName("");
                   }}
-                  className="flex-1 px-2 py-1 bg-white/10 hover:bg-white/15 rounded text-xs text-white/60 transition"
+                  className="kc-btn kc-btn--sm kc-btn--ghost flex-1"
                 >
                   Cancel
                 </button>
@@ -163,7 +180,7 @@ export function EnhancedPresetsView() {
           ) : (
             <button
               onClick={() => setShowNewCollection(true)}
-              className="w-full mt-3 px-3 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-semibold text-white/70 transition border border-white/10"
+              className="kc-btn kc-btn--sm kc-btn--ghost w-full mt-3"
             >
               + New Collection
             </button>
@@ -190,7 +207,7 @@ export function EnhancedPresetsView() {
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -8 }}
-                    className="group p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/8 hover:border-white/15 transition flex flex-col gap-2"
+                    className="group kc-lift p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/8 flex flex-col gap-2"
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
@@ -212,7 +229,7 @@ export function EnhancedPresetsView() {
                     <button
                       onClick={() => handleApplyPreset(preset)}
                       data-ui-sound="none" // voiced centrally: preset apply plays the latch clack
-                      className="w-full px-2 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 text-xs font-semibold text-cyan-300 rounded transition"
+                      className="kc-btn kc-btn--sm kc-btn--accent w-full"
                     >
                       Apply
                     </button>
@@ -302,7 +319,8 @@ export function EnhancedPresetsView() {
             step={0.001}
             value={mix}
             onChange={(e) => { preview.start(); setMix(Number(e.target.value)); }}
-            className="w-full accent-plasma h-8"
+            className="kc-slider w-full"
+            style={{ ["--kc-fill" as string]: `${mix * 100}%` }}
           />
           <div
             className="text-sm font-semibold truncate"
@@ -371,7 +389,7 @@ export function EnhancedPresetsView() {
                     handleApplyPreset(preset);
                   }
                 }}
-                className="relative p-2 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] hover:border-white/15 transition text-left group cursor-pointer"
+                className="relative kc-lift p-2 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] text-left group cursor-pointer"
               >
                 {renamingId === preset.id ? (
                   <input
@@ -396,7 +414,21 @@ export function EnhancedPresetsView() {
                   </div>
                 )}
                 <div className="text-[10px] text-white/40">
-                  {!isUser(preset) ? preset.blurb : "Saved preset"}
+                  {!isUser(preset) ? (
+                    preset.blurb
+                  ) : preset.repair ? (
+                    <span>
+                      Saved preset ·{" "}
+                      <span
+                        className="kc-chip kc-on"
+                        title="Includes the repair layer — applying this also deploys Restoration Bay + Clarity"
+                      >
+                        REPAIR LAYER
+                      </span>
+                    </span>
+                  ) : (
+                    "Saved preset"
+                  )}
                 </div>
 
                 <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">

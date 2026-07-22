@@ -52,7 +52,10 @@ export function BandEQPanel() {
   const dragRef = useRef<{ id: string; offset: number } | null>(null);
   const dirtyRef = useRef(true);
   const lastTickRef = useRef(0);
-  const [selected, setSelected] = useState<string | null>(null);
+  // v2.0 — selection lives in the eq store so 3rd Dimension's Band Mode and
+  // the Sculptor highlight the same band (live selection link).
+  const selected = useEqStore((s) => s.selectedBandId);
+  const setSelected = useEqStore((s) => s.selectBand);
 
   const selectedBand = useMemo(
     () => bands.find((b) => b.id === selected) ?? null,
@@ -107,6 +110,14 @@ export function BandEQPanel() {
     const engine = getEngine();
     const freqBuf = new Uint8Array(engine.analyserPre.frequencyBinCount) as Uint8Array<ArrayBuffer>;
     const MIN_INTERVAL = 40; // ~25 fps
+
+    // Canvas colours can't resolve CSS var() — read the theme triplet once.
+    const cyanTriplet = (getComputedStyle(document.documentElement)
+      .getPropertyValue("--c-cyan")
+      .trim() || "84 180 214")
+      .split(/\s+/)
+      .slice(0, 3)
+      .join(",");
 
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
@@ -188,8 +199,8 @@ export function BandEQPanel() {
 
       // Fill under the curve.
       const grad = ctx.createLinearGradient(0, 0, 0, h);
-      grad.addColorStop(0, "rgb(var(--c-cyan) / 0.26)");
-      grad.addColorStop(1, "rgb(var(--c-cyan) / 0)");
+      grad.addColorStop(0, `rgba(${cyanTriplet},0.26)`);
+      grad.addColorStop(1, `rgba(${cyanTriplet},0)`);
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.moveTo(0, h);
@@ -200,8 +211,8 @@ export function BandEQPanel() {
 
       // The curve itself.
       ctx.lineWidth = 2;
-      ctx.strokeStyle = "rgb(var(--c-cyan))";
-      ctx.shadowColor = "rgb(var(--c-cyan) / 0.45)";
+      ctx.strokeStyle = `rgb(${cyanTriplet})`;
+      ctx.shadowColor = `rgba(${cyanTriplet},0.45)`;
       ctx.shadowBlur = 6;
       ctx.beginPath();
       for (let i = 0; i < N; i++) {
@@ -481,6 +492,20 @@ function BandEditor({
       >
         {band.enabled ? "On" : "Off"}
       </button>
+
+      {(band.type === "peaking" || band.type === "lowshelf" || band.type === "highshelf") && (
+        <button
+          onClick={() => onChange({ dynamic: !band.dynamic })}
+          className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+            band.dynamic
+              ? "border-fuchsia-400/60 bg-fuchsia-500/15 text-fuchsia-300 shadow-[0_0_10px_rgba(232,121,249,0.25)]"
+              : "border-white/12 text-white/50 hover:border-white/25"
+          }`}
+          title="Dynamic mode (v2.1): the band's gain rides a sidechain — cuts only engage when this region flares above its usual level, boosts only fill in when it dips. Steady content passes untouched."
+        >
+          DYN
+        </button>
+      )}
 
       <button
         onClick={onRemove}

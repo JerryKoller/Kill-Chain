@@ -185,3 +185,85 @@ export function frameSamples(tableId: string, f: number, count: number): Float32
 export function wavetableName(id: string): string {
   return WAVETABLES.find((w) => w.id === id)?.name ?? id;
 }
+
+// ── Spectral warps (v1.7, Razor-inspired) ──
+// `PeriodicWave` partials sit at fixed integer harmonics, so true inharmonic
+// stretch isn't possible — instead these warps remap ENERGY across the
+// harmonic series, which reads to the ear as stretch/tilt/comb while staying
+// perfectly band-limited and CPU-free at play time.
+
+/**
+ * Warp a sine-series amplitude array (index 0 unused, 1..N = harmonics).
+ *
+ * - `stretch` (-1..1): spectral stretch/compress. Positive pushes energy
+ *   toward stretched partial positions (bell/piano-like); negative compresses
+ *   the series (darker, formant-squashed).
+ * - `tilt` (-1..1): even/odd balance. Positive strips even harmonics toward a
+ *   hollow square-like tone; negative strips odds (minus the fundamental)
+ *   for a reedy, octave-doubled character.
+ * - `comb` (0..1): periodic notches carved across the series — metallic,
+ *   flanged spectra at full depth.
+ *
+ * All zeros returns the input untouched (bit-identical fast path).
+ */
+export function applyWarp(
+  imag: Float32Array,
+  stretch: number,
+  tilt: number,
+  comb: number,
+): Float32Array {
+  stretch = clamp(stretch, -1, 1);
+  tilt = clamp(tilt, -1, 1);
+  comb = clamp(comb, 0, 1);
+  if (stretch === 0 && tilt === 0 && comb === 0) return imag;
+
+  const N = imag.length - 1; // harmonics 1..N
+  const out = new Float32Array(imag.length);
+
+  // 1) Stretch: resample the series along n' = n · (1 + B·n) — the classic
+  //    stiff-string partial law, applied to amplitudes via inverse mapping.
+  const B = stretch * 0.05;
+  for (let m = 1; m <= N; m++) {
+    const denom = Math.max(0.3, 1 + B * m);
+    const src = m / denom; // fractional source harmonic
+    const lo = Math.floor(src);
+    const hi = lo + 1;
+    const t = src - lo;
+    const aLo = lo >= 1 && lo <= N ? imag[lo] : 0;
+    const aHi = hi >= 1 && hi <= N ? imag[hi] : 0;
+    out[m] = aLo * (1 - t) + aHi * t;
+  }
+
+  // 2) Tilt: even/odd emphasis (fundamental always survives).
+  if (tilt !== 0) {
+    for (let n = 2; n <= N; n++) {
+      const even = n % 2 === 0;
+      const cut = even ? Math.max(0, tilt) : Math.max(0, -tilt);
+      out[n] *= 1 - cut * 0.96;
+    }
+  }
+
+  // 3) Comb: cosine notches, ~4-harmonic tooth spacing.
+  if (comb > 0) {
+    for (let n = 2; n <= N; n++) {
+      const notch = 0.5 + 0.5 * Math.cos((2 * Math.PI * n) / 4.3);
+      out[n] *= 1 - comb * notch;
+    }
+  }
+
+  // Keep overall energy in the same ballpark so warping doesn't duck the osc
+  // (createPeriodicWave normalizes peak, but relative frame loudness matters).
+  let eIn = 0;
+  let eOut = 0;
+  for (let n = 1; n <= N; n++) {
+    eIn += imag[n] * imag[n];
+    eOut += out[n] * out[n];
+  }
+  if (eOut > 1e-9) {
+    const g = Math.sqrt(eIn / eOut);
+    for (let n = 1; n <= N; n++) out[n] *= g;
+  } else {
+    out[1] = imag[1] || 1; // fully notched-out frame — keep a fundamental
+  }
+  return out;
+}

@@ -1,5 +1,6 @@
 import { SystemMonitor } from "@/components/Layout/SystemMonitor";
 import { useAudioStore } from "@/state/audioStore";
+import { APP_VERSION } from "@/lib/appVersion";
 
 export function TitleBar() {
   // The kill-chain status light: red on standby/bypass, green when the DSP
@@ -40,7 +41,7 @@ export function TitleBar() {
       </div>
 
       <div className="flex items-center gap-2 text-[10px] tracking-widest uppercase text-white/40 pr-[120px]">
-        <span>v0.1 · Kill-Chain</span>
+        <span>{`v${APP_VERSION} · Kill-Chain`}</span>
       </div>
     </div>
   );

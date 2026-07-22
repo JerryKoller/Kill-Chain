@@ -4,7 +4,16 @@ import { useUIStore } from "@/state/uiStore";
 import { useUserPresetsStore } from "@/state/userPresetsStore";
 import { useCalibrationStore } from "@/state/calibrationStore";
 import { useEqStore } from "@/state/eqStore";
+import { useSettingsStore } from "@/state/settingsStore";
+import { HEADPHONES } from "@/audio/headphoneProfiles";
+import { restoreActive } from "@/audio/dsp/Reconstructor";
 import { playUi } from "@/audio/uiSounds";
+
+/** Name of the active correction profile (never hardcode the device). */
+function activeProfileName(): string {
+  const id = useSettingsStore.getState().headphone;
+  return HEADPHONES[id]?.name ?? id;
+}
 
 /**
  * Sticky toolbar that appears at the top of any major view. Centralises
@@ -32,17 +41,27 @@ export function ActionBar({
   const savePreset = useUserPresetsStore((s) => s.savePreset);
   const toast = useUIStore((s) => s.toast);
 
+  const restore = useAudioStore((s) => s.restore);
+  const clarity = useAudioStore((s) => s.clarity);
+
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [includeRepair, setIncludeRepair] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+
+  const repairActive = restoreActive(restore) || clarity > 0;
 
   const doSave = () => {
     const name = saveName.trim() || "Untitled tuning";
-    savePreset(name, params);
+    const repair =
+      includeRepair && repairActive
+        ? { restore: { ...restore }, clarity }
+        : null;
+    savePreset(name, params, undefined, undefined, repair);
     playUi("success");
     setSaveOpen(false);
     setSaveName("");
-    toast(`Saved "${name}"`);
+    toast(repair ? `Saved "${name}" (with repair layer)` : `Saved "${name}"`, "success");
   };
 
   const doReset = () => {
@@ -60,7 +79,7 @@ export function ActionBar({
     // Also flatten the user graphic EQ so Clear All truly clears everything.
     useEqStore.getState().reset();
     setConfirmReset(false);
-    toast("All parameters purged — chain reset to neutral");
+    toast("All parameters purged — chain reset to neutral", "warn");
   };
 
   return (
@@ -77,6 +96,24 @@ export function ActionBar({
         </div>
         {showActions && (
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => {
+              void import("@/state/missionLogStore").then(async (m) => {
+                const name = await m.logCurrentSource();
+                if (name) {
+                  playUi("success");
+                  toast(`Logged chain for "${name}"`, "success");
+                } else {
+                  toast("Play something first — the Mission Log keys chains to what's playing", "warn");
+                }
+              });
+            }}
+            data-ui-sound="none"
+            className="rounded-xl border border-violet/40 bg-violet/10 hover:bg-violet/20 px-4 py-2 text-sm font-semibold text-violet transition whitespace-nowrap"
+            title="Save the FULL chain (EQ, restoration, modes, Tractor lock) to the Mission Log for the current track / video — it's restored automatically next time it plays"
+          >
+            ◎ Log Chain
+          </button>
           <button
             onClick={() => { playUi(saveOpen ? "modal-close" : "modal-open"); setSaveOpen((v) => !v); }}
             data-ui-sound="none"
@@ -135,8 +172,28 @@ export function ActionBar({
           >
             Cancel
           </button>
+          <label
+            className={`flex items-center gap-2 text-[11px] w-full select-none ${
+              repairActive ? "text-white/80 cursor-pointer" : "text-white/30 cursor-not-allowed"
+            }`}
+            title={
+              repairActive
+                ? "Also store the Restoration Bay + Clarity settings inside this preset"
+                : "Restoration Bay and Clarity are both idle — nothing to include"
+            }
+          >
+            <input
+              type="checkbox"
+              checked={includeRepair && repairActive}
+              disabled={!repairActive}
+              onChange={(e) => setIncludeRepair(e.target.checked)}
+              className="accent-emerald-400"
+            />
+            Include repair layer (Restoration Bay + Clarity)
+          </label>
           <div className="text-[10px] text-dim w-full">
-            Correction layer: {correctionEnabled ? "ON (XM6)" : "OFF (raw)"} — toggle in Sculptor.
+            Correction layer:{" "}
+            {correctionEnabled ? `ON (${activeProfileName()})` : "OFF (raw)"} — toggle in Sculptor.
           </div>
         </div>
       )}

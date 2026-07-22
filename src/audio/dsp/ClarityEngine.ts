@@ -37,10 +37,20 @@ export class ClarityEngine {
   private readonly buf: Float32Array<ArrayBuffer>;
   private timer: number | null = null;
 
+  /** v2.1 repair-stack A/B: crossfaded true bypass (click-safe). */
+  private readonly directGain: GainNode;
+  private readonly wetTail: GainNode;
+  private bypassed = false;
+
   constructor(ctx: BaseAudioContext) {
     this.ctx = ctx;
     this.input = ctx.createGain();
     this.output = ctx.createGain();
+    this.directGain = ctx.createGain();
+    this.directGain.gain.value = 0;
+    this.wetTail = ctx.createGain();
+    this.wetTail.gain.value = 1;
+    this.input.connect(this.directGain).connect(this.output);
 
     this.rumble = ctx.createBiquadFilter();
     this.rumble.type = "highpass";
@@ -75,6 +85,7 @@ export class ClarityEngine {
       .connect(this.loShelf)
       .connect(this.hiShelf)
       .connect(this.edgeFilter)
+      .connect(this.wetTail)
       .connect(this.output);
 
     this.mudSide = ctx.createBiquadFilter();
@@ -116,6 +127,15 @@ export class ClarityEngine {
 
   getAmount(): number {
     return this.amount;
+  }
+
+  /** v2.1 repair-stack A/B — crossfaded true bypass (click-safe). */
+  setBypassed(b: boolean): void {
+    if (this.bypassed === b) return;
+    this.bypassed = b;
+    const t = this.ctx.currentTime;
+    this.directGain.gain.setTargetAtTime(b ? 1 : 0, t, 0.03);
+    this.wetTail.gain.setTargetAtTime(b ? 0 : 1, t, 0.03);
   }
 
   private rms(analyser: AnalyserNode): number {

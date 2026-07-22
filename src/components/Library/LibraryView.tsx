@@ -5,9 +5,15 @@ import { NeonButton } from "@/components/shared/NeonButton";
 import { VisualizerOverlay } from "@/components/Visualizer/VisualizerOverlay";
 import { useUIStore } from "@/state/uiStore";
 import { usePlayerStore } from "@/state/playerStore";
-import { useCoverStore } from "@/state/coverStore";
-import { useTrackEqStore } from "@/state/trackEqStore";
+import { useCoverStore, raiseCoverCapacity } from "@/state/coverStore";
 import { useVisualizerStore } from "@/state/visualizerStore";
+import { MissionLogPanel } from "@/components/MissionLog/MissionLogPanel";
+import {
+  useMissionLogStore,
+  trackKey,
+  albumKey,
+  playlistKey,
+} from "@/state/missionLogStore";
 import {
   useLibraryStore,
   buildLibraryView,
@@ -115,7 +121,9 @@ export function LibraryView() {
   const sortKey = useLibraryStore((s) => s.sortKey);
   const sortDir = useLibraryStore((s) => s.sortDir);
   const groupBy = useLibraryStore((s) => s.groupBy);
+  const viewMode = useLibraryStore((s) => s.viewMode);
   const search = useLibraryStore((s) => s.search);
+  const genreFilter = useLibraryStore((s) => s.genreFilter);
   const collection = useLibraryStore((s) => s.collection);
   const favorites = useLibraryStore((s) => s.favorites);
   const playCounts = useLibraryStore((s) => s.playCounts);
@@ -127,7 +135,9 @@ export function LibraryView() {
   const clearAll = useLibraryStore((s) => s.clearAll);
   const setSort = useLibraryStore((s) => s.setSort);
   const setGroupBy = useLibraryStore((s) => s.setGroupBy);
+  const setViewMode = useLibraryStore((s) => s.setViewMode);
   const setSearch = useLibraryStore((s) => s.setSearch);
+  const setGenreFilter = useLibraryStore((s) => s.setGenreFilter);
   const setCollection = useLibraryStore((s) => s.setCollection);
   const toggleFavorite = useLibraryStore((s) => s.toggleFavorite);
   const movePlaylistItem = useLibraryStore((s) => s.movePlaylistItem);
@@ -137,6 +147,7 @@ export function LibraryView() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [missionLogOpen, setMissionLogOpen] = useState(false);
 
   const vizOpen = useVisualizerStore((s) => s.open);
   const setVizOpen = useVisualizerStore((s) => s.setOpen);
@@ -159,6 +170,7 @@ export function LibraryView() {
         sortKey,
         sortDir,
         search,
+        genreFilter,
         groupBy,
         collection,
         favorites,
@@ -166,8 +178,21 @@ export function LibraryView() {
         lastPlayed,
         playlists,
       }),
-    [tracks, sortKey, sortDir, search, groupBy, collection, favorites, playCounts, lastPlayed, playlists],
+    [tracks, sortKey, sortDir, search, genreFilter, groupBy, collection, favorites, playCounts, lastPlayed, playlists],
   );
+
+  // Top genres in the library — filter chips (needs tag enrichment done).
+  const genres = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of tracks) {
+      if (!t.genre) continue;
+      counts.set(t.genre, (counts.get(t.genre) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 14)
+      .map(([g, n]) => ({ genre: g, count: n }));
+  }, [tracks]);
 
   const activePlaylist = collection.startsWith("pl:")
     ? playlists.find((p) => `pl:${p.id}` === collection) ?? null
@@ -360,6 +385,28 @@ export function LibraryView() {
                 ))}
               </div>
 
+              {/* List / album-art grid toggle */}
+              <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+                <button
+                  onClick={() => setViewMode("list")}
+                  className={`px-2 py-1 rounded-md text-xs transition ${
+                    viewMode === "list" ? "bg-cyan/15 text-cyan" : "text-white/60 hover:text-white/90"
+                  }`}
+                  title="Track list"
+                >
+                  ☰ List
+                </button>
+                <button
+                  onClick={() => setViewMode("grid")}
+                  className={`px-2 py-1 rounded-md text-xs transition ${
+                    viewMode === "grid" ? "bg-cyan/15 text-cyan" : "text-white/60 hover:text-white/90"
+                  }`}
+                  title="Album-art grid"
+                >
+                  ▦ Albums
+                </button>
+              </div>
+
               <div className="relative flex-1 min-w-[160px]">
                 <input
                   value={search}
@@ -377,7 +424,7 @@ export function LibraryView() {
                 )}
               </div>
 
-              <EqMemoryToggle />
+              <MissionLogButton onOpen={() => setMissionLogOpen(true)} />
 
               <div className="text-[11px] text-dim tabular-nums">
                 {scanning
@@ -417,6 +464,37 @@ export function LibraryView() {
               favoritesCount={Object.keys(favorites).length}
             />
 
+            {/* Genre filter chips (from real file tags) */}
+            {genres.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
+                <span className="text-[10px] uppercase tracking-widest text-dim pr-0.5">
+                  Genre
+                </span>
+                {genres.map(({ genre, count }) => (
+                  <button
+                    key={genre}
+                    onClick={() => setGenreFilter(genreFilter === genre ? null : genre)}
+                    className={`rounded-full border px-2.5 py-0.5 text-[11px] transition ${
+                      genreFilter === genre
+                        ? "border-cyan/60 bg-cyan/15 text-cyan"
+                        : "border-white/10 bg-white/[0.03] text-white/60 hover:text-white/90 hover:border-white/25"
+                    }`}
+                    title={`${count} track${count === 1 ? "" : "s"}`}
+                  >
+                    {genre}
+                  </button>
+                ))}
+                {genreFilter && (
+                  <button
+                    onClick={() => setGenreFilter(null)}
+                    className="text-[11px] text-dim hover:text-white"
+                  >
+                    ✕ clear
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Folder chips */}
             {folders.length > 0 && (
               <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
@@ -441,8 +519,29 @@ export function LibraryView() {
             )}
           </GlassPanel>
 
-          {/* ── Track list ── */}
+          {/* ── Track list / album grid ── */}
           <GlassPanel intense className="p-0 overflow-hidden">
+            {viewMode === "grid" ? (
+              rows.length === 0 ? (
+                <div style={{ height: listHeight, minHeight: 260 }}>
+                  <EmptyState
+                    hasFolders={folders.length > 0}
+                    scanning={scanning}
+                    collection={collection}
+                    playlistName={activePlaylist?.name ?? null}
+                    searching={search.trim().length > 0 || !!genreFilter}
+                    onAdd={() => void addFolders()}
+                  />
+                </div>
+              ) : (
+                <AlbumGrid
+                  tracks={orderedTracks}
+                  playingPath={playingPath}
+                  listHeight={listHeight}
+                />
+              )
+            ) : (
+            <>
             {/* Column header */}
             <div
               className={`${GRID} h-9 shrink-0 border-b border-white/10 text-[10px] uppercase tracking-[0.2em] text-dim`}
@@ -574,6 +673,8 @@ export function LibraryView() {
                 </div>
               </div>
             )}
+            </>
+            )}
           </GlassPanel>
         </>
       )}
@@ -587,27 +688,28 @@ export function LibraryView() {
         />
       )}
 
+      {missionLogOpen && <MissionLogPanel onClose={() => setMissionLogOpen(false)} />}
+
       {vizOpen && <VisualizerOverlay />}
     </div>
   );
 }
 
-/** Toggle for the per-track EQ auto-recall. */
-function EqMemoryToggle() {
-  const autoApply = useTrackEqStore((s) => s.autoApply);
-  const setAutoApply = useTrackEqStore((s) => s.setAutoApply);
-  const count = useTrackEqStore((s) => Object.keys(s.entries).length);
+/** Mission Log entry point: shows the saved-chain count + opens the panel. */
+function MissionLogButton({ onOpen }: { onOpen: () => void }) {
+  const autoRestore = useMissionLogStore((s) => s.autoRestore);
+  const count = useMissionLogStore((s) => Object.keys(s.entries).length);
   return (
     <button
-      onClick={() => setAutoApply(!autoApply)}
-      className={`btn-ghost text-xs ${autoApply ? "text-cyan" : "text-white/50"}`}
+      onClick={onOpen}
+      className={`btn-ghost text-xs ${autoRestore ? "text-cyan" : "text-white/50"}`}
       title={
-        `Per-track EQ memory: when a track with a saved EQ starts playing, its EQ is restored automatically. ` +
-        `${count} track${count === 1 ? " has" : "s have"} a saved EQ. ` +
-        `Save one from a track's ⋯ menu.`
+        `Mission Log: full-chain memory per track / album / playlist / Airspace source. ` +
+        `${count} chain${count === 1 ? "" : "s"} saved. ` +
+        `Auto-restore is ${autoRestore ? "armed" : "off"}. Click to open.`
       }
     >
-      {autoApply ? "◉" : "○"} EQ Memory
+      ◎ Mission Log{count > 0 ? ` · ${count}` : ""}
     </button>
   );
 }
@@ -708,30 +810,33 @@ function CollectionBar({
                   <span className="text-dim ml-1 tabular-nums">{pl.paths.length}</span>
                 </button>
                 {active && (
-                  <button
-                    onClick={() => {
-                      if (confirmDeleteId === pl.id) {
-                        deletePlaylist(pl.id);
-                        setConfirmDeleteId(null);
-                        toast(`Deleted playlist "${pl.name}"`);
-                      } else {
-                        setConfirmDeleteId(pl.id);
-                        setTimeout(() => setConfirmDeleteId(null), 2400);
+                  <>
+                    <PlaylistChainControls id={pl.id} name={pl.name} />
+                    <button
+                      onClick={() => {
+                        if (confirmDeleteId === pl.id) {
+                          deletePlaylist(pl.id);
+                          setConfirmDeleteId(null);
+                          toast(`Deleted playlist "${pl.name}"`);
+                        } else {
+                          setConfirmDeleteId(pl.id);
+                          setTimeout(() => setConfirmDeleteId(null), 2400);
+                        }
+                      }}
+                      className={`w-4 h-4 grid place-items-center rounded-full text-[10px] ml-0.5 ${
+                        confirmDeleteId === pl.id
+                          ? "text-plasma bg-plasma/20"
+                          : "text-dim hover:text-plasma hover:bg-white/10"
+                      }`}
+                      title={
+                        confirmDeleteId === pl.id
+                          ? "Confirm purge — tap again to delete this playlist"
+                          : "Delete playlist (tracks stay in the library)"
                       }
-                    }}
-                    className={`w-4 h-4 grid place-items-center rounded-full text-[10px] ml-0.5 ${
-                      confirmDeleteId === pl.id
-                        ? "text-plasma bg-plasma/20"
-                        : "text-dim hover:text-plasma hover:bg-white/10"
-                    }`}
-                    title={
-                      confirmDeleteId === pl.id
-                        ? "Confirm purge — tap again to delete this playlist"
-                        : "Delete playlist (tracks stay in the library)"
-                    }
-                  >
-                    ✕
-                  </button>
+                    >
+                      ✕
+                    </button>
+                  </>
                 )}
               </span>
             );
@@ -753,6 +858,203 @@ function CollectionBar({
         ＋ New playlist
       </button>
     </div>
+  );
+}
+
+/**
+ * Playlist chain override (v1.5). Saves the live full chain under the
+ * playlist's Mission Log key; auto-restore applies it to any track in this
+ * playlist that has no track/album entry of its own (track > album > playlist).
+ */
+function PlaylistChainControls({ id, name }: { id: string; name: string }) {
+  const key = playlistKey(id);
+  const entry = useMissionLogStore((s) => s.entries[key]);
+  const saveEntry = useMissionLogStore((s) => s.saveEntry);
+  const removeEntry = useMissionLogStore((s) => s.removeEntry);
+  const applyEntry = useMissionLogStore((s) => s.applyEntry);
+  const toast = useUIStore((s) => s.toast);
+
+  return (
+    <span className="inline-flex items-center gap-0.5 ml-0.5">
+      <button
+        onClick={() => {
+          saveEntry(key, "playlist", name);
+          toast(`◎ Chain override saved for "${name}"`);
+        }}
+        className={`w-5 h-5 grid place-items-center rounded-full text-[11px] ${
+          entry ? "text-violet bg-violet/15" : "text-dim hover:text-violet hover:bg-white/10"
+        }`}
+        title={
+          entry
+            ? "Playlist chain override active — click to overwrite with the current chain"
+            : "Save the current chain as this playlist's override (applies to every track in it without its own saved chain)"
+        }
+      >
+        ◎
+      </button>
+      {entry && (
+        <>
+          <button
+            onClick={() => {
+              applyEntry(key);
+              toast(`Applied "${name}" chain override`);
+            }}
+            className="w-5 h-5 grid place-items-center rounded-full text-[11px] text-dim hover:text-cyan hover:bg-white/10"
+            title="Apply the saved playlist chain now"
+          >
+            ↺
+          </button>
+          <button
+            onClick={() => {
+              removeEntry(key);
+              toast("Playlist chain override cleared");
+            }}
+            className="w-5 h-5 grid place-items-center rounded-full text-[11px] text-dim hover:text-plasma hover:bg-white/10"
+            title="Clear the playlist chain override"
+          >
+            ○
+          </button>
+        </>
+      )}
+    </span>
+  );
+}
+
+// ── Album-art grid (v1.5) ──
+
+interface AlbumCell {
+  key: string;
+  album: string;
+  artist: string;
+  tracks: LibraryTrack[];
+  /** Index of the album's first track in the flat ordered list. */
+  firstIndex: number;
+}
+
+function AlbumGrid({
+  tracks,
+  playingPath,
+  listHeight,
+}: {
+  tracks: LibraryTrack[];
+  playingPath: string | null;
+  listHeight: string;
+}) {
+  // The grid shows far more art at once than the list — widen the LRU so
+  // scrolling back up doesn't re-parse covers that were just evicted.
+  useEffect(() => {
+    raiseCoverCapacity(1200);
+  }, []);
+
+  const albums = useMemo(() => {
+    const map = new Map<string, AlbumCell>();
+    tracks.forEach((t, i) => {
+      const key = `${t.artist}|${t.album}`.toLowerCase();
+      const cell = map.get(key);
+      if (cell) {
+        cell.tracks.push(t);
+      } else {
+        map.set(key, {
+          key,
+          album: t.album || "Unknown album",
+          artist: t.artist || "Unknown artist",
+          tracks: [t],
+          firstIndex: i,
+        });
+      }
+    });
+    const list = [...map.values()];
+    // Multi-artist albums ("Various") collapse when artists differ per track.
+    for (const a of list) {
+      const artists = new Set(a.tracks.map((t) => t.artist));
+      if (artists.size > 1) a.artist = "Various artists";
+    }
+    return list.sort(
+      (a, b) =>
+        a.artist.localeCompare(b.artist, undefined, { sensitivity: "base" }) ||
+        a.album.localeCompare(b.album, undefined, { sensitivity: "base" }),
+    );
+  }, [tracks]);
+
+  return (
+    <div
+      className="overflow-y-auto sidebar-scroll p-3"
+      style={{ height: listHeight, minHeight: 260 }}
+    >
+      <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(148px,1fr))]">
+        {albums.map((a) => (
+          <AlbumCard
+            key={a.key}
+            cell={a}
+            isPlaying={playingPath != null && a.tracks.some((t) => t.path === playingPath)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AlbumCard({ cell, isPlaying }: { cell: AlbumCell; isPlaying: boolean }) {
+  const first = cell.tracks[0];
+  const cover = useCoverStore((s) => s.covers[first.path]);
+  const requestCover = useCoverStore((s) => s.requestCover);
+  const hasChain = useMissionLogStore(
+    (s) => !!s.entries[albumKey(first.artist, first.album)],
+  );
+  useEffect(() => {
+    requestCover(first.path);
+  }, [first.path, requestCover]);
+
+  // Album order: track number then title (the flat list may be sorted by
+  // anything — inside an album we always want disc order).
+  const play = () => {
+    const ordered = [...cell.tracks].sort(
+      (a, b) => (a.trackNo ?? 0) - (b.trackNo ?? 0) || a.title.localeCompare(b.title),
+    );
+    void playLibrary(ordered, 0);
+  };
+
+  return (
+    <button
+      onClick={play}
+      className={`group text-left rounded-xl border p-2 transition ${
+        isPlaying
+          ? "border-cyan/50 bg-cyan/[0.07]"
+          : "border-white/10 hover:border-white/25 hover:bg-white/[0.03]"
+      }`}
+      title={`${cell.album} — ${cell.artist}\n${cell.tracks.length} track${cell.tracks.length === 1 ? "" : "s"} · click to play`}
+    >
+      <div className="relative aspect-square rounded-lg overflow-hidden border border-white/10 bg-white/[0.04] grid place-items-center text-2xl text-dim">
+        {cover ? (
+          <div
+            className="absolute inset-0"
+            style={{ background: `center/cover no-repeat url("${cover}")` }}
+          />
+        ) : (
+          <span>♪</span>
+        )}
+        <span className="absolute inset-0 hidden group-hover:grid place-items-center bg-black/50 text-cyan text-3xl">
+          ▶
+        </span>
+        {hasChain && (
+          <span
+            className="absolute top-1.5 right-1.5 rounded-[4px] border border-violet/60 bg-ink/80 text-violet text-[9px] font-bold leading-none px-1 py-[2px]"
+            title="Mission Log: this album has a saved chain"
+          >
+            ◎
+          </span>
+        )}
+        {isPlaying && (
+          <span className="absolute bottom-1.5 left-1.5 rounded-[4px] bg-cyan/20 border border-cyan/50 text-cyan text-[9px] font-bold leading-none px-1 py-[2px]">
+            PLAYING
+          </span>
+        )}
+      </div>
+      <div className="mt-1.5 text-xs font-medium truncate" title={cell.album}>
+        {cell.album}
+      </div>
+      <div className="text-[10px] text-dim truncate">{cell.artist}</div>
+    </button>
   );
 }
 
@@ -826,7 +1128,7 @@ function TrackRow({
 }) {
   const cover = useCoverStore((s) => s.covers[track.path]);
   const requestCover = useCoverStore((s) => s.requestCover);
-  const hasEq = useTrackEqStore((s) => !!s.entries[track.path]);
+  const logEntry = useMissionLogStore((s) => s.entries[trackKey(track.path)]);
   useEffect(() => {
     requestCover(track.path);
   }, [track.path, requestCover]);
@@ -900,12 +1202,16 @@ function TrackRow({
         >
           {track.title}
         </span>
-        {hasEq && (
+        {logEntry && (
           <span
             className="shrink-0 rounded-[3px] border border-violet/50 bg-violet/15 text-violet text-[8px] font-bold leading-none px-1 py-[2px]"
-            title="This track has a saved EQ — it's restored automatically when the track plays (EQ Memory)"
+            title={
+              logEntry.chain.tractor
+                ? "Mission Log: saved chain with a Tractor lock — restored automatically when this track plays"
+                : "Mission Log: saved chain — restored automatically when this track plays"
+            }
           >
-            EQ
+            {logEntry.chain.tractor ? "◎LOCK" : "◎"}
           </span>
         )}
       </div>
@@ -963,9 +1269,13 @@ function TrackMenu({
   const addToPlaylist = useLibraryStore((s) => s.addToPlaylist);
   const removeFromPlaylist = useLibraryStore((s) => s.removeFromPlaylist);
   const createPlaylist = useLibraryStore((s) => s.createPlaylist);
-  const hasEq = useTrackEqStore((s) => !!s.entries[track.path]);
-  const saveForTrack = useTrackEqStore((s) => s.saveForTrack);
-  const clearForTrack = useTrackEqStore((s) => s.clearForTrack);
+  const hasChain = useMissionLogStore((s) => !!s.entries[trackKey(track.path)]);
+  const hasAlbumChain = useMissionLogStore(
+    (s) => !!s.entries[albumKey(track.artist, track.album)],
+  );
+  const saveEntry = useMissionLogStore((s) => s.saveEntry);
+  const removeEntry = useMissionLogStore((s) => s.removeEntry);
+  const applyEntry = useMissionLogStore((s) => s.applyEntry);
   const toast = useUIStore((s) => s.toast);
 
   const isFav = !!favorites[track.path];
@@ -1082,28 +1392,68 @@ function TrackMenu({
       )}
 
       {divider}
-      <div className={label}>EQ memory</div>
+      <div className={label}>Mission Log</div>
       <button
         className={item}
         onClick={() => {
-          saveForTrack(track.path);
-          toast(`Saved current EQ to "${track.title}"`);
+          saveEntry(trackKey(track.path), "track", track.title, track.artist);
+          toast(`◎ Logged chain for "${track.title}"`);
           onClose();
         }}
-        title="Snapshot the current sound settings; they're restored whenever this track plays"
+        title="Snapshot the FULL chain (EQ, restoration, modes, Tractor lock); it's restored whenever this track plays"
       >
-        ◉ Save current EQ to track
+        ◎ Log this chain to track
       </button>
-      {hasEq && (
+      <button
+        className={item}
+        onClick={() => {
+          saveEntry(
+            albumKey(track.artist, track.album),
+            "album",
+            track.album || "Unknown album",
+            track.artist,
+          );
+          toast(`◎ Logged chain for album "${track.album || "Unknown album"}"`);
+          onClose();
+        }}
+        title="Snapshot the full chain for EVERY track of this album"
+      >
+        ◈ Log this chain to album
+      </button>
+      {hasChain && (
+        <>
+          <button
+            className={item}
+            onClick={() => {
+              applyEntry(trackKey(track.path));
+              toast(`Mission Log — restored "${track.title}"`);
+              onClose();
+            }}
+          >
+            ↺ Restore saved chain
+          </button>
+          <button
+            className={item}
+            onClick={() => {
+              removeEntry(trackKey(track.path));
+              toast("Mission Log entry cleared");
+              onClose();
+            }}
+          >
+            ○ Clear saved chain
+          </button>
+        </>
+      )}
+      {hasAlbumChain && !hasChain && (
         <button
           className={item}
           onClick={() => {
-            clearForTrack(track.path);
-            toast("Track EQ cleared");
+            removeEntry(albumKey(track.artist, track.album));
+            toast("Album chain cleared");
             onClose();
           }}
         >
-          ○ Clear saved EQ
+          ○ Clear album chain
         </button>
       )}
     </div>
@@ -1172,16 +1522,13 @@ function EmptyState({
   }
 
   return (
-    <div className="h-full grid place-items-center text-center p-8">
-      <div>
-        <div className="text-5xl mb-3 opacity-70">{icon}</div>
-        <div className="text-lg font-semibold">{title}</div>
-        <div className="text-sm text-dim mt-1 max-w-sm mx-auto leading-relaxed">{sub}</div>
+    <div className="h-full grid place-items-center p-8">
+      <div className="kc-empty w-full max-w-md">
+        <div className="text-4xl opacity-60">{icon}</div>
+        <div className="text-sm font-semibold text-white/80">{title}</div>
+        <div className="text-xs text-dim max-w-sm leading-relaxed">{sub}</div>
         {!hasFolders && !scanning && collection === "all" && !searching && (
-          <button
-            onClick={onAdd}
-            className="mt-4 rounded-xl border border-cyan/50 bg-cyan/10 hover:bg-cyan/20 px-4 py-2.5 text-sm font-semibold text-cyan transition"
-          >
+          <button onClick={onAdd} className="kc-btn kc-btn--primary mt-2">
             ＋ Add folders
           </button>
         )}

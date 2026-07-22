@@ -61,6 +61,8 @@ export interface ParametricBand {
   type: BiquadFilterType;
   label?: string;
   color?: string;
+  /** v2.1 — dynamic mode: gain rides a sidechain instead of sitting static. */
+  dynamic?: boolean;
 }
 
 export interface EngineSnapshot {

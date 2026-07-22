@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, protocol, screen, desktopCapturer, session } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, shell, protocol, screen, desktopCapturer, session, crashReporter } from "electron";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
@@ -7,6 +7,59 @@ import dgram from "node:dgram";
 import os from "node:os";
 
 const isDev = process.env.NODE_ENV === "development";
+
+// ──────────────── Crash logging (v1.5) ────────────────
+// Local-only: native crash dumps stay on disk (uploadToServer: false) and
+// process failures are appended to <userData>/crash.log. Remote reporting
+// (Sentry) is opt-in in Settings and only activates when a DSN is baked in
+// at build time — see src/lib/crashReporting.ts.
+crashReporter.start({ uploadToServer: false, submitURL: "" });
+
+const crashLogPath = () => path.join(app.getPath("userData"), "crash.log");
+
+async function appendCrashLog(source: string, detail: string): Promise<void> {
+  try {
+    await fs.appendFile(
+      crashLogPath(),
+      `[${new Date().toISOString()}] [${source}] ${detail}\n`,
+      "utf8",
+    );
+  } catch {
+    /* the crash logger must never crash anything */
+  }
+}
+
+process.on("uncaughtException", (err) => {
+  void appendCrashLog("main:uncaught", String(err?.stack ?? err));
+});
+app.on("render-process-gone", (_e, wc, details) => {
+  void appendCrashLog(
+    "renderer-gone",
+    `reason=${details.reason} exit=${details.exitCode} url=${wc.getURL()}`,
+  );
+});
+app.on("child-process-gone", (_e, details) => {
+  void appendCrashLog(
+    "child-gone",
+    `type=${details.type} reason=${details.reason} exit=${details.exitCode}`,
+  );
+});
+
+// Renderer error hook (window.onerror / unhandledrejection) → same log.
+ipcMain.on("crash:renderer", (_e, entry: { source?: string; message?: string }) => {
+  void appendCrashLog(
+    `renderer:${entry?.source ?? "error"}`,
+    String(entry?.message ?? "").slice(0, 4000),
+  );
+});
+ipcMain.handle("crash:openLog", async () => {
+  try {
+    await fs.access(crashLogPath());
+  } catch {
+    await fs.writeFile(crashLogPath(), "", "utf8");
+  }
+  shell.showItemInFolder(crashLogPath());
+});
 
 // Let the splash-screen intro sound play on launch without a user gesture.
 // Chromium blocks audible autoplay by default; this opt-in must be set before
@@ -228,6 +281,10 @@ function createMainWindow(): void {
 
   mainWindow.once("ready-to-show", () => mainWindow?.show());
 
+  // The broadcast window is a satellite of the main one — no point leaving
+  // it orphaned (it would keep the app alive with no way to control it).
+  mainWindow.on("closed", () => closeVizWindow());
+
   // Safety net: force-show the window after a few seconds even if
   // ready-to-show never fires. Without this, a renderer error during
   // initial load (failed asset, JS throw, etc.) results in an
@@ -251,8 +308,20 @@ function createMainWindow(): void {
     }
   });
 
+  // v2.4: a dead renderer now RECOVERS — reload the window instead of
+  // leaving a frozen ghost. "clean-exit" / "killed" are deliberate (window
+  // close, app quit), everything else is a crash worth restarting from.
   mainWindow.webContents.on("render-process-gone", (_e, details) => {
     console.error(`[main] render-process-gone: reason=${details.reason} exitCode=${details.exitCode}`);
+    if (details.reason === "clean-exit" || details.reason === "killed") return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      setTimeout(() => {
+        try {
+          mainWindow?.webContents.reload();
+          mainWindow?.show();
+        } catch { /* window torn down mid-recovery */ }
+      }, 350);
+    }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -298,6 +367,50 @@ ipcMain.handle("dialog:openAudio", async () => {
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
 });
+
+// Multi-select variant — the Restoration Bay's offline batch processor.
+ipcMain.handle("dialog:openAudioMulti", async (): Promise<string[]> => {
+  if (!mainWindow) return [];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Pick audio files to restore",
+    properties: ["openFile", "multiSelections"],
+    filters: [
+      {
+        name: "Audio",
+        extensions: Object.keys(AUDIO_MIME).map((e) => e.slice(1)),
+      },
+    ],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
+// Single output-folder picker (batch restore writes results there).
+ipcMain.handle("dialog:pickOutputFolder", async (): Promise<string | null> => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose an output folder for restored files",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+// Dialog-free write into a folder the user already picked (batch restore).
+ipcMain.handle(
+  "file:writeIn",
+  async (_e, opts: { dir: string; name: string; dataBase64: string }) => {
+    try {
+      // The name must stay a plain file name — no path traversal.
+      const safeName = path.basename(String(opts.name || "output.wav"));
+      const full = path.join(String(opts.dir), safeName);
+      await fs.writeFile(full, Buffer.from(opts.dataBase64, "base64"));
+      return full;
+    } catch (err) {
+      console.error("[file:writeIn] write failed:", err);
+      return null;
+    }
+  },
+);
 
 // ── Generic file save/open (Fire Command WAV export + project files) ──
 
@@ -461,6 +574,115 @@ ipcMain.handle("window:miniSize", (_e, mini: boolean) => {
 });
 ipcMain.handle("window:fullscreen", (_e, full: boolean) => {
   mainWindow?.setFullScreen(!!full);
+});
+
+// ──────────────── Visualizer broadcast window (v1.5) ────────────────
+// A second frameless window running the same bundle with ?viz=1 — it renders
+// analyser frames STREAMED from the main window over IPC (it never touches
+// the audio engine). Designed for OBS window capture / second-monitor use.
+let vizWindow: BrowserWindow | null = null;
+
+function closeVizWindow(): void {
+  if (vizWindow && !vizWindow.isDestroyed()) vizWindow.close();
+  vizWindow = null;
+}
+
+ipcMain.handle("viz:displays", () => {
+  const primaryId = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d, i) => ({
+    id: d.id,
+    label: d.label || `Display ${i + 1}`,
+    width: d.size.width,
+    height: d.size.height,
+    primary: d.id === primaryId,
+  }));
+});
+
+ipcMain.handle(
+  "viz:open",
+  (
+    _e,
+    opts: {
+      displayId?: number;
+      fullscreen?: boolean;
+      alwaysOnTop?: boolean;
+      transparent?: boolean;
+    } | undefined,
+  ) => {
+    closeVizWindow();
+    const target =
+      screen.getAllDisplays().find((d) => d.id === opts?.displayId) ??
+      screen.getPrimaryDisplay();
+    const wa = target.workArea;
+    vizWindow = new BrowserWindow({
+      x: wa.x + 40,
+      y: wa.y + 40,
+      width: Math.min(1280, wa.width - 80),
+      height: Math.min(720, wa.height - 80),
+      frame: false,
+      // Transparent windows (OBS overlay trick) can't be resized on Windows
+      // once created; acceptable for the capture use-case.
+      transparent: !!opts?.transparent,
+      backgroundColor: opts?.transparent ? "#00000000" : "#04050a",
+      title: "Kill-Chain — Broadcast",
+      skipTaskbar: false,
+      webPreferences: {
+        preload: path.join(__dirname, "preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: false,
+      },
+      show: false,
+    });
+    if (opts?.alwaysOnTop) vizWindow.setAlwaysOnTop(true, "screen-saver");
+    vizWindow.once("ready-to-show", () => {
+      if (!vizWindow) return;
+      vizWindow.show();
+      if (opts?.fullscreen) {
+        // Borderless fullscreen on the CHOSEN display: position first, then
+        // go fullscreen so Chromium picks that display.
+        vizWindow.setBounds(target.bounds);
+        vizWindow.setFullScreen(true);
+      }
+    });
+    vizWindow.on("closed", () => {
+      vizWindow = null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("viz:closed");
+      }
+    });
+    const query: Record<string, string> = { viz: "1" };
+    if (opts?.transparent) query.transparent = "1";
+    if (isDev) {
+      vizWindow.loadURL(
+        `http://localhost:5173/?viz=1${opts?.transparent ? "&transparent=1" : ""}`,
+      );
+    } else {
+      vizWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"), {
+        query,
+      });
+    }
+    return true;
+  },
+);
+
+ipcMain.handle("viz:close", () => closeVizWindow());
+ipcMain.handle("viz:isOpen", () => vizWindow !== null && !vizWindow.isDestroyed());
+
+// Called FROM the broadcast window itself (F key) — toggles ITS fullscreen.
+ipcMain.handle("viz:setFullscreen", (e, full: boolean) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (win && win === vizWindow) win.setFullScreen(!!full);
+});
+
+// Hot path: analyser frames from the main renderer → broadcast renderer.
+// Fire-and-forget (`send`, not `invoke`) at ~30 fps; typed arrays survive
+// the structured-clone serialization intact.
+ipcMain.on("viz:frame", (_e, payload) => {
+  if (vizWindow && !vizWindow.isDestroyed()) {
+    vizWindow.webContents.send("viz:frame", payload);
+  }
 });
 
 // ──────────────── System resource monitor ────────────────
@@ -1055,12 +1277,29 @@ ipcMain.handle("headtrack:status", () => ({
   packets: headtrackPackets,
 }));
 
-app.whenReady().then(() => {
-  registerAudioProtocol();
-  installDisplayMediaHandler();
-  installAirspaceAdblock();
-  createMainWindow();
-});
+// ── Single-instance lock (v2.4) ────────────────────────────────────────────
+// A second launch focuses the existing window instead of spawning a rival
+// process (two AudioContexts fighting over the same output device, doubled
+// remote servers, doubled headtrack sockets…).
+const gotInstanceLock = app.requestSingleInstanceLock();
+if (!gotInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
+  app.whenReady().then(() => {
+    registerAudioProtocol();
+    installDisplayMediaHandler();
+    installAirspaceAdblock();
+    createMainWindow();
+  });
+}
 
 app.on("before-quit", () => {
   if (remoteServer) {

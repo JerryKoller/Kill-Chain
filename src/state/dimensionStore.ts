@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
 import { useEqStore } from "@/state/eqStore";
+import { getVisualIntel } from "@/components/Visualizer/visualIntel";
 import type {
   MotionConfig,
   MotionPattern,
@@ -79,7 +80,20 @@ export const DEFAULT_MOTION: MotionConfig = {
   reactivity: 0.65,
   cohesion: 0.65,
   anchorLows: true,
+  bpmSync: false,
 };
+
+/** Raw opentrack-protocol tracker sample: degrees + centimetres. */
+export interface HeadPose {
+  yaw: number;
+  pitch: number;
+  roll: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export const ZERO_HEAD_POSE: HeadPose = { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0 };
 
 /** One-click motion characters — pattern + feel, tuned by ear. */
 export const MOTION_PRESETS: {
@@ -127,6 +141,32 @@ export type LayoutId =
   | "surround71"
   | "surround72"
   | "atmos512";
+
+/**
+ * v1.5 — "Cinema seat" scene presets: one click configures the WHOLE scene
+ * (mode, layout/speakers, room acoustics, stage, ambience, motion) instead
+ * of asking the user to tweak twenty knobs. Speakers are built lazily so
+ * every apply gets fresh ids.
+ */
+export interface ScenePreset {
+  id: string;
+  label: string;
+  icon: string;
+  desc: string;
+  mode: DimMode;
+  layout: LayoutId;
+  /** Custom speaker placements; omitted → the layout's standard positions. */
+  speakers?: () => Speaker[];
+  room: { width: number; height: number; depth: number };
+  absorption: number;
+  stage: "room" | "head";
+  space: number;
+  motion?: MotionConfig;
+}
+
+/** File format for exported `.kdim` spatial scenes (Armory). */
+export const KDIM_KIND = "kill-chain-dimension";
+export const KDIM_VERSION = 1;
 
 export interface Vec3n {
   nx: number;
@@ -277,6 +317,154 @@ export function layoutSpeakers(id: LayoutId): Speaker[] {
   }
 }
 
+export const SCENE_PRESETS: ScenePreset[] = [
+  {
+    id: "theater",
+    label: "Theater",
+    icon: "🎬",
+    desc: "Big-screen seat: 7.1 bed in a large treated cinema, effects breathing around you.",
+    mode: "speaker",
+    layout: "surround71",
+    room: { width: 10, height: 4.2, depth: 12 },
+    absorption: 0.3,
+    stage: "room",
+    space: 0.62,
+  },
+  {
+    id: "club",
+    label: "Club",
+    icon: "🔊",
+    desc: "On the floor: reflective concrete room, the music alive and swarming around you.",
+    mode: "motion",
+    layout: "stereo21",
+    room: { width: 8, height: 4, depth: 10 },
+    absorption: 0.12,
+    stage: "room",
+    space: 0.75,
+    motion: { pattern: "swarm", speed: 0.6, intensity: 0.7, reactivity: 0.8, cohesion: 0.35, anchorLows: true },
+  },
+  {
+    id: "car",
+    label: "Car",
+    icon: "🚗",
+    desc: "Driver's seat: tight damped cabin, door speakers up front, sub in the trunk.",
+    mode: "speaker",
+    layout: "stereo21",
+    speakers: () => [
+      spk("bookshelf", -0.75, -0.2, -0.55),
+      spk("bookshelf", 0.75, -0.2, -0.55),
+      spk("subwoofer", 0, -0.7, 0.9, 3),
+    ],
+    room: { width: 2, height: 2, depth: 3 },
+    absorption: 0.42,
+    stage: "room",
+    space: 0.32,
+  },
+  {
+    id: "widestage",
+    label: "Wide Stage",
+    icon: "🎸",
+    desc: "Front-row festival: towers thrown wide in a huge open space — massive stereo image.",
+    mode: "speaker",
+    layout: "stereo20",
+    speakers: () => [
+      spk("tower", -0.92, 0.05, -0.6),
+      spk("tower", 0.92, 0.05, -0.6),
+    ],
+    room: { width: 15, height: 5, depth: 12 },
+    absorption: 0.18,
+    stage: "room",
+    space: 0.55,
+  },
+  {
+    id: "vocal",
+    label: "Intimate Vocal",
+    icon: "🎙",
+    desc: "Studio near-field: dry, close, centered — voices and acoustic detail first.",
+    mode: "speaker",
+    layout: "stereo20",
+    speakers: () => [
+      spk("bookshelf", -0.38, 0.05, -0.42),
+      spk("bookshelf", 0.38, 0.05, -0.42),
+    ],
+    room: { width: 3.4, height: 2.4, depth: 3.6 },
+    absorption: 0.5,
+    stage: "head",
+    space: 0.22,
+  },
+];
+
+/**
+ * v2.0 — Mission Profiles: complete one-click spatial scenes. Where the v1.5
+ * cinema-seat presets set the seat, these configure the whole DEPLOYMENT —
+ * layout, room acoustics, stage, ambience and motion character together.
+ */
+export const MISSION_PROFILES: ScenePreset[] = [
+  {
+    id: "bunker",
+    label: "Cinema Bunker",
+    icon: "🛡",
+    desc: "Hardened 5.1.2 screening room: restrained motion, medium space, heights overhead — dialogue locked to the screen.",
+    mode: "speaker",
+    layout: "atmos512",
+    room: { width: 8.5, height: 3.6, depth: 10.5 },
+    absorption: 0.34,
+    stage: "room",
+    space: 0.52,
+  },
+  {
+    id: "hall",
+    label: "Concert Hall",
+    icon: "🏛",
+    desc: "Wide reflective hall, lush reflections, the bands swinging in a gentle pendulum across the stage.",
+    mode: "motion",
+    layout: "stereo20",
+    room: { width: 14, height: 6, depth: 16 },
+    absorption: 0.09,
+    stage: "room",
+    space: 0.82,
+    motion: { pattern: "pendulum", speed: 0.28, intensity: 0.5, reactivity: 0.4, cohesion: 0.8, anchorLows: true, bpmSync: false },
+  },
+  {
+    id: "halo",
+    label: "Intimate Halo",
+    icon: "💫",
+    desc: "Close headphone stage: dry, cohesive constellation orbiting slowly right around your head.",
+    mode: "motion",
+    layout: "stereo20",
+    room: { width: 3.6, height: 2.4, depth: 3.8 },
+    absorption: 0.55,
+    stage: "head",
+    space: 0.14,
+    motion: { pattern: "orbit", speed: 0.24, intensity: 0.4, reactivity: 0.45, cohesion: 0.9, anchorLows: true, bpmSync: false },
+  },
+  {
+    id: "arena",
+    label: "Arena Drop",
+    icon: "⚡",
+    desc: "Festival main stage: huge live room, sub anchored, the field swarming ON the beat grid (BPM-locked).",
+    mode: "motion",
+    layout: "stereo21",
+    room: { width: 15, height: 6, depth: 15 },
+    absorption: 0.12,
+    stage: "room",
+    space: 0.68,
+    motion: { pattern: "swarm", speed: 0.62, intensity: 0.8, reactivity: 0.9, cohesion: 0.55, anchorLows: true, bpmSync: true },
+  },
+  {
+    id: "lab",
+    label: "Analyst Lab",
+    icon: "🔬",
+    desc: "Dry treated lab in Band Mode: every Sculptor band a fixed point of sound — spatial EQ work, zero ambience.",
+    mode: "band",
+    layout: "stereo20",
+    room: { width: 4.5, height: 2.7, depth: 5 },
+    absorption: 0.55,
+    stage: "head",
+    space: 0.05,
+  },
+];
+
 /** Which input bus a speaker draws from, derived from its type + side. */
 export function feedForSpeaker(s: Speaker): VoiceFeed {
   switch (s.type) {
@@ -304,12 +492,14 @@ export function bandPlacementFor(rank: number, total: number): Vec3n {
   };
 }
 
-interface PersistShape {
+export interface PersistShape {
   mode: DimMode;
   signal: DimSignal;
   room: { width: number; height: number; depth: number };
   absorption: number;
   listenerYaw: number;
+  /** v2.0 — listener position in room metres (Walk Mode / drag). */
+  listenerPos: { x: number; y: number; z: number };
   layout: LayoutId;
   speakers: Speaker[];
   bandPlacements: Record<string, Vec3n>;
@@ -320,6 +510,11 @@ interface PersistShape {
   stage: "room" | "head";
   /** Ambience amount: 0 dry … 0.5 physical room … 1 lush. */
   space: number;
+}
+
+/** A saved spatial scene: the persisted state plus whether 3D was engaged. */
+export interface DimensionSceneSnapshot extends PersistShape {
+  active: boolean;
 }
 
 const STORAGE_KEY = "killchain.dimension.v1";
@@ -338,6 +533,7 @@ function defaults(): PersistShape {
     },
     absorption: ABSORPTION_LIMITS.default,
     listenerYaw: 0,
+    listenerPos: { x: 0, y: 0, z: 0 },
     layout: "stereo20",
     speakers: layoutSpeakers("stereo20"),
     bandPlacements: {},
@@ -363,6 +559,38 @@ function sanitizeMotion(m: Partial<MotionConfig> | undefined): MotionConfig {
     reactivity: clamp01(Number(m.reactivity ?? d.reactivity)),
     cohesion: clamp01(Number(m.cohesion ?? d.cohesion)),
     anchorLows: m.anchorLows !== false,
+    bpmSync: m.bpmSync === true,
+  };
+}
+
+/**
+ * Validate + backfill a persisted / imported scene. Shared by the
+ * localStorage load, `.kdim` import and Mission Log spatial memory.
+ */
+export function sanitizePersistShape(parsed: Partial<PersistShape> | null | undefined): PersistShape {
+  const d = defaults();
+  if (!parsed || typeof parsed !== "object") return d;
+  const lp = parsed.listenerPos;
+  return {
+    ...d,
+    ...parsed,
+    mode: parsed.mode === "band" || parsed.mode === "motion" ? parsed.mode : "speaker",
+    signal: parsed.signal === "raw" ? "raw" : "eqd",
+    room: { ...d.room, ...(parsed.room ?? {}) },
+    listenerYaw: Number.isFinite(Number(parsed.listenerYaw)) ? Number(parsed.listenerYaw) : 0,
+    listenerPos: {
+      x: Number.isFinite(Number(lp?.x)) ? Number(lp!.x) : 0,
+      y: Number.isFinite(Number(lp?.y)) ? Number(lp!.y) : 0,
+      z: Number.isFinite(Number(lp?.z)) ? Number(lp!.z) : 0,
+    },
+    speakers:
+      Array.isArray(parsed.speakers) && parsed.speakers.length > 0
+        ? parsed.speakers.map((s) => ({ ...s, id: s.id || sid() }))
+        : d.speakers,
+    bandPlacements: parsed.bandPlacements ?? {},
+    motion: sanitizeMotion(parsed.motion),
+    stage: parsed.stage === "room" ? "room" : "head",
+    space: clamp01(Number(parsed.space ?? d.space)),
   };
 }
 
@@ -371,22 +599,7 @@ function load(): PersistShape {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return defaults();
-    const parsed = JSON.parse(raw) as Partial<PersistShape>;
-    const d = defaults();
-    return {
-      ...d,
-      ...parsed,
-      mode: parsed.mode === "band" || parsed.mode === "motion" ? parsed.mode : "speaker",
-      room: { ...d.room, ...(parsed.room ?? {}) },
-      speakers:
-        Array.isArray(parsed.speakers) && parsed.speakers.length > 0
-          ? parsed.speakers.map((s) => ({ ...s, id: s.id || sid() }))
-          : d.speakers,
-      bandPlacements: parsed.bandPlacements ?? {},
-      motion: sanitizeMotion(parsed.motion),
-      stage: parsed.stage === "room" ? "room" : "head",
-      space: clamp01(Number(parsed.space ?? d.space)),
-    };
+    return sanitizePersistShape(JSON.parse(raw) as Partial<PersistShape>);
   } catch {
     return defaults();
   }
@@ -397,26 +610,30 @@ function schedulePersist(state: DimensionState): void {
   if (typeof window === "undefined") return;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    const data: PersistShape = {
-      mode: state.mode,
-      signal: state.signal,
-      room: state.room,
-      absorption: state.absorption,
-      listenerYaw: state.listenerYaw,
-      layout: state.layout,
-      speakers: state.speakers,
-      bandPlacements: state.bandPlacements,
-      paletteType: state.paletteType,
-      motion: state.motion,
-      stage: state.stage,
-      space: state.space,
-    };
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persistShapeOf(state)));
     } catch {
       /* ignore */
     }
   }, 350);
+}
+
+function persistShapeOf(state: PersistShape): PersistShape {
+  return {
+    mode: state.mode,
+    signal: state.signal,
+    room: state.room,
+    absorption: state.absorption,
+    listenerYaw: state.listenerYaw,
+    listenerPos: state.listenerPos,
+    layout: state.layout,
+    speakers: state.speakers,
+    bandPlacements: state.bandPlacements,
+    paletteType: state.paletteType,
+    motion: state.motion,
+    stage: state.stage,
+    space: state.space,
+  };
 }
 
 const clampN = (v: number) => Math.max(-1, Math.min(1, v));
@@ -424,18 +641,23 @@ const clampN = (v: number) => Math.max(-1, Math.min(1, v));
 export interface DimensionState extends PersistShape {
   active: boolean;
   selectedId: string | null;
+  /** Last-applied scene preset (session-only, for UI highlight). */
+  scene: string | null;
 
-  // ── Head tracking (issue #9) — opentrack-protocol UDP → listener yaw ──
+  // ── Head tracking — opentrack-protocol UDP → full 6DOF listener pose ──
   /** True while the UDP listener is running and steering the listener. */
   headTracking: boolean;
   /** UDP port the tracker sends to (opentrack default: 4242). */
   headTrackPort: number;
-  /** Latest raw yaw from the tracker (degrees), null before first packet. */
-  headTrackYawDeg: number | null;
-  /** Yaw captured as "straight ahead" by Recenter (degrees). */
-  headTrackZeroDeg: number;
+  /** Latest raw tracker sample (deg / cm), null before the first packet. */
+  headTrackPose: HeadPose | null;
+  /** Pose captured as "straight ahead" by Recenter. */
+  headTrackZero: HeadPose;
   /** Error string when the listener failed to bind (port in use etc.). */
   headTrackError: string | null;
+
+  // ── Walk Mode (v2.0) — WASD / drag translates the listener ──
+  walkMode: boolean;
 
   setActive: (on: boolean) => void;
   setMode: (mode: DimMode) => void;
@@ -450,10 +672,24 @@ export interface DimensionState extends PersistShape {
   setHeadTrackPort: (port: number) => void;
   recenterHeadTracking: () => void;
 
+  setWalkMode: (on: boolean) => void;
+  /** Place the listener at an absolute room position (metres). */
+  setListenerPos: (patch: Partial<{ x: number; y: number; z: number }>) => void;
+  /** Move relative to the current facing: fwd/strafe/up in metres. */
+  nudgeListener: (fwd: number, strafe: number, up: number) => void;
+  resetListenerPos: () => void;
+
+  /** v2.0 — save the current scene as a `.kdim` file (Armory). */
+  exportScene: (name?: string) => Promise<boolean>;
+  /** v2.0 — load a `.kdim` scene file. Resolves to its name, or null. */
+  importScene: () => Promise<string | null>;
+
   /** Motion Mode: live-update pattern / speed / intensity / reactivity… */
   setMotion: (patch: Partial<MotionConfig>) => void;
   /** Apply a one-click motion preset (pattern + feel + stage). */
   applyMotionPreset: (id: string) => void;
+  /** v1.5 — apply a full "cinema seat" scene (mode/layout/room/stage/space/motion). */
+  applyScenePreset: (id: string) => void;
   /** Room Stage vs Headphone Stage. */
   setStage: (stage: "room" | "head") => void;
   /** Ambience amount 0..1. */
@@ -481,16 +717,21 @@ function buildVoiceSpecs(state: DimensionState): VoiceSpec[] {
   const hy = state.room.height / 2;
   const hz = state.room.depth / 2;
   if (state.mode === "speaker") {
-    return state.speakers
-      .filter((s) => s.enabled)
-      .map((s) => ({
-        id: s.id,
-        feed: feedForSpeaker(s),
-        x: s.nx * hx,
-        y: s.ny * hy,
-        z: s.nz * hz,
-        gainDb: s.gainDb,
-      }));
+    const enabled = state.speakers.filter((s) => s.enabled);
+    // v2.0 smarter routing — bass management: when the layout has a live
+    // subwoofer, the satellites are LR4-high-passed at 80 Hz and the lows
+    // live on the LFE feed only. Real bass from a phantom position between
+    // several full-range HRTF voices smears; one anchored sub is tight.
+    const bassManaged = enabled.some((s) => s.type === "subwoofer");
+    return enabled.map((s) => ({
+      id: s.id,
+      feed: feedForSpeaker(s),
+      x: s.nx * hx,
+      y: s.ny * hy,
+      z: s.nz * hz,
+      gainDb: s.gainDb,
+      ...(bassManaged && s.type !== "subwoofer" ? { bandLoHz: 80, bandHiHz: null } : {}),
+    }));
   }
   if (state.mode === "motion") {
     // Crossover bands arranged in a starting arc; the motion engine takes
@@ -528,9 +769,65 @@ function buildVoiceSpecs(state: DimensionState): VoiceSpec[] {
 
 // Module-level head-tracker plumbing (not reactive state): the UDP feed
 // steers the engine listener directly at ~30 Hz; the store only gets a
-// throttled yaw readout so the UI doesn't re-render per packet.
+// throttled pose readout so the UI doesn't re-render per packet.
 let headTrackUnsub: (() => void) | null = null;
 let headTrackLastUiPush = 0;
+/** Latest raw tracker sample — combined into the engine pose on every push. */
+let htLast: HeadPose | null = null;
+
+const D2R = Math.PI / 180;
+
+/**
+ * Combine the base pose (facing slider + Walk Mode position) with the live
+ * head-tracker offsets and push the full 6DOF pose into the engine. The
+ * soundfield stays fixed to the ROOM: sources keep their room positions
+ * while the head rotates and translates through them.
+ *
+ * opentrack units: yaw/pitch/roll in degrees (pitch + = up), X/Y/Z in cm
+ * (X + = right, Y + = up, Z + = back, away from the screen). Recenter
+ * captures the full zero pose so any tracker's resting offsets cancel out.
+ */
+function pushListenerPose(s: DimensionState): void {
+  let yaw = s.listenerYaw;
+  let pitch = 0;
+  let roll = 0;
+  let { x, y, z } = s.listenerPos;
+  if (s.headTracking && htLast) {
+    const zero = s.headTrackZero;
+    yaw += (htLast.yaw - zero.yaw) * D2R;
+    pitch = (htLast.pitch - zero.pitch) * D2R;
+    roll = (htLast.roll - zero.roll) * D2R;
+    x += (htLast.x - zero.x) / 100;
+    y += (htLast.y - zero.y) / 100;
+    z += (htLast.z - zero.z) / 100;
+  }
+  getEngine().dimension.setListenerPose({ yaw, pitch, roll, x, y, z });
+}
+
+// ── BPM-aware motion: attach the shared analysis service on demand ─────────
+let intelAttached = false;
+
+function syncTempoProvider(s: DimensionState): void {
+  const need = s.active && s.mode === "motion" && s.motion.bpmSync === true;
+  if (need === intelAttached) return;
+  const dim = getEngine().dimension;
+  if (need) {
+    intelAttached = true;
+    const intel = getVisualIntel();
+    intel.start();
+    // The provider drives its own analysis update (no-op if a visualizer
+    // already updated this frame) — only ONE high-rate pipeline ever runs.
+    dim.setTempoProvider(() => {
+      intel.update(performance.now());
+      const sn = intel.snapshot;
+      return { bpm: sn.bpm, conf: sn.bpmConf, beatPhase: sn.beatPhase, barPhase: sn.barPhase };
+    });
+  } else {
+    intelAttached = false;
+    dim.setTempoProvider(null);
+    getVisualIntel().stop();
+  }
+}
 
 export const useDimensionStore = create<DimensionState>((set, get) => {
   const persist = () => schedulePersist(get());
@@ -541,34 +838,41 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
     engine.dimension.setStageProfile(s.stage);
     engine.dimension.setSpace(s.space);
     engine.dimension.setRoom(s.room.width, s.room.height, s.room.depth, s.absorption);
-    engine.dimension.setListenerYaw(s.listenerYaw);
+    pushListenerPose(s);
     engine.dimension.setVoices(buildVoiceSpecs(s));
     // Motion engine follows the mode: animate the band voices while Motion
     // Mode is engaged, stand down (and leave positions static) otherwise.
+    // setMotionConfig (not startMotion) so param changes EASE in (~0.5 s)
+    // when motion is already running; it falls through to startMotion when
+    // it isn't.
     if (s.mode === "motion" && s.active) {
-      engine.dimension.startMotion(s.motion);
+      engine.dimension.setMotionConfig(s.motion);
     } else {
       engine.dimension.stopMotion();
     }
+    syncTempoProvider(s);
   };
 
   const stopHeadTracking = () => {
     headTrackUnsub?.();
     headTrackUnsub = null;
+    htLast = null;
     void window.playground?.headtrack?.stop();
-    // Return the listener to the manual facing slider.
-    getEngine().dimension.setListenerYaw(get().listenerYaw);
+    // Return the listener to the manual pose (facing slider + Walk Mode).
+    pushListenerPose(get());
   };
 
   return {
     ...load(),
     active: false,
     selectedId: null,
+    scene: null,
     headTracking: false,
     headTrackPort: 4242,
-    headTrackYawDeg: null,
-    headTrackZeroDeg: 0,
+    headTrackPose: null,
+    headTrackZero: { ...ZERO_HEAD_POSE },
     headTrackError: null,
+    walkMode: false,
 
     setActive: (on) => {
       set({ active: on });
@@ -579,6 +883,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
         pushStructure();
       } else {
         engine.dimension.stopMotion();
+        syncTempoProvider(get());
       }
       engine.setDimensionActive(on);
     },
@@ -626,9 +931,9 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
 
     setListenerYaw: (yaw) => {
       set({ listenerYaw: yaw });
-      // While head tracking drives the listener, the slider only stores the
-      // base facing; the tracker keeps ownership of the live yaw.
-      if (!get().headTracking) getEngine().dimension.setListenerYaw(yaw);
+      // The slider stores the BASE facing; the tracker's relative yaw (if
+      // running) is layered on top by pushListenerPose.
+      pushListenerPose(get());
       persist();
     },
 
@@ -636,7 +941,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       const api = window.playground?.headtrack;
       if (!on) {
         stopHeadTracking();
-        set({ headTracking: false, headTrackYawDeg: null, headTrackError: null });
+        set({ headTracking: false, headTrackPose: null, headTrackError: null });
         return;
       }
       if (!api) {
@@ -655,16 +960,21 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       headTrackUnsub = api.onData((d) => {
         const s = get();
         if (!s.headTracking) return;
-        // Tracker yaw is degrees, positive = head turned LEFT in opentrack's
-        // convention for most sources; our engine yaw is radians, positive =
-        // facing right of front. Apply the recenter offset, then steer.
-        const relDeg = d.yaw - s.headTrackZeroDeg;
-        const yawRad = (relDeg * Math.PI) / 180 + s.listenerYaw;
-        getEngine().dimension.setListenerYaw(yawRad);
+        // Full 6DOF: yaw/pitch/roll steer the head's orientation, X/Y/Z
+        // translate it — the room and its sources stay fixed in space.
+        htLast = {
+          yaw: Number.isFinite(d.yaw) ? d.yaw : 0,
+          pitch: Number.isFinite(d.pitch) ? d.pitch : 0,
+          roll: Number.isFinite(d.roll) ? d.roll : 0,
+          x: Number.isFinite(d.x) ? d.x : 0,
+          y: Number.isFinite(d.y) ? d.y : 0,
+          z: Number.isFinite(d.z) ? d.z : 0,
+        };
+        pushListenerPose(s);
         const now = performance.now();
         if (now - headTrackLastUiPush > 150) {
           headTrackLastUiPush = now;
-          set({ headTrackYawDeg: d.yaw });
+          set({ headTrackPose: { ...htLast } });
         }
       });
       set({ headTracking: true, headTrackError: null });
@@ -678,8 +988,98 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
     },
 
     recenterHeadTracking: () => {
-      const yaw = get().headTrackYawDeg;
-      if (yaw !== null) set({ headTrackZeroDeg: yaw });
+      // Capture the FULL current pose (orientation + position) as the new
+      // "seated, facing the screen" zero.
+      if (htLast) {
+        set({ headTrackZero: { ...htLast } });
+        pushListenerPose(get());
+      }
+    },
+
+    setWalkMode: (on) => {
+      set({ walkMode: on });
+    },
+
+    setListenerPos: (patch) => {
+      const cur = get().listenerPos;
+      const room = get().room;
+      const cl = (v: number, half: number) =>
+        Math.max(-(half - 0.25), Math.min(half - 0.25, v));
+      const listenerPos = {
+        x: cl(patch.x ?? cur.x, room.width / 2),
+        y: cl(patch.y ?? cur.y, room.height / 2),
+        z: cl(patch.z ?? cur.z, room.depth / 2),
+      };
+      set({ listenerPos });
+      pushListenerPose(get());
+      persist();
+    },
+
+    nudgeListener: (fwd, strafe, up) => {
+      const s = get();
+      const yaw = s.listenerYaw;
+      // Move relative to the current facing (WASD walks where you look).
+      const dx = Math.sin(yaw) * fwd + Math.cos(yaw) * strafe;
+      const dz = -Math.cos(yaw) * fwd + Math.sin(yaw) * strafe;
+      s.setListenerPos({
+        x: s.listenerPos.x + dx,
+        y: s.listenerPos.y + up,
+        z: s.listenerPos.z + dz,
+      });
+    },
+
+    resetListenerPos: () => {
+      set({ listenerPos: { x: 0, y: 0, z: 0 } });
+      pushListenerPose(get());
+      persist();
+    },
+
+    exportScene: async (name) => {
+      const files = window.playground?.files;
+      if (!files) return false;
+      const s = get();
+      const label = (name ?? "").trim() || (s.scene ?? "custom-scene");
+      const payload = {
+        kind: KDIM_KIND,
+        version: KDIM_VERSION,
+        name: label,
+        savedAt: new Date().toISOString(),
+        scene: persistShapeOf(s),
+      };
+      const json = JSON.stringify(payload, null, 2);
+      const base64 = btoa(unescape(encodeURIComponent(json)));
+      const fileSafe = label.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "scene";
+      const out = await files.save(
+        `${fileSafe}.kdim`,
+        [{ name: "Kill-Chain 3D scene", extensions: ["kdim", "json"] }],
+        base64,
+      );
+      return out !== null;
+    },
+
+    importScene: async () => {
+      const files = window.playground?.files;
+      if (!files) return null;
+      const res = await files.openText([
+        { name: "Kill-Chain 3D scene", extensions: ["kdim", "json"] },
+      ]);
+      if (!res) return null;
+      try {
+        const data = JSON.parse(res.text) as {
+          kind?: string;
+          name?: string;
+          scene?: Partial<PersistShape>;
+        };
+        if (data.kind !== KDIM_KIND || !data.scene) return null;
+        const scene = sanitizePersistShape(data.scene);
+        set({ ...scene, selectedId: null, scene: null });
+        pushStructure();
+        if (get().active) getEngine().setDimensionSignal(scene.signal);
+        persist();
+        return typeof data.name === "string" && data.name ? data.name : "scene";
+      } catch {
+        return null;
+      }
     },
 
     setMotion: (patch) => {
@@ -689,6 +1089,30 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       if (s.mode === "motion" && s.active) {
         getEngine().dimension.setMotionConfig(motion);
       }
+      syncTempoProvider(s);
+      persist();
+    },
+
+    applyScenePreset: (id) => {
+      const p =
+        MISSION_PROFILES.find((s) => s.id === id) ??
+        SCENE_PRESETS.find((s) => s.id === id);
+      if (!p) return;
+      set({
+        scene: p.id,
+        mode: p.mode,
+        layout: p.layout,
+        speakers: p.speakers ? p.speakers() : layoutSpeakers(p.layout),
+        room: { ...p.room },
+        absorption: p.absorption,
+        stage: p.stage,
+        space: clamp01(p.space),
+        ...(p.motion ? { motion: sanitizeMotion(p.motion) } : {}),
+        selectedId: null,
+        // A profile is a fresh seat — walk back to the sweet spot.
+        listenerPos: { x: 0, y: 0, z: 0 },
+      });
+      pushStructure();
       persist();
     },
 
@@ -725,7 +1149,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
     },
 
     applyLayout: (id) => {
-      set({ layout: id, speakers: layoutSpeakers(id), selectedId: null });
+      set({ layout: id, speakers: layoutSpeakers(id), selectedId: null, scene: null });
       pushStructure();
       persist();
     },
@@ -837,7 +1261,17 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       persist();
     },
 
-    select: (id) => set({ selectedId: id }),
+    select: (id) => {
+      set({ selectedId: id });
+      // Band Mode ↔ Sculptor live link: picking a band point in the room
+      // highlights the same band in the Sculptor (and vice versa below).
+      if (get().mode === "band") {
+        const st = useEqStore.getState();
+        if (st.selectedBandId !== id && (id === null || st.bands.some((b) => b.id === id))) {
+          st.selectBand(id);
+        }
+      }
+    },
 
     syncStructure: () => {
       pushStructure();
@@ -845,13 +1279,57 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
 
     reset: () => {
       const d = defaults();
-      set({ ...d, selectedId: null });
+      set({ ...d, selectedId: null, scene: null });
       const engine = getEngine();
       engine.dimension.stopMotion();
       engine.setDimensionActive(false);
       set({ active: false });
+      syncTempoProvider(get());
       pushStructure();
       persist();
     },
   };
 });
+
+// Sculptor → Band Mode selection sync (the reverse direction lives in
+// `select` above). Subscribed once at module load.
+let lastEqSelected: string | null | undefined;
+useEqStore.subscribe((s) => {
+  if (s.selectedBandId === lastEqSelected) return;
+  lastEqSelected = s.selectedBandId;
+  const dim = useDimensionStore.getState();
+  if (dim.mode === "band" && dim.selectedId !== s.selectedBandId) {
+    useDimensionStore.setState({ selectedId: s.selectedBandId });
+  }
+});
+
+// ── v2.0 Spatial Memory — scene capture / apply for Mission Log ────────────
+
+/** Snapshot the whole spatial scene (plus whether 3D is engaged). */
+export function captureDimensionScene(): DimensionSceneSnapshot {
+  const s = useDimensionStore.getState();
+  return { ...persistShapeOf(s), active: s.active };
+}
+
+/** Validate a scene loaded from storage. Null when unusable. */
+export function sanitizeDimensionScene(raw: unknown): DimensionSceneSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<DimensionSceneSnapshot>;
+  // A scene without a mode/room is not a scene — treat as "absent".
+  if (!r.mode && !r.room && !r.speakers) return null;
+  return { ...sanitizePersistShape(r), active: r.active === true };
+}
+
+/**
+ * Apply a saved spatial scene: restores layout, room, stage, space, motion
+ * AND the engaged state — the "manual override persists for that source"
+ * half of Spatial Memory.
+ */
+export function applyDimensionScene(snap: DimensionSceneSnapshot): void {
+  const store = useDimensionStore.getState();
+  const scene = sanitizePersistShape(snap);
+  useDimensionStore.setState({ ...scene, selectedId: null, scene: null });
+  store.syncStructure();
+  if (store.active !== snap.active) store.setActive(snap.active);
+  else if (snap.active) getEngine().setDimensionSignal(scene.signal);
+}

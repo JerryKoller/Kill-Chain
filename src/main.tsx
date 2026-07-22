@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles/globals.css";
+import "./styles/kcds.css";
 import {
   playSplashSound,
   preloadSplashSound,
@@ -9,11 +10,31 @@ import {
 } from "./audio/splashSound";
 import { useSettingsStore } from "./state/settingsStore";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+// ?viz=1 → this instance is the Visualizer BROADCAST window (a second
+// frameless BrowserWindow). It renders analyser frames streamed over IPC and
+// must NOT boot the full app (no engine, no splash, no stores beyond the
+// visualizer's own).
+const IS_VIZ_WINDOW =
+  new URLSearchParams(window.location.search).get("viz") === "1";
+
+if (IS_VIZ_WINDOW) {
+  document.getElementById("boot-splash")?.remove();
+  void import("./components/Visualizer/BroadcastWindow").then(
+    ({ BroadcastWindow }) => {
+      ReactDOM.createRoot(document.getElementById("root")!).render(
+        <React.StrictMode>
+          <BroadcastWindow />
+        </React.StrictMode>,
+      );
+    },
+  );
+} else {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  );
+}
 
 // Boot splash sequence. The inline script in index.html reveals the visuals
 // after a short black lead-in and stamps `__introStart`; here we start the
@@ -21,6 +42,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 // and dismiss the splash exactly when the sting ends — which is also when the
 // progress bar's 5 s fill animation completes.
 (() => {
+  if (IS_VIZ_WINDOW) return;
   const splash = document.getElementById("boot-splash");
   if (!splash) return;
 
@@ -66,7 +88,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 // automation can inspect the real engine + stores instead of accidentally
 // importing duplicate module copies through un-timestamped URLs.
 const IS_DEV = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true;
-if (IS_DEV) {
+if (IS_DEV && !IS_VIZ_WINDOW) {
   void Promise.all([
     import("@/audio/AudioEngine"),
     import("@/state/audioStore"),
@@ -78,9 +100,11 @@ if (IS_DEV) {
     import("@/state/fireSequencerStore"),
     import("@/lib/airspaceMedia"),
     import("@/state/visualizerStore"),
-  ]).then(([eng, audio, player, ui, air, dim, fire, seq, airMedia, viz]) => {
+    import("@/state/eqStore"),
+    import("@/lib/chainSnapshot"),
+  ]).then(([eng, audio, player, ui, air, dim, fire, seq, airMedia, viz, eq, chain]) => {
     (window as unknown as Record<string, unknown>).__kc = {
-      eng, audio, player, ui, air, dim, fire, seq, airMedia, viz,
+      eng, audio, player, ui, air, dim, fire, seq, airMedia, viz, eq, chain,
     };
   });
 }

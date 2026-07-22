@@ -428,7 +428,7 @@ function MenuScreen({
             <button
               key={d.id}
               onClick={() => setDifficulty(d)}
-              className={`rounded-2xl p-4 border text-left transition ${
+              className={`kc-lift rounded-2xl p-4 border text-left ${
                 difficulty.id === d.id
                   ? "border-cyan/60 bg-cyan/10"
                   : "border-white/10 hover:border-white/25 hover:bg-white/[0.03]"
@@ -452,7 +452,7 @@ function MenuScreen({
           <div className="text-[10px] uppercase tracking-[0.3em] text-dim">Test sound</div>
           <button
             onClick={onPickTrack}
-            className="text-[10px] uppercase tracking-widest px-2.5 py-1 rounded-full border border-violet/40 bg-violet/10 text-violet-300 hover:border-violet/70 transition"
+            className="kc-btn kc-btn--sm kc-btn--accent"
           >
             ＋ Load your track
           </button>
@@ -462,11 +462,7 @@ function MenuScreen({
             <button
               onClick={() => setSource("custom")}
               title={customName}
-              className={`rounded-full px-3 py-1.5 text-xs border transition max-w-[180px] truncate ${
-                source === "custom"
-                  ? "border-violet/70 bg-violet/20 text-violet-200"
-                  : "border-white/10 bg-white/[0.03] text-white/70 hover:border-white/25 hover:text-white"
-              }`}
+              className={`kc-chip max-w-[180px] truncate ${source === "custom" ? "kc-on" : ""}`}
             >
               ♪ {customName}
             </button>
@@ -475,11 +471,7 @@ function MenuScreen({
             <button
               key={s.id}
               onClick={() => setSource(s.id)}
-              className={`rounded-full px-3 py-1.5 text-xs border transition ${
-                source === s.id
-                  ? "border-cyan/60 bg-cyan/15 text-cyan"
-                  : "border-white/10 bg-white/[0.03] text-white/70 hover:border-white/25 hover:text-white"
-              }`}
+              className={`kc-chip ${source === s.id ? "kc-on" : ""}`}
             >
               {s.label}
             </button>
@@ -603,22 +595,18 @@ function ABControls({
   disabled: boolean;
 }) {
   return (
-    <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+    <div className="kc-seg">
       <button
         onClick={() => boosted && onToggle()}
         disabled={disabled}
-        className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
-          !boosted ? "bg-white/10 text-white" : "text-white/50 hover:text-white/80"
-        } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+        className={`kc-seg-btn ${!boosted ? "kc-on" : ""} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
       >
         Flat
       </button>
       <button
         onClick={() => !boosted && onToggle()}
         disabled={disabled}
-        className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
-          boosted ? "bg-cyan/20 text-cyan shadow-[0_0_18px_rgba(34,232,255,0.3)]" : "text-white/50 hover:text-white/80"
-        } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
+        className={`kc-seg-btn ${boosted ? "kc-on" : ""} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
       >
         Boosted
       </button>
@@ -745,7 +733,7 @@ function GameOver({
         <NeonButton onClick={onPlayAgain}>Play again</NeonButton>
         <button
           onClick={onMenu}
-          className="rounded-xl border border-white/12 hover:bg-white/5 px-4 py-2 text-sm text-white/80 transition"
+          className="kc-btn kc-btn--ghost"
         >
           Change difficulty
         </button>
