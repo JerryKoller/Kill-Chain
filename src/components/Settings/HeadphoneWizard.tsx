@@ -44,9 +44,10 @@ export function openHeadphoneWizard(): void {
 type WizardStep = "search" | "import" | "fallback";
 
 const FALLBACKS: Array<{ label: string; sub: string; profileId: string }> = [
-  { label: "Over-ear / on-ear", sub: "Harman over-ear target curve", profileId: "harman" },
+  { label: "Headphones (over-ear / on-ear)", sub: "Harman over-ear target curve", profileId: "harman" },
   { label: "IEM / earbuds", sub: "Harman target, gentle voicing", profileId: "harman" },
-  { label: "Open-back / studio", sub: "Neutral — no correction", profileId: "neutral" },
+  { label: "Desktop / bookshelf speakers", sub: "Generic PC speaker correction", profileId: "generic-pc-speakers" },
+  { label: "Soundbar / TV", sub: "Generic 2.1 soundbar starting point", profileId: "generic-soundbar-21" },
   { label: "Not sure", sub: "Neutral — pure source signal", profileId: "neutral" },
 ];
 
@@ -216,7 +217,7 @@ export function HeadphoneWizard() {
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder='Search brand or model — "XM6", "HD 650", "AirPods"...'
+                placeholder='Search brand or model — "HD 650", "soundbar", "laptop"...'
                 className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-cyan/60"
               />
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[320px] overflow-y-auto pr-1">

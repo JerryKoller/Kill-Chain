@@ -1,6 +1,6 @@
 import type { ParametricBand } from "./types";
-import { XM6_CORRECTION_BANDS } from "./xm6Profile";
 import { DEVICE_PROFILES } from "./deviceProfiles";
+import { SONY_XM6_CORRECTION_BANDS } from "./profiles/sonyXm6Profile";
 import type { HeadphoneId } from "@/state/settingsStore";
 
 /**
@@ -59,6 +59,11 @@ export interface HeadphoneProfile {
 /** Category of a profile, defaulting legacy headphone entries. */
 export function deviceTypeOf(p: HeadphoneProfile): DeviceType {
   return p.deviceType ?? "headphones";
+}
+
+/** Resolve a profile id, falling back to the neutral reference curve. */
+export function profileForId(id: string): HeadphoneProfile {
+  return HEADPHONES[id] ?? HEADPHONES.neutral;
 }
 
 /** Display order of the picker's device-type groups. */
@@ -377,7 +382,7 @@ export const HEADPHONES: Record<HeadphoneId, HeadphoneProfile> = {
   xm6: {
     id: "xm6", name: "Sony WH-1000XM6", brand: "Sony", formFactor: "over-ear",
     blurb: "Flagship ANC. Warm-detailed, slight mid presence dip.",
-    outputGainDb: -4.0, bands: XM6_CORRECTION_BANDS,
+    outputGainDb: -4.0, bands: SONY_XM6_CORRECTION_BANDS,
     match: ["wh-1000xm6", "xm6"],
   },
   xm5: {

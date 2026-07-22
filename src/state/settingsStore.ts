@@ -151,7 +151,7 @@ const DEFAULTS: Omit<SettingsState, "set" | "toggle"> = {
   accent: "theme",
   uiGlow: 0.4,
   uiScale: 1.0,
-  headphone: "xm6",
+  headphone: "neutral",
   companionMode: false,
   onboardingDone: false,
   miniMode: false,

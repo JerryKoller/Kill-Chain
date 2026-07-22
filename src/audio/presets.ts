@@ -18,7 +18,7 @@ export const PRESETS: Preset[] = [
   {
     id: "neutral",
     name: "Neutral Reference",
-    blurb: "XM6 corrected. Nothing else. The honest truth.",
+    blurb: "Flat reference. No coloration — the honest starting point.",
     emoji: "◯",
     accent: "#22e8ff",
     params: make({}),

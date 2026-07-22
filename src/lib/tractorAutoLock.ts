@@ -79,7 +79,7 @@ export async function autoLockScan(
     // The full manifest path — restoration / clarity / trim included, with
     // the health guard capping strength on already-clean masters.
     const manifest = buildLockManifest(m, {
-      headphone: HEADPHONES[useSettingsStore.getState().headphone] ?? HEADPHONES.xm6,
+      headphone: HEADPHONES[useSettingsStore.getState().headphone] ?? HEADPHONES.neutral,
       correctionEnabled: useAudioStore.getState().correctionEnabled,
       targetId: "smart",
       strength: 0.85,

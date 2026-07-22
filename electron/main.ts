@@ -1208,7 +1208,7 @@ ipcMain.handle("airspace:adblockStatus", () => ({
 // Listens for the de-facto standard opentrack "UDP over network" packets:
 // six little-endian float64s — X, Y, Z (cm), yaw, pitch, roll (degrees).
 // Tobii (via opentrack), AITrack/webcam trackers, phone IMU apps and the
-// Sony-headphone IMU bridges all speak it. Data is throttled to ~30 Hz and
+// Headphone / speaker IMU bridges all speak it. Data is throttled to ~30 Hz and
 // pushed to the renderer, which steers the 3rd Dimension listener.
 let headtrackSocket: dgram.Socket | null = null;
 let headtrackPort = 0;

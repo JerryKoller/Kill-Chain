@@ -15,6 +15,7 @@ import {
 } from "@/audio/headphoneProfiles";
 import { openHeadphoneWizard } from "@/components/Settings/HeadphoneWizard";
 import { HotkeysSection } from "@/components/Settings/HotkeysSection";
+import { LegalAboutSection } from "@/components/Settings/LegalAboutSection";
 import { useCustomHeadphonesStore } from "@/state/customHeadphonesStore";
 import { openWhatsNew } from "@/components/shared/WhatsNewPanel";
 import { APP_VERSION } from "@/lib/appVersion";
@@ -496,6 +497,7 @@ export function SettingsView() {
       <MidiSection />
 
       {/* v2.4 — engine recovery + session portability */}
+      <LegalAboutSection />
       <AdvancedActions />
       </>)}
     </div>
@@ -721,8 +723,8 @@ function HeadphonesSection({
   return (
     <GlassPanel intense className="p-5">
       <Section
-        title="Correction Profiles"
-        sub="Active correction profile — headphones, speakers, laptops and more, grouped by device type. Companion Mode auto-picks when you switch devices."
+        title="Playback Correction"
+        sub="Output device profile — headphones, speakers, laptops, soundbars, TVs, and more. Companion Mode auto-picks when you switch Windows output devices."
       />
       <div className="mt-3 flex flex-col sm:flex-row gap-3 items-stretch">
         <input
@@ -745,13 +747,16 @@ function HeadphonesSection({
           className="rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 px-3 py-2 text-xs font-semibold text-cyan whitespace-nowrap"
           title="Guided setup: find your model, import an AutoEq profile, or pick a generic fallback"
         >
-          I have these cans…
+          Find my model…
         </button>
       </div>
+      <p className="mt-2 text-[10px] text-dim leading-relaxed">
+        Profiles are compatibility aids, not brand endorsements.
+      </p>
       <div className="mt-3 flex flex-col gap-2 max-h-[420px] overflow-y-auto pr-1">
         {total === 0 && (
           <div className="text-[12px] text-dim p-4 text-center">
-            No devices match "{query}". Try "Sony", "JBL", "laptop", "soundbar"...
+            No devices match "{query}". Try a brand name, "laptop", or "soundbar"...
           </div>
         )}
         {groups.map(({ type, items }) => {
@@ -814,7 +819,7 @@ function HeadphonesSection({
       <div className="mt-3">
         <ToggleRow
           label="Companion Mode"
-          sub="Auto-enable correction when the active Windows output matches a known headphone"
+          sub="Auto-enable correction when the active Windows output matches a known device signature"
           value={companionMode}
           onChange={onToggleCompanion}
         />
@@ -1229,8 +1234,8 @@ function RoutingDiagnostics({
 
       {/* Quick A/B controls - critical when the user says "sounds worse"
           because both toggles let them instantly compare to truly raw
-          audio. Bypass = skip ALL user DSP. Correction = skip headphone
-          EQ (XM6 by default). */}
+          audio. Bypass = skip ALL user DSP. Correction = skip the active
+          output profile curve. */}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           onClick={() => {
@@ -1249,14 +1254,14 @@ function RoutingDiagnostics({
         <button
           onClick={() => {
             toggleCorrection();
-            toast(correctionEnabled ? "Headphone correction OFF" : "Headphone correction ON");
+            toast(correctionEnabled ? "Playback correction OFF" : "Playback correction ON");
           }}
           className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
             correctionEnabled
               ? "border-cyan/40 bg-cyan/10 text-cyan"
               : "border-yellow-400/40 bg-yellow-400/10 text-yellow-300"
           }`}
-          title="Headphone correction curve (e.g. Sony XM6). When OFF, the chain is fully neutral except for user DSP. Toggle this if exterior audio sounds 'colored' - the correction is designed for music files played in-app, not always ideal for processed system audio."
+          title="Playback correction curve for the active output profile. When OFF, the chain is fully neutral except for user DSP. Toggle this if exterior audio sounds 'colored' — correction is designed for music files played in-app, not always ideal for processed system audio."
         >
           {correctionEnabled ? `Correction: ${HEADPHONES[settings.headphone]?.name ?? settings.headphone}` : "Correction OFF (flat)"}
         </button>

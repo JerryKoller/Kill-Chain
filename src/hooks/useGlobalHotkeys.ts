@@ -52,7 +52,7 @@ export function getHotkeyCheatSheet(
     { keys: [K("snapshotA")], label: "Snapshot A (full chain)" },
     { keys: [K("swapAB")], label: "Swap A <-> B (loudness-matched)" },
     { keys: [K("clearAB")], label: "Clear A snapshot" },
-    { keys: [K("correction")], label: "Toggle XM6 / headphone correction" },
+    { keys: [K("correction")], label: "Toggle playback correction profile" },
     { keys: [K("bypass")], label: "Toggle full-effect bypass" },
     { keys: [K("savePreset")], label: "Save current tuning as preset" },
     { keys: [`Shift+${K("savePreset")}`], label: "Quick-save session snapshot (full chain)" },

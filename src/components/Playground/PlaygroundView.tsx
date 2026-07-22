@@ -18,7 +18,7 @@ import { RepairStackPanel } from "./RepairStackPanel";
 import { TargetLockPanel } from "./TargetLockPanel";
 import { BouncePanel } from "./BouncePanel";
 import { AdvancedMeter } from "@/components/Metering/AdvancedMeter";
-import { HEADPHONES } from "@/audio/headphoneProfiles";
+import { profileForId } from "@/audio/headphoneProfiles";
 import { useSettingsStore } from "@/state/settingsStore";
 
 const DYNAMICS_KEYS: (keyof SoundParams)[] = ["punch", "texture", "compression"];
@@ -38,7 +38,7 @@ export function PlaygroundView() {
   const toggleCorrection = useAudioStore((s) => s.toggleCorrection);
   const toast = useUIStore((s) => s.toast);
   const headphoneId = useSettingsStore((s) => s.headphone);
-  const headphone = HEADPHONES[headphoneId] ?? HEADPHONES.xm6;
+  const headphone = profileForId(headphoneId);
 
   return (
     <div className="flex flex-col gap-3 pb-4">

@@ -5,14 +5,14 @@ import { useUserPresetsStore } from "@/state/userPresetsStore";
 import { useCalibrationStore } from "@/state/calibrationStore";
 import { useEqStore } from "@/state/eqStore";
 import { useSettingsStore } from "@/state/settingsStore";
-import { HEADPHONES } from "@/audio/headphoneProfiles";
+import { profileForId } from "@/audio/headphoneProfiles";
 import { restoreActive } from "@/audio/dsp/Reconstructor";
 import { playUi } from "@/audio/uiSounds";
 
 /** Name of the active correction profile (never hardcode the device). */
 function activeProfileName(): string {
   const id = useSettingsStore.getState().headphone;
-  return HEADPHONES[id]?.name ?? id;
+  return profileForId(id).name;
 }
 
 /**
@@ -136,7 +136,7 @@ export function ActionBar({
                 ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
                 : "border-rose-400/30 bg-rose-500/5 text-rose-200/80 hover:bg-rose-500/10"
             }`}
-            title="Resets every slider, snapshot, and re-enables XM6 correction"
+            title="Resets every slider and snapshot; restores the active output profile's default gain"
           >
             {confirmReset ? "CONFIRM PURGE" : "✕ Purge All"}
           </button>

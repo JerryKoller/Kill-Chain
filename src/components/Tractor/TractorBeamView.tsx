@@ -9,7 +9,7 @@ import { useUIStore } from "@/state/uiStore";
 import { useAirspaceStore } from "@/state/airspaceStore";
 import { useLibraryStore, audioUrlForPath } from "@/state/libraryStore";
 import { getEngine } from "@/audio/AudioEngine";
-import { HEADPHONES } from "@/audio/headphoneProfiles";
+import { HEADPHONES, profileForId } from "@/audio/headphoneProfiles";
 import { useEqStore } from "@/state/eqStore";
 import {
   measureTrack,
@@ -106,7 +106,7 @@ function persistPrefs(prefs: TractorPrefs): void {
 export function TractorBeamView() {
   const correctionEnabled = useAudioStore((s) => s.correctionEnabled);
   const headphoneId = useSettingsStore((s) => s.headphone);
-  const headphone = HEADPHONES[headphoneId] ?? HEADPHONES.xm6;
+  const headphone = profileForId(headphoneId);
   const playerEl = usePlayerStore((s) => s.element);
   const playerMeta = usePlayerStore((s) => s.metadata);
   const playerStatus = usePlayerStore((s) => s.status);

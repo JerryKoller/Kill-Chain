@@ -1,6 +1,6 @@
 import { useUIStore, type View } from "@/state/uiStore";
 import { useSettingsStore } from "@/state/settingsStore";
-import { HEADPHONES } from "@/audio/headphoneProfiles";
+import { HEADPHONES, profileForId } from "@/audio/headphoneProfiles";
 import { SpectrumStrip } from "@/components/Layout/SpectrumStrip";
 import { useTabActivity, type TabActivity } from "@/hooks/useTabActivity";
 import { useEffect, useState, type ComponentType, type SVGProps } from "react";
@@ -102,14 +102,14 @@ export function Sidebar() {
   const view = useUIStore((s) => s.view);
   const setView = useUIStore((s) => s.setView);
   const headphoneId = useSettingsStore((s) => s.headphone);
-  const headphone = HEADPHONES[headphoneId] ?? HEADPHONES.xm6;
+  const headphone = profileForId(headphoneId);
   const activity = useTabActivity();
   const outputName = useOutputDeviceName();
 
   return (
     <aside className="w-56 shrink-0 p-3 flex flex-col gap-2 min-h-0">
       <div className="px-3 pt-2 pb-3 shrink-0">
-        <div className="kc-label text-white/40">Tactical Audio Engine</div>
+        <div className="kc-label text-white/40">Universal Windows audio engine</div>
         <div className="mt-1 text-lg font-display neon-text font-bold tracking-[0.12em] uppercase">
           Kill-Chain
         </div>
@@ -154,20 +154,20 @@ export function Sidebar() {
       </div>
 
       <div className="shrink-0 px-3 pt-3">
-        <div className="kc-label text-white/40 mb-2">Active device</div>
+        <div className="kc-label text-white/40 mb-2">Playback Correction</div>
         <div className="glass p-3 rounded-xl">
-          <div className="text-sm font-semibold truncate" title={outputName}>
-            {outputName}
+          <div className="text-sm font-semibold truncate" title={headphone.name}>
+            {headphone.name}
           </div>
-          <div className="text-[11px] text-dim mt-1 leading-relaxed truncate" title={headphone.name}>
-            Profile · {headphone.name}
+          <div className="text-[11px] text-dim mt-1 leading-relaxed truncate" title={outputName}>
+            Output · {outputName}
           </div>
         </div>
         <button
           onClick={() => setView("settings")}
           className="mt-2 w-full text-[10px] text-dim hover:text-cyan transition uppercase tracking-widest"
         >
-          Change device
+          Change profile
         </button>
       </div>
     </aside>

@@ -1,6 +1,6 @@
 /**
  * SpatialEnhancer — a lightweight crossfeed + Haas widener to give
- * tracks an "out-of-head" feeling on closed-back headphones like the XM6.
+ * tracks an "out-of-head" feeling on closed-back headphones.
  *
  * For each channel we feed a delayed, low-passed copy to the opposite
  * channel. The amount controls both delay (5–18ms) and gain.

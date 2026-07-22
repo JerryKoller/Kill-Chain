@@ -1,7 +1,7 @@
 {
   "name": "audio-playground",
-  "version": "2.4.0",
-  "description": "Kill-Chain — a tactical audio engine for the Sony WH-1000XM6 on Windows.",
+  "version": "2.4.1",
+  "description": "Kill Chain — a universal Windows audio engine for headphones, speakers, and home theater.",
   "author": "Jerry",
   "private": true,
   "main": "dist-electron/main.js",

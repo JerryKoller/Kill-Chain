@@ -20,7 +20,7 @@ import { FireCommandSynth } from "./dsp/FireCommandSynth";
 import { FireDrumKit, makeSafetyClipCurve, SAFETY_CLIP_RANGE } from "./dsp/FireDrumKit";
 import type { ParametricBand, SoundParams } from "./types";
 import { NEUTRAL_PARAMS } from "./types";
-import { XM6_CORRECTION_BANDS, XM6_DEFAULT_OUTPUT_GAIN_DB } from "./xm6Profile";
+import { DEFAULT_CORRECTION_BANDS, DEFAULT_OUTPUT_GAIN_DB } from "./defaultCorrectionProfile";
 
 /**
  * Maps friendly UI sliders to ParametricEQ bands.
@@ -198,7 +198,7 @@ export class AudioEngine {
     this.postFxGain.gain.value = 0;
     this.feedbackKiller = new FeedbackKiller(this.ctx);
 
-    this.correctionEQ = new ParametricEQ(this.ctx, XM6_CORRECTION_BANDS);
+    this.correctionEQ = new ParametricEQ(this.ctx, DEFAULT_CORRECTION_BANDS);
     this.reconstruct = new Reconstructor(this.ctx);
     this.clarity = new ClarityEngine(this.ctx);
     this.friendlyBands = this.buildFriendlyBands(this.params);
@@ -236,7 +236,7 @@ export class AudioEngine {
     this.balance = new StereoBalance(this.ctx);
 
     this.outputGain = this.ctx.createGain();
-    this.outputGain.gain.value = AudioEngine.dbToGain(XM6_DEFAULT_OUTPUT_GAIN_DB);
+    this.outputGain.gain.value = AudioEngine.dbToGain(DEFAULT_OUTPUT_GAIN_DB);
 
     this.lufs = new LUFSMeter(this.ctx);
 
@@ -601,9 +601,9 @@ export class AudioEngine {
   }
 
   /**
-   * Toggle the headphone-correction layer independent of the user-facing
-   * DSP. Useful for A/B-ing "raw Windows-style sound" vs the corrected
-   * Sony XM6 baseline without touching the playground controls.
+   * Toggle the playback-correction layer independent of the user-facing
+   * DSP. Useful for A/B-ing "raw" vs the active output profile without
+   * touching the playground controls.
    */
   setCorrectionEnabled(enabled: boolean): void {
     if (enabled === this.correctionEnabled) return;

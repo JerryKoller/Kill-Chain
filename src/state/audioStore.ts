@@ -7,8 +7,8 @@ import { RESTORE_OFF, restoreActive, type RestoreParams } from "@/audio/dsp/Reco
 // despite the module cycle chainSnapshot → audioStore.
 import { applyChain, captureChain, type ChainSnapshot } from "@/lib/chainSnapshot";
 import type { RoomId } from "@/audio/dsp/HRTFRooms";
-import { XM6_CORRECTION_BANDS, XM6_DEFAULT_OUTPUT_GAIN_DB } from "@/audio/xm6Profile";
-import { HEADPHONES } from "@/audio/headphoneProfiles";
+import { DEFAULT_CORRECTION_BANDS, DEFAULT_OUTPUT_GAIN_DB } from "@/audio/defaultCorrectionProfile";
+import { HEADPHONES, profileForId } from "@/audio/headphoneProfiles";
 import { useSettingsStore, type HeadphoneId } from "@/state/settingsStore";
 
 export type EngineStatus = "idle" | "loading" | "ready" | "playing" | "error";
@@ -107,9 +107,9 @@ let bootProfileApplied = false;
 export const useAudioStore = create<AudioState>((set, get) => ({
   status: "idle",
   params: { ...NEUTRAL_PARAMS },
-  correctionBands: [...XM6_CORRECTION_BANDS],
+  correctionBands: [...DEFAULT_CORRECTION_BANDS],
   correctionEnabled: false,
-  outputGainDb: XM6_DEFAULT_OUTPUT_GAIN_DB,
+  outputGainDb: DEFAULT_OUTPUT_GAIN_DB,
   bypass: true,
   abSnapshot: null,
   abLufs: null,
@@ -136,10 +136,8 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     if (!bootProfileApplied) {
       bootProfileApplied = true;
       const hpId = useSettingsStore.getState().headphone;
-      const hp = HEADPHONES[hpId];
-      if (hp && hpId !== "xm6") {
-        set({ correctionBands: hp.bands, outputGainDb: hp.outputGainDb });
-      }
+      const hp = profileForId(hpId);
+      set({ correctionBands: hp.bands, outputGainDb: hp.outputGainDb });
     }
     engine.applyParams(get().params);
     engine.replaceCorrectionBands(get().correctionBands);
@@ -272,7 +270,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   },
 
   setHeadphoneProfile: (id) => {
-    const profile = HEADPHONES[id] ?? HEADPHONES.xm6;
+    const profile = profileForId(id);
     set({
       correctionBands: profile.bands,
       outputGainDb: profile.outputGainDb,
@@ -348,8 +346,8 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     // Restore the active headphone's default output level too, so a Clear All
     // wipes any gain offset left behind by Pro Tools / LUFS normalize.
     const headphoneId = useSettingsStore.getState().headphone;
-    const profile = HEADPHONES[headphoneId] ?? HEADPHONES.xm6;
-    const defaultGainDb = profile.outputGainDb ?? XM6_DEFAULT_OUTPUT_GAIN_DB;
+    const profile = profileForId(headphoneId);
+    const defaultGainDb = profile.outputGainDb ?? DEFAULT_OUTPUT_GAIN_DB;
     set({
       params: { ...NEUTRAL_PARAMS },
       history,

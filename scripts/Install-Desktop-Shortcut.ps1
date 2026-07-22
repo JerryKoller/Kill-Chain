@@ -348,9 +348,9 @@ $useVbs = (Test-Path $LauncherVbs) -and (Test-Path $WScriptExe)
 $writtenCount = 0
 foreach ($shortcutPath in $shortcutTargets) {
   if ($useVbs) {
-    $ok = New-PlaygroundShortcut -Path $shortcutPath -Target $WScriptExe -Arguments ('"{0}"' -f $LauncherVbs) -Description "Kill-Chain - tactical audio engine for the Sony WH-1000XM6"
+    $ok = New-PlaygroundShortcut -Path $shortcutPath -Target $WScriptExe -Arguments ('"{0}"' -f $LauncherVbs) -Description "Kill Chain — universal Windows audio engine"
   } else {
-    $ok = New-PlaygroundShortcut -Path $shortcutPath -Target $LauncherBat -Description "Kill-Chain - tactical audio engine for the Sony WH-1000XM6"
+    $ok = New-PlaygroundShortcut -Path $shortcutPath -Target $LauncherBat -Description "Kill Chain — universal Windows audio engine"
   }
   if ($ok) { $writtenCount++ }
 }
