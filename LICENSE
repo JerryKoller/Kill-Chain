@@ -2,15 +2,13 @@ Kill Chain — Proprietary Software License
 
 Copyright (c) 2026 Jerry Koller. All rights reserved.
 
-Permission is granted to download and use Kill Chain for personal,
-non-commercial use on your own devices.
+This software is NOT open source. You may not copy, modify, merge, publish,
+distribute, sublicense, or sell copies of Kill Chain except under a separate
+written agreement with the copyright holder.
 
-You may not:
-- Redistribute, sublicense, or sell Kill Chain or any part of it
-- Reverse engineer, decompile, or modify the software for redistribution
-- Remove or alter copyright notices
+Personal evaluation may be permitted by the copyright holder. Commercial use,
+resale, and redistribution require an approved End User License Agreement.
+See LEGAL/EULA.md (draft — attorney review required).
 
-Kill Chain is provided "as is", without warranty of any kind. The author
-is not liable for any damages arising from use of the software.
-
-For permissions beyond personal use, contact the author via GitHub Issues.
+Third-party components embedded in Kill Chain are licensed under their own
+terms. See THIRD_PARTY_NOTICES.md.

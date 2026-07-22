@@ -2,6 +2,21 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.4.1] — 2026-07-22
+
+**Legal and Universal Output Repositioning** — commercial hygiene pass, not a feature release.
+
+### Changed
+- Product positioning: universal Windows audio engine for headphones, speakers, and home theater (not a single-headphone product)
+- Fresh installs default to **Neutral** playback correction instead of a Sony XM6 curve
+- Settings device section renamed **Playback Correction**; onboarding asks what you listen on (headphones, speakers, soundbar/TV, home theater, or neutral)
+- Sidebar shows the active profile dynamically; ActionBar and hotkeys use generic “playback correction” wording
+
+### Added
+- **About / Legal** (Settings › Advanced): trademark notice, content responsibility, draft EULA and Privacy Policy links
+- `LICENSE` (proprietary), `LEGAL/`, and `THIRD_PARTY_NOTICES.md` for commercial distribution checklist
+- Profile picker disclaimer: compatibility aids, not brand endorsements
+
 ## [2.4.0] — 2026-07-22
 
 **Stability and Cohesion** — a glue-and-trust release. First public build since 1.4.0; also rolls up the internal 1.5–2.3 releases below.
