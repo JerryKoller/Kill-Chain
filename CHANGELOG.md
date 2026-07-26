@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.5] — 2026-07-26 — Command Deck
+
+### Added
+- **Signal Path Theater** — OSC → Filter → Drive → FX → Mix → Scope with live heat; click jump / FOC focus
+- **Command Map** — atlas of all Fire Command stages with jump + focus
+- **Focus Mode** — solo one module full-bay; sticky Show-all HUD. Layout only — audio unchanged
+
 ## [2.6.4] — 2026-07-26 — Morph Search + Stage Depth
 
 ### Changed
