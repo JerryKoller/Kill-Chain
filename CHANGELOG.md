@@ -2,15 +2,30 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.1] — 2026-07-26 — Genesis Polish
+
+### Changed
+- **Character names** — fully ambiguous (Horizon Stack, Acid Line, Pocket Chip, Algorithm Keys, …); no trademarked inspiration labels in the UI
+- **Patch Library** — emoji-free chrome, denser organization, clearer Mission deploy flow
+- **Signal Path** — On/Off bypass per stage (OSC · FILTER · DRIVE · AGE · FX · MIX · SCOPE)
+- **Reverb** — Damp, Predelay, Diffusion knobs + richer IR / stage viz
+- **Chip & Analog Life** — stronger PWM / sync / noise bed / drift / instability / accent / slide feel
+- **Visualizers** — Vintage Age, Chip, Analog Life stages; Sidechain duck curve is hi-DPI
+
+### Fixed
+- Sidechain rack canvas stretched at low resolution
+- Chip noise character barely audible when Noise knob was at zero
+- Analog Life knobs too subtle to hear without cranking Drift
+
 ## [3.0.0] — 2026-07-26 — Fire Command Genesis
 
 ### Added
-- **Characters** — 23 inspired cards (Vintage / Chip / FM) from Jupiter-8, Prophet-5, Juno-60, SH-101, CS-70M, ARP 2600, Game Boy, NES, C64, Genesis, Atari ST, TB-303, DX7/Operator, Synclavier, Wavestation, Pigments, Gladiator, Vanguard, Albino, Sumu, Synplant, Myth, MAP
-- **Vintage Age** bus — cassette generations, variable tape speed, wow/flutter, VHS Hi-Fi, 8/12-bit + downsample, BBD chorus, analog compress, dust / hiss / hum / print-through (transparent when off)
+- **Characters** — 23 inspired cards (Vintage / Chip / FM) with original names (Horizon Stack, Soft Dual, Acid Line, Pocket Chip, Algorithm Keys, Color Morph, and more)
+- **Vintage Age** bus — cassette generations, variable tape speed, wow/flutter, VHS color, 8/12-bit + downsample, BBD chorus, analog compress, dust / hiss / hum / print-through (transparent when off)
 - **Analog Life** — drift rate, voice instability, per-note tune variance, envelope inconsistency
-- **Chip & Acid** — pulse duty, hard sync DNA, NES/GB/periodic noise, chip voice limit, 303 accent + slide
+- **Chip & Acid** — pulse duty, hard sync feel, Hold/Soft/periodic noise, chip voice limit, accent + slide
 - **FM Rack & Vector** — 4-op FM engine mode (algorithms / ops / feedback), vector morph rate/depth
-- **Library categories** — Vintage, Chip, FM + Genesis · … presets
+- **Library categories** — Vintage, Chip, FM + Genesis presets
 
 ### Changed
 - Fire Command patch bay: Characters button; rack sections for Vintage Age, Analog Life, Chip, FM Rack
