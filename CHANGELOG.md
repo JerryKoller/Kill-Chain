@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.3] — 2026-07-26 — Unique Stage Personalities
+
+### Changed
+- **Macros** — four equal command cards (ring meters + destination chips); no radar clipping
+- **Stage chrome** — plate / bloom / scope / rails / notch / keys frames so FX and Core stages no longer share one look
+- **Personality pass** — Drive forge, Phaser comb valleys, Chorus L/C/R sheets, Delay dual lanes, LFO CRT phosphor, FM Venn, Performance piano keys, Gate shutter rails, Arp bloom rails. Display only — audio unchanged
+
 ## [2.6.2] — 2026-07-26 — Visualizer Fidelity + Patch Polish
 
 ### Changed
