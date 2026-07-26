@@ -829,6 +829,8 @@ interface PersistShape {
   maxVoices: number;
   /** Natural-selection mutation strength, 0 (subtle) .. 1 (wild). */
   mutateAmount: number;
+  /** Last kept generation — survives Keep Winner so the next breed continues the lineage. */
+  mutateLineage: number;
 }
 
 function defaults(): PersistShape {
@@ -842,6 +844,7 @@ function defaults(): PersistShape {
     userPresets: [],
     maxVoices: 12,
     mutateAmount: 0.35,
+    mutateLineage: 0,
   };
 }
 
@@ -864,6 +867,7 @@ function load(): PersistShape {
       userPresets: Array.isArray(parsed.userPresets) ? parsed.userPresets : d.userPresets,
       maxVoices: typeof parsed.maxVoices === "number" ? parsed.maxVoices : d.maxVoices,
       mutateAmount: typeof parsed.mutateAmount === "number" ? clamp(parsed.mutateAmount, 0, 1) : d.mutateAmount,
+      mutateLineage: typeof parsed.mutateLineage === "number" ? Math.max(0, Math.floor(parsed.mutateLineage)) : d.mutateLineage,
     };
   } catch {
     return defaults();
@@ -885,6 +889,7 @@ function schedulePersist(state: FireCommandState): void {
       userPresets: state.userPresets,
       maxVoices: state.maxVoices,
       mutateAmount: state.mutateAmount,
+      mutateLineage: state.mutateLineage,
     };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -1004,7 +1009,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory(`param:${String(key)}`);
       const patch = { ...get().patch, [key]: value };
       // Hand-editing adopts the audible sound and ends any selection round.
-      set({ patch, presetId: "custom", mutation: null });
+      set({ patch, presetId: "custom", mutation: null, mutateLineage: 0 });
       getEngine().fireCommand.set(key, value);
       persist();
     },
@@ -1033,7 +1038,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const arp: ArpSettings = src.arp
         ? { ...DEFAULT_ARP, ...src.arp }
         : { ...get().arp, enabled: false };
-      set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, arpStepIndex: -1, heldNotes: [], mutation: null });
+      set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, arpStepIndex: -1, heldNotes: [], mutation: null, mutateLineage: 0 });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
@@ -1045,7 +1050,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     randomize: () => {
       pushFireHistory();
       const patch = randomPatch();
-      set({ patch, presetId: "custom", mutation: null });
+      set({ patch, presetId: "custom", mutation: null, mutateLineage: 0 });
       getEngine().fireCommand.setPatch(patch);
       persist();
     },
@@ -1055,8 +1060,13 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const s = get();
       // Breeding from an open round evolves from what's currently audible —
       // the parent of the next generation is the offspring you're hearing.
+      // After Keep Winner, mutateLineage remembers the last kept gen.
       const parent = s.patch;
-      const generation = s.mutation ? s.mutation.generation + 1 : 1;
+      const generation = s.mutation
+        ? s.mutation.generation + 1
+        : s.mutateLineage > 0
+          ? s.mutateLineage + 1
+          : 1;
       const a = mutatePatch(parent, s.mutateAmount);
       const b = mutatePatch(parent, s.mutateAmount);
       set({
@@ -1089,15 +1099,16 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     commitMutation: () => {
       const m = get().mutation;
       if (!m) return;
-      // Patch already holds the audible offspring — just close the round.
-      set({ mutation: null });
+      // Patch already holds the audible offspring — close the round and
+      // remember the generation so the next breed continues the lineage.
+      set({ mutation: null, mutateLineage: m.generation });
       persist();
     },
 
     discardMutation: () => {
       const m = get().mutation;
       if (!m) return;
-      set({ mutation: null, patch: structuredClone(m.base), presetId: "custom" });
+      set({ mutation: null, mutateLineage: 0, patch: structuredClone(m.base), presetId: "custom" });
       getEngine().fireCommand.setPatch(get().patch);
       persist();
     },
@@ -1110,7 +1121,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
         : { ...get().arp };
       stopArpScheduler();
-      set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1, mutation: null });
+      set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1, mutation: null, mutateLineage: 0 });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);

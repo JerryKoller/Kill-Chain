@@ -127,19 +127,19 @@ export function FireCommandDeck() {
           )}
         </div>
 
-        <div className="flex items-stretch gap-0 min-w-0 overflow-x-auto pb-0.5">
+        <div className="flex w-full items-stretch gap-0 min-w-0">
           {SIGNAL_PATH.map((node, i) => {
             const h = heat[node.id];
             const focused = focusId === node.moduleId;
             const lit = h > 0.08;
             return (
-              <div key={node.id} className="flex items-center min-w-0">
-                <div className="relative flex flex-col items-center gap-1 min-w-[64px] sm:min-w-[76px]">
+              <div key={node.id} className="flex min-w-0 flex-1 items-center">
+                <div className="relative flex w-full min-w-0 flex-col items-center gap-1">
                   <button
                     type="button"
                     onClick={() => onNodeClick(node.moduleId)}
                     title={`${node.hint} — jump to ${node.label}`}
-                    className="group relative flex h-12 w-full max-w-[76px] flex-col items-center justify-center rounded-xl border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                    className="group relative flex h-12 w-full flex-col items-center justify-center rounded-xl border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
                     style={{
                       borderColor: focused ? node.color : lit ? `${node.color}66` : "rgba(255,255,255,0.1)",
                       background: focused
@@ -157,7 +157,7 @@ export function FireCommandDeck() {
                       {node.label}
                     </span>
                     {/* Heat rail */}
-                    <span className="mt-1 h-0.5 w-8 overflow-hidden rounded-full bg-white/10">
+                    <span className="mt-1 h-0.5 w-[min(2rem,40%)] overflow-hidden rounded-full bg-white/10">
                       <span
                         className="block h-full rounded-full transition-[width] duration-200"
                         style={{
@@ -182,7 +182,7 @@ export function FireCommandDeck() {
                   </button>
                 </div>
                 {i < SIGNAL_PATH.length - 1 && (
-                  <div className="mx-0.5 sm:mx-1 flex w-4 sm:w-7 shrink-0 items-center self-center" aria-hidden>
+                  <div className="mx-0.5 flex w-2 shrink-0 items-center self-center sm:mx-1 sm:w-3" aria-hidden>
                     <div
                       className="h-px w-full"
                       style={{
