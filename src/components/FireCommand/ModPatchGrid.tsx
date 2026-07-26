@@ -1,15 +1,12 @@
 /**
- * ModPatchGrid (v1.7, MK IV facelift) — the mod matrix as a patch-bay grid.
+ * ModPatchGrid — green signal bay.
  *
  * Sources are rows, destinations are columns. Click an empty cell to allocate
- * one of the 12 matrix slots to that (source → destination) pair; drag
- * vertically to set the bipolar amount (dot grows/changes color); right-click
- * clears the cell back into the free pool. It's purely a VIEW over the same
- * 12-slot `modMatrix` array — presets, undo and the engine see nothing new.
- * MK IV adds a crosshair hover, per-family row tints and a slot meter.
+ * one of the 12 matrix slots; drag vertically for bipolar amount; right-click
+ * clears. Display-only chrome on top: animated cable flow of active routes.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { ModSource, ModDest } from "@/audio/dsp/FireCommandSynth";
 
@@ -46,6 +43,160 @@ const DESTS: { id: ModDest; label: string; hint: string }[] = [
   { id: "reverb", label: "Rev", hint: "Reverb send" },
   { id: "delay", label: "Dly", hint: "Delay send" },
 ];
+
+/** Animated cable bay — active routes as bezier wires with traveling packets. */
+function SignalFlowViz() {
+  const matrix = useFireCommandStore((s) => s.patch.modMatrix);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const stateRef = useRef(matrix);
+  stateRef.current = matrix;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const size = { w: 400, h: 88 };
+
+    const sync = () => {
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      size.w = Math.max(280, Math.floor(wrap.clientWidth));
+      size.h = 88;
+      canvas.width = Math.floor(size.w * dpr);
+      canvas.height = Math.floor(size.h * dpr);
+      canvas.style.width = `${size.w}px`;
+      canvas.style.height = `${size.h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(wrap);
+
+    const srcTint = (id: string) => SOURCES.find((s) => s.id === id)?.tint ?? GRN;
+
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 24) return;
+      last = t;
+      const mx = stateRef.current;
+      const { w: W, h: H } = size;
+      ctx.clearRect(0, 0, W, H);
+
+      // Green lattice depth
+      const bg = ctx.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, "rgba(124,246,176,0.07)");
+      bg.addColorStop(0.5, "rgba(4,14,10,0.55)");
+      bg.addColorStop(1, "rgba(124,246,176,0.04)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      // Faint lattice
+      ctx.strokeStyle = "rgba(124,246,176,0.05)";
+      for (let x = 0; x < W; x += 24) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      }
+      for (let y = 0; y < H; y += 18) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
+
+      const routes = mx.filter((r) => r.source !== "none" && r.dest !== "none");
+      const leftX = 70;
+      const rightX = W - 70;
+      const midY = H / 2;
+
+      // Source / dest pillars
+      ctx.fillStyle = "rgba(124,246,176,0.12)";
+      ctx.fillRect(18, 12, 36, H - 24);
+      ctx.fillRect(W - 54, 12, 36, H - 24);
+      ctx.font = "600 8px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(124,246,176,0.55)";
+      ctx.fillText("SRC", 36, H - 8);
+      ctx.fillText("DST", W - 36, H - 8);
+
+      if (routes.length === 0) {
+        ctx.fillStyle = "rgba(255,255,255,0.28)";
+        ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillText("NO ACTIVE PATCHES — click a cell below", W / 2, midY + 4);
+        return;
+      }
+
+      routes.slice(0, 12).forEach((r, i) => {
+        const n = routes.length;
+        const y1 = 18 + ((i + 0.5) / Math.max(1, n)) * (H - 36);
+        const destIdx = DESTS.findIndex((d) => d.id === r.dest);
+        const y2 = 18 + ((Math.max(0, destIdx) + 0.5) / DESTS.length) * (H - 36);
+        const tint = srcTint(r.source);
+        const color = r.amount >= 0 ? tint : AMB;
+        const mag = Math.abs(r.amount);
+        const cpx = (leftX + rightX) / 2;
+
+        // Cable
+        ctx.beginPath();
+        ctx.moveTo(leftX, y1);
+        ctx.bezierCurveTo(cpx - 40, y1, cpx + 40, y2, rightX, y2);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.25 + mag * 0.55;
+        ctx.lineWidth = 1.2 + mag * 2;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // Traveling packet along bezier
+        const u = ((t / 1400) + i * 0.13) % 1;
+        // Approximate point on cubic bezier
+        const mt = 1 - u;
+        const px =
+          mt * mt * mt * leftX +
+          3 * mt * mt * u * (cpx - 40) +
+          3 * mt * u * u * (cpx + 40) +
+          u * u * u * rightX;
+        const py =
+          mt * mt * mt * y1 +
+          3 * mt * mt * u * y1 +
+          3 * mt * u * u * y2 +
+          u * u * u * y2;
+        const rg = ctx.createRadialGradient(px, py, 0, px, py, 5);
+        rg.addColorStop(0, "#fff");
+        rg.addColorStop(0.4, color);
+        rg.addColorStop(1, `${color}00`);
+        ctx.fillStyle = rg;
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // End nodes
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(leftX, y1, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(rightX, y2, 2.5, 0, Math.PI * 2); ctx.fill();
+      });
+
+      ctx.fillStyle = "rgba(124,246,176,0.45)";
+      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(`${routes.length} LIVE`, 12, 12);
+    };
+
+    raf = requestAnimationFrame(draw);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, []);
+
+  return (
+    <div
+      ref={wrapRef}
+      className="relative mb-2.5 overflow-hidden rounded-xl border border-[#7cf6b0]/15 bg-black/50 shadow-[inset_0_1px_0_rgba(124,246,176,0.06),0_8px_24px_rgba(0,0,0,0.3)]"
+    >
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 88 }} aria-hidden />
+      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t border-[#7cf6b0]/40" />
+      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t border-[#7cf6b0]/40" />
+      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l border-[#7cf6b0]/40" />
+      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r border-[#7cf6b0]/40" />
+    </div>
+  );
+}
 
 export function ModPatchGrid() {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
@@ -94,16 +245,18 @@ export function ModPatchGrid() {
 
   return (
     <div>
-      <div className="overflow-x-auto">
-        <table className="border-separate" style={{ borderSpacing: 2 }}>
+      <SignalFlowViz />
+
+      <div className="overflow-x-auto rounded-xl border border-white/[0.06] bg-black/30 p-2">
+        <table className="border-separate w-full" style={{ borderSpacing: 3 }}>
           <thead>
             <tr>
-              <th />
+              <th className="w-10" />
               {DESTS.map((dst, ci) => (
                 <th
                   key={dst.id}
-                  className="text-[8.5px] font-semibold uppercase tracking-wide pb-0.5 min-w-[26px] transition-colors"
-                  style={{ color: hover?.c === ci ? "#fff" : "rgba(255,255,255,0.4)" }}
+                  className="text-[8.5px] font-semibold uppercase tracking-wide pb-1 min-w-[26px] transition-colors"
+                  style={{ color: hover?.c === ci ? "#fff" : "rgba(255,255,255,0.38)" }}
                   title={dst.hint}
                 >
                   {dst.label}
@@ -116,7 +269,7 @@ export function ModPatchGrid() {
               <tr key={src.id}>
                 <td
                   className="text-[9px] font-semibold uppercase tracking-wide pr-1.5 text-right whitespace-nowrap transition-colors"
-                  style={{ color: hover?.r === ri ? src.tint : "rgba(255,255,255,0.45)" }}
+                  style={{ color: hover?.r === ri ? src.tint : "rgba(255,255,255,0.42)" }}
                   title={src.hint}
                 >
                   {src.label}
@@ -137,14 +290,19 @@ export function ModPatchGrid() {
                         onPointerCancel={onCellUp}
                         onPointerEnter={() => setHover({ r: ri, c: ci })}
                         onContextMenu={(e) => e.preventDefault()}
-                        className="w-[26px] h-[22px] rounded-[5px] border flex items-center justify-center cursor-pointer touch-none select-none transition-colors"
+                        className="mx-auto flex h-[24px] w-[26px] items-center justify-center rounded-md border cursor-pointer touch-none select-none transition-all"
                         style={{
-                          borderColor: active ? `${color}66` : inCross ? `${src.tint}33` : "rgba(255,255,255,0.06)",
-                          background: active
-                            ? `${color}14`
+                          borderColor: active
+                            ? `${color}88`
                             : inCross
-                              ? `${src.tint}0d`
-                              : "rgba(255,255,255,0.015)",
+                              ? `${src.tint}44`
+                              : "rgba(255,255,255,0.06)",
+                          background: active
+                            ? `radial-gradient(circle at 50% 40%, ${color}33, ${color}0a)`
+                            : inCross
+                              ? `${src.tint}12`
+                              : "rgba(255,255,255,0.02)",
+                          boxShadow: active ? `inset 0 0 8px ${color}33, 0 0 ${4 + mag * 6}px ${color}22` : undefined,
                         }}
                         title={
                           active
@@ -160,9 +318,9 @@ export function ModPatchGrid() {
                             style={{
                               width: 4 + mag * 12,
                               height: 4 + mag * 12,
-                              background: color,
-                              boxShadow: mag > 0.02 ? `0 0 ${3 + mag * 8}px ${color}aa` : undefined,
-                              opacity: 0.45 + mag * 0.55,
+                              background: `radial-gradient(circle at 35% 35%, #fff, ${color})`,
+                              boxShadow: mag > 0.02 ? `0 0 ${4 + mag * 10}px ${color}` : undefined,
+                              opacity: 0.5 + mag * 0.5,
                             }}
                           />
                         )}
@@ -175,34 +333,36 @@ export function ModPatchGrid() {
           </tbody>
         </table>
       </div>
-      <div className="mt-1.5 flex items-center gap-2 text-[10px] text-dim">
-        <span
-          className={`font-mono px-1.5 py-0.5 rounded border transition ${
-            budgetFlash
-              ? "border-rose-400/70 text-rose-300 bg-rose-500/15"
-              : "border-white/10 text-white/50"
-          }`}
-        >
-          {used}/{matrix.length} slots
-        </span>
-        {/* slot meter — one pip per matrix slot */}
-        <span className="flex items-center gap-[3px]" aria-hidden>
-          {matrix.map((r, i) => {
-            const on = r.source !== "none" && r.dest !== "none";
-            return (
-              <span
-                key={i}
-                className="w-[5px] h-[10px] rounded-[2px] transition-colors"
-                style={{
-                  background: on ? (r.amount >= 0 ? GRN : AMB) : "rgba(255,255,255,0.08)",
-                  boxShadow: on ? `0 0 5px ${(r.amount >= 0 ? GRN : AMB)}66` : "none",
-                }}
-              />
-            );
-          })}
-        </span>
-        <span>
-          click a cell to patch · drag ↕ sets depth ({" "}
+
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-dim">
+        <div className="flex items-center gap-2">
+          <span
+            className={`font-mono px-1.5 py-0.5 rounded border transition ${
+              budgetFlash
+                ? "border-rose-400/70 text-rose-300 bg-rose-500/15"
+                : "border-white/10 text-white/50"
+            }`}
+          >
+            {used}/{matrix.length} slots
+          </span>
+          <span className="flex items-center gap-[3px]" aria-hidden>
+            {matrix.map((r, i) => {
+              const on = r.source !== "none" && r.dest !== "none";
+              return (
+                <span
+                  key={i}
+                  className="h-[10px] w-[5px] rounded-[2px] transition-colors"
+                  style={{
+                    background: on ? (r.amount >= 0 ? GRN : AMB) : "rgba(255,255,255,0.08)",
+                    boxShadow: on ? `0 0 5px ${(r.amount >= 0 ? GRN : AMB)}66` : "none",
+                  }}
+                />
+              );
+            })}
+          </span>
+        </div>
+        <span className="text-right">
+          click to patch · drag ↕ depth ({" "}
           <span style={{ color: GRN }}>green +</span> /{" "}
           <span style={{ color: AMB }}>amber −</span> ) · right-click clears
         </span>

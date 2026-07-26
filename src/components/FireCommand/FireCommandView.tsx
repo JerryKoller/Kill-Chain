@@ -1475,16 +1475,225 @@ function LfoPanel({ idx }: { idx: 1 | 2 }) {
 
 // ════════════════════ macros · gate · matrix ════════════════════
 
-function MacrosPanel() {
+const MACRO_COLORS = ["#ffb35c", "#ff8f5c", "#ffcf5c", "#f0a060"] as const;
+const MACRO_KEYS = ["macro1", "macro2", "macro3", "macro4"] as const;
+
+/** Macros personality: amber command cluster — radar of the four hands-on controls. */
+function MacroClusterViz() {
+  const m1 = useFireCommandStore((s) => s.patch.macro1);
+  const m2 = useFireCommandStore((s) => s.patch.macro2);
+  const m3 = useFireCommandStore((s) => s.patch.macro3);
+  const m4 = useFireCommandStore((s) => s.patch.macro4);
+  const matrix = useFireCommandStore((s) => s.patch.modMatrix);
+  const values = [m1, m2, m3, m4];
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const stateRef = useRef({ values, matrix });
+  stateRef.current = { values, matrix };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const size = { w: 400, h: 118 };
+
+    const sync = () => {
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      size.w = Math.max(280, Math.floor(wrap.clientWidth));
+      size.h = 118;
+      canvas.width = Math.floor(size.w * dpr);
+      canvas.height = Math.floor(size.h * dpr);
+      canvas.style.width = `${size.w}px`;
+      canvas.style.height = `${size.h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(wrap);
+
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 24) return;
+      last = t;
+      const { values: v, matrix: mx } = stateRef.current;
+      const { w: W, h: H } = size;
+      ctx.clearRect(0, 0, W, H);
+
+      // Amber depth field
+      const bg = ctx.createRadialGradient(W * 0.5, H * 0.55, 8, W * 0.5, H * 0.5, W * 0.55);
+      bg.addColorStop(0, "rgba(255,179,92,0.10)");
+      bg.addColorStop(0.55, "rgba(12,10,6,0.5)");
+      bg.addColorStop(1, "rgba(0,0,0,0.35)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      const cx = W * 0.38;
+      const cy = H * 0.52;
+      const R = Math.min(H * 0.38, 44);
+
+      // Concentric rings
+      for (let i = 1; i <= 4; i++) {
+        ctx.strokeStyle = `rgba(255,179,92,${0.06 + i * 0.02})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Crosshair
+      ctx.strokeStyle = "rgba(255,179,92,0.12)";
+      ctx.beginPath();
+      ctx.moveTo(cx - R - 6, cy); ctx.lineTo(cx + R + 6, cy);
+      ctx.moveTo(cx, cy - R - 6); ctx.lineTo(cx, cy + R + 6);
+      ctx.stroke();
+
+      // Diamond polygon of the four macros
+      const angles = [-Math.PI / 2, 0, Math.PI / 2, Math.PI];
+      const pts = angles.map((ang, i) => {
+        const r = 8 + v[i] * (R - 6);
+        return { x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r, v: v[i], c: MACRO_COLORS[i] };
+      });
+
+      // Fill polygon
+      if (pts.every((p) => p.v > 0.01) || pts.some((p) => p.v > 0.01)) {
+        ctx.beginPath();
+        pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.closePath();
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+        g.addColorStop(0, "rgba(255,179,92,0.22)");
+        g.addColorStop(1, "rgba(255,179,92,0.02)");
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,179,92,0.45)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      // Nodes + spokes
+      pts.forEach((p, i) => {
+        ctx.strokeStyle = `${p.c}44`;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+
+        const rg = ctx.createRadialGradient(p.x - 1, p.y - 1, 0, p.x, p.y, 7);
+        rg.addColorStop(0, "#fff");
+        rg.addColorStop(0.4, p.c);
+        rg.addColorStop(1, `${p.c}00`);
+        ctx.fillStyle = rg;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6 + p.v * 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        const lx = cx + Math.cos(angles[i]) * (R + 14);
+        const ly = cy + Math.sin(angles[i]) * (R + 14);
+        ctx.fillText(`M${i + 1}`, lx, ly + 3);
+      });
+
+      // Slow sweep arm
+      const sweep = (t / 2200) % (Math.PI * 2);
+      ctx.strokeStyle = "rgba(255,207,92,0.25)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(sweep) * R, cy + Math.sin(sweep) * R);
+      ctx.stroke();
+
+      // Right-side wiring readout
+      const x0 = W * 0.62;
+      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(255,179,92,0.55)";
+      ctx.fillText("WIRED DESTINATIONS", x0, 16);
+
+      for (let i = 0; i < 4; i++) {
+        const src = MACRO_KEYS[i];
+        const routes = mx.filter((r) => r.source === src && r.dest !== "none");
+        const y = 34 + i * 20;
+        ctx.fillStyle = MACRO_COLORS[i];
+        ctx.beginPath();
+        ctx.arc(x0 + 4, y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        // Value bar
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        ctx.fillRect(x0 + 14, y - 3, 48, 6);
+        ctx.fillStyle = `${MACRO_COLORS[i]}99`;
+        ctx.fillRect(x0 + 14, y - 3, 48 * v[i], 6);
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        ctx.font = "500 9px ui-monospace, Menlo, monospace";
+        const label = routes.length
+          ? routes.map((r) => r.dest).slice(0, 3).join(" · ")
+          : "— unpatched —";
+        ctx.fillText(label, x0 + 70, y + 3);
+      }
+    };
+
+    raf = requestAnimationFrame(draw);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, []);
+
   return (
-    <Section title="Macros" color={GRN} collapseKey="macros" defaultCollapsed>
-      <KnobRow>
-        <FParamKnob paramKey="macro1" label="Macro 1" min={0} max={1} format={fmtPct} def={0} color={GRN} />
-        <FParamKnob paramKey="macro2" label="Macro 2" min={0} max={1} format={fmtPct} def={0} color={GRN} />
-        <FParamKnob paramKey="macro3" label="Macro 3" min={0} max={1} format={fmtPct} def={0} color={GRN} />
-        <FParamKnob paramKey="macro4" label="Macro 4" min={0} max={1} format={fmtPct} def={0} color={GRN} />
-      </KnobRow>
-      <div className="mt-1 text-[10px] text-dim">Hands-on controls — wire them to anything in the matrix below.</div>
+    <div
+      ref={wrapRef}
+      className="relative mb-3 overflow-hidden rounded-xl border border-[#ffb35c]/15 bg-black/50 shadow-[inset_0_1px_0_rgba(255,179,92,0.06),0_8px_24px_rgba(0,0,0,0.3)]"
+    >
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 118 }} aria-hidden />
+      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t border-[#ffb35c]/40" />
+      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t border-[#ffb35c]/40" />
+      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l border-[#ffb35c]/40" />
+      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r border-[#ffb35c]/40" />
+    </div>
+  );
+}
+
+function MacrosPanel() {
+  const matrix = useFireCommandStore((s) => s.patch.modMatrix);
+  const wired = (key: typeof MACRO_KEYS[number]) =>
+    matrix.filter((r) => r.source === key && r.dest !== "none").map((r) => r.dest);
+  return (
+    <Section title="Macros" color="#ffb35c" collapseKey="macros" defaultCollapsed>
+      <MacroClusterViz />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {MACRO_KEYS.map((key, i) => {
+          const dests = wired(key);
+          return (
+            <div
+              key={key}
+              className="flex flex-col items-center gap-1.5 rounded-xl border border-white/[0.06] bg-black/25 px-2 py-2.5"
+              style={{ borderColor: `${MACRO_COLORS[i]}22` }}
+            >
+              <FParamKnob
+                paramKey={key}
+                label={`Macro ${i + 1}`}
+                min={0}
+                max={1}
+                format={fmtPct}
+                def={0}
+                color={MACRO_COLORS[i]}
+                size={52}
+              />
+              <div className="min-h-[14px] text-center text-[9px] leading-tight text-dim">
+                {dests.length ? (
+                  <span style={{ color: `${MACRO_COLORS[i]}cc` }}>{dests.slice(0, 2).join(" · ")}{dests.length > 2 ? "…" : ""}</span>
+                ) : (
+                  <span className="text-white/25">unpatched</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 text-center text-[10px] text-dim">
+        Performance cluster — twist here, wire destinations in the matrix. Amber radar shows the live shape.
+      </div>
     </Section>
   );
 }
@@ -1500,13 +1709,191 @@ const GATE_PRESETS: { name: string; steps: number[] }[] = [
   { name: "Long-Short", steps: [1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0] },
 ];
 
+/** Trance Gate personality: ice chop field — amplitude silhouette with radar sweep. */
+function GateChopViz({
+  pattern, steps, on, playStep, depth, smooth,
+}: {
+  pattern: number[];
+  steps: number;
+  on: boolean;
+  playStep: number;
+  depth: number;
+  smooth: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const stateRef = useRef({ pattern, steps, on, playStep, depth, smooth });
+  stateRef.current = { pattern, steps, on, playStep, depth, smooth };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const size = { w: 400, h: 96 };
+
+    const sync = () => {
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      size.w = Math.max(280, Math.floor(wrap.clientWidth));
+      size.h = 96;
+      canvas.width = Math.floor(size.w * dpr);
+      canvas.height = Math.floor(size.h * dpr);
+      canvas.style.width = `${size.w}px`;
+      canvas.style.height = `${size.h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(wrap);
+
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 22) return;
+      last = t;
+      const s = stateRef.current;
+      const { w: W, h: H } = size;
+      ctx.clearRect(0, 0, W, H);
+
+      // Ice depth field
+      const hueShift = 195 + Math.sin(t / 3500) * 12;
+      const bg = ctx.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, `hsla(${hueShift}, 70%, 45%, 0.10)`);
+      bg.addColorStop(0.5, "rgba(4,10,18,0.55)");
+      bg.addColorStop(1, `hsla(${hueShift + 20}, 60%, 40%, 0.06)`);
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      const n = Math.max(2, Math.min(16, Math.round(s.steps)));
+      const padX = 12;
+      const usable = W - padX * 2;
+      const stepW = usable / n;
+      const floor = H - 10;
+      const ceil = 14;
+      const ampH = floor - ceil;
+      const closed = 1 - s.depth; // how far down closed steps go
+
+      // Softened step heights (smooth blurs edges)
+      const heights: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const open = (s.pattern[i] ?? 0) > 0.5 ? 1 : closed;
+        heights.push(open);
+      }
+      if (s.smooth > 0.01) {
+        const blur = Math.max(1, Math.round(s.smooth * 3));
+        const soft = heights.slice();
+        for (let i = 0; i < n; i++) {
+          let acc = 0, w = 0;
+          for (let k = -blur; k <= blur; k++) {
+            const j = (i + k + n) % n;
+            const wt = 1 - Math.abs(k) / (blur + 1);
+            acc += heights[j] * wt;
+            w += wt;
+          }
+          soft[i] = acc / w;
+        }
+        for (let i = 0; i < n; i++) heights[i] = soft[i];
+      }
+
+      // Fill silhouette
+      ctx.beginPath();
+      ctx.moveTo(padX, floor);
+      for (let i = 0; i < n; i++) {
+        const x0 = padX + i * stepW;
+        const y = floor - heights[i] * ampH;
+        ctx.lineTo(x0, y);
+        ctx.lineTo(x0 + stepW, y);
+      }
+      ctx.lineTo(padX + usable, floor);
+      ctx.closePath();
+      const fill = ctx.createLinearGradient(0, ceil, 0, floor);
+      fill.addColorStop(0, `hsla(${hueShift}, 80%, 65%, ${s.on ? 0.35 : 0.12})`);
+      fill.addColorStop(1, `hsla(${hueShift}, 70%, 40%, 0.02)`);
+      ctx.fillStyle = fill;
+      ctx.fill();
+
+      // Top contour
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x0 = padX + i * stepW;
+        const y = floor - heights[i] * ampH;
+        if (i === 0) ctx.moveTo(x0, y);
+        ctx.lineTo(x0, y);
+        ctx.lineTo(x0 + stepW, y);
+      }
+      ctx.strokeStyle = s.on ? `hsla(${hueShift}, 90%, 70%, 0.85)` : `hsla(${hueShift}, 60%, 60%, 0.35)`;
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = s.on ? 10 : 0;
+      ctx.shadowColor = ICE;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Step ticks
+      for (let i = 0; i <= n; i++) {
+        const x = padX + i * stepW;
+        ctx.strokeStyle = i % 4 === 0 ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)";
+        ctx.beginPath();
+        ctx.moveTo(x, ceil - 2);
+        ctx.lineTo(x, floor + 2);
+        ctx.stroke();
+      }
+
+      // Playhead beam
+      if (s.on && s.playStep >= 0 && s.playStep < n) {
+        const x = padX + s.playStep * stepW + stepW / 2;
+        const beam = ctx.createLinearGradient(x, 0, x, H);
+        beam.addColorStop(0, "rgba(200,240,255,0)");
+        beam.addColorStop(0.4, "rgba(150,230,255,0.5)");
+        beam.addColorStop(1, "rgba(98,182,255,0)");
+        ctx.fillStyle = beam;
+        ctx.fillRect(x - 2, 0, 4, H);
+
+        // Pulse ring at crest
+        const y = floor - heights[s.playStep] * ampH;
+        const pulse = 0.5 + 0.5 * Math.sin(t / 80);
+        ctx.strokeStyle = `rgba(200,240,255,${0.55 * pulse})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, 5 + pulse * 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(150,210,255,0.4)";
+      ctx.fillText(s.on ? "CHOP LIVE" : "STANDBY", 12, H - 8);
+      ctx.textAlign = "right";
+      ctx.fillText(`${n} STEPS`, W - 12, H - 8);
+    };
+
+    raf = requestAnimationFrame(draw);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, []);
+
+  return (
+    <div
+      ref={wrapRef}
+      className="relative mb-3 overflow-hidden rounded-xl border border-cyan/20 bg-black/50 shadow-[inset_0_1px_0_rgba(98,182,255,0.06),0_8px_24px_rgba(0,0,0,0.3)]"
+    >
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 96 }} aria-hidden />
+      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t border-cyan/40" />
+      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t border-cyan/40" />
+      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l border-cyan/40" />
+      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r border-cyan/40" />
+    </div>
+  );
+}
+
 function GatePanel() {
   const on = useFireCommandStore((s) => s.patch.gateOn);
   const pattern = useFireCommandStore((s) => s.patch.gatePattern);
   const steps = useFireCommandStore((s) => s.patch.gateSteps);
+  const depth = useFireCommandStore((s) => s.patch.gateDepth);
+  const smooth = useFireCommandStore((s) => s.patch.gateSmooth ?? 0);
   const setParam = useFireCommandStore((s) => s.setParam);
   const setGateStep = useFireCommandStore((s) => s.setGateStep);
-  // Live playhead — polls the engine's step counter while the gate runs.
   const [playStep, setPlayStep] = useState(-1);
   useEffect(() => {
     if (!on) { setPlayStep(-1); return; }
@@ -1524,64 +1911,68 @@ function GatePanel() {
     <Section title="Trance Gate" color={ICE} collapseKey="gate" defaultCollapsed right={
       <button
         onClick={() => setParam("gateOn", !on)}
-        className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${on ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_14px_rgb(var(--c-cyan)/0.3)]" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
-      >{on ? "● ON" : "OFF"}</button>
+        className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${on ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_14px_rgb(98_182_255/0.35)]" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
+      >{on ? "● CHOP" : "ARM"}</button>
     }>
-      {/* pattern toolbox */}
-      <div className="flex flex-wrap items-center gap-1.5 mb-2">
-        <select
-          value=""
-          onChange={(e) => {
-            const p = GATE_PRESETS.find((g) => g.name === e.target.value);
-            if (p) setPattern([...p.steps]);
-          }}
-          className="bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white/80 focus:outline-none cursor-pointer"
-          title="Load a classic gate shape"
-        >
-          <option value="" disabled className="bg-ink">Pattern…</option>
-          {GATE_PRESETS.map((g) => <option key={g.name} value={g.name} className="bg-ink">{g.name}</option>)}
-        </select>
-        <button onClick={() => shift(-1)} className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition" title="Rotate pattern left">◂ Shift</button>
-        <button onClick={() => shift(1)} className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition" title="Rotate pattern right">Shift ▸</button>
-        <button
-          onClick={() => setPattern(pattern.map((v) => (v > 0.5 ? 0 : 1)))}
-          className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition"
-          title="Invert — open steps close, closed steps open"
-        >Invert</button>
-        <button
-          onClick={() => setPattern(Array.from({ length: 16 }, () => (Math.random() < 0.55 ? 1 : 0)))}
-          className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition"
-          title="Random pattern"
-        >Rand</button>
+      <GateChopViz pattern={pattern} steps={steps} on={on} playStep={playStep} depth={depth} smooth={smooth} />
+
+      {/* Preset strip — even chips */}
+      <div className="mb-2.5 grid grid-cols-4 gap-1 sm:grid-cols-7">
+        {GATE_PRESETS.map((g) => (
+          <button
+            key={g.name}
+            onClick={() => setPattern([...g.steps])}
+            className="h-7 truncate rounded-md border border-white/10 bg-white/[0.03] px-1 text-[9px] font-medium uppercase tracking-wide text-white/55 transition hover:border-cyan/40 hover:bg-cyan/10 hover:text-cyan"
+            title={g.name}
+          >{g.name}</button>
+        ))}
       </div>
-      <div className="flex gap-1 mb-3">
-        {pattern.map((v, i) => {
-          const active = i < steps;
+
+      {/* Step pads — tall, even */}
+      <div className="mb-3 grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(2, Math.min(16, Math.round(steps)))}, minmax(0, 1fr))` }}>
+        {pattern.slice(0, Math.max(2, Math.min(16, Math.round(steps)))).map((v, i) => {
           const lit = v > 0.5;
-          const isPlay = on && i === playStep && active;
+          const isPlay = on && i === playStep;
           return (
             <button
               key={i}
               onClick={() => setGateStep(i, !lit)}
-              className="flex-1 h-7 rounded-md border transition"
+              className="relative h-12 rounded-lg border transition"
               style={{
-                borderColor: isPlay ? "#fff" : lit && active ? `${ICE}aa` : "rgba(255,255,255,0.1)",
-                background: !active ? "rgba(255,255,255,0.02)" : lit ? (isPlay ? `${ICE}66` : `${ICE}33`) : "rgba(255,255,255,0.05)",
-                opacity: active ? 1 : 0.3,
-                boxShadow: isPlay ? `inset 0 0 12px ${ICE}aa, 0 0 8px ${ICE}66` : lit && active ? `inset 0 0 10px ${ICE}55` : "none",
+                borderColor: isPlay ? "#fff" : lit ? `${ICE}99` : "rgba(255,255,255,0.1)",
+                background: lit
+                  ? isPlay
+                    ? `linear-gradient(180deg, ${ICE}88, ${ICE}33)`
+                    : `linear-gradient(180deg, ${ICE}44, ${ICE}14)`
+                  : "rgba(255,255,255,0.03)",
+                boxShadow: isPlay ? `0 0 16px ${ICE}66, inset 0 0 12px ${ICE}44` : lit ? `inset 0 0 10px ${ICE}33` : "none",
               }}
               title={`Step ${i + 1}`}
-            />
+            >
+              <span className="absolute bottom-1 left-0 right-0 text-center text-[8px] font-mono text-white/35">{i + 1}</span>
+            </button>
           );
         })}
       </div>
-      <KnobRow>
-        <FParamKnob paramKey="gateRate" label="Rate" min={0.5} max={24} curve="log" format={fmtHzRate} def={8} color={ICE} />
-        <FParamKnob paramKey="gateDepth" label="Depth" min={0} max={1} format={fmtPct} def={1} color={ICE} />
-        <FParamKnob paramKey="gateSteps" label="Steps" min={2} max={16} integer format={fmtInt} def={16} color={ICE} />
-        <FParamKnob paramKey="gateSmooth" label="Smooth" min={0} max={1} format={fmtPct} def={0} color={ICE} />
-      </KnobRow>
-      <div className="mt-1 text-[10px] text-dim">Rhythmic amplitude gate. Smooth softens the chop into sidechain-style pumping.</div>
+
+      {/* Toolbox + knobs — symmetric rails */}
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 items-center">
+        <div className="flex flex-col gap-1">
+          <button onClick={() => shift(-1)} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Rotate left">◂ Shift</button>
+          <button onClick={() => shift(1)} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Rotate right">Shift ▸</button>
+          <button onClick={() => setPattern(pattern.map((v) => (v > 0.5 ? 0 : 1)))} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Invert">Invert</button>
+          <button onClick={() => setPattern(Array.from({ length: 16 }, () => (Math.random() < 0.55 ? 1 : 0)))} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Random">Rand</button>
+        </div>
+        <div className="flex items-center justify-evenly gap-2">
+          <FParamKnob paramKey="gateRate" label="Rate" min={0.5} max={24} curve="log" format={fmtHzRate} def={8} color={ICE} />
+          <FParamKnob paramKey="gateDepth" label="Depth" min={0} max={1} format={fmtPct} def={1} color={ICE} />
+          <FParamKnob paramKey="gateSteps" label="Steps" min={2} max={16} integer format={fmtInt} def={16} color={ICE} />
+          <FParamKnob paramKey="gateSmooth" label="Smooth" min={0} max={1} format={fmtPct} def={0} color={ICE} />
+        </div>
+      </div>
+      <div className="mt-2 text-center text-[10px] text-dim">
+        Ice chop field — silhouette is your amplitude. Smooth melts edges into a pump; playhead rides the crest.
+      </div>
     </Section>
   );
 }
@@ -1603,8 +1994,6 @@ const SELECT_CLS = "bg-black/40 border border-white/15 rounded-lg px-2 py-1 text
 function ModMatrixPanel() {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const setModRoute = useFireCommandStore((s) => s.setModRoute);
-  // v1.7: the patch GRID is the primary view; the slot list stays for
-  // precise numeric edits.
   const [view, setView] = useState<"grid" | "list">(() =>
     (localStorage.getItem("fire.matrixView") as "grid" | "list") ?? "grid",
   );
@@ -1622,7 +2011,7 @@ function ModMatrixPanel() {
         <Seg<"grid" | "list">
           value={view}
           onChange={pickView}
-          options={[{ id: "grid", label: "⊞ Grid" }, { id: "list", label: "☰ Slots" }]}
+          options={[{ id: "grid", label: "⊞ Bay" }, { id: "list", label: "☰ Slots" }]}
           color={GRN}
         />
       }
