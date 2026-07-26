@@ -81,7 +81,7 @@ export function MutateCluster() {
 
   return (
     <div
-      className={`relative flex items-stretch gap-2 rounded-2xl border px-2 py-1.5 transition ${
+      className={`relative flex items-stretch gap-2 rounded-2xl border px-2.5 py-2 min-h-[88px] transition ${
         mutation
           ? "border-emerald-400/45 bg-gradient-to-br from-emerald-500/15 via-teal-500/[0.07] to-lime-500/[0.05] shadow-[0_0_28px_rgb(52_211_153/0.18)]"
           : "border-emerald-400/25 bg-gradient-to-br from-emerald-500/[0.08] to-transparent"
@@ -97,7 +97,7 @@ export function MutateCluster() {
         <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-emerald-300/50 to-transparent" />
       </div>
 
-      <div className="relative z-10 flex flex-col justify-center gap-1 min-w-[148px]">
+      <div className="relative z-10 flex flex-col justify-center gap-1 min-w-[148px] flex-1">
         <div className="flex items-center gap-1.5">
           <HelixMark active={!!mutation} />
           <div className="min-w-0">
@@ -199,7 +199,7 @@ export function MutateCluster() {
           </div>
         </div>
       ) : (
-        <div className="relative z-10 hidden sm:flex flex-col justify-center max-w-[120px] pl-2 border-l border-emerald-400/15">
+        <div className="relative z-10 hidden xl:flex flex-col justify-center max-w-[110px] pl-2 border-l border-emerald-400/15">
           <div className="text-[9px] leading-snug text-emerald-100/40">
             Breed two rivals. Hear A / B. Keep the fittest. Evolve.
           </div>

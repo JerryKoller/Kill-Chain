@@ -38,6 +38,7 @@ import { ModPatchGrid } from "./ModPatchGrid";
 import { FireMorphPad } from "./FireMorphPad";
 import { undoFire, redoFire, useFireHistoryStore } from "@/lib/fireHistory";
 import { MutateCluster } from "./MutateCluster";
+import { RandomizeCluster } from "./RandomizeCluster";
 
 const FIRE = "#ff6a3d"; // primary
 const ICE = "#62b6ff"; // LFOs
@@ -103,7 +104,6 @@ export function FireCommandView() {
   const keyboardMinimized = useFireCommandStore((s) => s.keyboardMinimized);
   const setParam = useFireCommandStore((s) => s.setParam);
   const loadPreset = useFireCommandStore((s) => s.loadPreset);
-  const randomPreset = useFireCommandStore((s) => s.randomPreset);
   const shiftOctave = useFireCommandStore((s) => s.shiftOctave);
   const toast = useUIStore((s) => s.toast);
   const setRouteThroughFx = useFireCommandStore((s) => s.setRouteThroughFx);
@@ -261,54 +261,66 @@ export function FireCommandView() {
         </div>
       </div>
 
-      {/* Compact preset bar — full library lives in its own browser */}
-      <GlassPanel className="p-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] uppercase tracking-[0.22em] text-dim pl-1">Patch</span>
-          <button
-            onClick={() => cyclePreset(-1)}
-            className="w-7 h-7 rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
-            title="Previous preset"
-            aria-label="Previous preset"
-          >◂</button>
-          <button
-            onClick={() => setBrowserOpen(true)}
-            className="flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] hover:bg-white/[0.09] hover:border-white/25 px-3 py-1 transition min-w-[180px]"
-            title="Open the preset library"
-          >
-            <span className="text-base leading-none" style={{ color: FIRE }}>♪</span>
-            <span className="text-sm font-semibold text-white truncate">{currentName}</span>
-            <span className="ml-auto text-[10px] uppercase tracking-widest text-white/40">Browse ▾</span>
-          </button>
-          <button
-            onClick={() => cyclePreset(1)}
-            className="w-7 h-7 rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
-            title="Next preset"
-            aria-label="Next preset"
-          >▸</button>
-          <button
-            onClick={() => loadPreset("init")}
-            className="rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 px-3 py-1 text-xs text-white/75 transition"
-          >↺ Init</button>
-          <button
-            onClick={() => {
-              // Announce the pick — "Randomize" used to change the sound with
-              // no readout of what it landed on (issue #2).
-              const p = randomPreset();
-              toast(`🎲 Deployed: ${p.name} · ${p.category}`);
-            }}
-            className="h-[52px] rounded-2xl border border-[#ff6a3d]/55 bg-gradient-to-b from-[#ff6a3d]/22 to-[#ff6a3d]/08 hover:from-[#ff6a3d]/30 hover:to-[#ff6a3d]/12 px-3.5 text-xs font-black uppercase tracking-[0.12em] transition shadow-[0_0_20px_rgb(255_106_61/0.22)]"
-            style={{ color: "#ffd9c9" }}
-            title="Deploy a random preset from the armory (the name shows here and in the Patch box)"
-          >🎲 Randomize</button>
-          <MutateCluster />
-          <div className="flex-1" />
-          <UndoRedoButtons />
-          <button
-            onClick={() => setBrowserOpen(true)}
-            className="rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 px-3 py-1 text-xs text-white/80 transition"
-            title="Save / manage presets"
-          >＋ Save · Library</button>
+      {/* Patch bar — three balanced bays: library · generative · history */}
+      <GlassPanel className="p-2.5">
+        <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)_minmax(0,0.85fr)] xl:items-stretch">
+          {/* Library bay */}
+          <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px]">
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Patch</span>
+              <span className="text-[9px] text-white/25 truncate">library · browse · init</span>
+            </div>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <button
+                onClick={() => cyclePreset(-1)}
+                className="w-8 h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
+                title="Previous preset"
+                aria-label="Previous preset"
+              >◂</button>
+              <button
+                onClick={() => setBrowserOpen(true)}
+                className="flex items-center gap-2 rounded-xl border border-white/12 bg-black/30 hover:bg-black/45 hover:border-white/25 px-2.5 py-1.5 transition min-w-0 flex-1"
+                title="Open the preset library"
+              >
+                <span className="text-base leading-none shrink-0" style={{ color: FIRE }}>♪</span>
+                <span className="text-sm font-semibold text-white truncate">{currentName}</span>
+                <span className="ml-auto text-[9px] uppercase tracking-widest text-white/40 shrink-0">Browse</span>
+              </button>
+              <button
+                onClick={() => cyclePreset(1)}
+                className="w-8 h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
+                title="Next preset"
+                aria-label="Next preset"
+              >▸</button>
+              <button
+                onClick={() => loadPreset("init")}
+                className="h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-2.5 text-[11px] text-white/75 transition"
+                title="Reset to Init patch"
+              >↺ Init</button>
+            </div>
+          </div>
+
+          {/* Generative bay — twin pods */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
+            <RandomizeCluster />
+            <MutateCluster />
+          </div>
+
+          {/* History bay */}
+          <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px] xl:items-end">
+            <div className="flex items-center gap-2 w-full xl:justify-end">
+              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Studio</span>
+              <span className="text-[9px] text-white/25">undo · save</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 w-full xl:justify-end">
+              <UndoRedoButtons />
+              <button
+                onClick={() => setBrowserOpen(true)}
+                className="h-8 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-3 text-[11px] text-white/80 transition"
+                title="Save / manage presets"
+              >＋ Save · Library</button>
+            </div>
+          </div>
         </div>
       </GlassPanel>
 

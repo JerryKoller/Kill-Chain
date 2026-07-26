@@ -428,6 +428,12 @@ select option:checked {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
   }
+  @keyframes dice-tumble {
+    0% { transform: rotate(0deg) scale(1); }
+    35% { transform: rotate(140deg) scale(1.18); }
+    70% { transform: rotate(280deg) scale(0.92); }
+    100% { transform: rotate(360deg) scale(1); }
+  }
   .fire-status-dot {
     display: inline-block;
     width: 6px;
