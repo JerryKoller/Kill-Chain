@@ -36,14 +36,15 @@ import {
 } from "@/state/fireSequencerStore";
 import { playUi } from "@/audio/uiSounds";
 import { useUIStore } from "@/state/uiStore";
+import { useRollFit, ROLL_ZOOM_MAX } from "./useRollFit";
+
+export const PIANO_GUTTER = 46;
 
 const ROW_H = 14;    // px per semitone row
-const GUTTER = 46;   // piano key gutter width
+const GUTTER = PIANO_GUTTER;   // piano key gutter width
 const MIDI_TOP = 96; // C7
 const MIDI_BOT = 24; // C1
 const ROWS = MIDI_TOP - MIDI_BOT + 1;
-const ZOOM_MIN = 12;
-const ZOOM_MAX = 48;
 const HEIGHT_MIN = 220;
 const HEIGHT_MAX = 620;
 
@@ -100,14 +101,12 @@ export function PianoRoll() {
   // Live audition while dragging a note across pitches (throttle by pitch).
   const lastAudMidiRef = useRef<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
-  // Horizontal zoom (px per 16th) + the roll's own height — both live-tweakable.
-  const [cellW, setCellW] = useState(26);
-  const [rollH, setRollH] = useState(320);
+  // Fit-to-width zoom (1 = fill the bay) + the roll's own height.
+  const { cellW: CELL_W, gridW, zoom, bumpZoom, setZoom, fitMode } = useRollFit();
+  const [rollH, setRollH] = useState(360);
   const heightDrag = useRef<{ startY: number; startH: number } | null>(null);
 
-  const CELL_W = cellW;
   const totalSteps = bars * STEPS_PER_BAR;
-  const gridW = GUTTER + totalSteps * CELL_W;
   const gridH = ROWS * ROW_H;
 
   const snapPitch = useCallback(
@@ -140,7 +139,13 @@ export function PianoRoll() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, gridW, gridH);
 
-    // Row stripes (+ scale tint: in-scale rows glow, the root glows most)
+    // Stage plate — fills the whole bay so there's never a dead black void
+    const plate = ctx.createLinearGradient(0, 0, 0, gridH);
+    plate.addColorStop(0, "rgba(14,16,22,1)");
+    plate.addColorStop(0.5, "rgba(10,12,18,1)");
+    plate.addColorStop(1, "rgba(8,9,14,1)");
+    ctx.fillStyle = plate;
+    ctx.fillRect(0, 0, gridW, gridH);
     const scaleOn = scaleId !== "off";
     for (let r = 0; r < ROWS; r++) {
       const midi = MIDI_TOP - r;
@@ -229,7 +234,7 @@ export function PianoRoll() {
     }
     ctx.fillStyle = "rgba(255,120,60,0.5)";
     ctx.fillRect(GUTTER - 2, 0, 2, gridH);
-  }, [notes, selectedIds, totalSteps, gridW, gridH, scaleRoot, scaleId]);
+  }, [notes, selectedIds, totalSteps, gridW, gridH, CELL_W, scaleRoot, scaleId]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -250,20 +255,20 @@ export function PianoRoll() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [playing, bpm, bars, cellW]);
+  }, [playing, bpm, bars, CELL_W]);
 
-  // Ctrl+wheel zooms horizontally around the cursor.
+  // Ctrl+wheel zooms horizontally (fit = 1×; zoom in for detail + scroll).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setCellW((w) => clamp(Math.round(w * (e.deltaY > 0 ? 0.85 : 1.18)), ZOOM_MIN, ZOOM_MAX));
+      bumpZoom(e.deltaY > 0 ? 0.85 : 1.18);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [bumpZoom]);
 
   // ── hit-testing helpers ──
   const posFromEvent = (e: React.PointerEvent): { x: number; y: number; step: number; midi: number } => {
@@ -503,6 +508,8 @@ export function PianoRoll() {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, gridW, VEL_H);
+    ctx.fillStyle = "rgba(10,12,18,1)";
+    ctx.fillRect(0, 0, gridW, VEL_H);
 
     // grid
     for (let s = 0; s <= totalSteps; s++) {
@@ -633,16 +640,16 @@ export function PianoRoll() {
 
   return (
     <div>
-      {/* ── Scale + tools bar (compact) ── */}
+      {/* ── Scale + tools bar ── */}
       <div
-        className="mb-1 flex items-center gap-1 flex-wrap text-[11px]"
+        className="mb-2 flex items-center gap-2 flex-wrap rounded-xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2"
         title="Click draw · drag move · edge resize · right-drag erase · Shift+drag velocity · Ctrl+wheel zoom · orange=A · blue=B"
       >
-        <span className="uppercase tracking-[0.16em] text-dim text-[9px]">Key</span>
+        <span className="uppercase tracking-[0.18em] text-white/40 text-[9px] font-semibold">Key</span>
         <select
           value={scaleRoot}
           onChange={(e) => setScaleRoot(Number(e.target.value))}
-          className="bg-black/50 border border-white/10 rounded-md px-1 py-0.5 text-[10px] font-mono outline-none focus:border-cyan/50 h-6"
+          className="bg-black/50 border border-white/12 rounded-lg px-2 py-1.5 text-[11px] font-mono outline-none focus:border-cyan/50 h-8"
           title="Scale root note"
         >
           {NOTE_NAMES.map((n, i) => (
@@ -652,7 +659,7 @@ export function PianoRoll() {
         <select
           value={scaleId}
           onChange={(e) => setScaleId(e.target.value as ScaleId)}
-          className="bg-black/50 border border-white/10 rounded-md px-1 py-0.5 text-[10px] outline-none focus:border-cyan/50 h-6"
+          className="bg-black/50 border border-white/12 rounded-lg px-2 py-1.5 text-[11px] outline-none focus:border-cyan/50 h-8"
           title="Scale — in-scale rows glow in the roll"
         >
           {SCALES.map((s) => (
@@ -664,7 +671,7 @@ export function PianoRoll() {
           data-ui-sound="toggle"
           data-ui-on={scaleSnap ? "true" : "false"}
           disabled={scaleId === "off"}
-          className={`h-6 px-1.5 rounded-md border text-[9px] uppercase tracking-[0.1em] transition ${
+          className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
             scaleId === "off"
               ? "border-white/8 text-white/25"
               : scaleSnap
@@ -687,7 +694,7 @@ export function PianoRoll() {
                   : "Not enough notes to call a key yet",
               );
           }}
-          className="h-6 px-1.5 rounded-md border border-white/10 bg-white/[0.03] text-white/55 hover:text-cyan text-[9px] uppercase tracking-[0.1em] transition"
+          className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-cyan text-[10px] uppercase tracking-[0.12em] transition"
           title="Detect key from notes in the roll"
         >
           Detect
@@ -707,7 +714,7 @@ export function PianoRoll() {
               );
           }}
           disabled={scaleId === "off"}
-          className={`h-6 px-1.5 rounded-md border text-[9px] uppercase tracking-[0.1em] transition ${
+          className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
             scaleId === "off"
               ? "border-white/8 text-white/25"
               : "border-white/10 bg-white/[0.03] text-white/55 hover:text-emerald-300"
@@ -718,29 +725,42 @@ export function PianoRoll() {
         </button>
         <button
           onClick={() => { humanizeNotes(); playUi("press"); }}
-          className="h-6 px-1.5 rounded-md border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[9px] uppercase tracking-[0.1em] transition"
+          className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[10px] uppercase tracking-[0.12em] transition"
           title="Humanize velocity + micro-timing"
         >
           Humanize
         </button>
         {selectedIds.size > 0 && (
-          <span className="text-[9px] text-cyan/80">
+          <span className="text-[10px] text-cyan/80">
             {selectedIds.size} sel · Ctrl+D · ↑↓ · ←→
           </span>
         )}
         <span className="flex-1" />
-        <div className="flex items-center gap-0.5">
+        <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/30 p-0.5">
           <button
-            onClick={() => setCellW((w) => clamp(w - 5, ZOOM_MIN, ZOOM_MAX))}
-            className="w-5 h-5 rounded border border-white/10 bg-white/[0.03] text-white/60 hover:text-white text-[11px] leading-none transition"
-            title="Zoom out (Ctrl+wheel)"
+            onClick={() => bumpZoom(0.85)}
+            disabled={fitMode}
+            className="w-7 h-7 rounded-md border border-transparent text-white/60 hover:text-white hover:bg-white/8 text-[13px] leading-none transition disabled:opacity-30"
+            title="Zoom out toward fit-to-width"
           >
             −
           </button>
           <button
-            onClick={() => setCellW((w) => clamp(w + 5, ZOOM_MIN, ZOOM_MAX))}
-            className="w-5 h-5 rounded border border-white/10 bg-white/[0.03] text-white/60 hover:text-white text-[11px] leading-none transition"
-            title="Zoom in (Ctrl+wheel)"
+            onClick={() => setZoom(1)}
+            className={`h-7 px-2 rounded-md text-[9px] uppercase tracking-[0.14em] transition ${
+              fitMode
+                ? "bg-[#ff6a3d]/15 text-[#ffbfa0]"
+                : "text-white/45 hover:text-white/80"
+            }`}
+            title="Fit pattern to the full width of the bay"
+          >
+            Fit
+          </button>
+          <button
+            onClick={() => bumpZoom(1.18)}
+            disabled={zoom >= ROLL_ZOOM_MAX}
+            className="w-7 h-7 rounded-md border border-transparent text-white/60 hover:text-white hover:bg-white/8 text-[13px] leading-none transition disabled:opacity-30"
+            title="Zoom in for detail (scroll horizontally)"
           >
             +
           </button>
@@ -754,10 +774,12 @@ export function PianoRoll() {
           const v = velScrollRef.current;
           if (v) v.scrollLeft = e.currentTarget.scrollLeft;
         }}
-        className="relative overflow-auto rounded-xl border border-white/10 bg-black/45"
+        className={`relative rounded-2xl border border-white/12 bg-[#0a0c12] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_0_1px_rgba(255,106,61,0.06)] ${
+          fitMode ? "overflow-y-auto overflow-x-hidden" : "overflow-auto"
+        }`}
         style={{ height: rollH }}
       >
-        <div className="relative" style={{ width: gridW, height: gridH }}>
+        <div className="relative" style={{ width: gridW, height: gridH, minWidth: "100%" }}>
           <canvas
             ref={canvasRef}
             onPointerDown={onPointerDown}
@@ -786,10 +808,10 @@ export function PianoRoll() {
       </div>
 
       {/* Velocity lane (v1.7): one bar per note — drag to paint loudness. */}
-      <div className="mt-1">
+      <div className="mt-2">
         <button
           onClick={() => setVelOpen(!velOpen)}
-          className="text-[10px] uppercase tracking-[0.25em] text-dim hover:text-white/70 transition"
+          className="text-[10px] uppercase tracking-[0.22em] text-white/40 hover:text-white/70 transition"
           title="Velocity lane: each bar is a note's loudness — drag across to paint. (Shift+drag on a note still works.)"
         >
           {velOpen ? "▾" : "▸"} Velocity
@@ -797,7 +819,9 @@ export function PianoRoll() {
         {velOpen && (
           <div
             ref={velScrollRef}
-            className="mt-1 overflow-hidden rounded-xl border border-white/10 bg-black/45"
+            className={`mt-1.5 rounded-xl border border-white/12 bg-[#0a0c12] ${
+              fitMode ? "overflow-hidden" : "overflow-x-auto"
+            }`}
           >
             <canvas
               ref={velCanvasRef}
@@ -822,16 +846,16 @@ export function PianoRoll() {
         onPointerMove={(e) => {
           const h = heightDrag.current;
           if (!h) return;
-          setRollH(clamp(h.startH + (e.clientY - h.startY), HEIGHT_MIN, HEIGHT_MAX));
+          setRollH(clamp(h.startH + (e.clientY - h.startH), HEIGHT_MIN, HEIGHT_MAX));
         }}
         onPointerUp={(e) => {
           heightDrag.current = null;
           try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
         }}
-        className="mt-1 h-2.5 rounded-full cursor-ns-resize flex items-center justify-center group touch-none"
+        className="mt-1.5 h-3 rounded-full cursor-ns-resize flex items-center justify-center group touch-none"
         title="Drag to resize the piano roll"
       >
-        <div className="w-16 h-1 rounded-full bg-white/15 group-hover:bg-cyan/50 transition" />
+        <div className="w-20 h-1 rounded-full bg-white/15 group-hover:bg-[#ff6a3d]/55 transition" />
       </div>
     </div>
   );

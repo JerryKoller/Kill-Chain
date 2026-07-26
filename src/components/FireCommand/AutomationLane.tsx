@@ -20,6 +20,7 @@ import {
   type AutoParamId,
 } from "@/state/fireSequencerStore";
 import { useUIStore } from "@/state/uiStore";
+import { useRollFit } from "./useRollFit";
 
 const LANE_H = 92;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -51,9 +52,8 @@ export function AutomationLane() {
   // Last painted (step, value) so fast drags fill the gap between events.
   const strokeRef = useRef<{ step: number; val: number; erase: boolean } | null>(null);
 
+  const { cellW: stepW, gridW, gutter, fitMode } = useRollFit();
   const totalSteps = bars * STEPS_PER_BAR;
-  const stepW = totalSteps > 32 ? 16 : 22;
-  const gridW = totalSteps * stepW;
   const def = AUTO_PARAMS.find((d) => d.id === param)!;
   const lanesWithData = AUTO_PARAMS.filter((d) => automation[d.id]).length;
 
@@ -72,9 +72,17 @@ export function AutomationLane() {
     g.scale(dpr, dpr);
     g.clearRect(0, 0, gridW, LANE_H);
 
-    // step + bar grid
+    // Match piano-roll stage + gutter so timelines share an edge
+    g.fillStyle = "rgba(10,12,18,1)";
+    g.fillRect(0, 0, gridW, LANE_H);
+    g.fillStyle = "rgba(8,6,10,0.96)";
+    g.fillRect(0, 0, gutter, LANE_H);
+    g.fillStyle = "rgba(255,120,60,0.45)";
+    g.fillRect(gutter - 2, 0, 2, LANE_H);
+
+    // step + bar grid (gutter-aligned with the piano roll)
     for (let i = 0; i <= totalSteps; i++) {
-      const x = i * stepW;
+      const x = gutter + i * stepW;
       const isBar = i % STEPS_PER_BAR === 0;
       const isBeat = i % 4 === 0;
       g.strokeStyle = isBar
@@ -90,15 +98,15 @@ export function AutomationLane() {
     // horizontal midline
     g.strokeStyle = "rgba(255,255,255,0.06)";
     g.beginPath();
-    g.moveTo(0, LANE_H / 2 + 0.5);
+    g.moveTo(gutter, LANE_H / 2 + 0.5);
     g.lineTo(gridW, LANE_H / 2 + 0.5);
     g.stroke();
 
     const arr = automation[param];
     if (!arr || arr.length === 0) {
       g.fillStyle = "rgba(255,255,255,0.22)";
-      g.font = "11px Inter, sans-serif";
-      g.fillText(`Draw ${def.label} movement — left-drag paints, right-drag erases`, 10, LANE_H / 2 + 4);
+      g.font = "11px ui-sans-serif, system-ui, sans-serif";
+      g.fillText(`Draw ${def.label} — left-drag paints, right-drag erases`, gutter + 10, LANE_H / 2 + 4);
       return;
     }
 
@@ -112,7 +120,7 @@ export function AutomationLane() {
       const pos = i / SUB;
       const n = autoValueAt(arr, Math.min(pos, totalSteps - 0.001));
       if (n == null) continue;
-      const x = pos * stepW;
+      const x = gutter + pos * stepW;
       const y = yOf(n);
       if (!started) { g.moveTo(x, y); started = true; }
       else g.lineTo(x, y);
@@ -122,7 +130,7 @@ export function AutomationLane() {
       g.lineWidth = 1.8;
       g.stroke();
       g.lineTo(gridW, LANE_H);
-      g.lineTo(0, LANE_H);
+      g.lineTo(gutter, LANE_H);
       g.closePath();
       g.fillStyle = `${def.color}22`;
       g.fill();
@@ -133,14 +141,14 @@ export function AutomationLane() {
       const n = arr[i];
       if (n == null) continue;
       g.beginPath();
-      g.arc(i * stepW + stepW / 2, yOf(n), 3.2, 0, Math.PI * 2);
+      g.arc(gutter + i * stepW + stepW / 2, yOf(n), 3.2, 0, Math.PI * 2);
       g.fillStyle = def.color;
       g.fill();
       g.strokeStyle = "rgba(0,0,0,0.5)";
       g.lineWidth = 1;
       g.stroke();
     }
-  }, [open, automation, param, gridW, totalSteps, stepW, def]);
+  }, [open, automation, param, gridW, totalSteps, stepW, gutter, def]);
 
   // ── playhead (RAF, DOM transform — same pattern as the drum grid) ──
   useEffect(() => {
@@ -153,16 +161,18 @@ export function AutomationLane() {
       if (document.hidden) return;
       const step = getPlayheadStep(bpm, bars);
       el.style.opacity = step < 0 ? "0" : "1";
-      el.style.transform = `translateX(${Math.max(0, step) * stepW}px)`;
+      el.style.transform = `translateX(${gutter + Math.max(0, step) * stepW}px)`;
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [open, playing, bpm, bars, stepW]);
+  }, [open, playing, bpm, bars, stepW, gutter]);
 
   // ── paint ──
   const paintAt = (e: React.PointerEvent, erase: boolean) => {
     const rect = canvasRef.current!.getBoundingClientRect();
-    const step = clamp(Math.floor((e.clientX - rect.left) / stepW), 0, totalSteps - 1);
+    const x = e.clientX - rect.left;
+    if (x < gutter) return;
+    const step = clamp(Math.floor((x - gutter) / stepW), 0, totalSteps - 1);
     const val = clamp(1 - (e.clientY - rect.top - 4) / (LANE_H - 8), 0, 1);
     const prev = strokeRef.current;
     if (prev && prev.erase === erase && Math.abs(step - prev.step) > 1) {
@@ -255,8 +265,10 @@ export function AutomationLane() {
       </div>
 
       {open && (
-        <div className="mt-1.5 overflow-x-auto rounded-xl border border-white/10 bg-black/45">
-          <div className="relative" style={{ width: gridW, height: LANE_H }}>
+        <div className={`mt-1.5 rounded-xl border border-white/12 bg-[#0a0c12] ${
+          fitMode ? "overflow-hidden" : "overflow-x-auto"
+        }`}>
+          <div className="relative" style={{ width: gridW, height: LANE_H, minWidth: "100%" }}>
             <canvas
               ref={canvasRef}
               onPointerDown={onPointerDown}
