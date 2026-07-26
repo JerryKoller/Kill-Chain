@@ -2290,18 +2290,19 @@ function ArpPanel({ arp, setArp, chipHosted = false }: { arp: ArpSettings; setAr
   );
 }
 
-// ════════════════════ keyboard (1 or 2 octaves · default 2) ════════════════════
+// ════════════════════ keyboard (1–4 octaves · default 2) ════════════════════
 
 const KBD_OCT_KEY = "killchain.firecmd.kbd.octaves";
 const WHITE_IN_OCT = [0, 2, 4, 5, 7, 9, 11];
 const BLACK_IN_OCT = [1, 3, 6, 8, 10];
 /** White-key index (within an octave) that each black key sits after. */
 const BLACK_AFTER_WHITE: Record<number, number> = { 1: 0, 3: 1, 6: 3, 8: 4, 10: 5 };
+type KbdOctaves = 1 | 2 | 3 | 4;
 
-function loadKbdOctaves(): 1 | 2 {
+function loadKbdOctaves(): KbdOctaves {
   try {
     const v = Number(window.localStorage.getItem(KBD_OCT_KEY));
-    if (v === 1 || v === 2) return v;
+    if (v === 1 || v === 2 || v === 3 || v === 4) return v;
   } catch { /* ignore */ }
   return 2;
 }
@@ -2312,7 +2313,8 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
   const arpCurrent = useFireCommandStore((s) => s.arpCurrent);
   const arpEnabled = useFireCommandStore((s) => s.arp.enabled);
   const setOctave = useFireCommandStore((s) => s.setOctave);
-  const [octaves, setOctaves] = useState<1 | 2>(loadKbdOctaves);
+  const [octaves, setOctaves] = useState<KbdOctaves>(loadKbdOctaves);
+  const [hoverMidi, setHoverMidi] = useState<number | null>(null);
   const litSet = new Set(arpEnabled ? arpOrder : heldNotes);
   const mouseNote = useRef<number | null>(null);
   useEffect(() => {
@@ -2323,12 +2325,11 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
     window.addEventListener("pointercancel", release);
     return () => { window.removeEventListener("pointerup", release); window.removeEventListener("pointercancel", release); };
   }, []);
-  const pickOctaves = (n: 1 | 2) => {
+  const pickOctaves = (n: KbdOctaves) => {
     setOctaves(n);
     try { window.localStorage.setItem(KBD_OCT_KEY, String(n)); } catch { /* ignore */ }
   };
-  // Velocity from strike position: hitting a key near its base plays loud,
-  // up by the fulcrum plays soft — like leaning into a real key.
+  // Velocity from strike position: near the base = loud, near the fulcrum = soft.
   const press = (midi: number, e?: React.PointerEvent) => {
     const store = useFireCommandStore.getState();
     if (mouseNote.current !== null && mouseNote.current !== midi) store.noteOff(mouseNote.current);
@@ -2345,35 +2346,60 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
   const totalWhites = octaves * WHITE_IN_OCT.length;
   const whiteW = 100 / totalWhites;
   const endOct = octave + octaves - 1;
+  const keyH = octaves >= 4 ? "h-36" : octaves === 3 ? "h-[9.5rem]" : "h-40";
 
-  const keyVisual = (midi: number, black: boolean) => {
+  const keyVisual = (midi: number, black: boolean): React.CSSProperties => {
     const lit = litSet.has(midi);
     const cur = arpCurrent === midi;
+    const hover = hoverMidi === midi && !lit && !cur;
     const pressed = lit || cur;
     const style: React.CSSProperties = pressed
       ? cur
-        ? { background: `linear-gradient(180deg, #fff2ec 0%, ${FIRE} 100%)`, boxShadow: `0 0 30px ${FIRE}` }
+        ? {
+            background: `linear-gradient(180deg, #fff6f0 0%, ${FIRE} 55%, #c43a18 100%)`,
+            boxShadow: `0 0 28px ${FIRE}cc, inset 0 1px 0 rgba(255,255,255,0.45)`,
+          }
         : {
-            background: black ? `linear-gradient(180deg, ${FIRE} 0%, #8f2a14 100%)` : `linear-gradient(180deg, ${FIRE} 0%, #b8351a 100%)`,
-            boxShadow: `0 0 24px ${FIRE}`,
+            background: black
+              ? `linear-gradient(180deg, #ff9a6b 0%, ${FIRE} 55%, #8f2a14 100%)`
+              : `linear-gradient(180deg, #ffe0d0 0%, ${FIRE} 70%, #b8351a 100%)`,
+            boxShadow: `0 0 22px ${FIRE}aa, inset 0 1px 0 rgba(255,255,255,0.35)`,
           }
       : black
-        ? { background: "linear-gradient(180deg, #2f333d 0%, #05060a 92%)", boxShadow: "0 5px 10px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.12)" }
-        : { background: "linear-gradient(180deg, #f2f4fa 0%, #c3cadb 88%, #a9b1c4 100%)", boxShadow: "inset 0 -7px 12px rgba(0,0,0,0.2), inset 0 1px 0 #fff" };
-    // Key travel: pressed keys sink.
-    style.transform = pressed ? "translateY(2px) scaleY(0.985)" : undefined;
+        ? {
+            background: hover
+              ? "linear-gradient(180deg, #3a4050 0%, #141820 92%)"
+              : "linear-gradient(180deg, #2a2e38 0%, #08090e 92%)",
+            boxShadow: "0 6px 12px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.14)",
+          }
+        : {
+            background: hover
+              ? "linear-gradient(180deg, #ffffff 0%, #e8edf8 70%, #cfd6e8 100%)"
+              : "linear-gradient(180deg, #f7f8fc 0%, #d5dbea 88%, #b8c0d4 100%)",
+            boxShadow: "inset 0 -8px 14px rgba(0,0,0,0.18), inset 0 1px 0 #fff, 0 1px 0 rgba(0,0,0,0.25)",
+          };
+    style.transform = pressed ? "translateY(3px) scaleY(0.978)" : hover ? "translateY(1px)" : undefined;
     style.transformOrigin = "top";
     return style;
   };
 
   return (
     <div className="sticky bottom-0 z-10 pt-2">
-      <GlassPanel intense className="p-3">
-        <div className="flex items-center justify-between mb-2 px-1 gap-3 flex-wrap">
-          <div className="text-[10px] uppercase tracking-[0.3em] text-dim">Keyboard</div>
-          {/* Octave scroll: slider + readout, spanning the playable range */}
-          <div className="flex items-center gap-2 flex-wrap" title="Scroll the keyboard across octaves (Z/X keys do the same)">
-            <span className="text-[9px] font-mono text-white/45">C{Math.max(0, octave)}</span>
+      <GlassPanel intense className="relative overflow-hidden p-3">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-70"
+          style={{
+            background:
+              "radial-gradient(ellipse 80% 60% at 15% 0%, rgba(255,106,61,0.12), transparent 55%), radial-gradient(ellipse 50% 40% at 85% 100%, rgba(98,182,255,0.08), transparent 50%)",
+          }}
+        />
+        <div className="relative flex items-center justify-between mb-2.5 px-1 gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="text-[10px] uppercase tracking-[0.3em] text-white/55 font-semibold">Keyboard</div>
+            <span className="hidden sm:inline text-[9px] text-white/30">live · velocity · qwerty</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap" title="Scroll range (Z/X) · span on screen">
+            <span className="text-[9px] font-mono text-white/50">C{Math.max(0, octave)}</span>
             <input
               type="range"
               min={0}
@@ -2381,41 +2407,61 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
               step={1}
               value={clamp(octave, 0, 7)}
               onChange={(e) => setOctave(Number(e.target.value))}
-              className="w-40 h-1 cursor-pointer"
+              className="w-36 h-1.5 cursor-pointer"
               style={{ accentColor: FIRE }}
-              aria-label="Keyboard octave"
+              aria-label="Keyboard base octave"
             />
-            <span className="text-[9px] font-mono text-white/45">C{Math.min(9, octave + octaves)}</span>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-white/10 text-white/60">
+            <span className="text-[9px] font-mono text-white/50">C{Math.min(9, octave + octaves)}</span>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md border border-[#ff6a3d]/30 bg-[#ff6a3d]/10 text-[#ffd9c9]">
               OCT {octaves === 1 ? String(octave) : `${octave}–${endOct}`}
             </span>
-            <div className="flex items-stretch rounded-lg border border-white/12 bg-black/25 p-0.5" title="Keys on screen">
-              {([1, 2] as const).map((n) => (
+            <div className="flex items-stretch rounded-lg border border-white/12 bg-black/35 p-0.5 shadow-inner" title="Octaves on screen">
+              {([1, 2, 3, 4] as const).map((n) => (
                 <button
                   key={n}
                   type="button"
                   onClick={() => pickOctaves(n)}
-                  className={`rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition ${
+                  className={`rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wide transition ${
                     octaves === n
-                      ? "bg-[#ff6a3d]/25 text-[#ffd9c9]"
-                      : "text-white/45 hover:bg-white/5 hover:text-white/80"
+                      ? "bg-[#ff6a3d]/30 text-[#ffe8dc] shadow-[0_0_12px_rgba(255,106,61,0.35)]"
+                      : "text-white/40 hover:bg-white/5 hover:text-white/80"
                   }`}
                   aria-pressed={octaves === n}
                 >
-                  {n} oct
+                  {n}
                 </button>
               ))}
+              <span className="self-center px-1.5 text-[8px] uppercase tracking-wider text-white/30">oct</span>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="text-[10px] text-dim hidden lg:block">Strike low on a key for full velocity · hold computer keys to perform</div>
-            <button onClick={onMinimize} className="rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 px-2.5 py-1 text-xs text-white/70 transition">▼ Hide</button>
+            <div className="text-[10px] text-white/35 hidden xl:block">Strike low = loud · computer keys play too</div>
+            <button
+              onClick={onMinimize}
+              className="rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 px-2.5 py-1 text-xs text-white/70 transition"
+            >
+              ▼ Hide
+            </button>
           </div>
         </div>
-        <div className="relative h-40 select-none" style={{ touchAction: "none" }}>
-          {/* felt strip above the keys */}
-          <div className="absolute -top-0.5 inset-x-0 h-1 rounded-full" style={{ background: `linear-gradient(90deg, ${FIRE}55, #8f2a1466, ${FIRE}55)` }} />
-          <div className="absolute inset-0 flex gap-[2px]">
+
+        <div
+          className={`relative ${keyH} select-none rounded-xl overflow-hidden`}
+          style={{
+            touchAction: "none",
+            background: "linear-gradient(180deg, #0c0e14 0%, #06070b 100%)",
+            boxShadow: "inset 0 2px 8px rgba(0,0,0,0.55)",
+          }}
+          onPointerLeave={() => setHoverMidi(null)}
+        >
+          <div
+            className="absolute top-0 inset-x-0 h-1.5 z-[3]"
+            style={{
+              background: `linear-gradient(90deg, transparent, ${FIRE}88 18%, #ffcf5c66 50%, ${FIRE}88 82%, transparent)`,
+              boxShadow: `0 0 16px ${FIRE}44`,
+            }}
+          />
+          <div className="absolute inset-0 flex gap-[2px] px-0.5 pt-1.5 pb-0.5">
             {Array.from({ length: octaves }, (_, o) =>
               WHITE_IN_OCT.map((semi) => {
                 const midi = base + o * 12 + semi;
@@ -2426,37 +2472,66 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
                   <div
                     key={`${o}-${semi}`}
                     onPointerDown={(e) => press(midi, e)}
-                    onPointerEnter={(e) => enter(midi, e)}
-                    className="flex-1 rounded-b-lg border border-white/15 flex flex-col items-center justify-end pb-1.5 cursor-pointer transition-[background,transform,box-shadow] duration-75"
+                    onPointerEnter={(e) => { setHoverMidi(midi); enter(midi, e); }}
+                    className="flex-1 rounded-b-[10px] border border-black/25 flex flex-col items-center justify-end pb-1.5 cursor-pointer transition-[background,transform,box-shadow] duration-75"
                     style={keyVisual(midi, false)}
                   >
-                    <span className={`text-[10px] font-mono font-bold ${lit ? "text-white" : "text-black/55"}`}>{qwerty ?? ""}</span>
-                    <span className={`text-[8px] font-semibold ${lit ? "text-white/85" : isC ? "text-black/55" : "text-black/30"}`}>{isC || lit ? noteName(midi) : ""}</span>
+                    {qwerty && (
+                      <span
+                        className={`text-[11px] font-mono font-black leading-none mb-0.5 ${
+                          lit ? "text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.7)]" : "text-[#1a1f2e]"
+                        }`}
+                        style={lit ? undefined : { textShadow: "0 1px 0 rgba(255,255,255,0.35)" }}
+                      >
+                        {qwerty}
+                      </span>
+                    )}
+                    <span
+                      className={`text-[8px] font-bold leading-none ${
+                        lit ? "text-white/90" : isC ? "text-[#3a4258]" : "text-[#5a6578]"
+                      }`}
+                    >
+                      {isC || lit ? noteName(midi) : ""}
+                    </span>
                   </div>
                 );
               }),
             )}
           </div>
-          <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute inset-0 pointer-events-none pt-1.5 px-0.5">
             {Array.from({ length: octaves }, (_, o) =>
               BLACK_IN_OCT.map((semi) => {
                 const midi = base + o * 12 + semi;
                 const whiteIdx = o * WHITE_IN_OCT.length + BLACK_AFTER_WHITE[semi];
                 const qwerty = SEMITONE_TO_KEY[midi - base];
+                const lit = litSet.has(midi) || arpCurrent === midi;
                 return (
                   <div
                     key={`${o}-${semi}`}
                     onPointerDown={(e) => press(midi, e)}
-                    onPointerEnter={(e) => enter(midi, e)}
-                    className="absolute top-0 h-[60%] rounded-b-md border border-black/60 flex items-end justify-center pb-1.5 cursor-pointer pointer-events-auto transition-[background,transform,box-shadow] duration-75"
+                    onPointerEnter={(e) => { setHoverMidi(midi); enter(midi, e); }}
+                    className="absolute top-1.5 h-[58%] rounded-b-lg border border-black/70 flex items-end justify-center pb-1.5 cursor-pointer pointer-events-auto transition-[background,transform,box-shadow] duration-75"
                     style={{
-                      width: `${whiteW * 0.62}%`,
-                      left: `${(whiteIdx + 1) * whiteW - whiteW * 0.31}%`,
+                      width: `${whiteW * 0.58}%`,
+                      left: `${(whiteIdx + 1) * whiteW - whiteW * 0.29}%`,
                       zIndex: 2,
                       ...keyVisual(midi, true),
                     }}
                   >
-                    <span className="text-[9px] font-mono font-bold text-white/85">{qwerty ?? ""}</span>
+                    {qwerty && (
+                      <span
+                        className={`text-[10px] font-mono font-black leading-none ${
+                          lit ? "text-white" : "text-[#ffc4a8]"
+                        }`}
+                        style={
+                          lit
+                            ? { textShadow: "0 0 8px rgba(255,106,61,0.9)" }
+                            : { textShadow: "0 0 6px rgba(255,106,61,0.45), 0 1px 2px rgba(0,0,0,0.9)" }
+                        }
+                      >
+                        {qwerty}
+                      </span>
+                    )}
                   </div>
                 );
               }),

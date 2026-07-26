@@ -32,7 +32,8 @@ declare global {
       };
       window: {
         minimize: () => Promise<void>;
-        maximize: () => Promise<void>;
+        maximize: () => Promise<boolean | void>;
+        isMaximized?: () => Promise<boolean>;
         close: () => Promise<void>;
         setAlwaysOnTop?: (on: boolean) => Promise<void>;
         setMiniSize?: (mini: boolean) => Promise<void>;

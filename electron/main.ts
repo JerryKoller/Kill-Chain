@@ -229,11 +229,7 @@ function createMainWindow(): void {
     title: "Kill-Chain",
     frame: true,
     titleBarStyle: "hidden",
-    titleBarOverlay: {
-      color: "#06060c",
-      symbolColor: "#e6e6ff",
-      height: 36,
-    },
+    // Custom hover-reveal window buttons live in TitleBar (no always-on native overlay).
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -543,10 +539,12 @@ ipcMain.handle("shell:open", async (_e, url: string) => {
 
 ipcMain.handle("window:minimize", () => mainWindow?.minimize());
 ipcMain.handle("window:maximize", () => {
-  if (!mainWindow) return;
+  if (!mainWindow) return false;
   if (mainWindow.isMaximized()) mainWindow.unmaximize();
   else mainWindow.maximize();
+  return mainWindow.isMaximized();
 });
+ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
 ipcMain.handle("window:close", () => mainWindow?.close());
 
 // ──────────────── Mini-mode / always-on-top ────────────────

@@ -37,7 +37,8 @@ const bridge = {
   },
   window: {
     minimize: () => ipcRenderer.invoke("window:minimize"),
-    maximize: () => ipcRenderer.invoke("window:maximize"),
+    maximize: () => ipcRenderer.invoke("window:maximize") as Promise<boolean>,
+    isMaximized: () => ipcRenderer.invoke("window:isMaximized") as Promise<boolean>,
     close: () => ipcRenderer.invoke("window:close"),
     setAlwaysOnTop: (on: boolean) => ipcRenderer.invoke("window:alwaysOnTop", on),
     setMiniSize: (mini: boolean) => ipcRenderer.invoke("window:miniSize", mini),
