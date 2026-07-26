@@ -155,7 +155,7 @@ function startArpScheduler(
       // forever (noteOn re-arms the scheduler when the next note arrives).
       arpStep = 0;
       arpTimer = null;
-      if (s.arpCurrent !== null) set({ arpCurrent: null });
+      if (s.arpCurrent !== null) set({ arpCurrent: null, arpStepIndex: -1 });
       return;
     }
     const fc = getEngine().fireCommand;
@@ -179,7 +179,8 @@ function startArpScheduler(
     const accented = s.arp.accent > 0 && every > 0 && arpStep % every === 0;
     const vel = accented ? 1 : 0.9 - s.arp.accent * 0.35;
     fc.noteOn(midi, vel);
-    set({ arpCurrent: midi });
+    // arpStepIndex is display-only — surfaces the sounding step for the viz.
+    set({ arpCurrent: midi, arpStepIndex: idx });
     const gateMs = Math.max(20, s.arp.gate * stepSec * 1000 - 8);
     setTimeout(() => fc.noteOff(midi), gateMs);
     // Ratchet: probabilistic double-hit in the back half of the step.
@@ -899,6 +900,8 @@ export interface FireCommandState extends PersistShape {
   heldNotes: number[]; // physically held keys (keyboard highlight)
   arpOrder: number[]; // latched arp pattern source notes
   arpCurrent: number | null; // note the arp is currently sounding
+  /** Display-only: index into the built sequence of the sounding step (−1 idle). */
+  arpStepIndex: number;
   /** Pending natural-selection round (null when not selecting). */
   mutation: MutationRound | null;
 
@@ -993,6 +996,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     heldNotes: [],
     arpOrder: [],
     arpCurrent: null,
+    arpStepIndex: -1,
     mutation: null,
 
     setParam: (key, value) => {
@@ -1029,7 +1033,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const arp: ArpSettings = src.arp
         ? { ...DEFAULT_ARP, ...src.arp }
         : { ...get().arp, enabled: false };
-      set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, heldNotes: [], mutation: null });
+      set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, arpStepIndex: -1, heldNotes: [], mutation: null });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
@@ -1106,7 +1110,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
         : { ...get().arp };
       stopArpScheduler();
-      set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null, mutation: null });
+      set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1, mutation: null });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
@@ -1233,7 +1237,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       stopArpScheduler();
       harmonyHeld.clear();
       getEngine().fireCommand.allNotesOff();
-      set({ heldNotes: [], arpOrder: [], arpCurrent: null });
+      set({ heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
       // Keep arp enabled flag, just restart the (now-empty) scheduler if on.
       if (get().arp.enabled) startArpScheduler(get, set);
     },
@@ -1241,7 +1245,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     setOctave: (octave) => {
       const o = clamp(octave, 0, 8);
       getEngine().fireCommand.allNotesOff();
-      set({ octave: o, heldNotes: [], arpOrder: [], arpCurrent: null });
+      set({ octave: o, heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
       persist();
     },
 
@@ -1269,7 +1273,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       } else if (!arp.enabled && prev.enabled) {
         stopArpScheduler();
         getEngine().fireCommand.allNotesOff();
-        set({ arpCurrent: null });
+        set({ arpCurrent: null, arpStepIndex: -1 });
       }
       persist();
     },
@@ -1310,6 +1314,7 @@ registerFireHistoryProvider("fireCommand", {
       ...(snap as Partial<FireCommandState>),
       arpOrder: [],
       arpCurrent: null,
+      arpStepIndex: -1,
     });
     const s = useFireCommandStore.getState();
     const fc = getEngine().fireCommand;

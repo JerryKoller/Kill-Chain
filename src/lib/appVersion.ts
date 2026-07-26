@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "2.5.0";
+export const APP_VERSION = "2.5.1";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -11,6 +11,10 @@ export const PRODUCT_DESCRIPTION =
 
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
+  {
+    title: "Arp stage — visual overhaul",
+    body: "The arpeggiator now has a live contour stage: glowing note path, playhead beam, accent tips, gate-length columns, swing offset, ratchet shimmer, and spark bursts on every step. Mode chips carry contour glyphs. Same engine — just more fun to watch and play.",
+  },
   {
     title: "Fire Command MK IV",
     body: "The wavetable weapons platform gets its biggest overhaul yet: a redesigned MK IV banner, 1000 factory presets, next/previous patch cycling, and a rebuilt two-octave keyboard with octave scroll and click-position velocity.",
@@ -24,15 +28,7 @@ export const WHATS_NEW: { title: string; body: string }[] = [
     body: "Every knob supports shift-drag fine tuning, click-to-type exact values, double-click reset, and a hover reset pip — no more fighting to land on an exact percentage.",
   },
   {
-    title: "Eye candy everywhere",
-    body: "Live visualizations for the envelope, lowpass gate, LFO, filter curve, spectral warp, drive stage, arpeggiator, and spectral FX. Each module now shows you what it's doing to the sound.",
-  },
-  {
     title: "Deeper arp, gate, and mod matrix",
     body: "New arp modes (down-up, converge, diverge, pedal, walk) with swing, accents, and ratchets; trance gate presets, shift/invert, smoothing, and a live playhead; and a 12-slot mod matrix with crosshair highlighting and color-coded sources.",
-  },
-  {
-    title: "Ten mission packs + fixes",
-    body: "Four new genre missions (neuro, acid, trance, dubstep) and tighter existing ones. Talking Bass clipping fixed via soft-knee filter drive, and spectral freeze/smear/stereo bugs resolved.",
   },
 ];
