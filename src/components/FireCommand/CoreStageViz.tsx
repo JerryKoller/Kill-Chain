@@ -56,28 +56,81 @@ function useHiDpiCanvas(
   }, [wrapRef, canvasRef, cssH, sizeRef]);
 }
 
+type StageChrome = "corners" | "rails" | "notch" | "plate" | "bloom" | "scope" | "keys";
+
 function StageFrame({
   children,
   border,
   height,
   wrapRef,
+  chrome = "corners",
 }: {
   children: ReactNode;
   border: string;
   height: number;
   wrapRef: RefObject<HTMLDivElement | null>;
+  chrome?: StageChrome;
 }) {
+  const base =
+    chrome === "plate"
+      ? "relative mb-2.5 overflow-hidden rounded-lg border-2 bg-black/55 shadow-[inset_0_2px_8px_rgba(0,0,0,0.55),0_4px_14px_rgba(0,0,0,0.35)]"
+      : chrome === "bloom"
+        ? "relative mb-2.5 overflow-hidden rounded-2xl border bg-black/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_0_28px_rgba(0,0,0,0.35)]"
+        : chrome === "scope"
+          ? "relative mb-2.5 overflow-hidden rounded-md border bg-[#05080c]/90 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06),inset_0_0_24px_rgba(0,0,0,0.65),0_6px_18px_rgba(0,0,0,0.3)]"
+          : chrome === "notch"
+            ? "relative mb-2.5 overflow-hidden rounded-xl border bg-black/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_6px_20px_rgba(0,0,0,0.28)]"
+            : chrome === "keys"
+              ? "relative mb-2.5 overflow-hidden rounded-xl border bg-black/50 shadow-[inset_0_-2px_6px_rgba(255,255,255,0.04),0_6px_20px_rgba(0,0,0,0.28)]"
+              : "relative mb-2.5 overflow-hidden rounded-xl border bg-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_6px_20px_rgba(0,0,0,0.28)]";
+
   return (
     <div
       ref={wrapRef as RefObject<HTMLDivElement>}
-      className="relative mb-2.5 overflow-hidden rounded-xl border bg-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_6px_20px_rgba(0,0,0,0.28)]"
-      style={{ borderColor: border, height }}
+      className={base}
+      style={{
+        borderColor: border,
+        height,
+        boxShadow:
+          chrome === "bloom"
+            ? `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 32px ${border}, 0 6px 20px rgba(0,0,0,0.28)`
+            : undefined,
+      }}
     >
       {children}
-      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t" style={{ borderColor: border }} />
-      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t" style={{ borderColor: border }} />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l" style={{ borderColor: border }} />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r" style={{ borderColor: border }} />
+      {chrome === "corners" && (
+        <>
+          <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t" style={{ borderColor: border }} />
+          <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t" style={{ borderColor: border }} />
+          <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l" style={{ borderColor: border }} />
+          <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r" style={{ borderColor: border }} />
+        </>
+      )}
+      {chrome === "rails" && (
+        <>
+          <span className="pointer-events-none absolute inset-x-3 top-1 h-px" style={{ background: border }} />
+          <span className="pointer-events-none absolute inset-x-3 bottom-1 h-px" style={{ background: border }} />
+        </>
+      )}
+      {chrome === "notch" && (
+        <>
+          <span className="pointer-events-none absolute left-0 top-0 h-2 w-5" style={{ background: border, clipPath: "polygon(0 0, 100% 0, 70% 100%, 0 100%)" }} />
+          <span className="pointer-events-none absolute right-0 top-0 h-2 w-5" style={{ background: border, clipPath: "polygon(0 0, 100% 0, 100% 100%, 30% 100%)" }} />
+          <span className="pointer-events-none absolute bottom-1 left-2 right-2 h-px opacity-40" style={{ background: border }} />
+        </>
+      )}
+      {chrome === "scope" && (
+        <span
+          className="pointer-events-none absolute inset-1 rounded-[4px] border border-white/[0.04]"
+          aria-hidden
+        />
+      )}
+      {chrome === "keys" && (
+        <>
+          <span className="pointer-events-none absolute inset-x-3 bottom-1.5 h-0.5" style={{ background: border }} />
+          <span className="pointer-events-none absolute inset-x-0 top-0 h-px opacity-20" style={{ background: `linear-gradient(90deg, transparent, ${border}, transparent)` }} />
+        </>
+      )}
     </div>
   );
 }
@@ -197,6 +250,26 @@ export function UnisonStageViz() {
       ctx.lineWidth = 1;
       ctx.stroke();
 
+      // Detuned waveform ribbons (stacked behind stems)
+      for (let layer = 2; layer >= 0; layer--) {
+        const layerAlpha = (layer === 0 ? 0.12 : 0.06) * Math.max(0.3, det);
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const u = n === 1 ? 0 : (i / (n - 1)) * 2 - 1;
+          const pan = u * stereoAmt;
+          const x = cx + u * spread;
+          const lean = u * det * 22 + pan * 6;
+          const amp = (22 + (1 - Math.abs(u)) * 14) * breath;
+          const y = cy - amp * 0.65 + layer * 4;
+          const wobble = Math.sin(t / (280 + layer * 50) + u * 2) * det * 3;
+          if (i === 0) ctx.moveTo(x + lean * 0.15 + wobble, y);
+          else ctx.lineTo(x + lean * 0.15 + wobble, y);
+        }
+        ctx.strokeStyle = hexAlpha(AMB, layerAlpha);
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+
       for (let i = 0; i < n; i++) {
         const u = n === 1 ? 0 : (i / (n - 1)) * 2 - 1;
         const pan = u * stereoAmt;
@@ -289,19 +362,20 @@ export function UnisonStageViz() {
       ctx.fillRect(76, meterY, noiseFill, 6);
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(255,106,61,0.6)";
+      ctx.fillStyle = "rgba(255,106,61,0.65)";
       ctx.textAlign = "left";
-      ctx.fillText(`${n} VOICE FAN`, 10, H - 7);
-      ctx.fillStyle = "rgba(255,207,92,0.5)";
+      ctx.fillText(`STEREO CHOIR · ${n}V`, 10, H - 7);
+      ctx.fillStyle = "rgba(255,207,92,0.55)";
       ctx.textAlign = "right";
-      ctx.fillText(`SUB ${(p.subWave as SubWave).slice(0, 3).toUpperCase()}`, W - 10, H - 7);
+      const subLabel = p.sub > 0.01 ? `SUB ${(p.subWave as SubWave).slice(0, 3).toUpperCase()}` : "NO SUB";
+      ctx.fillText(subLabel, W - 10, H - 7);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={UNISON_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={UNISON_H} chrome="rails">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -476,19 +550,33 @@ export function FilterStageViz() {
         }
       }
 
+      // Mode chip (top notch)
+      const modeLabel = (p.type as FireFilterType).toUpperCase();
+      ctx.font = "600 7px ui-sans-serif, system-ui, sans-serif";
+      const modeW = ctx.measureText(modeLabel).width + 8;
+      const chipX = W * 0.5 - modeW * 0.5;
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(chipX, 8, modeW, 11);
+      ctx.strokeStyle = hexAlpha(FIRE, 0.4);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(chipX, 8, modeW, 11);
+      ctx.fillStyle = hexAlpha(FIRE, 0.85);
+      ctx.textAlign = "center";
+      ctx.fillText(modeLabel, W * 0.5, 16);
+
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = "rgba(255,106,61,0.6)";
       ctx.textAlign = "left";
-      ctx.fillText((p.type as FireFilterType).toUpperCase(), 10, H - 8);
+      ctx.fillText("BODE ANALYZER", 10, H - 8);
       ctx.textAlign = "right";
-      ctx.fillText(`${Math.round(p.cutoff)} Hz · Q ${p.res.toFixed(1)}`, W - 10, H - 8);
+      ctx.fillText(`${Math.round(p.cutoff)}Hz · Q${p.res.toFixed(1)}`, W - 10, H - 8);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={FILTER_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={FILTER_H} chrome="notch">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -577,16 +665,16 @@ function AmpEnvViz({ a, d, s, r }: { a: number; d: number; s: number; r: number 
       ctx.fill();
       ctx.shadowBlur = 0;
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(GRN, 0.6);
-      ctx.textAlign = "left";
-      ctx.fillText("AMP · VOLUME", 10, H - 7);
+      ctx.fillStyle = hexAlpha(GRN, 0.65);
+      ctx.textAlign = "center";
+      ctx.fillText("VOLUME MOUNTAIN", W * 0.5, H - 7);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border={hexAlpha(GRN, 0.28)} height={ENV_H}>
+    <StageFrame wrapRef={wrapRef} border={hexAlpha(GRN, 0.28)} height={ENV_H} chrome="bloom">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -677,9 +765,9 @@ function ModEnvViz({ a, d, s, r }: { a: number; d: number; s: number; r: number 
       ctx.fill();
       ctx.shadowBlur = 0;
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(LIME, 0.6);
+      ctx.fillStyle = hexAlpha(LIME, 0.65);
       ctx.textAlign = "left";
-      ctx.fillText("MOD → MORPH", 10, H - 7);
+      ctx.fillText("DASHED MORPH PULSE", 10, H - 7);
       ctx.textAlign = "right";
       ctx.fillText("WT SCAN", W - 10, H - 7);
     };
@@ -688,7 +776,7 @@ function ModEnvViz({ a, d, s, r }: { a: number; d: number; s: number; r: number 
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border={hexAlpha(LIME, 0.28)} height={ENV_H}>
+    <StageFrame wrapRef={wrapRef} border={hexAlpha(LIME, 0.28)} height={ENV_H} chrome="rails">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -780,17 +868,39 @@ function FiltEnvViz({ a, d, s, r }: { a: number; d: number; s: number; r: number
       ctx.arc(sx, sy, 3, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
+
+      // Inset Bode thumbnail (right side, rises with sustain)
+      const thumbW = 28;
+      const thumbH = 18 + sus * 10;
+      const thumbX = W - 10 - thumbW;
+      const thumbY = PAD + usableH - thumbH;
+      ctx.fillStyle = "rgba(0,0,0,0.4)";
+      ctx.fillRect(thumbX, thumbY, thumbW, thumbH);
+      ctx.strokeStyle = hexAlpha(TEAL, 0.25 + sus * 0.3);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(thumbX, thumbY, thumbW, thumbH);
+      ctx.beginPath();
+      for (let i = 0; i <= 16; i++) {
+        const tx = thumbX + (i / 16) * thumbW;
+        const ty = thumbY + (1 - sus) * thumbH;
+        if (i === 0) ctx.moveTo(tx, ty);
+        else ctx.lineTo(tx, ty);
+      }
+      ctx.strokeStyle = hexAlpha(TEAL, 0.6 + sus * 0.3);
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(TEAL, 0.6);
+      ctx.fillStyle = hexAlpha(TEAL, 0.65);
       ctx.textAlign = "left";
-      ctx.fillText("FILTER ENV · CUTOFF", 10, H - 7);
+      ctx.fillText("CUTOFF SWEEP", 10, H - 7);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border={hexAlpha(TEAL, 0.28)} height={ENV_H}>
+    <StageFrame wrapRef={wrapRef} border={hexAlpha(TEAL, 0.28)} height={ENV_H} chrome="notch">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -861,15 +971,16 @@ function LpgStageViz({ decay }: { decay: number }) {
       ctx.stroke();
       ctx.shadowBlur = 0;
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(255,207,92,0.6)";
-      ctx.fillText("VACTROL PLUCK", 10, H - 7);
+      ctx.fillStyle = "rgba(255,207,92,0.65)";
+      ctx.textAlign = "center";
+      ctx.fillText("VACTROL PLUCK", W * 0.5, H - 7);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.3)" height={ENV_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.3)" height={ENV_H} chrome="plate">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -971,7 +1082,7 @@ export function LfoStageViz({ idx }: { idx: 1 | 2 }) {
         if (x === xL) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = hexAlpha(ICE, 0.2);
+      ctx.strokeStyle = hexAlpha(GRN, 0.18);
       ctx.lineWidth = 1.2;
       ctx.stroke();
 
@@ -991,7 +1102,7 @@ export function LfoStageViz({ idx }: { idx: 1 | 2 }) {
       ctx.fillStyle = ribbon;
       ctx.fill();
 
-      // Front waveform
+      // Front waveform (ice phosphor)
       ctx.beginPath();
       for (let x = xL; x <= xR; x++) {
         const y = mid - shape(p.wave, ((x - xL) / span) * 2) * amp;
@@ -1011,6 +1122,19 @@ export function LfoStageViz({ idx }: { idx: 1 | 2 }) {
       const px = xL + (ph / 2) * span;
       const py = mid - shape(p.wave, ph) * amp;
 
+      // Phosphor history trail (fading dots behind live tracer)
+      const historySteps = 16;
+      for (let hist = historySteps; hist > 0; hist--) {
+        const histPh = (ph - hist * 0.06) % 2;
+        const hx = xL + (histPh / 2) * span;
+        const hy = mid - shape(p.wave, histPh) * amp;
+        const histAlpha = (historySteps - hist) / historySteps;
+        ctx.fillStyle = hexAlpha(GRN, histAlpha * 0.3 * p.depth);
+        ctx.beginPath();
+        ctx.arc(hx, hy, 1.2 + histAlpha * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       // Tracer bloom
       const bloom = ctx.createRadialGradient(px, py, 0, px, py, 14 + p.depth * 10);
       bloom.addColorStop(0, hexAlpha(ICE, 0.45));
@@ -1026,12 +1150,12 @@ export function LfoStageViz({ idx }: { idx: 1 | 2 }) {
       ctx.shadowBlur = 0;
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(98,182,255,0.6)";
+      ctx.fillStyle = "rgba(98,182,255,0.65)";
       ctx.textAlign = "left";
-      ctx.fillText(`LFO ${idx} · ${String(p.wave).toUpperCase()}`, 10, H - 8);
+      ctx.fillText(`LFO ${idx} SCOPE · ${String(p.wave).toUpperCase()}`, 10, H - 8);
       ctx.textAlign = "right";
       const destLabel = (p.dest as LfoDest) === "off" ? "IDLE" : `→ ${(p.dest as string).toUpperCase()}`;
-      ctx.fillStyle = (p.dest as LfoDest) === "off" ? "rgba(98,182,255,0.3)" : "rgba(98,182,255,0.7)";
+      ctx.fillStyle = (p.dest as LfoDest) === "off" ? "rgba(98,182,255,0.35)" : "rgba(98,182,255,0.75)";
       ctx.fillText(destLabel, W - 10, H - 8);
     };
     raf = requestAnimationFrame(draw);
@@ -1039,7 +1163,7 @@ export function LfoStageViz({ idx }: { idx: 1 | 2 }) {
   }, [idx]);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(98,182,255,0.28)" height={LFO_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(98,182,255,0.28)" height={LFO_H} chrome="scope">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -1118,29 +1242,51 @@ export function FmRingStageViz() {
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Carrier hub + modulator spokes
+      // Carrier/Modulator Venn diagram with sideband spokes (FM metaphor)
       const cx = W * 0.2;
       const cy = mid;
       const R = 18 + p.fm * 8;
-      ctx.strokeStyle = hexAlpha(FIRE, 0.4);
-      ctx.lineWidth = 1.2;
+      const sep = R * 0.85;
+
+      // Carrier circle (left)
+      ctx.strokeStyle = hexAlpha(FIRE, 0.5);
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.arc(cx - sep * 0.5, cy, R, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.fillStyle = hexAlpha(FIRE, 0.08);
+      ctx.fill();
+
+      // Modulator circle (right)
+      ctx.strokeStyle = hexAlpha(AMB, 0.5);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(cx + sep * 0.5, cy, R, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = hexAlpha(AMB, 0.08);
+      ctx.fill();
+
+      // Sideband spokes from intersection
       const spokes = Math.min(14, Math.max(2, Math.round(p.ratio * 2)));
       for (let i = 0; i < spokes; i++) {
         const ang = (i / spokes) * Math.PI * 2 + t / 1600;
-        const len = R + 4 + Math.sin(t / 400 + i) * 3;
-        ctx.strokeStyle = hexAlpha(i % 2 === 0 ? FIRE : AMB, 0.3 + p.fm * 0.3);
+        const len = R * 1.35 + Math.sin(t / 400 + i) * 4;
+        const side = i % 2 === 0 ? -1 : 1;
+        ctx.strokeStyle = hexAlpha(i % 2 === 0 ? FIRE : AMB, 0.25 + p.fm * 0.35);
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(cx, cy);
-        ctx.lineTo(cx + Math.cos(ang) * len, cy + Math.sin(ang) * len);
+        ctx.lineTo(cx + Math.cos(ang) * len, cy + Math.sin(ang) * len * 0.7);
         ctx.stroke();
       }
-      ctx.fillStyle = hexAlpha(FIRE, 0.7);
-      ctx.beginPath();
-      ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-      ctx.fill();
+
+      // Center labels
+      ctx.font = "600 6px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(FIRE, 0.75);
+      ctx.textAlign = "center";
+      ctx.fillText("C", cx - sep * 0.5, cy + 2);
+      ctx.fillStyle = hexAlpha(AMB, 0.75);
+      ctx.fillText("M", cx + sep * 0.5, cy + 2);
 
       // Metallic shimmer particles
       const particleN = Math.floor(8 + p.fm * 12 + p.ring * 8);
@@ -1153,18 +1299,18 @@ export function FmRingStageViz() {
       }
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(255,106,61,0.6)";
+      ctx.fillStyle = "rgba(255,106,61,0.65)";
       ctx.textAlign = "left";
-      ctx.fillText("FM · RING", 10, H - 8);
+      ctx.fillText("FM VENN · SIDEBANDS", 10, H - 8);
       ctx.textAlign = "right";
-      ctx.fillText(p.ring > 0.02 ? `RING ${Math.round(p.ringHz)}Hz` : `${p.ratio.toFixed(2)}×`, W - 10, H - 8);
+      ctx.fillText(p.ring > 0.02 ? `RING ${Math.round(p.ringHz)}Hz` : `RATIO ${p.ratio.toFixed(2)}`, W - 10, H - 8);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={FM_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={FM_H} chrome="plate">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -1289,19 +1435,19 @@ export function PitchGlideStageViz() {
       }
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(255,106,61,0.6)";
+      ctx.fillStyle = "rgba(255,106,61,0.65)";
       ctx.textAlign = "left";
-      ctx.fillText("PITCH · GLIDE", 10, H - 8);
+      ctx.fillText("SEMITONE LADDER", 10, H - 8);
       ctx.textAlign = "right";
-      ctx.fillStyle = p.mono ? hexAlpha(FIRE, 0.7) : "rgba(255,255,255,0.35)";
-      ctx.fillText(p.mono ? "MONO · GLIDE" : "POLY · PER VOICE", W - 10, H - 8);
+      ctx.fillStyle = p.mono ? hexAlpha(FIRE, 0.75) : "rgba(255,255,255,0.4)";
+      ctx.fillText(p.mono ? "MONO COMET" : "POLY DISCRETE", W - 10, H - 8);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={PITCH_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={PITCH_H} chrome="rails">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -1433,9 +1579,9 @@ export function OscStageViz({ group, color }: { group: "a" | "b" | "c"; color: s
       ctx.fillRect(mx - 1.5, H - 18, 3, 10);
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(color, 0.6);
+      ctx.fillStyle = hexAlpha(color, 0.65);
       ctx.textAlign = "left";
-      ctx.fillText(`OSC ${group.toUpperCase()}`, 10, H - 7);
+      ctx.fillText(`OSC ${group.toUpperCase()} · ${p.table.toUpperCase()}`, 10, H - 7);
       ctx.textAlign = "right";
       ctx.fillText(p.level < 0.01 ? "SILENT" : `${Math.round(p.level * 100)}%`, W - 10, H - 7);
     };
@@ -1444,7 +1590,7 @@ export function OscStageViz({ group, color }: { group: "a" | "b" | "c"; color: s
   }, [group, color]);
 
   return (
-    <StageFrame wrapRef={wrapRef} border={hexAlpha(color, 0.28)} height={OSC_H}>
+    <StageFrame wrapRef={wrapRef} border={hexAlpha(color, 0.28)} height={OSC_H} chrome="corners">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -1487,63 +1633,66 @@ export function PerformanceStageViz() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
-      const slots = Math.min(32, p.maxVoices);
-      const pad = 12;
-      const usable = W - pad * 2;
-      const gap = usable / Math.max(1, slots);
-      const baseY = H * 0.52;
+      // Mini piano-key silhouette row (performance metaphor)
+      const keyCount = Math.min(24, p.maxVoices);
+      const keyPad = 14;
+      const keyW = (W - keyPad * 2) / keyCount;
+      const keyH = 32;
+      const keyY = H * 0.42;
 
-      // Depth layers (back constellation)
-      for (let layer = 2; layer >= 0; layer--) {
-        for (let i = 0; i < slots; i++) {
-          const active = i < p.voices;
-          const x = pad + i * gap + gap * 0.25 + layer * 0.5;
-          const bh = (active ? 10 + Math.sin(t / 220 + i * 0.7) * 5 : 5) - layer * 2;
-          const y = baseY - layer * 3;
-          ctx.fillStyle = active
-            ? hexAlpha(layer === 0 ? FIRE : AMB, (0.7 - layer * 0.2) * (active ? 1 : 0.3))
-            : `rgba(255,255,255,${0.04 - layer * 0.01})`;
-          if (active && layer === 0) {
-            ctx.shadowBlur = 8;
-            ctx.shadowColor = FIRE;
-          }
-          ctx.beginPath();
-          ctx.ellipse(x, y, Math.max(2, gap * 0.28), bh / 2, 0, 0, Math.PI * 2);
-          ctx.fill();
+      for (let i = 0; i < keyCount; i++) {
+        const active = i < p.voices;
+        const x = keyPad + i * keyW;
+        
+        // Key body
+        ctx.fillStyle = active
+          ? hexAlpha(p.mono ? FIRE : AMB, 0.65 + Math.sin(t / 280 + i * 0.5) * 0.15)
+          : "rgba(255,255,255,0.06)";
+        ctx.fillRect(x + 0.5, keyY, Math.max(1, keyW - 1.5), keyH);
+        
+        // Key edge
+        ctx.strokeStyle = active
+          ? hexAlpha(p.mono ? FIRE : FIRE, 0.45)
+          : "rgba(255,255,255,0.08)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, keyY, Math.max(1, keyW - 1.5), keyH);
+
+        // Glow for active keys
+        if (active) {
+          ctx.shadowBlur = 6;
+          ctx.shadowColor = p.mono ? FIRE : AMB;
+          ctx.fillStyle = hexAlpha(p.mono ? FIRE : GOLD, 0.8);
+          ctx.fillRect(x + 0.5, keyY, Math.max(1, keyW - 1.5), 3);
           ctx.shadowBlur = 0;
         }
       }
 
-      // Connect active voices with faint lines
-      if (p.voices > 1) {
-        ctx.strokeStyle = hexAlpha(FIRE, 0.08);
-        ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        for (let i = 0; i < p.voices - 1; i++) {
-          const x1 = pad + i * gap + gap * 0.25;
-          const x2 = pad + (i + 1) * gap + gap * 0.25;
-          ctx.moveTo(x1, baseY);
-          ctx.lineTo(x2, baseY - 4);
-        }
-        ctx.stroke();
+      // FX routing tint on right edge
+      if (p.fxOn) {
+        const tintW = 40;
+        const tint = ctx.createLinearGradient(W - keyPad - tintW, 0, W - keyPad, 0);
+        tint.addColorStop(0, "rgba(98,182,255,0)");
+        tint.addColorStop(1, "rgba(98,182,255,0.15)");
+        ctx.fillStyle = tint;
+        ctx.fillRect(W - keyPad - tintW, keyY, tintW, keyH);
       }
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = "rgba(255,106,61,0.65)";
       ctx.textAlign = "left";
-      ctx.fillText(`${p.voices}/${p.maxVoices} VOICES`, 10, H - 8);
+      ctx.fillText(`PERFORMANCE · ${p.voices}/${p.maxVoices}`, 10, H - 8);
       ctx.textAlign = "right";
       const mode = p.mono ? "MONO" : "POLY";
-      const harm = p.harmony && p.harmony !== "off" ? ` · ${String(p.harmony).toUpperCase()}` : "";
-      ctx.fillStyle = p.fxOn ? "rgba(98,182,255,0.7)" : "rgba(255,106,61,0.55)";
-      ctx.fillText(`${mode}${harm} · ${p.fxOn ? "FX" : "RAW"}`, W - 10, H - 8);
+      const harm = p.harmony && p.harmony !== "off" ? ` ${String(p.harmony).toUpperCase()}` : "";
+      ctx.fillStyle = p.fxOn ? "rgba(98,182,255,0.75)" : "rgba(255,106,61,0.6)";
+      ctx.fillText(`${mode}${harm} ${p.fxOn ? "→FX" : "DRY"}`, W - 10, H - 8);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={PERF_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.28)" height={PERF_H} chrome="keys">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );

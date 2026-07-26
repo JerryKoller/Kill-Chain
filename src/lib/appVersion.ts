@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "2.6.2";
+export const APP_VERSION = "2.6.3";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,20 +12,20 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
+    title: "Macros command cards",
+    body: "Four equal macro cards with ring meters and destination chips — no more cramped radar or clipped text.",
+  },
+  {
+    title: "Unique stage personalities",
+    body: "Each Fire Command visualizer gets its own chrome and metaphor — forge plate, CRT scope, comb bloom, piano keys, ping-pong lanes, and more.",
+  },
+  {
     title: "Visualizer fidelity pass",
-    body: "Fire Command stages resize to their bay (no clipped edge labels). Osc WaveDisplay is hi-DPI. Morph Pad, Meter Bridge, Arp, Macros, Gate, and FX/Core stages fit the full-width band layout.",
+    body: "Stages resize to their bay. Morph Pad, Meter Bridge, Arp, Gate, and FX/Core stages fit the full-width band layout.",
   },
   {
-    title: "Patch bar polish",
-    body: "Keep winner no longer bleeds its box. Studio bay is three equal Undo / Redo / Library cells that fill the panel.",
-  },
-  {
-    title: "Armory Deploy randomize",
-    body: "Tumbling-dice deploy pod with category Scope — twin to Natural Selection.",
-  },
-  {
-    title: "Natural Selection mutate",
-    body: "Evolution bay with Mild→Wild pressure, Gen, rival A/B cards.",
+    title: "Armory Deploy + Natural Selection",
+    body: "Tumbling-dice randomize and evolution mutate bays — twin generative pods.",
   },
   {
     title: "Drum + piano roll fill width",

@@ -879,8 +879,12 @@ function Scope() {
     };
   }, []);
   return (
-    <div ref={wrapRef} className="overflow-hidden rounded-xl border border-[#ff6a3d]/25 bg-black/50 shadow-[inset_0_0_28px_rgba(255,106,61,0.08)]">
+    <div
+      ref={wrapRef}
+      className="relative overflow-hidden rounded-md border border-[#ff6a3d]/35 bg-[#080504]/95 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05),inset_0_0_32px_rgba(0,0,0,0.7),0_0_24px_rgba(255,106,61,0.12)]"
+    >
       <canvas ref={ref} className="block w-full" style={{ height: 100 }} />
+      <span className="pointer-events-none absolute inset-1 rounded-[3px] border border-white/[0.04]" />
     </div>
   );
 }
@@ -1450,13 +1454,11 @@ function ArpViz({ arp }: { arp: ArpSettings }) {
   return (
     <div
       ref={wrapRef}
-      className="relative mb-3 overflow-hidden rounded-xl border border-white/[0.09] bg-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_8px_28px_rgba(0,0,0,0.35)]"
+      className="relative mb-3 overflow-hidden rounded-2xl border border-[#ff6a3d]/22 bg-black/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_0_28px_rgba(255,106,61,0.1),0_8px_28px_rgba(0,0,0,0.35)]"
     >
       <canvas ref={canvasRef} className="block w-full" style={{ height: 132 }} aria-hidden />
-      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2.5 w-2.5 border-l border-t border-[#ff6a3d]/40" />
-      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 border-r border-t border-[#ff6a3d]/40" />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2.5 w-2.5 border-b border-l border-[#ff6a3d]/40" />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2.5 w-2.5 border-b border-r border-[#ff6a3d]/40" />
+      <span className="pointer-events-none absolute inset-x-4 top-1.5 h-px bg-[#ff6a3d]/35" />
+      <span className="pointer-events-none absolute inset-x-4 bottom-1.5 h-px bg-[#62b6ff]/25" />
     </div>
   );
 }
@@ -1547,7 +1549,77 @@ function LfoPanel({ idx, chipHosted = false }: { idx: 1 | 2; chipHosted?: boolea
 const MACRO_COLORS = ["#ffb35c", "#ff8f5c", "#ffcf5c", "#f0a060"] as const;
 const MACRO_KEYS = ["macro1", "macro2", "macro3", "macro4"] as const;
 
-/** Macros personality: amber command cluster — radar of the four hands-on controls. */
+/** Per-macro ring meter — lives inside each command card. */
+function MacroRingMeter({ value, color }: { value: number; color: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const size = 72;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 32) return;
+      last = t;
+      const v = value;
+      ctx.clearRect(0, 0, size, size);
+      const cx = size / 2;
+      const cy = size / 2;
+      const R = 28;
+      // Track
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.stroke();
+      // Value arc
+      const start = -Math.PI * 0.75;
+      const span = Math.PI * 1.5 * v;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 5;
+      ctx.lineCap = "round";
+      ctx.shadowBlur = 8 + v * 10;
+      ctx.shadowColor = color;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, start, start + span);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      // Hub pulse
+      const pulse = 0.85 + 0.15 * Math.sin(t / 400 + v * 4);
+      const hub = ctx.createRadialGradient(cx - 2, cy - 2, 0, cx, cy, 12 * pulse);
+      hub.addColorStop(0, "#fff8");
+      hub.addColorStop(0.45, color);
+      hub.addColorStop(1, `${color}00`);
+      ctx.fillStyle = hub;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 7 + v * 4, 0, Math.PI * 2);
+      ctx.fill();
+      // Readout
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = "700 11px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${Math.round(v * 100)}`, cx, cy + 0.5);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [value, color]);
+  return <canvas ref={ref} className="block mx-auto" aria-hidden />;
+}
+
+/**
+ * Macros personality — four equal command cards (not a cramped radar).
+ * Each card: ring meter + dest chips. Fills the bay; text never clips.
+ */
 function MacroClusterViz() {
   const m1 = useFireCommandStore((s) => s.patch.macro1);
   const m2 = useFireCommandStore((s) => s.patch.macro2);
@@ -1555,170 +1627,62 @@ function MacroClusterViz() {
   const m4 = useFireCommandStore((s) => s.patch.macro4);
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const values = [m1, m2, m3, m4];
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const stateRef = useRef({ values, matrix });
-  stateRef.current = { values, matrix };
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const wrap = wrapRef.current;
-    if (!canvas || !wrap) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    let raf = 0;
-    let last = 0;
-    const size = { w: 400, h: 118 };
-
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      size.h = 118;
-      canvas.width = Math.floor(size.w * dpr);
-      canvas.height = Math.floor(size.h * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${size.h}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-
-    const draw = (t: number) => {
-      raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 24) return;
-      last = t;
-      const { values: v, matrix: mx } = stateRef.current;
-      const { w: W, h: H } = size;
-      ctx.clearRect(0, 0, W, H);
-
-      // Amber depth field
-      const bg = ctx.createRadialGradient(W * 0.5, H * 0.55, 8, W * 0.5, H * 0.5, W * 0.55);
-      bg.addColorStop(0, "rgba(255,179,92,0.10)");
-      bg.addColorStop(0.55, "rgba(12,10,6,0.5)");
-      bg.addColorStop(1, "rgba(0,0,0,0.35)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, H);
-
-      const cx = W * 0.38;
-      const cy = H * 0.52;
-      const R = Math.min(H * 0.38, 44);
-
-      // Concentric rings
-      for (let i = 1; i <= 4; i++) {
-        ctx.strokeStyle = `rgba(255,179,92,${0.06 + i * 0.02})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Crosshair
-      ctx.strokeStyle = "rgba(255,179,92,0.12)";
-      ctx.beginPath();
-      ctx.moveTo(cx - R - 6, cy); ctx.lineTo(cx + R + 6, cy);
-      ctx.moveTo(cx, cy - R - 6); ctx.lineTo(cx, cy + R + 6);
-      ctx.stroke();
-
-      // Diamond polygon of the four macros
-      const angles = [-Math.PI / 2, 0, Math.PI / 2, Math.PI];
-      const pts = angles.map((ang, i) => {
-        const r = 8 + v[i] * (R - 6);
-        return { x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r, v: v[i], c: MACRO_COLORS[i] };
-      });
-
-      // Fill polygon
-      if (pts.every((p) => p.v > 0.01) || pts.some((p) => p.v > 0.01)) {
-        ctx.beginPath();
-        pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-        ctx.closePath();
-        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
-        g.addColorStop(0, "rgba(255,179,92,0.22)");
-        g.addColorStop(1, "rgba(255,179,92,0.02)");
-        ctx.fillStyle = g;
-        ctx.fill();
-        ctx.strokeStyle = "rgba(255,179,92,0.45)";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-
-      // Nodes + spokes
-      pts.forEach((p, i) => {
-        ctx.strokeStyle = `${p.c}44`;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-
-        const rg = ctx.createRadialGradient(p.x - 1, p.y - 1, 0, p.x, p.y, 7);
-        rg.addColorStop(0, "#fff");
-        rg.addColorStop(0.4, p.c);
-        rg.addColorStop(1, `${p.c}00`);
-        ctx.fillStyle = rg;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 6 + p.v * 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = "rgba(255,255,255,0.55)";
-        ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        const lx = cx + Math.cos(angles[i]) * (R + 14);
-        const ly = cy + Math.sin(angles[i]) * (R + 14);
-        ctx.fillText(`M${i + 1}`, lx, ly + 3);
-      });
-
-      // Slow sweep arm
-      const sweep = (t / 2200) % (Math.PI * 2);
-      ctx.strokeStyle = "rgba(255,207,92,0.25)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(cx + Math.cos(sweep) * R, cy + Math.sin(sweep) * R);
-      ctx.stroke();
-
-      // Right-side wiring readout
-      const x0 = W * 0.62;
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = "rgba(255,179,92,0.55)";
-      ctx.fillText(W < 360 ? "DESTINATIONS" : "WIRED DESTINATIONS", x0, 16);
-
-      for (let i = 0; i < 4; i++) {
-        const src = MACRO_KEYS[i];
-        const routes = mx.filter((r) => r.source === src && r.dest !== "none");
-        const y = 34 + i * 20;
-        ctx.fillStyle = MACRO_COLORS[i];
-        ctx.beginPath();
-        ctx.arc(x0 + 4, y, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-        // Value bar
-        ctx.fillStyle = "rgba(255,255,255,0.08)";
-        ctx.fillRect(x0 + 14, y - 3, 48, 6);
-        ctx.fillStyle = `${MACRO_COLORS[i]}99`;
-        ctx.fillRect(x0 + 14, y - 3, 48 * v[i], 6);
-        ctx.fillStyle = "rgba(255,255,255,0.55)";
-        ctx.font = "500 9px ui-monospace, Menlo, monospace";
-        const label = routes.length
-          ? routes.map((r) => r.dest).slice(0, 3).join(" · ")
-          : "— unpatched —";
-        ctx.fillText(label, x0 + 70, y + 3);
-      }
-    };
-
-    raf = requestAnimationFrame(draw);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  }, []);
 
   return (
-    <div
-      ref={wrapRef}
-      className="relative mb-3 overflow-hidden rounded-xl border border-[#ffb35c]/15 bg-black/50 shadow-[inset_0_1px_0_rgba(255,179,92,0.06),0_8px_24px_rgba(0,0,0,0.3)]"
-    >
-      <canvas ref={canvasRef} className="block w-full" style={{ height: 118 }} aria-hidden />
-      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t border-[#ffb35c]/40" />
-      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t border-[#ffb35c]/40" />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l border-[#ffb35c]/40" />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r border-[#ffb35c]/40" />
+    <div className="mb-3 grid grid-cols-2 lg:grid-cols-4 gap-2 min-w-0">
+      {MACRO_KEYS.map((key, i) => {
+        const routes = matrix.filter((r) => r.source === key && r.dest !== "none");
+        const color = MACRO_COLORS[i];
+        return (
+          <div
+            key={key}
+            className="relative min-w-0 overflow-hidden rounded-xl border bg-gradient-to-b from-black/50 to-black/30 px-2.5 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+            style={{ borderColor: `${color}44` }}
+          >
+            <div
+              className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full blur-2xl opacity-40"
+              style={{ background: color }}
+            />
+            <div className="relative flex items-center justify-between gap-1 mb-1.5">
+              <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color }}>
+                Macro {i + 1}
+              </span>
+              <span className="text-[9px] font-mono text-white/35">{Math.round(values[i] * 100)}%</span>
+            </div>
+            <MacroRingMeter value={values[i]} color={color} />
+            <div className="mt-2 min-h-[32px]">
+              {routes.length === 0 ? (
+                <div className="rounded-md border border-dashed border-white/10 px-1.5 py-1 text-center text-[9px] text-white/30">
+                  unpatched
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1 justify-center">
+                  {routes.slice(0, 3).map((r) => (
+                    <span
+                      key={`${r.source}-${r.dest}`}
+                      className="max-w-full truncate rounded-md border px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wider"
+                      style={{ borderColor: `${color}55`, color, background: `${color}18` }}
+                      title={r.dest}
+                    >
+                      {r.dest}
+                    </span>
+                  ))}
+                  {routes.length > 3 && (
+                    <span className="text-[8px] text-white/35">+{routes.length - 3}</span>
+                  )}
+                </div>
+              )}
+            </div>
+            {/* Level rail */}
+            <div className="mt-2 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+              <div
+                className="h-full rounded-full transition-[width] duration-75"
+                style={{ width: `${Math.round(values[i] * 100)}%`, background: color, boxShadow: `0 0 8px ${color}` }}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1761,7 +1725,7 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         })}
       </div>
       <div className="mt-2 text-center text-[10px] text-dim">
-        Performance cluster — twist here, wire destinations in the matrix. Amber radar shows the live shape.
+        Performance cluster — twist the knobs; cards above show live level and matrix destinations.
       </div>
     </Section>
   );
@@ -1778,7 +1742,7 @@ const GATE_PRESETS: { name: string; steps: number[] }[] = [
   { name: "Long-Short", steps: [1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0] },
 ];
 
-/** Trance Gate personality: ice chop field — amplitude silhouette with radar sweep. */
+/** Trance Gate personality: ice chop field — shutter silhouette with playhead beam. */
 function GateChopViz({
   pattern, steps, on, playStep, depth, smooth,
 }: {
@@ -1944,13 +1908,11 @@ function GateChopViz({
   return (
     <div
       ref={wrapRef}
-      className="relative mb-3 overflow-hidden rounded-xl border border-cyan/20 bg-black/50 shadow-[inset_0_1px_0_rgba(98,182,255,0.06),0_8px_24px_rgba(0,0,0,0.3)]"
+      className="relative mb-3 overflow-hidden rounded-md border border-cyan/25 bg-[#050a10]/90 shadow-[inset_0_0_0_1px_rgba(98,182,255,0.06),inset_0_0_28px_rgba(0,0,0,0.55),0_6px_18px_rgba(0,0,0,0.3)]"
     >
       <canvas ref={canvasRef} className="block w-full" style={{ height: 96 }} aria-hidden />
-      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t border-cyan/40" />
-      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t border-cyan/40" />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l border-cyan/40" />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r border-cyan/40" />
+      <span className="pointer-events-none absolute inset-x-3 top-1 h-px bg-cyan/35" />
+      <span className="pointer-events-none absolute inset-x-3 bottom-1 h-px bg-cyan/35" />
     </div>
   );
 }

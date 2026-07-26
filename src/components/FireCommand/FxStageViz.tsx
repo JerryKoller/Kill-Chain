@@ -41,28 +41,73 @@ function useHiDpiCanvas(
   }, [wrapRef, canvasRef, cssH, sizeRef]);
 }
 
+type StageChrome = "corners" | "rails" | "notch" | "plate" | "bloom" | "scope";
+
 function StageFrame({
   children,
   border,
   height,
   wrapRef,
+  chrome = "corners",
 }: {
   children: ReactNode;
   border: string;
   height: number;
   wrapRef: RefObject<HTMLDivElement | null>;
+  chrome?: StageChrome;
 }) {
+  const base =
+    chrome === "plate"
+      ? "relative mb-2.5 overflow-hidden rounded-lg border-2 bg-black/55 shadow-[inset_0_2px_8px_rgba(0,0,0,0.55),0_4px_14px_rgba(0,0,0,0.35)]"
+      : chrome === "bloom"
+        ? "relative mb-2.5 overflow-hidden rounded-2xl border bg-black/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_0_28px_rgba(0,0,0,0.35)]"
+        : chrome === "scope"
+          ? "relative mb-2.5 overflow-hidden rounded-md border bg-[#05080c]/90 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06),inset_0_0_24px_rgba(0,0,0,0.65),0_6px_18px_rgba(0,0,0,0.3)]"
+          : chrome === "notch"
+            ? "relative mb-2.5 overflow-hidden rounded-xl border bg-black/55 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_6px_20px_rgba(0,0,0,0.28)]"
+            : "relative mb-2.5 overflow-hidden rounded-xl border bg-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_6px_20px_rgba(0,0,0,0.28)]";
+
   return (
     <div
       ref={wrapRef as RefObject<HTMLDivElement>}
-      className="relative mb-2.5 overflow-hidden rounded-xl border bg-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_6px_20px_rgba(0,0,0,0.28)]"
-      style={{ borderColor: border, height }}
+      className={base}
+      style={{
+        borderColor: border,
+        height,
+        boxShadow:
+          chrome === "bloom"
+            ? `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 32px ${border}, 0 6px 20px rgba(0,0,0,0.28)`
+            : undefined,
+      }}
     >
       {children}
-      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t" style={{ borderColor: border }} />
-      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t" style={{ borderColor: border }} />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l" style={{ borderColor: border }} />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r" style={{ borderColor: border }} />
+      {chrome === "corners" && (
+        <>
+          <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t" style={{ borderColor: border }} />
+          <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t" style={{ borderColor: border }} />
+          <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l" style={{ borderColor: border }} />
+          <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r" style={{ borderColor: border }} />
+        </>
+      )}
+      {chrome === "rails" && (
+        <>
+          <span className="pointer-events-none absolute inset-x-3 top-1 h-px" style={{ background: border }} />
+          <span className="pointer-events-none absolute inset-x-3 bottom-1 h-px" style={{ background: border }} />
+        </>
+      )}
+      {chrome === "notch" && (
+        <>
+          <span className="pointer-events-none absolute left-0 top-0 h-2 w-5" style={{ background: border, clipPath: "polygon(0 0, 100% 0, 70% 100%, 0 100%)" }} />
+          <span className="pointer-events-none absolute right-0 top-0 h-2 w-5" style={{ background: border, clipPath: "polygon(0 0, 100% 0, 100% 100%, 30% 100%)" }} />
+          <span className="pointer-events-none absolute bottom-1 left-2 right-2 h-px opacity-40" style={{ background: border }} />
+        </>
+      )}
+      {chrome === "scope" && (
+        <span
+          className="pointer-events-none absolute inset-1 rounded-[4px] border border-white/[0.04]"
+          aria-hidden
+        />
+      )}
     </div>
   );
 }
@@ -190,12 +235,24 @@ export function DriveStageViz() {
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(255,160,110,0.55)";
-      ctx.textAlign = "left";
-      ctx.fillText(m.toUpperCase(), 10, H - 8);
-      ctx.textAlign = "right";
-      ctx.fillText(d < 0.02 ? "CLEAN" : "FORGE", W - 10, H - 8);
+      // Heat shimmer when forging
+      if (d > 0.08) {
+        for (let i = 0; i < 10; i++) {
+          const sx = x0 + ((t / 30 + i * 41) % usable);
+          const sy = mid + Math.sin(sx * 0.08 + t / 120 + i) * amp * 0.7;
+          ctx.fillStyle = `rgba(255,140,80,${0.12 + d * 0.25})`;
+          ctx.fillRect(sx, sy, 1.5, 1.5);
+        }
+      }
+
+      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(255,160,110,0.65)";
+      ctx.textAlign = "center";
+      ctx.fillText(
+        d < 0.02 ? `${m.toUpperCase()} · CLEAN` : `${m.toUpperCase()} · MAGMA FORGE`,
+        W * 0.5,
+        H - 8,
+      );
     };
 
     raf = requestAnimationFrame(draw);
@@ -203,7 +260,7 @@ export function DriveStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.22)" height={100}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,106,61,0.35)" height={100} chrome="plate">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -249,47 +306,74 @@ export function PhaserStageViz() {
       const notches = 4;
       const PAD = 10;
 
-      // Spectrum floor
+      // Comb floor as filled valleys (not just a stroke)
+      const floorY = H - PAD;
       ctx.beginPath();
+      ctx.moveTo(PAD, floorY);
       for (let i = 0; i <= 100; i++) {
         const u = i / 100;
-        let y = 0.55 + 0.2 * Math.sin(u * 9 + t / 800);
+        let y = 0.62 + 0.18 * Math.sin(u * 9 + t / 800);
         for (let n = 0; n < notches; n++) {
           const center = (n + 0.5) / notches + (sweep - 0.5) * 0.35;
           const dist = Math.abs(u - center);
-          y -= Math.exp(-dist * dist * 180) * (0.35 + d * 0.35) * (0.4 + mx * 0.6);
+          y -= Math.exp(-dist * dist * 180) * (0.38 + d * 0.38) * (0.4 + mx * 0.6);
         }
-        y = Math.max(0.08, y);
+        y = Math.max(0.06, y);
+        const px = PAD + u * (W - PAD * 2);
+        const py = PAD + (1 - y) * (H - PAD * 2);
+        ctx.lineTo(px, py);
+      }
+      ctx.lineTo(W - PAD, floorY);
+      ctx.closePath();
+      const valley = ctx.createLinearGradient(0, PAD, 0, floorY);
+      valley.addColorStop(0, `rgba(224,112,255,${0.28 + mx * 0.25})`);
+      valley.addColorStop(0.55, `rgba(160,80,220,${0.1 + mx * 0.08})`);
+      valley.addColorStop(1, "rgba(40,10,60,0.02)");
+      ctx.fillStyle = valley;
+      ctx.fill();
+
+      ctx.beginPath();
+      for (let i = 0; i <= 100; i++) {
+        const u = i / 100;
+        let y = 0.62 + 0.18 * Math.sin(u * 9 + t / 800);
+        for (let n = 0; n < notches; n++) {
+          const center = (n + 0.5) / notches + (sweep - 0.5) * 0.35;
+          const dist = Math.abs(u - center);
+          y -= Math.exp(-dist * dist * 180) * (0.38 + d * 0.38) * (0.4 + mx * 0.6);
+        }
+        y = Math.max(0.06, y);
         const px = PAD + u * (W - PAD * 2);
         const py = PAD + (1 - y) * (H - PAD * 2);
         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
       ctx.strokeStyle = MAGENTA;
       ctx.lineWidth = 2;
-      ctx.shadowBlur = 10 * mx;
+      ctx.shadowBlur = 12 * mx;
       ctx.shadowColor = MAGENTA;
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Notch markers
+      // Crawling notch markers
       for (let n = 0; n < notches; n++) {
         const center = (n + 0.5) / notches + (sweep - 0.5) * 0.35;
         const x = PAD + center * (W - PAD * 2);
-        ctx.strokeStyle = `rgba(98,182,255,${0.25 + mx * 0.4})`;
-        ctx.setLineDash([2, 3]);
+        ctx.strokeStyle = `rgba(98,182,255,${0.3 + mx * 0.45})`;
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(x, 8);
-        ctx.lineTo(x, H - 8);
+        ctx.moveTo(x, 6);
+        ctx.lineTo(x, H - 10);
         ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.fillStyle = `rgba(200,230,255,${0.45 + mx * 0.4})`;
+        ctx.beginPath();
+        ctx.arc(x, 10, 2.2, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(224,112,255,0.55)";
-      ctx.textAlign = "left";
-      ctx.fillText("SWEEP", 10, H - 8);
-      ctx.textAlign = "right";
-      ctx.fillText(mx < 0.02 ? "BYPASS" : "PHASE", W - 10, H - 8);
+      // Center badge
+      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = `rgba(224,112,255,${0.45 + mx * 0.35})`;
+      ctx.fillText(mx < 0.02 ? "BYPASS · COMB IDLE" : "ALLPASS COMB · SWEEP", W * 0.5, H - 8);
     };
 
     raf = requestAnimationFrame(draw);
@@ -297,7 +381,7 @@ export function PhaserStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(224,112,255,0.22)" height={88}>
+    <StageFrame wrapRef={wrapRef} border="rgba(224,112,255,0.28)" height={88} chrome="bloom">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -340,41 +424,46 @@ export function ChorusStageViz() {
 
       const PAD = 10;
       const mid = H * 0.5;
-      const amp = H * 0.28;
+      const amp = H * 0.22;
+      // L / C / R spatial stack — vertical offsets so chorus reads as ensemble sheets
       const voices = [
-        { det: 0, alpha: 0.35, color: "rgba(255,255,255,0.35)" },
-        { det: -1, alpha: 0.55 + mx * 0.35, color: TEAL },
-        { det: 1, alpha: 0.55 + mx * 0.35, color: ICE },
-        { det: -0.5, alpha: 0.3 + mx * 0.3, color: "rgba(92,224,200,0.7)" },
-        { det: 0.5, alpha: 0.3 + mx * 0.3, color: "rgba(98,182,255,0.7)" },
+        { det: -1.0, yOff: -14, alpha: 0.45 + mx * 0.35, color: TEAL, label: "L" },
+        { det: -0.5, yOff: -7, alpha: 0.35 + mx * 0.25, color: "rgba(92,224,200,0.75)", label: "" },
+        { det: 0, yOff: 0, alpha: 0.55, color: "rgba(255,255,255,0.55)", label: "C" },
+        { det: 0.5, yOff: 7, alpha: 0.35 + mx * 0.25, color: "rgba(98,182,255,0.75)", label: "" },
+        { det: 1.0, yOff: 14, alpha: 0.45 + mx * 0.35, color: ICE, label: "R" },
       ];
 
       for (const v of voices) {
         ctx.beginPath();
         for (let i = 0; i <= 100; i++) {
           const u = i / 100;
-          const mod = Math.sin(t / 1000 * r * 2 + v.det) * d * 0.35;
+          const mod = Math.sin(t / 1000 * r * 2 + v.det) * d * 0.4;
           const y = Math.sin(u * Math.PI * 3 + t / 400 + v.det * 0.8 + mod * 4);
           const px = PAD + u * (W - PAD * 2);
-          const py = mid - y * amp * (0.7 + Math.abs(v.det) * 0.15);
+          const py = mid + v.yOff - y * amp * (0.75 + Math.abs(v.det) * 0.1);
           if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
         }
         ctx.strokeStyle = v.color;
         ctx.globalAlpha = v.alpha;
-        ctx.lineWidth = v.det === 0 ? 1.2 : 1.6;
-        ctx.shadowBlur = v.det === 0 ? 0 : 6 * mx;
+        ctx.lineWidth = v.det === 0 ? 1.4 : 1.7;
+        ctx.shadowBlur = v.det === 0 ? 0 : 7 * mx;
         ctx.shadowColor = TEAL;
         ctx.stroke();
         ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
+        if (v.label) {
+          ctx.fillStyle = v.color;
+          ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
+          ctx.textAlign = "left";
+          ctx.fillText(v.label, 8, mid + v.yOff + 3);
+        }
       }
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = "rgba(92,224,200,0.55)";
-      ctx.textAlign = "left";
-      ctx.fillText("ENSEMBLE", 10, H - 8);
       ctx.textAlign = "right";
-      ctx.fillText(mx < 0.02 ? "DRY" : `${Math.round(mx * 100)}% WET`, W - 10, H - 8);
+      ctx.fillText(mx < 0.02 ? "DRY · ENSEMBLE" : `${Math.round(mx * 100)}% WET · ENSEMBLE`, W - 10, H - 8);
     };
 
     raf = requestAnimationFrame(draw);
@@ -382,7 +471,7 @@ export function ChorusStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(92,224,200,0.22)" height={88}>
+    <StageFrame wrapRef={wrapRef} border="rgba(92,224,200,0.28)" height={88} chrome="rails">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -416,62 +505,74 @@ export function DelayStageViz() {
       const { time: tm, fbk: fb, mix: mx } = st.current;
       ctx.clearRect(0, 0, W, H);
 
-      const bg = ctx.createLinearGradient(0, 0, W, 0);
-      bg.addColorStop(0, `rgba(98,182,255,${0.08 + mx * 0.1})`);
-      bg.addColorStop(0.5, "rgba(4,8,16,0.55)");
-      bg.addColorStop(1, `rgba(98,182,255,${0.08 + mx * 0.1})`);
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, `rgba(98,182,255,${0.1 + mx * 0.1})`);
+      bg.addColorStop(0.5, "rgba(4,8,16,0.72)");
+      bg.addColorStop(1, `rgba(98,182,255,${0.1 + mx * 0.1})`);
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
-      // Corridor walls
-      ctx.strokeStyle = "rgba(98,182,255,0.12)";
-      ctx.beginPath();
-      ctx.moveTo(W * 0.5, 6); ctx.lineTo(W * 0.5, H - 6);
-      ctx.stroke();
+      // Dual tape lanes — L top / R bottom
+      const laneL = H * 0.32;
+      const laneR = H * 0.68;
+      const pad = 14;
+      const usable = W - pad * 2;
 
-      const midY = H * 0.5;
+      ctx.strokeStyle = "rgba(98,182,255,0.14)";
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(pad, laneL); ctx.lineTo(W - pad, laneL);
+      ctx.moveTo(pad, laneR); ctx.lineTo(W - pad, laneR);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(150,210,255,0.45)";
+      ctx.textAlign = "left";
+      ctx.fillText("L", 4, laneL + 3);
+      ctx.fillText("R", 4, laneR + 3);
+
       const echoes = 1 + Math.round(fb * 7);
-      const spacing = 18 + tm * 40;
-      const phase = (t / (400 + tm * 800)) % 1;
+      const spacing = 0.08 + tm * 0.14;
+      const phase = (t / (500 + tm * 900)) % 1;
 
       for (let i = 0; i < echoes; i++) {
-        const life = Math.pow(fb, i);
-        const side = i % 2 === 0 ? -1 : 1;
-        const x = W * 0.5 + side * (20 + i * spacing * 0.55);
-        const y = midY + Math.sin(phase * Math.PI * 2 + i * 0.7) * (10 + i * 2);
-        const r = 4 + life * 10 * (0.5 + mx * 0.5);
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 1.8);
-        g.addColorStop(0, `rgba(200,230,255,${0.7 * life * (0.4 + mx)})`);
-        g.addColorStop(0.4, `rgba(98,182,255,${0.45 * life})`);
+        const life = Math.pow(fb, i) * (0.35 + mx * 0.65);
+        const u = (phase + i * spacing) % 1;
+        const isL = i % 2 === 0;
+        const y = isL ? laneL : laneR;
+        const x = pad + u * usable;
+        const r = 3 + life * 8;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2);
+        g.addColorStop(0, `rgba(220,240,255,${0.85 * life})`);
+        g.addColorStop(0.45, `rgba(98,182,255,${0.5 * life})`);
         g.addColorStop(1, "rgba(98,182,255,0)");
         ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(x, y, r * 1.8, 0, Math.PI * 2);
+        ctx.arc(x, y, r * 2, 0, Math.PI * 2);
         ctx.fill();
 
-        // Trail toward center
-        ctx.strokeStyle = `rgba(98,182,255,${0.15 * life})`;
+        // Decay wake behind blip
+        ctx.strokeStyle = `rgba(98,182,255,${0.2 * life})`;
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(W * 0.5, midY);
-        ctx.quadraticCurveTo(x, midY - side * 20, x, y);
+        ctx.moveTo(Math.max(pad, x - 18 - i * 4), y);
+        ctx.lineTo(x, y);
         ctx.stroke();
       }
 
-      // Source pulse
-      const pulse = 0.6 + 0.4 * Math.sin(t / 200);
-      ctx.fillStyle = `rgba(255,255,255,${0.5 * pulse})`;
+      // Inject pulse at start of both lanes
+      const pulse = 0.55 + 0.45 * Math.sin(t / 180);
+      ctx.fillStyle = `rgba(255,255,255,${0.45 * pulse * (0.4 + mx)})`;
       ctx.beginPath();
-      ctx.arc(W * 0.5, midY, 3.5, 0, Math.PI * 2);
+      ctx.arc(pad + 2, laneL, 2.5, 0, Math.PI * 2);
+      ctx.arc(pad + 2, laneR, 2.5, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(150,210,255,0.55)";
-      ctx.textAlign = "left";
-      ctx.fillText("L", 10, H - 8);
-      ctx.textAlign = "right";
-      ctx.fillText("R", W - 10, H - 8);
       ctx.textAlign = "center";
-      ctx.fillText(mx < 0.02 ? "SILENT" : "PING-PONG", W * 0.5, H - 8);
+      ctx.fillStyle = "rgba(150,210,255,0.55)";
+      ctx.fillText(mx < 0.02 ? "TAPE IDLE" : `PING-PONG · FB ${Math.round(fb * 100)}%`, W * 0.5, H - 7);
     };
 
     raf = requestAnimationFrame(draw);
@@ -479,7 +580,7 @@ export function DelayStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(98,182,255,0.22)" height={88}>
+    <StageFrame wrapRef={wrapRef} border="rgba(98,182,255,0.32)" height={88} chrome="scope">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -579,7 +680,7 @@ export function ReverbStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(168,180,255,0.22)" height={88}>
+    <StageFrame wrapRef={wrapRef} border="rgba(168,180,255,0.3)" height={88} chrome="bloom">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -640,9 +741,19 @@ export function SpectralStageViz() {
         return;
       }
 
+      // Analyzer grid (tech bay)
       const PAD = 8;
       const bw = (W - PAD * 2) / N;
       const sec = t / 1000;
+      ctx.strokeStyle = "rgba(201,139,255,0.06)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 4; i++) {
+        const y = PAD + ((H - PAD * 2) / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(PAD, y);
+        ctx.lineTo(W - PAD, y);
+        ctx.stroke();
+      }
 
       for (let i = 0; i < N; i++) {
         const live = Math.max(
@@ -719,7 +830,7 @@ export function SpectralStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(201,139,255,0.22)" height={100}>
+    <StageFrame wrapRef={wrapRef} border="rgba(201,139,255,0.32)" height={100} chrome="notch">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -953,7 +1064,7 @@ export function WarpStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.32)" height={WARP_H}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.4)" height={WARP_H} chrome="plate">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
