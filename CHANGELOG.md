@@ -2,6 +2,18 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.6] — 2026-07-26 — Path Fit + Lineage + Color Map
+
+### Fixed
+- **Natural Selection** — Keep Winner / Extinct stay inside the mutate bay (no bleed into Studio); generation continues after Keep Winner via lineage
+- **Signal Path** — nodes stretch full width (no empty bay to the right of Scope)
+
+### Added
+- **Keyboard** — toggle 1 or 2 full octaves on screen (default 2); preference remembered
+
+### Changed
+- **Fire Command color language** — each band owns a hue (Mix coral · Sources peach · Tone gold · Mod sky · FX violet · Perf amber) so Command Map, Signal Path, and stage chrome agree on where you are
+
 ## [2.6.5] — 2026-07-26 — Command Deck
 
 ### Added
