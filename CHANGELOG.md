@@ -2,6 +2,14 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.5] — 2026-07-26 — Core Stages + Lit Collapse
+
+### Changed
+- **Lit collapse controls** — larger accent-colored fold chevrons across Fire Command sections
+- **Fire Mixer console** — signal-flow summing bay (parts → Master → Kill-Chain), taller strips, clearer Master/sidechain racks. Mixing unchanged
+- **Morph Pad** — larger pad, glowing corner weights, blend meters
+- **Core stage personalities** — OSC A–C, Performance, Spectral Warp, Unison, Filter, Amp/Mod/Filter envelopes, LFO 1–2, FM·Ring, Pitch·Glide each get their own hi-DPI stage. Display only
+
 ## [2.5.4] — 2026-07-26 — Collapse + Warp / Output / Mixer
 
 ### Changed
