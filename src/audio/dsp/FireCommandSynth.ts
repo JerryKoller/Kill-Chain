@@ -178,6 +178,20 @@ export interface FirePatch {
   // ── Reverb ──
   reverbSize: number;
   reverbMix: number;
+  /** 0..1 — high-frequency damping in the IR (0 = bright, 1 = dark). */
+  reverbDamp: number;
+  /** 0..0.2 — wet-path pre-delay seconds. */
+  reverbPredelay: number;
+  /** 0..1 — early/dense diffusion character. */
+  reverbDiffusion: number;
+  // ── Signal Path rack enables (v3.0.1) — true = stage engaged ──
+  pathOsc: boolean;
+  pathFilter: boolean;
+  pathDrive: boolean;
+  pathAge: boolean;
+  pathFx: boolean;
+  pathMix: boolean;
+  pathScope: boolean;
   // ── Spectral FX (v1.7): STFT worklet between reverb and autopan ──
   spectralMode: SpectralMode;
   /** 0..1 mode intensity (freeze hold, smear time, gate threshold, shift ±). */
@@ -224,9 +238,9 @@ export interface FirePatch {
   chipNoise: ChipNoiseMode;
   /** Optional low polyphony for chip authenticity (0 = use maxVoices). */
   chipVoiceLimit: number;
-  /** TB-303: velocity → accent (filter+amp boost). */
+  /** Velocity → accent (filter+amp boost) for acid-style lines. */
   accentAmount: number;
-  /** TB-303: legato extends glide (slide). */
+  /** Legato extends glide (slide) in mono mode. */
   slideOn: boolean;
   // ── FM Rack / Vector (Genesis v3.0) ──
   fmEngine: FmEngineMode;
@@ -541,8 +555,8 @@ class Voice {
     this.baseFreq = midiToFreq(midi);
     this.unisonCount = Math.round(clamp(p.unison, 1, MAX_UNISON));
     this.uNorm = 1 / Math.sqrt(this.unisonCount);
-    // Analog Life: static per-note tuning variance (Genesis).
-    this.tuneCents = (Math.random() * 2 - 1) * clamp(p.tuneVariance ?? 0, 0, 1) * 35;
+    // Analog Life: static per-note tuning variance (audible cents spread).
+    this.tuneCents = (Math.random() * 2 - 1) * clamp(p.tuneVariance ?? 0, 0, 1) * 85;
     const t = Math.max(ctx.currentTime, when ?? ctx.currentTime);
 
     this.mix = ctx.createGain();
@@ -620,12 +634,8 @@ class Voice {
     for (const o of this.allOscs()) this.modDetune.connect(o.detune);
     this.modDetune.connect(this.sub.detune);
 
-    this.gSub.gain.value = p.subLevel;
-    this.gNoise.gain.value = p.noiseLevel;
-    this.applyNoiseColor(p, true);
-    this.groupA.level.gain.value = p.oscALevel * this.uNorm;
-    this.groupB.level.gain.value = p.oscBLevel * this.uNorm;
-    if (this.groupC) this.groupC.level.gain.value = p.oscCLevel * this.uNorm;
+    this.setOscLevels(p);
+    this.setFilterLive(p);
 
     this.applyTuning(p, t, true);
     this.applyFm(p);
@@ -714,9 +724,9 @@ class Voice {
     const fA = this.baseFreq * Math.pow(2, p.oscAOctave);
     const fB = this.baseFreq * Math.pow(2, p.oscBOctave);
     const fC = this.baseFreq * Math.pow(2, p.oscCOctave);
-    // TB-303 slide: legato glide stretches when slideOn.
+    // Acid slide: legato glide stretches when slideOn.
     const glideSec = (p.slideOn && p.mono && !immediate)
-      ? Math.max(p.glide, 0.12) * 1.8
+      ? Math.max(p.glide, 0.14) * 2.2
       : p.glide;
     const setFreq = (osc: OscillatorNode, f: number) => {
       if (immediate || glideSec <= 0) osc.frequency.setValueAtTime(f, t);
@@ -751,11 +761,12 @@ class Voice {
       this.xmodGain.gain.setTargetAtTime(xm, t, 0.02);
       return;
     }
+    const fmAmt = p.hardSync ? Math.max(p.fmAmount, 0.22) : p.fmAmount;
     this.fmOsc.frequency.setValueAtTime(this.baseFreq * p.fmRatio, t);
-    this.fmGain.gain.setValueAtTime(p.fmAmount * this.baseFreq * 6, t);
-    // Hard sync DNA: boost B→A cross-mod so A tracks B's phase resets spectrally.
-    const syncBoost = p.hardSync ? Math.max(p.fmBtoA ?? 0, 0.55) : (p.fmBtoA ?? 0);
-    const xm = syncBoost * this.baseFreq * 4 / this.unisonCount;
+    this.fmGain.gain.setValueAtTime(fmAmt * this.baseFreq * (p.hardSync ? 9 : 6), t);
+    // Hard sync feel: strong B→A cross-mod (PeriodicWave can't hard-reset phase).
+    const syncBoost = p.hardSync ? Math.max(p.fmBtoA ?? 0, 0.88) : (p.fmBtoA ?? 0);
+    const xm = syncBoost * this.baseFreq * (p.hardSync ? 10 : 4) / this.unisonCount;
     this.xmodGain.gain.setTargetAtTime(xm, t, 0.02);
   }
 
@@ -801,7 +812,7 @@ class Voice {
       this.filterEnv.offset.setTargetAtTime(floorHz - base, t + strike, (decay / 3) * 0.8);
     } else {
       const jitter = clamp(p.envVariance ?? 0, 0, 1);
-      const j = (base: number) => Math.max(0.001, base * (1 + (Math.random() * 2 - 1) * jitter * 0.45));
+      const j = (base: number) => Math.max(0.001, base * (1 + (Math.random() * 2 - 1) * jitter * 0.95));
       const ampAtk = j(p.ampAttack);
       const ampDec = j(p.ampDecay);
       const filtAtk = j(p.filtAttack);
@@ -813,17 +824,17 @@ class Voice {
 
       const base = this.baseCutoff(p);
       this.filter.frequency.setValueAtTime(base, t);
-      // TB-303 accent: high velocity opens filter harder when accentAmount > 0.
+      // Acid accent: high velocity opens filter harder when accentAmount > 0.
       const accent = clamp(p.accentAmount ?? 0, 0, 1) * clamp(velocity, 0, 1);
-      const envAmt = p.filterEnvAmount + accent * 0.85;
-      const peakOff = clamp(base * Math.pow(2, envAmt * 4), 20, 20000) - base;
+      const envAmt = p.filterEnvAmount + accent * 1.15;
+      const peakOff = clamp(base * Math.pow(2, envAmt * 4.5), 20, 20000) - base;
       this.filterEnv.offset.cancelScheduledValues(t);
       this.filterEnv.offset.setValueAtTime(0, t);
       this.filterEnv.offset.linearRampToValueAtTime(peakOff, t + filtAtk);
       this.filterEnv.offset.setTargetAtTime(peakOff * p.filtSustain, t + filtAtk, Math.max(0.005, filtDec / 3));
-      // Accent also lifts amp peak slightly.
-      if (accent > 0.05) {
-        const boosted = clamp(peak * (1 + accent * 0.25), 0, 1.2);
+      // Accent also lifts amp peak.
+      if (accent > 0.04) {
+        const boosted = clamp(peak * (1 + accent * 0.4), 0, 1.25);
         this.ampEnv.offset.cancelScheduledValues(t);
         this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
         this.ampEnv.offset.linearRampToValueAtTime(boosted, t + ampAtk);
@@ -919,11 +930,16 @@ class Voice {
   // ── live updates ──
   setOscLevels(p: FirePatch): void {
     const t = this.ctx.currentTime;
-    this.groupA.level.gain.setTargetAtTime(p.oscALevel * this.uNorm, t, 0.02);
-    this.groupB.level.gain.setTargetAtTime(p.oscBLevel * this.uNorm, t, 0.02);
-    if (this.groupC) this.groupC.level.gain.setTargetAtTime(p.oscCLevel * this.uNorm, t, 0.02);
-    this.gSub.gain.setTargetAtTime(p.subLevel, t, 0.02);
-    this.gNoise.gain.setTargetAtTime(p.noiseLevel, t, 0.02);
+    const mute = p.pathOsc === false;
+    const nMul = mute ? 0 : 1;
+    // Non-white chip noise stays audible even when the Noise knob is low.
+    const chipBed = (p.chipNoise && p.chipNoise !== "white") ? 0.1 : 0;
+    const noise = mute ? 0 : Math.max(p.noiseLevel, chipBed * Math.min(1, 0.35 + p.noiseLevel));
+    this.groupA.level.gain.setTargetAtTime(p.oscALevel * this.uNorm * nMul, t, 0.02);
+    this.groupB.level.gain.setTargetAtTime(p.oscBLevel * this.uNorm * nMul, t, 0.02);
+    if (this.groupC) this.groupC.level.gain.setTargetAtTime(p.oscCLevel * this.uNorm * nMul, t, 0.02);
+    this.gSub.gain.setTargetAtTime(p.subLevel * nMul, t, 0.02);
+    this.gNoise.gain.setTargetAtTime(noise, t, 0.02);
     this.applyNoiseColor(p);
   }
 
@@ -947,6 +963,12 @@ class Voice {
   }
   setFilterLive(p: FirePatch): void {
     const t = this.ctx.currentTime;
+    if (p.pathFilter === false) {
+      this.filter.type = "lowpass";
+      this.filter.Q.setTargetAtTime(0.0001, t, 0.02);
+      this.filter.frequency.setTargetAtTime(20000, t, 0.03);
+      return;
+    }
     this.filter.type = p.filterType;
     this.filter.Q.setTargetAtTime(clamp(p.filterResonance, 0.0001, 30), t, 0.02);
     this.filter.frequency.setTargetAtTime(this.baseCutoff(p), t, 0.03);
@@ -954,16 +976,17 @@ class Voice {
 
   /** Slow random per-voice detune wander (analog instability), in cents. */
   advanceDrift(amount: number, rate = 0.35): number {
+    if (amount <= 0.001) return 0;
     const r = clamp(rate, 0.05, 1);
-    if (Math.random() < 0.02 + r * 0.06) this.driftTarget = (Math.random() * 2 - 1) * amount * (9 + r * 8);
-    this.driftCur += (this.driftTarget - this.driftCur) * (0.04 + r * 0.08);
+    if (Math.random() < 0.04 + r * 0.1) this.driftTarget = (Math.random() * 2 - 1) * amount * (22 + r * 28);
+    this.driftCur += (this.driftTarget - this.driftCur) * (0.06 + r * 0.12);
     return this.driftCur;
   }
 
   advanceInstability(amount: number): number {
     if (amount <= 0) return 0;
-    if (Math.random() < 0.05) this.instabilityTarget = (Math.random() * 2 - 1) * amount * 18;
-    this.instabilityCur += (this.instabilityTarget - this.instabilityCur) * 0.08;
+    if (Math.random() < 0.08) this.instabilityTarget = (Math.random() * 2 - 1) * amount * 55;
+    this.instabilityCur += (this.instabilityTarget - this.instabilityCur) * 0.12;
     return this.instabilityCur;
   }
 
@@ -1080,6 +1103,7 @@ export class FireCommandSynth {
   private readonly punchComp: DynamicsCompressorNode;
   private readonly punchMakeup: GainNode;
   private readonly reverbIn: GainNode;
+  private readonly reverbPredelay: DelayNode;
   private readonly reverbConv: ConvolverNode;
   private readonly reverbDry: GainNode;
   private readonly reverbWet: GainNode;
@@ -1121,7 +1145,8 @@ export class FireCommandSynth {
 
   private modTimer: ReturnType<typeof setInterval> | null = null;
   private irTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastIrSize = -1;
+  private lastIrKey = "";
+  private lastPredelay = -1;
   private sh1Step = -1; private sh1Val = 0;
   private sh2Step = -1; private sh2Val = 0;
   private mtxRandStep = -1; private mtxRandVal = 0;
@@ -1233,6 +1258,8 @@ export class FireCommandSynth {
     this.punchComp.release.value = 0.12;
     this.punchMakeup = ctx.createGain();
     this.reverbIn = ctx.createGain();
+    this.reverbPredelay = ctx.createDelay(0.25);
+    this.reverbPredelay.delayTime.value = 0;
     this.reverbConv = ctx.createConvolver();
     this.reverbDry = ctx.createGain();
     this.reverbWet = ctx.createGain();
@@ -1313,7 +1340,7 @@ export class FireCommandSynth {
     this.delayOut.connect(this.tone);
     this.tone.connect(this.punchComp).connect(this.punchMakeup).connect(this.reverbIn);
     this.reverbIn.connect(this.reverbDry).connect(this.reverbOut);
-    this.reverbIn.connect(this.reverbConv).connect(this.reverbWet).connect(this.reverbOut);
+    this.reverbIn.connect(this.reverbPredelay).connect(this.reverbConv).connect(this.reverbWet).connect(this.reverbOut);
     // Spectral FX sits between reverb and autopan (freezing reverb tails is
     // the point). At spectralMode "off" the signal takes the plain dry gain —
     // zero added latency, zero worklet cost; the worklet is loaded lazily on
@@ -1455,19 +1482,19 @@ export class FireCommandSynth {
   private static makeChipNoise(ctx: AudioContext, mode: ChipNoiseMode): AudioBuffer {
     const sr = ctx.sampleRate;
     if (mode === "periodic") {
-      // Metallic short loop (~32 samples at 44.1k ≈ harsh NES-like tone noise).
-      const len = 64;
+      // Metallic short loop — harsh digital tone noise.
+      const len = 48;
       const buf = ctx.createBuffer(1, len, sr);
       const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = ((i * 7) & 15) / 7.5 - 1;
+      for (let i = 0; i < len; i++) d[i] = (((i * 7) & 15) / 7.5 - 1) * 0.95;
       return buf;
     }
-    // NES / GB: long buffer with held steps (4-bit / 1-bit style).
+    // Hold / Soft: long buffer with stepped LFSR bits (4-bit / softer hold).
     const len = Math.floor(sr * 1.5);
     const buf = ctx.createBuffer(1, len, sr);
     const d = buf.getChannelData(0);
     let reg = 1;
-    const hold = mode === "nes" ? 8 : 4;
+    const hold = mode === "nes" ? 10 : 5;
     let bit = 0;
     for (let i = 0; i < len; i++) {
       if (i % hold === 0) {
@@ -1476,7 +1503,7 @@ export class FireCommandSynth {
         reg = (reg >> 1) | ((b0 ^ b1) << 14);
         bit = b0 ? 1 : -1;
       }
-      d[i] = bit;
+      d[i] = bit * 0.9;
     }
     return buf;
   }
@@ -1496,20 +1523,33 @@ export class FireCommandSynth {
     return this.periodicNoiseBuffer;
   }
 
-  private buildReverbIR(size: number): void {
+  private buildReverbIR(p: FirePatch): void {
     const sr = this.ctx.sampleRate;
-    const len = Math.max(1, Math.floor(sr * clamp(size, 0.2, 6)));
+    const size = clamp(p.reverbSize, 0.2, 6);
+    const damp = clamp(p.reverbDamp ?? 0.45, 0, 1);
+    const diff = clamp(p.reverbDiffusion ?? 0.7, 0, 1);
+    const len = Math.max(1, Math.floor(sr * size));
     const ir = this.ctx.createBuffer(2, len, sr);
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
+      let lp = 0;
+      const lpCoef = 0.12 + damp * 0.78;
       for (let i = 0; i < len; i++) {
         const t = i / len;
-        const decay = Math.pow(1 - t, 2.2);
-        d[i] = (Math.random() * 2 - 1) * decay;
+        const decay = Math.pow(1 - t, 1.55 + damp * 1.55);
+        const noise = Math.random() * 2 - 1;
+        lp = lp * lpCoef + noise * (1 - lpCoef);
+        // Sparse early reflections → denser body with diffusion.
+        const earlyWin = i < sr * 0.09;
+        const early = earlyWin && Math.random() < (0.015 + diff * 0.09)
+          ? (Math.random() * 2 - 1) * (1 - i / (sr * 0.09))
+          : 0;
+        const dense = lp * (0.28 + diff * 0.72);
+        d[i] = (dense + early * (1.1 - diff * 0.55)) * decay * (ch === 0 ? 1 : 0.92 + Math.random() * 0.16);
       }
     }
     this.reverbConv.buffer = ir;
-    this.lastIrSize = size;
+    this.lastIrKey = `${size.toFixed(2)}|${damp.toFixed(2)}|${diff.toFixed(2)}`;
   }
 
   private bankFor(id: string): PeriodicWave[] {
@@ -1695,7 +1735,8 @@ export class FireCommandSynth {
       this.lastGateTarget = gateTarget;
     }
 
-    const pvActive = p.drift > 0 || (p.voiceInstability ?? 0) > 0 || (p.tuneVariance ?? 0) > 0 || this.mtxHasPerVoice;
+    const pvActive = p.drift > 0 || (p.voiceInstability ?? 0) > 0 || (p.tuneVariance ?? 0) > 0
+      || (p.envVariance ?? 0) > 0 || this.mtxHasPerVoice;
     const A = this.mtxA;
     const m = this.mScratch;
 
@@ -1725,30 +1766,42 @@ export class FireCommandSynth {
             }
           }
         }
-        const dutyBias = (table: string) => {
-          if (table !== "pulse" && table !== "chip") return 0;
-          // Map pulseDuty 0..1 → morph bias around the PWM table's duty sweep.
-          return (clamp(p.pulseDuty ?? 0.5, 0, 1) - 0.5) * 0.9;
+        const dutyMorph = (table: string, base: number) => {
+          if (table !== "pulse" && table !== "chip") return base;
+          // Map pulseDuty directly onto PWM morph (0.5 = square → f≈0, extremes → thin).
+          const thin = Math.abs(clamp(p.pulseDuty ?? 0.5, 0, 1) - 0.5) * 2;
+          return clamp(thin * 0.92 + base * 0.08, 0, 1);
         };
-        // Vector morph (Wavestation / Pigments DNA): slow opposing XY on A/B.
+        // Vector morph: slow opposing XY on A/B.
         const vDepth = clamp(p.vectorDepth ?? 0, 0, 1);
         const vRate = clamp(p.vectorRate ?? 0, 0, 8);
         const vec = vDepth > 0 && vRate > 0
           ? Math.sin(now * vRate * Math.PI * 2) * vDepth * 0.45
           : 0;
-        const posA = clamp(p.oscAPos + me * p.oscAEnv + lfo1 * p.oscALfo + mWA + dutyBias(p.oscATable) + vec, 0, 1);
-        const posB = clamp(p.oscBPos + me * p.oscBEnv + lfo1 * p.oscBLfo + mWB + dutyBias(p.oscBTable) - vec, 0, 1);
+        const syncTilt = p.hardSync ? 0.22 : 0;
+        const posA = dutyMorph(
+          p.oscATable,
+          clamp(p.oscAPos + me * p.oscAEnv + lfo1 * p.oscALfo + mWA + vec + syncTilt, 0, 1),
+        );
+        const posB = dutyMorph(
+          p.oscBTable,
+          clamp(p.oscBPos + me * p.oscBEnv + lfo1 * p.oscBLfo + mWB - vec, 0, 1),
+        );
         v.setWtA(posA);
         v.setWtB(posB);
         dispA = posA;
         dispB = posB;
         if (v.hasGroupC()) {
-          const posC = clamp(p.oscCPos + me * p.oscCEnv + lfo1 * p.oscCLfo + mWC + dutyBias(p.oscCTable), 0, 1);
+          const posC = dutyMorph(
+            p.oscCTable,
+            clamp(p.oscCPos + me * p.oscCEnv + lfo1 * p.oscCLfo + mWC, 0, 1),
+          );
           v.setWtC(posC);
           dispC = posC;
         }
         if (pvActive) {
-          m.driftCents = (p.drift > 0 ? v.advanceDrift(p.drift, p.driftRate ?? 0.35) : 0)
+          const lifeAmt = Math.max(p.drift, (p.voiceInstability ?? 0) * 0.55, (p.tuneVariance ?? 0) * 0.25);
+          m.driftCents = (lifeAmt > 0 ? v.advanceDrift(lifeAmt, p.driftRate ?? 0.35) : 0)
             + v.getTuneCents()
             + v.advanceInstability(p.voiceInstability ?? 0);
           m.aReso = A.reso; m.aFm = A.fm; m.aLvl = A.lvlA || A.lvlB || A.lvlC;
@@ -1988,10 +2041,13 @@ export class FireCommandSynth {
       case "phaserRate": case "phaserDepth": case "phaserMix":
       case "chorusRate": case "chorusDepth": case "chorusMix":
       case "delayTime": case "delayFeedback": case "delayMix": case "tone":
-      case "reverbSize": case "reverbMix": case "stereoWidth":
+      case "reverbSize": case "reverbMix": case "reverbDamp": case "reverbPredelay": case "reverbDiffusion":
+      case "stereoWidth":
       case "cassetteGen": case "tapeSpeed": case "wowFlutter": case "vhsColor":
       case "bitDepth": case "sampleRateReduce": case "bbdChorus": case "analogComp":
       case "dust": case "hiss": case "hum": case "printThrough":
+      case "pathOsc": case "pathFilter": case "pathDrive": case "pathAge":
+      case "pathFx": case "pathMix": case "pathScope":
         this.applyBusParams(p); break;
       case "lfo1Wave": case "lfo1Rate": case "lfo1Depth": case "lfo1Dest":
       case "lfo2Wave": case "lfo2Rate": case "lfo2Depth": case "lfo2Dest":
@@ -2057,19 +2113,24 @@ export class FireCommandSynth {
 
   private applyBusParams(p: FirePatch): void {
     const t = this.ctx.currentTime;
-    this.master.gain.setTargetAtTime(clamp(p.masterGain, 0, 1.2), t, 0.02);
-    this.driveShaper.curve = makeDriveCurve(p.drive, p.driveMode);
-    // ×1/DRIVE_RANGE pad — the curve bakes the range back in, so the drive
-    // transfer is unchanged for in-range signals but the stage no longer
-    // hard-clamps summed chords at ±1 (see DRIVE_RANGE).
-    this.drivePre.gain.setTargetAtTime((1 + p.drive * 1.2) / DRIVE_RANGE, t, 0.02);
-    this.drivePost.gain.setTargetAtTime(1 / (1 + p.drive * 0.7), t, 0.02);
-    const crush = clamp(p.crush, 0, 1);
-    this.crushShaper.curve = makeCrushCurve(16 - crush * 13);
-    this.crushDry.gain.setTargetAtTime(1 - crush, t, 0.02);
-    this.crushWet.gain.setTargetAtTime(crush, t, 0.02);
-    // Vintage Age bus (Genesis) — dry wire when all knobs at neutral.
-    this.vintage.apply({
+    const pathDrive = p.pathDrive !== false;
+    const pathAge = p.pathAge !== false;
+    const pathFx = p.pathFx !== false;
+    const pathMix = p.pathMix !== false;
+
+    this.master.gain.setTargetAtTime(pathMix ? clamp(p.masterGain, 0, 1.2) : 0, t, 0.02);
+
+    const driveAmt = pathDrive ? p.drive : 0;
+    const crushAmt = pathDrive ? clamp(p.crush, 0, 1) : 0;
+    this.driveShaper.curve = makeDriveCurve(driveAmt, p.driveMode);
+    this.drivePre.gain.setTargetAtTime((1 + driveAmt * 1.2) / DRIVE_RANGE, t, 0.02);
+    this.drivePost.gain.setTargetAtTime(1 / (1 + driveAmt * 0.7), t, 0.02);
+    this.crushShaper.curve = makeCrushCurve(16 - crushAmt * 13);
+    this.crushDry.gain.setTargetAtTime(1 - crushAmt, t, 0.02);
+    this.crushWet.gain.setTargetAtTime(crushAmt, t, 0.02);
+
+    // Vintage Age bus — force neutral when path Age is off.
+    this.vintage.apply(pathAge ? {
       cassetteGen: p.cassetteGen ?? 0,
       tapeSpeed: p.tapeSpeed ?? 0,
       wowFlutter: p.wowFlutter ?? 0,
@@ -2082,47 +2143,71 @@ export class FireCommandSynth {
       hiss: p.hiss ?? 0,
       hum: p.hum ?? 0,
       printThrough: p.printThrough ?? 0,
+    } : {
+      cassetteGen: 0, tapeSpeed: 0, wowFlutter: 0, vhsColor: 0, bitDepth: "off",
+      sampleRateReduce: 0, bbdChorus: 0, analogComp: 0, dust: 0, hiss: 0, hum: 0, printThrough: 0,
     });
-    // Combine punch + analogComp for gentle glue (analogComp adds on top lightly).
-    const punch = clamp(p.punch, 0, 1);
-    const ac = clamp(p.analogComp ?? 0, 0, 1);
+
+    const punch = pathDrive ? clamp(p.punch, 0, 1) : 0;
+    const ac = pathAge ? clamp(p.analogComp ?? 0, 0, 1) : 0;
     const glue = clamp(punch + ac * 0.55, 0, 1);
     this.punchComp.threshold.setTargetAtTime(-glue * 30, t, 0.05);
     this.punchComp.ratio.setTargetAtTime(1 + glue * 7, t, 0.05);
     this.punchMakeup.gain.setTargetAtTime(1 + glue * 0.3, t, 0.05);
-    // Phaser
-    const phMix = clamp(p.phaserMix, 0, 1);
+
+    const phMix = pathFx ? clamp(p.phaserMix, 0, 1) : 0;
     const phDepth = clamp(p.phaserDepth, 0, 1);
     this.phaserLfo.frequency.setTargetAtTime(clamp(p.phaserRate, 0.02, 12), t, 0.02);
     this.phaserDepth.gain.setTargetAtTime(560 * phDepth, t, 0.02);
     this.phaserDry.gain.setTargetAtTime(1, t, 0.02);
     this.phaserWet.gain.setTargetAtTime(phMix, t, 0.02);
     this.phaserFb.gain.setTargetAtTime(phMix * 0.55, t, 0.02);
-    const ring = clamp(p.ringAmount, 0, 1);
+
+    const ring = pathFx ? clamp(p.ringAmount, 0, 1) : 0;
     this.ringDry.gain.setTargetAtTime(1 - ring, t, 0.02);
     this.ringDepth.gain.setTargetAtTime(ring, t, 0.02);
     this.ringCarrier.frequency.setTargetAtTime(clamp(p.ringFreq, 1, 8000), t, 0.02);
-    const chMix = clamp(p.chorusMix, 0, 1);
+
+    const chMix = pathFx ? clamp(p.chorusMix, 0, 1) : 0;
     this.chorusDry.gain.setTargetAtTime(1 - chMix * 0.5, t, 0.02);
     this.chorusWet.gain.setTargetAtTime(chMix, t, 0.02);
     this.cLfoL.frequency.setTargetAtTime(clamp(p.chorusRate, 0.05, 8), t, 0.02);
     this.cLfoR.frequency.setTargetAtTime(clamp(p.chorusRate, 0.05, 8) * 1.18, t, 0.02);
     this.cDepthL.gain.setTargetAtTime(p.chorusDepth * 0.006, t, 0.02);
     this.cDepthR.gain.setTargetAtTime(p.chorusDepth * 0.006, t, 0.02);
+
     this.dL.delayTime.setTargetAtTime(clamp(p.delayTime, 0.001, 2), t, 0.02);
     this.dR.delayTime.setTargetAtTime(clamp(p.delayTime, 0.001, 2) * 1.5, t, 0.02);
     const fb = clamp(p.delayFeedback, 0, 0.92);
     this.dFbLR.gain.setTargetAtTime(fb, t, 0.02);
     this.dFbRL.gain.setTargetAtTime(fb, t, 0.02);
-    this.delayWet.gain.setTargetAtTime(clamp(p.delayMix, 0, 1), t, 0.02);
+    this.delayWet.gain.setTargetAtTime(pathFx ? clamp(p.delayMix, 0, 1) : 0, t, 0.02);
     this.tone.frequency.setTargetAtTime(clamp(p.tone, 200, 20000), t, 0.02);
-    const revMix = clamp(p.reverbMix, 0, 1);
+
+    const revMix = pathFx ? clamp(p.reverbMix, 0, 1) : 0;
     this.reverbDry.gain.setTargetAtTime(1 - revMix * 0.4, t, 0.04);
     this.reverbWet.gain.setTargetAtTime(revMix, t, 0.04);
-    // Mid/side width — only the side gain moves; M+S recombination keeps
-    // mono content untouched, so width can't change perceived level.
+    const pre = clamp(p.reverbPredelay ?? 0, 0, 0.2);
+    if (Math.abs(pre - this.lastPredelay) > 0.0005) {
+      this.reverbPredelay.delayTime.setTargetAtTime(pre, t, 0.03);
+      this.lastPredelay = pre;
+    }
+
     this.widthSideAmt.gain.setTargetAtTime(clamp(p.stereoWidth ?? 1, 0, 1.4), t, 0.03);
-    this.updateReverbConvolver(p);
+    this.updateReverbConvolver(p, pathFx);
+
+    // Keep pathOsc / pathFilter live on existing voices.
+    for (const v of this.voices) {
+      v.setOscLevels(p);
+      v.setFilterLive(p);
+    }
+
+    // Spectral follows path FX.
+    if (!pathFx && p.spectralMode !== "off") {
+      this.applySpectral({ ...p, spectralMode: "off" });
+    } else {
+      this.applySpectral(p);
+    }
   }
 
   /**
@@ -2133,30 +2218,27 @@ export class FireCommandSynth {
    * buffer is nulled on a short delay so the wet tail has ramped to silence
    * first (click-free), and rebuilt on demand the moment it's needed again.
    */
-  private updateReverbConvolver(p: FirePatch): void {
-    const revMix = clamp(p.reverbMix, 0, 1);
-    const reverbNeeded = revMix > 0.0005 || this.mtxHasReverbRoute;
+  private updateReverbConvolver(p: FirePatch, pathFx = true): void {
+    const revMix = pathFx ? clamp(p.reverbMix, 0, 1) : 0;
+    const reverbNeeded = revMix > 0.0005 || (pathFx && this.mtxHasReverbRoute);
     if (!reverbNeeded) {
       if (this.reverbConv.buffer !== null && !this.revNullTimer) {
         this.revNullTimer = setTimeout(() => {
           this.reverbConv.buffer = null;
-          this.lastIrSize = -1;
+          this.lastIrKey = "";
           this.revNullTimer = null;
         }, 220);
       }
       return;
     }
     if (this.revNullTimer) { clearTimeout(this.revNullTimer); this.revNullTimer = null; }
+    const key = `${clamp(p.reverbSize, 0.2, 6).toFixed(2)}|${clamp(p.reverbDamp ?? 0.45, 0, 1).toFixed(2)}|${clamp(p.reverbDiffusion ?? 0.7, 0, 1).toFixed(2)}`;
     if (this.reverbConv.buffer === null) {
-      // Just became audible — build immediately so it doesn't lag in.
       if (this.irTimer) { clearTimeout(this.irTimer); this.irTimer = null; }
-      this.buildReverbIR(p.reverbSize);
-    } else if (Math.abs(p.reverbSize - this.lastIrSize) > 0.05) {
-      // Size changed while audible — debounce so dragging doesn't allocate a
-      // buffer every frame.
+      this.buildReverbIR(p);
+    } else if (key !== this.lastIrKey) {
       if (this.irTimer) clearTimeout(this.irTimer);
-      const size = p.reverbSize;
-      this.irTimer = setTimeout(() => { this.buildReverbIR(size); this.irTimer = null; }, 140);
+      this.irTimer = setTimeout(() => { this.buildReverbIR(p); this.irTimer = null; }, 140);
     }
   }
 
@@ -2256,7 +2338,7 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   phaserRate: 0.4, phaserDepth: 0.6, phaserMix: 0,
   chorusRate: 0.6, chorusDepth: 0.4, chorusMix: 0.25,
   delayTime: 0.28, delayFeedback: 0.3, delayMix: 0,
-  reverbSize: 2.2, reverbMix: 0,
+  reverbSize: 2.2, reverbMix: 0, reverbDamp: 0.45, reverbPredelay: 0.02, reverbDiffusion: 0.7,
   spectralMode: "off", spectralAmount: 0.6, spectralMix: 0.5,
   macro1: 0, macro2: 0, macro3: 0, macro4: 0,
   modMatrix: makeModMatrix(),
@@ -2295,6 +2377,13 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   fmFeedback: 0,
   vectorRate: 0,
   vectorDepth: 0,
+  pathOsc: true,
+  pathFilter: true,
+  pathDrive: true,
+  pathAge: true,
+  pathFx: true,
+  pathMix: true,
+  pathScope: true,
   stereoWidth: 1,
   gateOn: false, gateRate: 8, gateDepth: 1, gateSteps: 16,
   gatePattern: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],

@@ -1,7 +1,6 @@
 /**
- * PresetBrowser — the Fire Command armory. Two-pane browser (category rail +
- * searchable list) built for a 500+ preset bank: the list renders flat cards
- * with no per-card animation so even "All" stays snappy.
+ * PresetBrowser — Fire Command patch library. Two-pane category rail + list.
+ * Flat cards, no emoji chrome.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -34,21 +33,22 @@ const CAT_COLOR: Record<string, string> = {
   User: "#ff9a6b",
 };
 
-const CAT_ICON: Record<string, string> = {
-  All: "◈",
-  Missions: "🎯",
-  Bass: "▁",
-  Lead: "⚡",
-  Pluck: "✦",
-  Pad: "≋",
-  Keys: "⌨",
-  Arp: "⇶",
-  FX: "☄",
-  Atmos: "🌫",
-  Vintage: "📼",
-  Chip: "▣",
-  FM: "◇",
-  User: "★",
+/** Text marks only — no emoji. */
+const CAT_MARK: Record<string, string> = {
+  All: "ALL",
+  Missions: "MSN",
+  Bass: "BAS",
+  Lead: "LED",
+  Pluck: "PLK",
+  Pad: "PAD",
+  Keys: "KEY",
+  Arp: "ARP",
+  FX: "FX",
+  Atmos: "ATM",
+  Vintage: "VIN",
+  Chip: "CHP",
+  FM: "FM",
+  User: "USR",
 };
 
 type Filter = "All" | "Missions" | PresetCategory | "User";
@@ -92,7 +92,6 @@ export function PresetBrowser({
     if (initialFilter) setFilter(initialFilter);
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
-    // Focus search so you can type immediately.
     const t = setTimeout(() => searchRef.current?.focus(), 80);
     return () => { window.removeEventListener("keydown", onKey); clearTimeout(t); };
   }, [open, onClose, initialFilter]);
@@ -125,28 +124,20 @@ export function PresetBrowser({
   }, [cards, filter, query]);
 
   const groups = useMemo(() => {
-    const order: Filter[] = [...PRESET_CATEGORIES, "User"];
-    return order
+    if (filter !== "All") return [{ cat: filter, items: filtered }];
+    return PRESET_CATEGORIES
       .map((cat) => ({ cat, items: filtered.filter((c) => c.category === cat) }))
       .filter((g) => g.items.length > 0);
-  }, [filtered]);
+  }, [filtered, filter]);
 
   const doSave = () => {
     const id = savePreset(saveName);
     setSaveName("");
     setFilter("User");
-    loadPreset(id);
+    toast(`Saved · ${useFireCommandStore.getState().userPresets.find((p) => p.id === id)?.name ?? "patch"}`);
   };
 
   const rail: Filter[] = ["All", "Missions", ...PRESET_CATEGORIES, "User"];
-
-  const deployPack = (packId: string) => {
-    const pack = MISSION_PACKS.find((p) => p.id === packId);
-    if (!pack) return;
-    loadProjectData(pack.payload());
-    toast(`🎯 ${pack.name} deployed — patch, drums, sections and chain are live. Hit play.`);
-    onClose();
-  };
 
   const missionItems = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -166,235 +157,262 @@ export function PresetBrowser({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-6 bg-black/85"
           onClick={onClose}
         >
           <motion.div
-            initial={{ scale: 0.97, y: 14 }}
+            initial={{ scale: 0.98, y: 10 }}
             animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.97, y: 14 }}
-            transition={{ type: "spring", stiffness: 320, damping: 30 }}
+            exit={{ scale: 0.98, y: 10 }}
+            transition={{ type: "spring", stiffness: 360, damping: 32 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-4xl h-[86vh] rounded-2xl flex flex-col overflow-hidden border border-[#ff6a3d]/25"
+            className="w-full max-w-5xl h-[88vh] rounded-2xl flex flex-col overflow-hidden border border-white/[0.1]"
             style={{
-              background: "linear-gradient(165deg, rgb(24 12 8 / 0.99), rgb(10 6 10 / 0.995))",
-              boxShadow: "0 24px 80px rgba(0,0,0,0.7), 0 0 60px rgba(255,90,40,0.08) inset",
+              background: "linear-gradient(165deg, #12141a 0%, #0a0b0f 55%, #08090c 100%)",
+              boxShadow: "0 28px 90px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.04)",
             }}
           >
             {/* Header */}
-            <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[#ff6a3d]/15">
-              <div className="flex items-center gap-3">
+            <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-white/[0.07]">
+              <div className="flex items-center gap-3 min-w-0">
                 <div
-                  className="w-9 h-9 rounded-xl grid place-items-center text-lg"
-                  style={{ background: "linear-gradient(145deg, #ff6a3d33, #ff2e1a22)", border: "1px solid #ff6a3d55" }}
-                >🔥</div>
-                <div>
-                  <div className="text-[9px] uppercase tracking-[0.4em]" style={{ color: "#ff9a6b" }}>Fire Command</div>
-                  <div className="text-lg font-bold tracking-wide text-white">Patch Library</div>
+                  className="w-9 h-9 rounded-lg grid place-items-center shrink-0 text-[11px] font-black tracking-wider"
+                  style={{
+                    color: FIRE,
+                    background: "linear-gradient(145deg, rgba(255,106,61,0.2), rgba(0,0,0,0.4))",
+                    border: "1px solid rgba(255,106,61,0.4)",
+                  }}
+                >FC</div>
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-[0.28em] text-white/40">Fire Command</div>
+                  <div className="text-base font-bold tracking-wide text-white">Patch Library</div>
                 </div>
-                <div className="ml-2 text-[10px] font-mono text-white/35 tabular-nums">
-                  {FIRE_PRESETS.length} factory · {userPresets.length} saved
+                <div className="hidden sm:flex items-center gap-2 ml-2 text-[10px] font-mono text-white/35 tabular-nums">
+                  <span className="rounded border border-white/10 px-1.5 py-0.5">{FIRE_PRESETS.length} factory</span>
+                  <span className="rounded border border-white/10 px-1.5 py-0.5">{userPresets.length} saved</span>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={onClose}
-                className="w-8 h-8 grid place-items-center rounded-lg border border-white/10 text-white/60 hover:text-white hover:border-white/25 transition"
+                className="w-8 h-8 grid place-items-center rounded-lg border border-white/10 text-white/55 hover:text-white hover:border-white/25 transition"
+                aria-label="Close"
               >{"\u2715"}</button>
             </div>
 
-            {/* Toolbar */}
-            <div className="flex flex-wrap items-center gap-2 px-5 py-2.5 border-b border-white/6">
+            {/* Toolbar — search primary, save secondary */}
+            <div className="flex flex-col gap-2 px-5 py-2.5 border-b border-white/[0.06] sm:flex-row sm:items-center">
               <input
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={`Search ${counts.get(filter) ?? 0} presets…`}
-                className="flex-1 min-w-[160px] rounded-lg border border-white/12 bg-black/40 px-3 py-1.5 text-sm text-white placeholder:text-white/30 outline-none focus:border-[#ff6a3d]/60"
+                placeholder={filter === "Missions" ? "Search missions…" : `Search ${counts.get(filter) ?? 0} patches…`}
+                className="flex-1 min-w-0 rounded-lg border border-white/12 bg-black/45 px-3 py-2 text-sm text-white placeholder:text-white/30 outline-none focus:border-[#ff6a3d]/55"
               />
-              <input
-                value={saveName}
-                onChange={(e) => setSaveName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") doSave(); }}
-                placeholder="Name this patch…"
-                className="w-[170px] rounded-lg border border-white/12 bg-black/40 px-3 py-1.5 text-sm text-white placeholder:text-white/30 outline-none focus:border-[#ff6a3d]/60"
-              />
-              <button
-                onClick={doSave}
-                className="rounded-lg border border-[#ff6a3d]/60 bg-[#ff6a3d]/15 hover:bg-[#ff6a3d]/25 px-3.5 py-1.5 text-sm font-bold transition"
-                style={{ color: "#ffd9c9" }}
-              >＋ Save</button>
-              <button
-                onClick={() => {
-                  randomize();
-                  toast("🎲 Fresh random patch generated — hit ＋ Save to keep it");
-                }}
-                className="rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-sm text-white/80 transition"
-                title="Generate a fresh random patch (not from the preset bank)"
-              >🎲</button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <input
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") doSave(); }}
+                  placeholder="Save as…"
+                  className="w-[140px] rounded-lg border border-white/12 bg-black/45 px-2.5 py-2 text-sm text-white placeholder:text-white/30 outline-none focus:border-[#ff6a3d]/55"
+                />
+                <button
+                  type="button"
+                  onClick={doSave}
+                  className="rounded-lg border border-[#ff6a3d]/55 bg-[#ff6a3d]/15 hover:bg-[#ff6a3d]/25 px-3 py-2 text-[11px] font-bold uppercase tracking-wider transition"
+                  style={{ color: "#ffd9c9" }}
+                >Save</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    randomize();
+                    toast("Random patch — Save to keep it");
+                  }}
+                  className="rounded-lg border border-white/12 bg-white/[0.04] hover:bg-white/[0.08] px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-white/70 transition"
+                  title="Generate a fresh random patch"
+                >Dice</button>
+              </div>
             </div>
 
-            {/* Body: rail + list */}
             <div className="flex-1 flex min-h-0">
-              <div className="w-[124px] shrink-0 border-r border-white/6 py-2 px-1.5 space-y-0.5 overflow-y-auto">
+              {/* Category rail */}
+              <div className="w-[118px] shrink-0 border-r border-white/[0.06] py-2 px-1.5 space-y-0.5 overflow-y-auto">
                 {rail.map((t) => {
                   const active = filter === t;
                   const color = t === "All" ? FIRE : CAT_COLOR[t] ?? "#fff";
                   return (
                     <button
                       key={t}
+                      type="button"
                       onClick={() => setFilter(t)}
-                      className={`w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition border ${
-                        active ? "bg-white/[0.07] border-white/15" : "border-transparent text-white/55 hover:bg-white/[0.04]"
+                      className={`w-full flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-semibold transition border ${
+                        active ? "bg-white/[0.07] border-white/15" : "border-transparent text-white/50 hover:bg-white/[0.04] hover:text-white/75"
                       }`}
-                      style={active ? { color } : undefined}
+                      style={active ? { color, borderColor: `${color}44` } : undefined}
                     >
-                      <span className="w-4 text-center opacity-80">{CAT_ICON[t] ?? "·"}</span>
-                      <span className="flex-1 text-left">{t}</span>
-                      <span className="text-[9px] font-mono opacity-45 tabular-nums">{counts.get(t) ?? 0}</span>
+                      <span
+                        className="w-7 shrink-0 text-center text-[8px] font-black tracking-wide rounded border border-current/20 py-0.5 opacity-80"
+                      >{CAT_MARK[t] ?? "·"}</span>
+                      <span className="flex-1 text-left truncate">{t}</span>
+                      <span className="text-[9px] font-mono opacity-40 tabular-nums">{counts.get(t) ?? 0}</span>
                     </button>
                   );
                 })}
               </div>
 
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div className="flex-1 overflow-y-auto p-4 space-y-5">
                 {filter === "Missions" ? (
                   <div>
-                    <div className="mb-3 text-[11px] text-white/45 leading-relaxed">
-                      Mission packs load an ENTIRE production — synth patches, drum grids,
-                      note riffs, sections and the song chain — replacing what's loaded now.
-                      (Ctrl+Z brings your work back.)
+                    <div className="mb-3 text-[11px] text-white/40 leading-relaxed max-w-2xl">
+                      Missions load a full production (patches, drums, notes, chain) and replace the current session. Undo restores your work.
                     </div>
                     {missionItems.length === 0 && (
-                      <div className="text-center text-sm text-dim py-10">No mission packs match your search.</div>
+                      <div className="text-center text-sm text-white/35 py-12">No missions match.</div>
                     )}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      {missionItems.map((p) => (
-                        <div
-                          key={p.id}
-                          onClick={() => deployPack(p.id)}
-                          className="group cursor-pointer rounded-xl border border-white/8 bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/20 p-3 transition"
-                          style={{ boxShadow: `inset 3px 0 0 ${p.color}` }}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {missionItems.map((pack) => (
+                        <button
+                          key={pack.id}
+                          type="button"
+                          onClick={() => {
+                            loadProjectData(pack.payload());
+                            toast(`${pack.name} deployed — hit play`);
+                            onClose();
+                          }}
+                          className="text-left rounded-xl border border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/18 px-3.5 py-3 transition group"
+                          style={{ borderLeftWidth: 3, borderLeftColor: pack.color }}
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-white">{p.name}</span>
-                            <span
-                              className="text-[9px] font-mono px-1.5 py-0.5 rounded-md border"
-                              style={{ color: p.color, borderColor: `${p.color}55`, background: `${p.color}14` }}
-                            >{p.bpm} BPM</span>
-                            <span className="ml-auto opacity-0 group-hover:opacity-100 text-[10px] font-bold uppercase tracking-[0.15em] transition" style={{ color: p.color }}>
-                              Deploy ▸
-                            </span>
+                          <div className="flex items-baseline justify-between gap-2">
+                            <div className="font-semibold text-white group-hover:text-[#ffd9c9]">{pack.name}</div>
+                            <div className="text-[9px] font-mono text-white/30">{pack.bpm} BPM</div>
                           </div>
-                          <div className="mt-0.5 text-[11px] font-semibold" style={{ color: `${p.color}cc` }}>{p.tagline}</div>
-                          <div className="mt-1 text-[11px] text-white/45 leading-snug">{p.desc}</div>
-                        </div>
+                          <div className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: pack.color }}>{pack.tagline}</div>
+                          <div className="text-[11px] text-white/40 mt-1.5 line-clamp-2">{pack.desc}</div>
+                        </button>
                       ))}
                     </div>
                   </div>
                 ) : (
                   <>
-                {groups.length === 0 && (
-                  <div className="text-center text-sm text-dim py-10">
-                    {filter === "User"
-                      ? "No saved patches yet — dial in a sound and hit “＋ Save”."
-                      : "No presets match your search."}
-                  </div>
-                )}
-                {groups.map((g) => (
-                  <div key={g.cat}>
-                    <div className="flex items-center gap-2 mb-2 sticky top-0 z-10 py-1 -my-1"
-                      style={{ background: "linear-gradient(180deg, rgb(18 10 8 / 0.97), rgb(18 10 8 / 0.85))" }}>
-                      <span className="h-2 w-2 rounded-full" style={{ background: CAT_COLOR[g.cat] ?? "#fff" }} />
-                      <span className="text-[10px] uppercase tracking-[0.25em] text-white/60 font-semibold">{g.cat}</span>
-                      <span className="text-[10px] text-white/25 font-mono">{g.items.length}</span>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-                      {g.items.map((c) => {
-                        const active = presetId === c.id;
-                        const color = CAT_COLOR[c.category] ?? FIRE;
-                        return (
+                    {groups.length === 0 && (
+                      <div className="text-center text-sm text-white/35 py-12">No patches match.</div>
+                    )}
+                    {groups.map(({ cat, items }) => (
+                      <div key={String(cat)}>
+                        {filter === "All" && (
                           <div
-                            key={c.id}
-                            onClick={() => loadPreset(c.id)}
-                            className={`group cursor-pointer rounded-lg border px-2.5 py-2 transition ${
-                              active
-                                ? "border-[#ff6a3d]/70 bg-[#ff6a3d]/[0.14]"
-                                : "border-white/6 bg-white/[0.025] hover:bg-white/[0.06] hover:border-white/18"
-                            }`}
-                            style={active ? { boxShadow: "0 0 16px rgb(255 106 61 / 0.2)" } : undefined}
+                            className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em]"
+                            style={{ color: CAT_COLOR[cat] ?? "#fff" }}
                           >
-                            <div className="flex items-center gap-1.5">
-                              <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: color, opacity: active ? 1 : 0.5 }} />
-                              <div className="min-w-0 flex-1">
-                                {renamingId === c.id ? (
-                                  <input
-                                    autoFocus
-                                    value={renameText}
-                                    onClick={(e) => e.stopPropagation()}
-                                    onChange={(e) => setRenameText(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      e.stopPropagation();
-                                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                                      if (e.key === "Escape") { setRenameText(""); setRenamingId(null); }
-                                    }}
-                                    onBlur={() => {
-                                      if (renameText.trim()) renameUserPreset(c.id, renameText.trim());
-                                      setRenamingId(null);
-                                    }}
-                                    className="w-full rounded-md border border-[#ff6a3d]/50 bg-black/50 px-1.5 py-0.5 text-[13px] text-white outline-none"
-                                  />
-                                ) : (
-                                  <div className="text-[13px] font-semibold text-white truncate leading-tight">{c.name}</div>
+                            <span className="opacity-70">{CAT_MARK[cat]}</span>
+                            <span>{cat}</span>
+                            <span className="h-px flex-1 bg-white/[0.06]" />
+                            <span className="font-mono text-white/30 normal-case tracking-normal">{items.length}</span>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                          {items.map((c) => {
+                            const active = presetId === c.id;
+                            const color = CAT_COLOR[c.category] ?? FIRE;
+                            return (
+                              <div
+                                key={c.id}
+                                className={`group relative rounded-lg border px-3 py-2.5 transition cursor-pointer ${
+                                  active
+                                    ? "border-white/25 bg-white/[0.07]"
+                                    : "border-white/[0.06] bg-black/25 hover:border-white/14 hover:bg-white/[0.04]"
+                                }`}
+                                style={active ? { boxShadow: `inset 3px 0 0 ${color}` } : undefined}
+                                onClick={() => {
+                                  loadPreset(c.id);
+                                  toast(c.name);
+                                }}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className={`text-[13px] font-semibold truncate ${active ? "text-white" : "text-white/90"}`}>
+                                      {c.name}
+                                    </div>
+                                    <div className="text-[10px] text-white/35 truncate mt-0.5">{c.desc}</div>
+                                  </div>
+                                  {c.user && (
+                                    <div className="flex items-center gap-0.5 shrink-0 opacity-70 group-hover:opacity-100">
+                                      <button
+                                        type="button"
+                                        className="w-6 h-6 rounded text-[10px] text-white/50 hover:text-white hover:bg-white/10"
+                                        title="Rename"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setRenamingId(c.id);
+                                          setRenameText(c.name);
+                                        }}
+                                      >✎</button>
+                                      <button
+                                        type="button"
+                                        className="w-6 h-6 rounded text-[10px] text-white/50 hover:text-red-300 hover:bg-red-500/15"
+                                        title="Delete"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setConfirmDeleteId(c.id);
+                                        }}
+                                      >✕</button>
+                                    </div>
+                                  )}
+                                </div>
+                                {renamingId === c.id && (
+                                  <div className="mt-2 flex gap-1" onClick={(e) => e.stopPropagation()}>
+                                    <input
+                                      autoFocus
+                                      value={renameText}
+                                      onChange={(e) => setRenameText(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          renameUserPreset(c.id, renameText);
+                                          setRenamingId(null);
+                                        }
+                                        if (e.key === "Escape") setRenamingId(null);
+                                      }}
+                                      className="flex-1 rounded border border-white/15 bg-black/50 px-2 py-1 text-xs text-white outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      className="px-2 text-[10px] font-bold text-[#ffb08a]"
+                                      onClick={() => {
+                                        renameUserPreset(c.id, renameText);
+                                        setRenamingId(null);
+                                      }}
+                                    >OK</button>
+                                  </div>
                                 )}
-                                <div className="text-[10px] text-white/40 truncate leading-tight">{c.desc}</div>
-                              </div>
-                              {c.user && (
-                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition shrink-0">
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setRenamingId(c.id);
-                                      setRenameText(c.name);
-                                    }}
-                                    className="w-5 h-5 grid place-items-center rounded border border-white/10 text-white/55 hover:text-white hover:border-white/30 text-[10px]"
-                                    title="Rename"
-                                  >✎</button>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (confirmDeleteId === c.id) {
+                                {confirmDeleteId === c.id && (
+                                  <div className="mt-2 flex items-center gap-2 text-[10px]" onClick={(e) => e.stopPropagation()}>
+                                    <span className="text-white/50">Delete?</span>
+                                    <button
+                                      type="button"
+                                      className="text-red-300 font-bold"
+                                      onClick={() => {
                                         deleteUserPreset(c.id);
                                         setConfirmDeleteId(null);
-                                      } else {
-                                        setConfirmDeleteId(c.id);
-                                        setTimeout(() => setConfirmDeleteId(null), 2200);
-                                      }
-                                    }}
-                                    className={`h-5 grid place-items-center rounded border text-[10px] px-1 transition ${
-                                      confirmDeleteId === c.id
-                                        ? "border-rose-400/70 bg-rose-500/25 text-rose-100"
-                                        : "border-rose-400/30 text-rose-300/70 hover:text-rose-200 hover:border-rose-400/60 w-5"
-                                    }`}
-                                    title="Delete"
-                                  >{confirmDeleteId === c.id ? "CONFIRM PURGE" : "✕"}</button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+                                      }}
+                                    >Yes</button>
+                                    <button type="button" className="text-white/40" onClick={() => setConfirmDeleteId(null)}>No</button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </>
                 )}
               </div>
             </div>
 
-            <div className="px-4 py-2 border-t border-white/6 text-[9px] uppercase tracking-[0.3em] text-white/30 text-center">
-              {filter === "Missions"
-                ? "Click to deploy mission · Esc to close"
-                : "Click to load · Esc to close"}
+            <div className="px-5 py-2 border-t border-white/[0.06] text-[10px] text-white/30 flex justify-between">
+              <span>{filter === "Missions" ? "Click a mission to deploy · Esc closes" : "Click a patch to load · Esc closes"}</span>
+              <span className="font-mono tabular-nums text-white/25">{filtered.length} shown</span>
             </div>
           </motion.div>
         </motion.div>

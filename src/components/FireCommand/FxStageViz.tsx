@@ -586,16 +586,19 @@ export function DelayStageViz() {
   );
 }
 
-/** Room bloom — expanding impulse rings sized by reverb Size. */
+/** Room bloom — impulse rings + damp haze + predelay tick + diffusion density. */
 export function ReverbStageViz() {
   const size = useFireCommandStore((s) => s.patch.reverbSize);
   const mix = useFireCommandStore((s) => s.patch.reverbMix);
+  const damp = useFireCommandStore((s) => s.patch.reverbDamp ?? 0.45);
+  const pre = useFireCommandStore((s) => s.patch.reverbPredelay ?? 0.02);
+  const diff = useFireCommandStore((s) => s.patch.reverbDiffusion ?? 0.7);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 320, h: 88 });
-  const st = useRef({ size, mix });
-  st.current = { size, mix };
-  useHiDpiCanvas(wrapRef, canvasRef, 88, sizeRef);
+  const sizeRef = useRef({ w: 320, h: 100 });
+  const st = useRef({ size, mix, damp, pre, diff });
+  st.current = { size, mix, damp, pre, diff };
+  useHiDpiCanvas(wrapRef, canvasRef, 100, sizeRef);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -604,85 +607,92 @@ export function ReverbStageViz() {
     if (!ctx) return;
     let raf = 0;
     let last = 0;
-    const rings: { birth: number; x: number; y: number }[] = [];
+    const rings: { birth: number; x: number; y: number; early: boolean }[] = [];
     let nextSpawn = 0;
 
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 22) return;
+      if (document.hidden || t - last < 20) return;
       last = t;
       const { w: W, h: H } = sizeRef.current;
-      const { size: sz, mix: mx } = st.current;
+      const { size: sz, mix: mx, damp: dm, pre: pd, diff: df } = st.current;
       ctx.clearRect(0, 0, W, H);
 
-      const bg = ctx.createRadialGradient(W * 0.5, H * 0.55, 4, W * 0.5, H * 0.5, W * 0.5);
-      bg.addColorStop(0, `rgba(168,180,255,${0.08 + mx * 0.12})`);
+      const warm = 0.35 + dm * 0.55;
+      const bg = ctx.createRadialGradient(W * 0.5, H * 0.55, 4, W * 0.5, H * 0.5, W * 0.55);
+      bg.addColorStop(0, `rgba(${Math.round(168 + warm * 40)},${Math.round(180 - warm * 30)},${Math.round(255 - warm * 60)},${0.08 + mx * 0.14})`);
       bg.addColorStop(0.55, "rgba(6,6,14,0.55)");
       bg.addColorStop(1, "rgba(0,0,0,0.4)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
-      // Soft room haze
-      const haze = ctx.createRadialGradient(W * 0.5, H * 0.5, 0, W * 0.5, H * 0.5, 20 + sz * 18);
-      haze.addColorStop(0, `rgba(168,180,255,${0.12 * mx})`);
-      haze.addColorStop(1, "rgba(168,180,255,0)");
-      ctx.fillStyle = haze;
-      ctx.fillRect(0, 0, W, H);
+      // Predelay ruler
+      const preX = 14 + (pd / 0.2) * (W * 0.22);
+      ctx.strokeStyle = `rgba(200,210,255,${0.25 + mx * 0.35})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(12, H * 0.22);
+      ctx.lineTo(preX, H * 0.22);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(230,235,255,${0.45 + mx * 0.4})`;
+      ctx.beginPath();
+      ctx.arc(preX, H * 0.22, 2.5, 0, Math.PI * 2);
+      ctx.fill();
 
-      const spawnEvery = 280 + (6 - Math.min(6, sz)) * 80;
+      const spawnEvery = Math.max(90, 320 - df * 180 - mx * 60);
       if (t > nextSpawn && mx > 0.02) {
-        rings.push({
-          birth: t,
-          x: W * 0.5 + (Math.random() - 0.5) * 30,
-          y: H * 0.55 + (Math.random() - 0.5) * 10,
-        });
+        const n = 1 + Math.floor(df * 2);
+        for (let k = 0; k < n; k++) {
+          rings.push({
+            birth: t + k * 28,
+            x: W * 0.5 + (Math.random() - 0.5) * (40 + df * 50),
+            y: H * 0.58 + (Math.random() - 0.5) * 14,
+            early: k === 0,
+          });
+        }
         nextSpawn = t + spawnEvery;
-        if (rings.length > 8) rings.shift();
+        while (rings.length > 14) rings.shift();
       }
 
-      const lifeMs = 600 + sz * 400;
+      const lifeMs = 550 + sz * 420;
       for (let i = rings.length - 1; i >= 0; i--) {
         const ring = rings[i];
         const age = (t - ring.birth) / lifeMs;
+        if (age < 0) continue;
         if (age > 1) { rings.splice(i, 1); continue; }
-        const rad = 6 + age * (18 + sz * 22);
-        const alpha = (1 - age) * (0.35 + mx * 0.5);
+        const rad = 5 + age * (16 + sz * 24) * (1 - dm * 0.25);
+        const alpha = (1 - age) * (0.3 + mx * 0.55) * (1 - dm * 0.35);
         ctx.strokeStyle = `rgba(168,180,255,${alpha})`;
-        ctx.lineWidth = 1.5 * (1 - age * 0.5);
+        ctx.lineWidth = (ring.early ? 1.8 : 1.2) * (1 - age * 0.5);
         ctx.beginPath();
-        ctx.ellipse(ring.x, ring.y, rad * 1.6, rad * 0.55, 0, 0, Math.PI * 2);
+        ctx.ellipse(ring.x, ring.y, rad * 1.7, rad * (0.45 + df * 0.2), 0, 0, Math.PI * 2);
         ctx.stroke();
-        // Impulse spike at birth
-        if (age < 0.12) {
-          const spikeA = (1 - age / 0.12) * (0.5 + mx * 0.4);
-          ctx.strokeStyle = `rgba(230,235,255,${spikeA})`;
-          ctx.lineWidth = 1.5;
+        if (ring.early && age < 0.15) {
+          ctx.strokeStyle = `rgba(240,245,255,${(1 - age / 0.15) * 0.7})`;
           ctx.beginPath();
-          ctx.moveTo(ring.x, ring.y - 14);
-          ctx.lineTo(ring.x, ring.y + 4);
-          ctx.stroke();
-        }
-        // Secondary denser early reflection
-        if (age < 0.4) {
-          ctx.strokeStyle = `rgba(200,210,255,${alpha * 0.6})`;
-          ctx.beginPath();
-          ctx.ellipse(ring.x, ring.y, rad * 0.7, rad * 0.25, 0, 0, Math.PI * 2);
+          ctx.moveTo(ring.x, ring.y - 12);
+          ctx.lineTo(ring.x, ring.y + 3);
           ctx.stroke();
         }
       }
 
-      // Center spark
-      ctx.fillStyle = `rgba(220,230,255,${0.4 + mx * 0.4})`;
-      ctx.beginPath();
-      ctx.arc(W * 0.5, H * 0.55, 2.5, 0, Math.PI * 2);
-      ctx.fill();
+      // Diffusion grain field
+      if (mx > 0.05) {
+        const grains = Math.floor(8 + df * 28);
+        for (let g = 0; g < grains; g++) {
+          const gx = ((g * 97 + t * 0.02) % W);
+          const gy = H * 0.35 + ((g * 53) % (H * 0.45));
+          ctx.fillStyle = `rgba(180,190,255,${0.08 + df * 0.12 * mx})`;
+          ctx.fillRect(gx, gy, 1.5, 1.5);
+        }
+      }
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = "rgba(168,180,255,0.55)";
       ctx.textAlign = "left";
-      ctx.fillText(`${sz.toFixed(1)}s`, 10, H - 8);
+      ctx.fillText(`${sz.toFixed(1)}s · d${Math.round(dm * 100)}`, 10, H - 8);
       ctx.textAlign = "right";
-      ctx.fillText(mx < 0.02 ? "DRY" : "BLOOM", W - 10, H - 8);
+      ctx.fillText(mx < 0.02 ? "DRY" : `PRE ${Math.round(pd * 1000)}ms`, W - 10, H - 8);
     };
 
     raf = requestAnimationFrame(draw);
@@ -690,7 +700,7 @@ export function ReverbStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(168,180,255,0.3)" height={88} chrome="bloom">
+    <StageFrame wrapRef={wrapRef} border="rgba(168,180,255,0.3)" height={100} chrome="bloom">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -1075,6 +1085,318 @@ export function WarpStageViz() {
 
   return (
     <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.4)" height={WARP_H} chrome="plate">
+      <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
+    </StageFrame>
+  );
+}
+
+/** Tape / VHS / dust — unique Vintage Age stage personality. */
+export function VintageAgeStageViz() {
+  const cassette = useFireCommandStore((s) => s.patch.cassetteGen);
+  const wow = useFireCommandStore((s) => s.patch.wowFlutter);
+  const vhs = useFireCommandStore((s) => s.patch.vhsColor);
+  const dust = useFireCommandStore((s) => s.patch.dust);
+  const hiss = useFireCommandStore((s) => s.patch.hiss);
+  const bit = useFireCommandStore((s) => s.patch.bitDepth);
+  const srr = useFireCommandStore((s) => s.patch.sampleRateReduce);
+  const bbd = useFireCommandStore((s) => s.patch.bbdChorus);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const sizeRef = useRef({ w: 320, h: 100 });
+  const st = useRef({ cassette, wow, vhs, dust, hiss, bit, srr, bbd });
+  st.current = { cassette, wow, vhs, dust, hiss, bit, srr, bbd };
+  useHiDpiCanvas(wrapRef, canvasRef, 100, sizeRef);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 24) return;
+      last = t;
+      const { w: W, h: H } = sizeRef.current;
+      const p = st.current;
+      const heat = Math.max(p.cassette, p.wow, p.vhs, p.dust, p.hiss, p.srr, p.bbd, p.bit !== "off" ? 0.4 : 0);
+      ctx.clearRect(0, 0, W, H);
+
+      // Sepia plate
+      const bg = ctx.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, `rgba(40,28,14,${0.55 + heat * 0.2})`);
+      bg.addColorStop(1, "rgba(8,6,4,0.85)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      // VHS scanlines
+      const scanA = 0.04 + p.vhs * 0.18;
+      for (let y = 0; y < H; y += 3) {
+        ctx.fillStyle = `rgba(201,166,107,${scanA * (0.4 + ((y + t * 0.04) % 7) / 10)})`;
+        ctx.fillRect(0, y, W, 1);
+      }
+
+      // Dual tape reels
+      const wobble = Math.sin(t * 0.002 * (0.4 + p.wow * 4)) * (2 + p.wow * 6);
+      const reelY = H * 0.48 + wobble * 0.15;
+      const drawReel = (cx: number, spin: number) => {
+        ctx.strokeStyle = `rgba(201,166,107,${0.35 + heat * 0.4})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, reelY, 16, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = spin + (i / 6) * Math.PI * 2;
+          ctx.moveTo(cx, reelY);
+          ctx.lineTo(cx + Math.cos(a) * 14, reelY + Math.sin(a) * 14);
+        }
+        ctx.stroke();
+      };
+      const spin = t * 0.003 * (0.5 + p.cassette * 2 + p.wow);
+      drawReel(W * 0.28, spin);
+      drawReel(W * 0.72, -spin * 1.05);
+      // Tape bridge
+      ctx.strokeStyle = `rgba(220,190,130,${0.25 + p.cassette * 0.4})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(W * 0.28 + 16, reelY);
+      for (let x = W * 0.28 + 16; x < W * 0.72 - 16; x += 4) {
+        const y = reelY + Math.sin(x * 0.08 + t * 0.004 + p.wow * 8) * (1 + p.wow * 4);
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      // Dust / hiss speckles
+      const specs = Math.floor((p.dust + p.hiss) * 40);
+      for (let i = 0; i < specs; i++) {
+        const x = (Math.sin(i * 12.3 + t * 0.001) * 0.5 + 0.5) * W;
+        const y = (Math.cos(i * 7.1 + t * 0.0015) * 0.5 + 0.5) * H;
+        ctx.fillStyle = `rgba(255,230,180,${0.15 + p.dust * 0.4})`;
+        ctx.fillRect(x, y, 1.5, 1.5);
+      }
+
+      // Bitcrush stair overlay
+      if (p.bit !== "off" || p.srr > 0.05) {
+        const steps = p.bit === "8bit" ? 8 : p.bit === "12bit" ? 14 : Math.max(6, Math.floor(20 - p.srr * 14));
+        ctx.strokeStyle = `rgba(201,166,107,${0.2 + p.srr * 0.35})`;
+        ctx.beginPath();
+        const mid = H * 0.78;
+        for (let i = 0; i <= steps; i++) {
+          const x = (i / steps) * W;
+          const y = mid + Math.sin(i * 1.7 + t * 0.002) * (4 + p.srr * 10);
+          if (i === 0) ctx.moveTo(x, y);
+          else { ctx.lineTo(x, mid + Math.sin((i - 1) * 1.7 + t * 0.002) * (4 + p.srr * 10)); ctx.lineTo(x, y); }
+        }
+        ctx.stroke();
+      }
+
+      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(201,166,107,0.55)";
+      ctx.textAlign = "left";
+      ctx.fillText(heat < 0.04 ? "CLEAN PATH" : "AGED", 10, H - 8);
+      ctx.textAlign = "right";
+      ctx.fillText(p.bit === "off" ? "FULL" : p.bit.toUpperCase(), W - 10, H - 8);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <StageFrame wrapRef={wrapRef} border="rgba(201,166,107,0.4)" height={100} chrome="plate">
+      <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
+    </StageFrame>
+  );
+}
+
+/** PWM square · sync ticks · chip noise grit. */
+export function ChipStageViz() {
+  const duty = useFireCommandStore((s) => s.patch.pulseDuty);
+  const sync = useFireCommandStore((s) => s.patch.hardSync);
+  const noise = useFireCommandStore((s) => s.patch.chipNoise);
+  const accent = useFireCommandStore((s) => s.patch.accentAmount);
+  const slide = useFireCommandStore((s) => s.patch.slideOn);
+  const voices = useFireCommandStore((s) => s.patch.chipVoiceLimit);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const sizeRef = useRef({ w: 320, h: 88 });
+  const st = useRef({ duty, sync, noise, accent, slide, voices });
+  st.current = { duty, sync, noise, accent, slide, voices };
+  useHiDpiCanvas(wrapRef, canvasRef, 88, sizeRef);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 20) return;
+      last = t;
+      const { w: W, h: H } = sizeRef.current;
+      const p = st.current;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = "rgba(4,14,10,0.9)";
+      ctx.fillRect(0, 0, W, H);
+
+      // Grid
+      ctx.strokeStyle = "rgba(110,231,168,0.08)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < W; x += 12) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+
+      // PWM square wave
+      const mid = H * 0.42;
+      const amp = H * 0.22 * (1 + p.accent * 0.35);
+      const cycles = 4;
+      const duty = clamp01(p.duty);
+      ctx.strokeStyle = "rgba(110,231,168,0.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      let first = true;
+      for (let i = 0; i <= W; i++) {
+        const u = (i / W) * cycles + t * 0.0012;
+        const phase = u % 1;
+        const y = mid - (phase < duty ? amp : -amp);
+        if (first) { ctx.moveTo(i, y); first = false; }
+        else ctx.lineTo(i, y);
+      }
+      ctx.stroke();
+
+      // Hard sync reset ticks
+      if (p.sync) {
+        ctx.strokeStyle = "rgba(255,180,120,0.7)";
+        ctx.lineWidth = 1.5;
+        for (let c = 0; c < cycles; c++) {
+          const x = ((c - (t * 0.0012) % 1) / cycles) * W;
+          if (x < 0 || x > W) continue;
+          ctx.beginPath();
+          ctx.moveTo(x, mid - amp - 4);
+          ctx.lineTo(x, mid + amp + 4);
+          ctx.stroke();
+        }
+      }
+
+      // Noise grit band
+      if (p.noise !== "white") {
+        const hold = p.noise === "nes" ? 6 : p.noise === "gb" ? 3 : 2;
+        ctx.fillStyle = "rgba(110,231,168,0.35)";
+        for (let x = 0; x < W; x += hold) {
+          const bit = Math.sin(x * 0.4 + t * 0.01) > 0 ? 1 : -1;
+          const y = H * 0.78 + bit * 6;
+          ctx.fillRect(x, y, hold - 1, 2);
+        }
+      }
+
+      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(110,231,168,0.55)";
+      ctx.textAlign = "left";
+      ctx.fillText(`PWM ${Math.round(duty * 100)}%`, 10, H - 8);
+      ctx.textAlign = "right";
+      const tags = [p.sync ? "SYNC" : null, p.slide ? "SLIDE" : null, p.voices > 0 ? `V${Math.round(p.voices)}` : null].filter(Boolean);
+      ctx.fillText(tags.length ? tags.join(" · ") : "CHIP", W - 10, H - 8);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <StageFrame wrapRef={wrapRef} border="rgba(110,231,168,0.35)" height={88} chrome="scope">
+      <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
+    </StageFrame>
+  );
+}
+
+function clamp01(v: number) {
+  return Math.max(0, Math.min(1, v));
+}
+
+/** Organic pitch wander — Analog Life stage. */
+export function AnalogLifeStageViz() {
+  const drift = useFireCommandStore((s) => s.patch.drift);
+  const rate = useFireCommandStore((s) => s.patch.driftRate);
+  const instab = useFireCommandStore((s) => s.patch.voiceInstability);
+  const tune = useFireCommandStore((s) => s.patch.tuneVariance);
+  const env = useFireCommandStore((s) => s.patch.envVariance);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const sizeRef = useRef({ w: 320, h: 88 });
+  const st = useRef({ drift, rate, instab, tune, env });
+  st.current = { drift, rate, instab, tune, env };
+  useHiDpiCanvas(wrapRef, canvasRef, 88, sizeRef);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const traces = [0, 0, 0, 0, 0];
+    const targets = [0, 0, 0, 0, 0];
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 22) return;
+      last = t;
+      const { w: W, h: H } = sizeRef.current;
+      const p = st.current;
+      const life = Math.max(p.drift, p.instab, p.tune, p.env);
+      ctx.clearRect(0, 0, W, H);
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, `rgba(40,30,12,${0.5 + life * 0.25})`);
+      bg.addColorStop(1, "rgba(6,5,2,0.9)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.strokeStyle = "rgba(212,176,106,0.15)";
+      ctx.beginPath();
+      ctx.moveTo(0, H * 0.5);
+      ctx.lineTo(W, H * 0.5);
+      ctx.stroke();
+
+      const amt = Math.max(0.08, p.drift * 0.7 + p.instab * 0.9 + p.tune * 0.4);
+      const spd = 0.02 + p.rate * 0.08;
+      for (let i = 0; i < traces.length; i++) {
+        if (Math.random() < 0.04 + p.rate * 0.08) targets[i] = (Math.random() * 2 - 1) * amt;
+        traces[i] += (targets[i] - traces[i]) * spd;
+      }
+
+      for (let i = 0; i < traces.length; i++) {
+        const y0 = H * (0.22 + i * 0.12);
+        ctx.strokeStyle = `rgba(212,176,106,${0.25 + life * 0.45 - i * 0.03})`;
+        ctx.lineWidth = i === 0 ? 1.8 : 1.1;
+        ctx.beginPath();
+        for (let x = 0; x <= W; x += 3) {
+          const wob = Math.sin(x * 0.02 + t * 0.002 * (1 + p.rate) + i) * traces[i] * H * 0.35;
+          const y = y0 + wob;
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      // Env variance pulses
+      if (p.env > 0.02) {
+        const pulse = (Math.sin(t * 0.004) * 0.5 + 0.5) * p.env;
+        ctx.fillStyle = `rgba(212,176,106,${0.08 + pulse * 0.2})`;
+        ctx.fillRect(0, H * 0.82, W * pulse, 4);
+      }
+
+      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(212,176,106,0.55)";
+      ctx.textAlign = "left";
+      ctx.fillText(life < 0.02 ? "STABLE" : "ALIVE", 10, H - 8);
+      ctx.textAlign = "right";
+      ctx.fillText(`Δ${Math.round(amt * 100)}¢`, W - 10, H - 8);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <StageFrame wrapRef={wrapRef} border="rgba(212,176,106,0.35)" height={88} chrome="rails">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );

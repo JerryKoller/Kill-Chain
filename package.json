@@ -1,6 +1,6 @@
 {
   "name": "audio-playground",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Kill Chain — a universal Windows audio engine for headphones, speakers, and home theater.",
   "author": "Jerry",
   "private": true,

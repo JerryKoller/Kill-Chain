@@ -300,8 +300,8 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
 
   // ── Acid ──
   {
-    id: "ms-acid-303",
-    name: "Mission · Acid 303",
+    id: "ms-acid-line",
+    name: "Mission · Acid Line",
     desc: "Resonant mono squelch with glide — classic acid line",
     category: "Bass",
     patch: P({

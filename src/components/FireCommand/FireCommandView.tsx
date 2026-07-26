@@ -16,7 +16,7 @@ import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
-import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz, WarpStageViz } from "./FxStageViz";
+import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz, WarpStageViz, VintageAgeStageViz, ChipStageViz, AnalogLifeStageViz } from "./FxStageViz";
 import {
   UnisonStageViz,
   FilterStageViz,
@@ -387,13 +387,14 @@ export function FireCommandView() {
               color={FC.chip}
               options={[
                 { id: "white", label: "Wht" },
-                { id: "nes", label: "NES" },
-                { id: "gb", label: "GB" },
+                { id: "nes", label: "Hold" },
+                { id: "gb", label: "Soft" },
                 { id: "periodic", label: "Per" },
               ]}
             />
           }
         >
+          <ChipStageViz />
           <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
             <BoolToggle paramKey="hardSync" label="Hard Sync" color={FC.chip} />
             <BoolToggle paramKey="slideOn" label="Slide" color={FC.chip} />
@@ -403,7 +404,7 @@ export function FireCommandView() {
             <FParamKnob paramKey="chipVoiceLimit" label="Voices" min={0} max={8} integer format={(v) => (v < 0.5 ? "Off" : fmtInt(v))} def={0} color={FC.chip} />
             <FParamKnob paramKey="accentAmount" label="Accent" min={0} max={1} format={fmtPct} def={0} color={FC.chip} />
           </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">PWM · sync · chip noise · 303 accent/slide</div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">PWM · sync · chip noise · acid accent/slide</div>
         </Section>
       </FireBand>
 
@@ -424,6 +425,7 @@ export function FireCommandView() {
           </div>
         </Section>
         <Section title="Analog Life" color={FC.analogLife} collapseKey="analog.life" chipHosted defaultCollapsed>
+          <AnalogLifeStageViz />
           <div className="flex items-center justify-evenly gap-1 flex-wrap">
             <FParamKnob paramKey="driftRate" label="Rate" min={0.05} max={1} format={fmtPct} def={0.35} color={FC.analogLife} />
             <FParamKnob paramKey="voiceInstability" label="Instab" min={0} max={1} format={fmtPct} def={0} color={FC.analogLife} />
@@ -549,6 +551,7 @@ export function FireCommandView() {
             />
           }
         >
+          <VintageAgeStageViz />
           <div className="flex items-center justify-evenly gap-1 flex-wrap">
             <FParamKnob paramKey="cassetteGen" label="Cass" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
             <FParamKnob paramKey="tapeSpeed" label="Speed" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.vintage} />
@@ -592,8 +595,11 @@ export function FireCommandView() {
         </Section>
         <Section title="Reverb" color={FC.reverb} collapseKey="fx.reverb" chipHosted>
           <ReverbStageViz />
-          <div className="flex items-center justify-evenly gap-1">
+          <div className="flex items-center justify-evenly gap-1 flex-wrap">
             <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} color={FC.reverb} />
+            <FParamKnob paramKey="reverbDamp" label="Damp" min={0} max={1} format={fmtPct} def={0.45} color={FC.reverb} />
+            <FParamKnob paramKey="reverbPredelay" label="Pre" min={0} max={0.2} format={fmtSec} def={0.02} color={FC.reverb} />
+            <FParamKnob paramKey="reverbDiffusion" label="Diff" min={0} max={1} format={fmtPct} def={0.7} color={FC.reverb} />
             <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.reverb} />
           </div>
         </Section>
@@ -604,6 +610,7 @@ export function FireCommandView() {
         <MixerPanel chipHosted />
         <FireMorphPad chipHosted />
         <Section title="Output · Scope" color={FC.scope} collapseKey="output" chipHosted defaultCollapsed right={<VoiceCount />}>
+          <PathScopeGate>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
             <div className="rounded-xl border border-[#ff6a3d]/22 bg-gradient-to-b from-[#ff6a3d]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,106,61,0.08)] lg:col-span-1">
               <WaveDisplay group="a" color={FIRE} />
@@ -622,6 +629,7 @@ export function FireCommandView() {
               <Scope />
             </div>
           </div>
+          </PathScopeGate>
         </Section>
         <Section title="Live Controls" color={FIRE} collapseKey="performance" chipHosted>
           <PerformanceStageViz />
@@ -2790,6 +2798,21 @@ function LpgToggle() {
     >
       {lpgOn ? "● LPG" : "○ LPG"}
     </button>
+  );
+}
+
+/** Dim / pause scope chrome when Signal Path SCOPE is Off. */
+function PathScopeGate({ children }: { children: React.ReactNode }) {
+  const on = useFireCommandStore((s) => s.patch.pathScope !== false);
+  return (
+    <div className={on ? undefined : "opacity-35 pointer-events-none grayscale"} aria-disabled={!on}>
+      {!on && (
+        <div className="mb-2 text-center text-[10px] uppercase tracking-widest text-white/40">
+          Scope bypassed on Signal Path
+        </div>
+      )}
+      {children}
+    </div>
   );
 }
 

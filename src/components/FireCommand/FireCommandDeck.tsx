@@ -1,16 +1,27 @@
 /**
  * Fire Command Deck — Signal Path Theater + Command Map atlas.
- * Organizational chrome: jump, focus, live heat from patch params. Display only.
+ * Organizational chrome: jump, focus, live heat, per-stage On/Off.
  */
 
 import { useMemo, useState } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import type { FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, SIGNAL_PATH, type FireModuleId, type SignalNodeId } from "./fireModuleAtlas";
 import { useFireLayout } from "./FireLayoutContext";
 
 function clamp01(v: number) {
   return Math.max(0, Math.min(1, v));
 }
+
+const PATH_KEYS: Record<SignalNodeId, keyof FirePatch> = {
+  osc: "pathOsc",
+  filter: "pathFilter",
+  drive: "pathDrive",
+  age: "pathAge",
+  fx: "pathFx",
+  mix: "pathMix",
+  scope: "pathScope",
+};
 
 /** Live “heat” for signal-path nodes from patch params — decorative only. */
 function useSignalHeat(): Record<SignalNodeId, number> {
@@ -69,7 +80,7 @@ function FocusHud() {
           onClick={exitFocus}
           className="shrink-0 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/90 hover:bg-white/15 transition"
         >
-          ✕ Show all
+          Show all
         </button>
       </div>
     </div>
@@ -80,6 +91,18 @@ export function FireCommandDeck() {
   const { focusId, focusActive, enterFocus, exitFocus, jump } = useFireLayout();
   const heat = useSignalHeat();
   const [mapOpen, setMapOpen] = useState(false);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const pathOsc = useFireCommandStore((s) => s.patch.pathOsc !== false);
+  const pathFilter = useFireCommandStore((s) => s.patch.pathFilter !== false);
+  const pathDrive = useFireCommandStore((s) => s.patch.pathDrive !== false);
+  const pathAge = useFireCommandStore((s) => s.patch.pathAge !== false);
+  const pathFx = useFireCommandStore((s) => s.patch.pathFx !== false);
+  const pathMix = useFireCommandStore((s) => s.patch.pathMix !== false);
+  const pathScope = useFireCommandStore((s) => s.patch.pathScope !== false);
+  const pathOn: Record<SignalNodeId, boolean> = {
+    osc: pathOsc, filter: pathFilter, drive: pathDrive, age: pathAge,
+    fx: pathFx, mix: pathMix, scope: pathScope,
+  };
 
   const onNodeClick = (moduleId: FireModuleId) => {
     if (focusActive && focusId === moduleId) {
@@ -93,6 +116,12 @@ export function FireCommandDeck() {
     e.stopPropagation();
     if (focusId === moduleId) exitFocus();
     else enterFocus(moduleId);
+  };
+
+  const togglePath = (id: SignalNodeId, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const key = PATH_KEYS[id];
+    setParam(key, !pathOn[id] as never);
   };
 
   return (
@@ -119,7 +148,7 @@ export function FireCommandDeck() {
               Signal Path
             </span>
             <span className="hidden sm:inline text-[9px] text-white/25 truncate">
-              click to jump · Solo to isolate
+              click to jump · On/Off bypass · Solo to isolate
             </span>
           </div>
           {focusActive && focusId && (
@@ -129,7 +158,7 @@ export function FireCommandDeck() {
               className="shrink-0 rounded-lg border border-[#ff6a3d]/40 bg-[#ff6a3d]/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#ffb08a] hover:bg-[#ff6a3d]/25 transition"
               title="Exit solo — show all bands (Esc)"
             >
-              ✕ Exit solo
+              Exit solo
             </button>
           )}
         </div>
@@ -138,10 +167,11 @@ export function FireCommandDeck() {
           {SIGNAL_PATH.map((node, i) => {
             const h = heat[node.id];
             const focused = focusId === node.moduleId;
-            const lit = h > 0.08;
+            const on = pathOn[node.id];
+            const lit = on && h > 0.08;
             return (
               <div key={node.id} className="flex min-w-0 flex-1 items-center">
-                <div className="relative flex w-full min-w-0 flex-col items-center gap-1">
+                <div className={`relative flex w-full min-w-0 flex-col items-center gap-1 ${on ? "" : "opacity-45"}`}>
                   <button
                     type="button"
                     onClick={() => onNodeClick(node.moduleId)}
@@ -155,6 +185,7 @@ export function FireCommandDeck() {
                       boxShadow: lit
                         ? `0 0 ${8 + h * 18}px ${node.color}${Math.round(20 + h * 50).toString(16).padStart(2, "0")}`
                         : undefined,
+                      filter: on ? undefined : "grayscale(0.7)",
                     }}
                   >
                     <span
@@ -163,30 +194,44 @@ export function FireCommandDeck() {
                     >
                       {node.label}
                     </span>
-                    {/* Heat rail */}
                     <span className="mt-1 h-0.5 w-[min(2rem,40%)] overflow-hidden rounded-full bg-white/10">
                       <span
                         className="block h-full rounded-full transition-[width] duration-200"
                         style={{
-                          width: `${Math.round(h * 100)}%`,
+                          width: `${Math.round((on ? h : 0) * 100)}%`,
                           background: node.color,
                         }}
                       />
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={(e) => onNodeFocus(node.moduleId, e)}
-                    className={`rounded-full border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider transition ${
-                      focused
-                        ? "border-white/40 bg-white/15 text-white"
-                        : "border-white/10 bg-black/30 text-white/40 hover:text-white/70 hover:border-white/25"
-                    }`}
-                    title={focused ? "Exit solo" : `Solo ${node.label} only`}
-                    aria-pressed={focused}
-                  >
-                    {focused ? "◉ SOLO" : "◌ Solo"}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => togglePath(node.id, e)}
+                      className={`rounded-full border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider transition ${
+                        on
+                          ? "border-emerald-400/40 bg-emerald-400/15 text-emerald-200"
+                          : "border-white/15 bg-black/40 text-white/35 hover:text-white/60"
+                      }`}
+                      title={on ? `Bypass ${node.label}` : `Enable ${node.label}`}
+                      aria-pressed={on}
+                    >
+                      {on ? "On" : "Off"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => onNodeFocus(node.moduleId, e)}
+                      className={`rounded-full border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider transition ${
+                        focused
+                          ? "border-white/40 bg-white/15 text-white"
+                          : "border-white/10 bg-black/30 text-white/40 hover:text-white/70 hover:border-white/25"
+                      }`}
+                      title={focused ? "Exit solo" : `Solo ${node.label} only`}
+                      aria-pressed={focused}
+                    >
+                      {focused ? "Solo" : "Solo"}
+                    </button>
+                  </div>
                 </div>
                 {i < SIGNAL_PATH.length - 1 && (
                   <div className="mx-0.5 flex w-2 shrink-0 items-center self-center sm:mx-1 sm:w-3" aria-hidden>
@@ -197,6 +242,7 @@ export function FireCommandDeck() {
                         animation: lit ? "fire-path-pulse 2.4s ease-in-out infinite" : undefined,
                         animationDelay: `${i * 0.2}s`,
                         boxShadow: lit ? `0 0 6px ${node.color}44` : undefined,
+                        opacity: on && pathOn[SIGNAL_PATH[i + 1].id] ? 1 : 0.25,
                       }}
                     />
                   </div>

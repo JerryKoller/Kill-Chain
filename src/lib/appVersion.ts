@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.0";
+export const APP_VERSION = "3.0.1";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,19 +12,19 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Fire Command Genesis",
-    body: "23 Character cards — Jupiter, Prophet, 303, Game Boy, DX7, Pigments DNA and more. Inspired voices, not clones.",
+    title: "Ambiguous Character names",
+    body: "All Character cards use original names — no brand fingerprints. Patch Library chrome cleaned (no emoji).",
   },
   {
-    title: "Vintage Age",
-    body: "Cassette generations, tape speed, VHS Hi-Fi, 8/12-bit, BBD chorus, dust/hiss/hum/print-through — dry wire when off.",
+    title: "Signal Path On/Off",
+    body: "Every stage on the Signal Path rack (OSC → SCOPE) can bypass independently.",
   },
   {
-    title: "Analog Life + Chip + FM",
-    body: "Per-voice drift/tune/env variance, pulse duty, hard sync, chip noise, 303 accent/slide, 4-op FM rack, vector morph.",
+    title: "Stage visualizers",
+    body: "Vintage Age, Chip, and Analog Life get their own viz; Reverb blooms with Damp / Pre / Diff; Sidechain is hi-DPI sharp.",
   },
   {
-    title: "Splash locked to the sting",
-    body: "Reveal and drop hit pulses start with the audio — no wall-clock desync.",
+    title: "Chip + Analog Life feel",
+    body: "Stronger PWM, sync grit, chip-noise bed, drift/instability/tune/env variance — actually audible now.",
   },
 ];

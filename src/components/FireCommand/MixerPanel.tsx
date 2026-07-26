@@ -367,6 +367,31 @@ function SidechainRack() {
   const duckSource = useFireSequencerStore((s) => s.duckSource);
   const setDuck = useFireSequencerStore((s) => s.setDuck);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const sizeRef = useRef({ w: 200, h: 44 });
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const canvas = canvasRef.current;
+    if (!wrap || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const sync = () => {
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
+      const cssH = 44;
+      sizeRef.current = { w: cssW, h: cssH };
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = "100%";
+      canvas.style.height = `${cssH}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -377,31 +402,46 @@ function SidechainRack() {
     let last = 0;
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 40) return;
+      if (document.hidden || t - last < 32) return;
       last = t;
-      const W = canvas.width;
-      const H = canvas.height;
+      const W = sizeRef.current.w;
+      const H = sizeRef.current.h;
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = duckEnabled ? "rgba(255,106,61,0.08)" : "rgba(255,255,255,0.03)";
+      ctx.fillStyle = duckEnabled ? "rgba(255,106,61,0.1)" : "rgba(255,255,255,0.03)";
       ctx.fillRect(0, 0, W, H);
+      // Grid
+      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.beginPath();
+      ctx.moveTo(0, H * 0.55);
+      ctx.lineTo(W, H * 0.55);
+      ctx.stroke();
       const mid = H * 0.55;
+      const rel = Math.max(0.15, Math.min(1.2, duckReleaseMs / 400));
       ctx.beginPath();
       for (let x = 0; x <= W; x++) {
-        const u = x / W;
+        const u = x / Math.max(1, W);
         const pulse = duckEnabled
-          ? Math.max(0, 1 - ((u * 3 + (t / 900) * duckAmount) % 1) * (1.4 + duckAmount))
-          : 0.15;
-        const y = mid - pulse * (H * 0.35) * (0.35 + duckAmount * 0.65);
+          ? Math.max(0, 1 - ((u * 2.6 + (t / 850) * (0.4 + duckAmount)) % 1) * (1.2 + duckAmount * 0.9) / rel)
+          : 0.12;
+        const y = mid - pulse * (H * 0.38) * (0.3 + duckAmount * 0.7);
         if (x === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = duckEnabled ? FIRE : "rgba(255,255,255,0.15)";
-      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = duckEnabled ? FIRE : "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1.8;
       ctx.stroke();
+      // Fill under curve
+      if (duckEnabled) {
+        ctx.lineTo(W, mid);
+        ctx.lineTo(0, mid);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255,106,61,0.12)";
+        ctx.fill();
+      }
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [duckEnabled, duckAmount]);
+  }, [duckEnabled, duckAmount, duckReleaseMs]);
 
   return (
     <div
@@ -430,7 +470,9 @@ function SidechainRack() {
         >{duckEnabled ? "ON" : "OFF"}</button>
       </div>
 
-      <canvas ref={canvasRef} width={200} height={36} className="w-full rounded-lg border border-white/8 bg-black/40" aria-hidden />
+      <div ref={wrapRef} className="w-full overflow-hidden rounded-lg border border-white/8 bg-black/40">
+        <canvas ref={canvasRef} className="block w-full" aria-hidden />
+      </div>
 
       <label className="flex items-center gap-1.5 text-[10px] text-dim">
         <span className="w-12 uppercase tracking-wider">Source</span>

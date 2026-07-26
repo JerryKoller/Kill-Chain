@@ -457,8 +457,8 @@ export const MISSION_PACKS: MissionPack[] = [
   {
     id: "acid-offensive",
     name: "Acid Offensive",
-    desc: "Acid techno — resonant 303 16ths over relentless four-four.",
-    tagline: "303 squelch · 4/4 kick",
+    desc: "Acid techno — resonant acid 16ths over relentless four-four.",
+    tagline: "acid squelch · 4/4 kick",
     color: "#facc15",
     bpm: 134,
     payload: template({
@@ -466,7 +466,7 @@ export const MISSION_PACKS: MissionPack[] = [
       scaleRoot: 9,
       scaleId: "minor",
       // Acid is the only voice — sits on A with moderate duck
-      presetA: "ms-acid-303",
+      presetA: "ms-acid-line",
       duck: { amount: 0.4, releaseMs: 120 },
       sections: [
         {
