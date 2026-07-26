@@ -13,7 +13,7 @@ export const PRODUCT_DESCRIPTION =
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
     title: "Arp stage — visual overhaul",
-    body: "The arpeggiator now has a live contour stage: glowing note path, playhead beam, accent tips, gate-length columns, swing offset, ratchet shimmer, and spark bursts on every step. Mode chips carry contour glyphs. Same engine — just more fun to watch and play.",
+    body: "Hi-DPI contour stage with depth field, pitch-linked color shifting, targeting-reticle blooms on every hit, and a symmetrical control layout. Same arp engine — just sharper and more fun to watch.",
   },
   {
     title: "Fire Command MK IV",

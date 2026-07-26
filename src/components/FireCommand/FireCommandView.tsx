@@ -1027,54 +1027,114 @@ const ARP_MODE_GLYPHS: Record<ArpMode, string> = {
   asplayed: "M2 10 L5 10 L5 6 L8 6 L8 12 L11 12 L11 4 L14 4",
 };
 
-/** Arp sequence stage — animated contour, playhead, accents, gate, sparks. Display only. */
+type ArpPt = { x: number; y: number; midi: number; accented: boolean; i: number; hue: number };
+type ArpBloom = { x: number; y: number; life: number; accented: boolean; hue: number };
+type ArpAfterglow = { i: number; life: number; hue: number };
+
+/** Pitch → hue: lows ember, mids amber, highs ice — shifts slowly with time. */
+function arpHue(midi: number, lo: number, span: number, tMs: number): number {
+  const n = (midi - lo) / Math.max(1, span);
+  return 12 + n * 38 + Math.sin(tMs / 2800 + n * 2.4) * 10;
+}
+
+/** Arp sequence stage — hi-DPI depth field, color-shifting contour, targeting blooms. Display only. */
 function ArpViz({ arp }: { arp: ArpSettings }) {
   const arpOrder = useFireCommandStore((s) => s.arpOrder);
   const arpStepIndex = useFireCommandStore((s) => s.arpStepIndex);
   const arpCurrent = useFireCommandStore((s) => s.arpCurrent);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sparkRef = useRef<{ x: number; y: number; vx: number; vy: number; life: number; hue: number }[]>([]);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const bloomsRef = useRef<ArpBloom[]>([]);
+  const afterglowRef = useRef<ArpAfterglow[]>([]);
   const lastStepRef = useRef(-1);
   const pulseRef = useRef(0);
+  const sizeRef = useRef({ w: 720, h: 132, dpr: 1 });
   const stateRef = useRef({ arp, arpOrder, arpStepIndex, arpCurrent });
   stateRef.current = { arp, arpOrder, arpStepIndex, arpCurrent };
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    const syncSize = () => {
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      const cssW = Math.max(320, Math.floor(wrap.clientWidth));
+      const cssH = 132;
+      sizeRef.current = { w: cssW, h: cssH, dpr };
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    syncSize();
+    const ro = new ResizeObserver(syncSize);
+    ro.observe(wrap);
+
     let raf = 0;
     let lastTick = 0;
+
+    const drawContourPath = (pts: ArpPt[]) => {
+      if (pts.length === 0) return;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      if (pts.length === 1) return;
+      for (let i = 1; i < pts.length - 1; i++) {
+        const xc = (pts[i].x + pts[i + 1].x) / 2;
+        const yc = (pts[i].y + pts[i + 1].y) / 2;
+        ctx.quadraticCurveTo(pts[i].x, pts[i].y, xc, yc);
+      }
+      const last = pts[pts.length - 1];
+      ctx.quadraticCurveTo(last.x, last.y, last.x, last.y);
+    };
 
     const draw = (nowMs: number) => {
       raf = requestAnimationFrame(draw);
       if (document.hidden) return;
-      if (nowMs - lastTick < 33) return; // ~30 fps
+      if (nowMs - lastTick < 22) return;
       lastTick = nowMs;
       const { arp: a, arpOrder: order, arpStepIndex: stepIdx, arpCurrent: cur } = stateRef.current;
+      const { w: W, h: H } = sizeRef.current;
       const ghost = order.length === 0;
       const held = ghost ? [60, 64, 67] : order;
       const seq = buildArpSequence(held, a.mode, a.octaves);
-      const W = canvas.width;
-      const H = canvas.height;
       ctx.clearRect(0, 0, W, H);
 
-      // Atmosphere
+      // Depth field: drifting aurora wash
+      const drift = (nowMs / 9000) % 1;
       const gBg = ctx.createLinearGradient(0, 0, W, H);
-      gBg.addColorStop(0, "rgba(255,106,61,0.06)");
-      gBg.addColorStop(0.55, "rgba(0,0,0,0.35)");
-      gBg.addColorStop(1, "rgba(98,182,255,0.05)");
+      const hA = 18 + Math.sin(nowMs / 3200) * 8;
+      const hB = 205 + Math.cos(nowMs / 4100) * 12;
+      gBg.addColorStop(0, `hsla(${hA}, 85%, 48%, 0.11)`);
+      gBg.addColorStop(0.35 + drift * 0.15, "rgba(8,10,16,0.55)");
+      gBg.addColorStop(0.7, `hsla(${hB}, 70%, 42%, 0.07)`);
+      gBg.addColorStop(1, `hsla(${hA + 20}, 80%, 40%, 0.05)`);
       ctx.fillStyle = gBg;
       ctx.fillRect(0, 0, W, H);
 
-      // Soft stave lines
-      ctx.strokeStyle = "rgba(255,255,255,0.045)";
-      ctx.lineWidth = 1;
-      for (let i = 1; i <= 4; i++) {
-        const y = (H / 5) * i;
-        ctx.beginPath(); ctx.moveTo(8, y); ctx.lineTo(W - 8, y); ctx.stroke();
+      // Parallax depth grid
+      const gridOff = (nowMs / 40) % 28;
+      ctx.save();
+      ctx.globalAlpha = 0.045;
+      for (let x = -28 + gridOff; x < W + 28; x += 28) {
+        ctx.strokeStyle = "rgba(255,180,120,0.9)";
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
       }
+      for (let y = 18; y < H; y += 22) {
+        ctx.strokeStyle = "rgba(140,190,255,0.7)";
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
+      ctx.restore();
+
+      // Soft vignette
+      const vig = ctx.createRadialGradient(W * 0.5, H * 0.45, H * 0.15, W * 0.5, H * 0.5, W * 0.62);
+      vig.addColorStop(0, "rgba(0,0,0,0)");
+      vig.addColorStop(1, "rgba(0,0,0,0.45)");
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, W, H);
 
       if (seq.length === 0) return;
 
@@ -1082,222 +1142,260 @@ function ArpViz({ arp }: { arp: ArpSettings }) {
       const hi = Math.max(...seq);
       const span = Math.max(1, hi - lo);
       const n = Math.min(seq.length, 48);
-      const PAD_X = 14;
-      const PAD_Y = 16;
+      const PAD_X = 18;
+      const PAD_Y = 22;
       const usableW = W - PAD_X * 2;
-      const usableH = H - PAD_Y * 2;
+      const usableH = H - PAD_Y * 2 - 10;
       const swing = a.swing ?? 0;
       const gate = a.gate;
       const every = Math.max(0, Math.round(a.accentEvery ?? 4));
       const accentAmt = a.accent ?? 0;
       const running = !ghost && a.enabled && stepIdx >= 0;
+      const breath = ghost || !a.enabled ? 0.55 + 0.45 * Math.sin(nowMs / 900) : 1;
 
-      // Breathing when idle / ghost
-      const breath = ghost || !a.enabled
-        ? 0.55 + 0.45 * Math.sin(nowMs / 900)
-        : 1;
-
-      type Pt = { x: number; y: number; midi: number; accented: boolean; i: number };
-      const pts: Pt[] = [];
+      const pts: ArpPt[] = [];
       for (let i = 0; i < n; i++) {
         const midi = seq[i];
         const t = n === 1 ? 0.5 : i / (n - 1);
-        // Swing visually nudges odd steps rightward.
         const swingNudge = (i % 2 === 1 ? swing : -swing * 0.35) * (usableW / Math.max(1, n)) * 0.9;
         const x = PAD_X + t * usableW + swingNudge;
         const y = PAD_Y + (1 - (midi - lo) / span) * usableH;
         const accented = accentAmt > 0 && every > 0 && i % every === 0;
-        pts.push({ x, y, midi, accented, i });
+        pts.push({ x, y, midi, accented, i, hue: arpHue(midi, lo, span, nowMs) });
       }
 
-      // Contour ribbon behind the steps
+      // Contour under-fill (depth volume)
       if (pts.length > 1) {
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
+        drawContourPath(pts);
+        ctx.lineTo(pts[pts.length - 1].x, H - 4);
+        ctx.lineTo(pts[0].x, H - 4);
+        ctx.closePath();
+        const fill = ctx.createLinearGradient(0, 0, 0, H);
+        fill.addColorStop(0, `hsla(${pts[Math.floor(pts.length / 2)].hue}, 90%, 55%, ${0.14 * breath})`);
+        fill.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = fill;
+        ctx.fill();
+
+        // Wide soft glow pass
+        drawContourPath(pts);
+        ctx.strokeStyle = ghost
+          ? `rgba(255,255,255,${0.08 * breath})`
+          : `hsla(${pts[0].hue}, 90%, 60%, ${0.2 * breath})`;
+        ctx.lineWidth = 8;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.stroke();
+
+        // Color-shifting ribbon (hue travels along the path)
         for (let i = 1; i < pts.length; i++) {
           const p0 = pts[i - 1];
           const p1 = pts[i];
-          const cx = (p0.x + p1.x) / 2;
-          ctx.quadraticCurveTo(p0.x + (p1.x - p0.x) * 0.35, p0.y, cx, (p0.y + p1.y) / 2);
-          ctx.quadraticCurveTo(p1.x - (p1.x - p0.x) * 0.35, p1.y, p1.x, p1.y);
+          const g = ctx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
+          const alpha = ghost ? 0.18 * breath : a.enabled ? 0.85 * breath : 0.4 * breath;
+          g.addColorStop(0, `hsla(${p0.hue}, 95%, 62%, ${alpha})`);
+          g.addColorStop(1, `hsla(${p1.hue}, 95%, 62%, ${alpha})`);
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.strokeStyle = g;
+          ctx.lineWidth = 2.25;
+          ctx.lineCap = "round";
+          ctx.shadowBlur = a.enabled && !ghost ? 12 : 0;
+          ctx.shadowColor = `hsla(${p1.hue}, 100%, 55%, 0.7)`;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
         }
-        ctx.strokeStyle = ghost
-          ? `rgba(255,255,255,${0.12 * breath})`
-          : a.enabled
-            ? `rgba(255,106,61,${0.45 * breath})`
-            : `rgba(255,106,61,${0.22 * breath})`;
-        ctx.lineWidth = 2;
-        ctx.shadowBlur = a.enabled && !ghost ? 10 : 0;
-        ctx.shadowColor = FIRE;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
       }
 
-      // Column bars + step nodes
-      const colW = Math.max(3, Math.min(14, (usableW / n) * 0.55));
+      // Gate columns + nodes
+      const colW = Math.max(4, Math.min(16, (usableW / n) * 0.5));
       for (const p of pts) {
         const isLive = running && stepIdx === p.i;
-        const barH = Math.max(6, (H - p.y - 6) * (0.35 + gate * 0.65));
-        // Gate column (how long the note rings)
-        const colAlpha = ghost ? 0.08 * breath : isLive ? 0.35 : 0.12;
-        ctx.fillStyle = isLive
-          ? `rgba(255,217,201,${colAlpha})`
-          : `rgba(255,106,61,${colAlpha})`;
-        ctx.fillRect(p.x - colW / 2, p.y, colW, barH);
+        const ag = afterglowRef.current.find((g) => g.i === p.i);
+        const glowLife = ag?.life ?? 0;
+        const barH = Math.max(8, (H - p.y - 8) * (0.35 + gate * 0.65));
 
-        // Node
-        const r = isLive ? 5.5 : p.accented ? 4.2 : 3.2;
-        const fill = ghost
-          ? `rgba(255,255,255,${0.2 * breath})`
-          : isLive
-            ? "#fff"
-            : p.accented
-              ? `rgba(255,207,92,${0.75 + accentAmt * 0.25})`
-              : FIRE;
+        const cg = ctx.createLinearGradient(p.x, p.y, p.x, p.y + barH);
+        const baseA = ghost ? 0.06 * breath : isLive ? 0.42 : 0.1 + glowLife * 0.25;
+        cg.addColorStop(0, `hsla(${p.hue}, 90%, 65%, ${baseA})`);
+        cg.addColorStop(1, `hsla(${p.hue}, 80%, 40%, 0)`);
+        ctx.fillStyle = cg;
+        const hw = colW / 2;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-        if (isLive) {
-          ctx.shadowBlur = 16;
-          ctx.shadowColor = FIRE;
-        } else if (p.accented && !ghost) {
-          ctx.shadowBlur = 6;
-          ctx.shadowColor = "#ffcf5c";
-        }
-        ctx.fillStyle = fill;
+        ctx.moveTo(p.x - hw, p.y);
+        ctx.lineTo(p.x + hw, p.y);
+        ctx.lineTo(p.x + hw * 0.7, p.y + barH);
+        ctx.lineTo(p.x - hw * 0.7, p.y + barH);
+        ctx.closePath();
         ctx.fill();
-        ctx.shadowBlur = 0;
 
-        // Accent diamond tip
+        const r = isLive ? 6 : p.accented ? 4.5 : 3.4;
+        const core = ctx.createRadialGradient(p.x - 1, p.y - 1, 0, p.x, p.y, r * 1.8);
+        if (ghost) {
+          core.addColorStop(0, `rgba(255,255,255,${0.35 * breath})`);
+          core.addColorStop(1, "rgba(255,255,255,0)");
+        } else if (isLive) {
+          core.addColorStop(0, "#fff");
+          core.addColorStop(0.45, `hsla(${p.hue}, 100%, 72%, 1)`);
+          core.addColorStop(1, `hsla(${p.hue}, 100%, 50%, 0)`);
+        } else if (p.accented) {
+          core.addColorStop(0, `hsla(42, 100%, 72%, ${0.9 + accentAmt * 0.1})`);
+          core.addColorStop(1, "hsla(42, 100%, 50%, 0)");
+        } else {
+          core.addColorStop(0, `hsla(${p.hue}, 95%, 62%, 0.95)`);
+          core.addColorStop(1, `hsla(${p.hue}, 90%, 45%, 0)`);
+        }
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 1.8, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 0.55, 0, Math.PI * 2);
+        ctx.fillStyle = isLive ? "#fff" : ghost ? `rgba(255,255,255,${0.35 * breath})` : `hsla(${p.hue}, 100%, 85%, 0.95)`;
+        ctx.fill();
+
         if (p.accented && !ghost && accentAmt > 0.05) {
-          ctx.fillStyle = `rgba(255,207,92,${0.55 + accentAmt * 0.4})`;
+          ctx.strokeStyle = `hsla(42, 100%, 65%, ${0.55 + accentAmt * 0.4})`;
+          ctx.lineWidth = 1.25;
           ctx.beginPath();
-          ctx.moveTo(p.x, p.y - r - 5);
-          ctx.lineTo(p.x + 3, p.y - r - 1);
-          ctx.lineTo(p.x - 3, p.y - r - 1);
+          ctx.moveTo(p.x, p.y - r - 6);
+          ctx.lineTo(p.x + 3.5, p.y - r - 1);
+          ctx.lineTo(p.x - 3.5, p.y - r - 1);
           ctx.closePath();
-          ctx.fill();
+          ctx.stroke();
         }
       }
 
-      // Playhead beam
+      // Playhead beam + note label
       if (running && stepIdx < pts.length) {
         const p = pts[stepIdx];
         const beam = ctx.createLinearGradient(p.x, 0, p.x, H);
-        beam.addColorStop(0, "rgba(255,217,201,0)");
-        beam.addColorStop(0.4, "rgba(255,106,61,0.35)");
-        beam.addColorStop(1, "rgba(255,106,61,0)");
+        beam.addColorStop(0, `hsla(${p.hue}, 100%, 75%, 0)`);
+        beam.addColorStop(0.35, `hsla(${p.hue}, 100%, 65%, 0.45)`);
+        beam.addColorStop(1, `hsla(${p.hue}, 90%, 50%, 0)`);
         ctx.fillStyle = beam;
-        ctx.fillRect(p.x - 1.5, 0, 3, H);
+        ctx.fillRect(p.x - 2, 0, 4, H);
 
-        // Floating note label
-        const label = noteName(p.midi);
-        ctx.font = "600 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.font = "600 12px ui-monospace, SFMono-Regular, Menlo, monospace";
         ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(255,255,255,0.92)";
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = FIRE;
-        ctx.fillText(label, p.x, Math.max(12, p.y - 12));
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = `hsla(${p.hue}, 100%, 55%, 0.9)`;
+        ctx.fillText(noteName(p.midi), p.x, Math.max(14, p.y - 14));
         ctx.shadowBlur = 0;
       }
 
-      // Spawn sparks when the step advances
+      // Targeting bloom + afterglow (not particle confetti)
       if (running && stepIdx !== lastStepRef.current && stepIdx >= 0 && stepIdx < pts.length) {
         const p = pts[stepIdx];
-        const burst = pts[stepIdx].accented ? 10 : 6;
-        for (let k = 0; k < burst; k++) {
-          const ang = Math.random() * Math.PI * 2;
-          const spd = 0.6 + Math.random() * 2.2;
-          sparkRef.current.push({
-            x: p.x, y: p.y,
-            vx: Math.cos(ang) * spd,
-            vy: Math.sin(ang) * spd - 0.8,
-            life: 1,
-            hue: pts[stepIdx].accented ? 42 : 18,
-          });
-        }
+        bloomsRef.current.push({ x: p.x, y: p.y, life: 1, accented: p.accented, hue: p.hue });
+        afterglowRef.current.push({ i: p.i, life: 1, hue: p.hue });
+        if (afterglowRef.current.length > 12) afterglowRef.current.shift();
         pulseRef.current = 1;
         lastStepRef.current = stepIdx;
       }
       if (!running) lastStepRef.current = -1;
 
-      // Ratchet shimmer ring when ratchet > 0 and running
-      if (running && (a.ratchet ?? 0) > 0.05 && stepIdx < pts.length) {
-        const p = pts[stepIdx];
-        const shimmer = 0.5 + 0.5 * Math.sin(nowMs / (60 - (a.ratchet ?? 0) * 40));
-        ctx.strokeStyle = `rgba(124,246,176,${0.25 * shimmer * (a.ratchet ?? 0)})`;
-        ctx.lineWidth = 1.5;
+      for (let i = afterglowRef.current.length - 1; i >= 0; i--) {
+        afterglowRef.current[i].life -= 0.028;
+        if (afterglowRef.current[i].life <= 0) afterglowRef.current.splice(i, 1);
+      }
+
+      // Expanding reticle rings + crosshair ticks
+      const blooms = bloomsRef.current;
+      for (let i = blooms.length - 1; i >= 0; i--) {
+        const b = blooms[i];
+        b.life -= 0.038;
+        if (b.life <= 0) { blooms.splice(i, 1); continue; }
+        const expand = (1 - b.life) * (b.accented ? 34 : 24);
+        const alpha = b.life * b.life;
+        ctx.strokeStyle = `hsla(${b.hue}, 95%, 68%, ${alpha * 0.85})`;
+        ctx.lineWidth = 1.4;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 9 + shimmer * 3, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, 4 + expand, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([3, 4]);
+        ctx.strokeStyle = `hsla(${b.hue + (b.accented ? 24 : 0)}, 90%, 70%, ${alpha * 0.5})`;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, 2 + expand * 0.55, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const tick = 3 + expand * 0.15;
+        const gap = 5 + expand * 0.35;
+        ctx.strokeStyle = `hsla(${b.hue}, 100%, 80%, ${alpha})`;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(b.x - gap - tick, b.y); ctx.lineTo(b.x - gap, b.y);
+        ctx.moveTo(b.x + gap, b.y); ctx.lineTo(b.x + gap + tick, b.y);
+        ctx.moveTo(b.x, b.y - gap - tick); ctx.lineTo(b.x, b.y - gap);
+        ctx.moveTo(b.x, b.y + gap); ctx.lineTo(b.x, b.y + gap + tick);
         ctx.stroke();
       }
 
-      // Update + draw sparks
-      const sparks = sparkRef.current;
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const s = sparks[i];
-        s.x += s.vx;
-        s.y += s.vy;
-        s.vy += 0.08;
-        s.life -= 0.045;
-        if (s.life <= 0) { sparks.splice(i, 1); continue; }
-        ctx.fillStyle = `hsla(${s.hue},100%,65%,${s.life})`;
+      // Ratchet: double-ring pulse
+      if (running && (a.ratchet ?? 0) > 0.05 && stepIdx < pts.length) {
+        const p = pts[stepIdx];
+        const shimmer = 0.5 + 0.5 * Math.sin(nowMs / (55 - (a.ratchet ?? 0) * 35));
+        ctx.strokeStyle = `hsla(150, 70%, 65%, ${0.28 * shimmer * (a.ratchet ?? 0)})`;
+        ctx.lineWidth = 1.25;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, 1.6 * s.life, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.arc(p.x, p.y, 10 + shimmer * 4, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 14 + shimmer * 5, 0, Math.PI * 2);
+        ctx.stroke();
       }
 
-      // Edge pulse when a note fires
+      // Soft edge flash
       if (pulseRef.current > 0) {
-        ctx.strokeStyle = `rgba(255,106,61,${pulseRef.current * 0.45})`;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(1, 1, W - 2, H - 2);
-        pulseRef.current = Math.max(0, pulseRef.current - 0.06);
+        const eg = ctx.createLinearGradient(0, 0, W, 0);
+        eg.addColorStop(0, `rgba(255,106,61,${pulseRef.current * 0.2})`);
+        eg.addColorStop(0.5, `rgba(255,180,100,${pulseRef.current * 0.08})`);
+        eg.addColorStop(1, `rgba(98,182,255,${pulseRef.current * 0.15})`);
+        ctx.fillStyle = eg;
+        ctx.fillRect(0, 0, W, 2);
+        ctx.fillRect(0, H - 2, W, 2);
+        pulseRef.current = Math.max(0, pulseRef.current - 0.05);
       }
 
-      // Mode watermark + status
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      // Status chrome
+      ctx.font = "600 10px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillStyle = "rgba(255,255,255,0.28)";
-      ctx.fillText(a.mode.toUpperCase(), 10, H - 8);
+      ctx.fillStyle = "rgba(255,255,255,0.32)";
+      ctx.fillText(a.mode.toUpperCase(), 12, H - 10);
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillText(`${a.octaves} OCT`, 12 + ctx.measureText(a.mode.toUpperCase()).width + 10, H - 10);
       ctx.textAlign = "right";
       if (ghost) {
-        ctx.fillStyle = `rgba(255,255,255,${0.22 * breath})`;
-        ctx.fillText("HOLD A CHORD", W - 10, H - 8);
+        ctx.fillStyle = `rgba(180,210,255,${0.28 * breath})`;
+        ctx.fillText("HOLD A CHORD", W - 12, H - 10);
       } else if (a.enabled) {
-        ctx.fillStyle = "rgba(255,106,61,0.7)";
-        ctx.fillText(cur != null ? `● ${noteName(cur)}` : "● LIVE", W - 10, H - 8);
+        ctx.fillStyle = "rgba(255,160,110,0.85)";
+        ctx.fillText(cur != null ? `● ${noteName(cur)}` : "● LIVE", W - 12, H - 10);
       } else {
         ctx.fillStyle = "rgba(255,255,255,0.28)";
-        ctx.fillText("STANDBY", W - 10, H - 8);
-      }
-
-      // Octave count ticks
-      ctx.textAlign = "left";
-      ctx.fillStyle = "rgba(255,255,255,0.2)";
-      for (let o = 0; o < a.octaves; o++) {
-        ctx.fillRect(10 + o * 7, 8, 5, 3);
+        ctx.fillText("STANDBY", W - 12, H - 10);
       }
     };
 
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, []);
 
   return (
-    <div className="relative mb-2.5 overflow-hidden rounded-xl border border-white/[0.08] bg-black/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-      <canvas
-        ref={canvasRef}
-        width={560}
-        height={110}
-        className="block w-full"
-        style={{ height: 110 }}
-        aria-hidden
-      />
-      {/* Corner reticle accents — weapons-platform framing */}
-      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2.5 w-2.5 border-l border-t border-[#ff6a3d]/45" />
-      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 border-r border-t border-[#ff6a3d]/45" />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2.5 w-2.5 border-b border-l border-[#ff6a3d]/45" />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2.5 w-2.5 border-b border-r border-[#ff6a3d]/45" />
+    <div
+      ref={wrapRef}
+      className="relative mb-3 overflow-hidden rounded-xl border border-white/[0.09] bg-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_8px_28px_rgba(0,0,0,0.35)]"
+    >
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 132 }} aria-hidden />
+      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2.5 w-2.5 border-l border-t border-[#ff6a3d]/40" />
+      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 border-r border-t border-[#ff6a3d]/40" />
+      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2.5 w-2.5 border-b border-l border-[#ff6a3d]/40" />
+      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2.5 w-2.5 border-b border-r border-[#ff6a3d]/40" />
     </div>
   );
 }
@@ -1596,6 +1694,12 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
     { id: "pedal", label: "Pedal" }, { id: "random", label: "Rnd" },
     { id: "walk", label: "Walk" }, { id: "asplayed", label: "Play" },
   ];
+  const chip = (active: boolean) =>
+    `rounded-md border text-[10px] font-medium uppercase tracking-wide transition ${
+      active
+        ? "border-[#ff6a3d]/70 bg-[#ff6a3d]/20 text-[#ffd9c9] shadow-[0_0_10px_rgb(255_106_61/0.2)]"
+        : "border-white/10 bg-white/[0.03] text-white/50 hover:border-white/20 hover:bg-white/[0.06] hover:text-white/80"
+    }`;
   return (
     <Section title="Arpeggiator" color={FIRE} collapseKey="arp" defaultCollapsed right={
       <button
@@ -1606,11 +1710,12 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
     }>
       <ArpViz arp={arp} />
 
-      {/* Arm + mode strip */}
-      <div className="flex flex-wrap items-stretch gap-2.5">
+      {/* Symmetric 3-column rails: left arm/div · center modes/knobs · right oct/every */}
+      <div className="grid grid-cols-[7.5rem_minmax(0,1fr)_7.5rem] gap-x-3 gap-y-3 items-center">
+        {/* Row 1 left — arm */}
         <button
           onClick={() => setArp({ enabled: !arp.enabled })}
-          className={`relative overflow-hidden rounded-xl border px-4 py-2 text-sm font-semibold tracking-wide transition ${
+          className={`relative h-10 overflow-hidden rounded-xl border px-2 text-[11px] font-semibold tracking-wide transition ${
             arp.enabled
               ? "border-[#ff6a3d]/80 bg-gradient-to-b from-[#ff6a3d]/30 to-[#ff6a3d]/10 text-[#ffd9c9] shadow-[0_0_22px_rgb(255_106_61/0.35)]"
               : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
@@ -1619,36 +1724,34 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
           {arp.enabled && (
             <span className="pointer-events-none absolute inset-0 animate-pulse bg-[radial-gradient(circle_at_30%_40%,rgba(255,217,201,0.18),transparent_60%)]" />
           )}
-          <span className="relative">{arp.enabled ? "● ARP ARMED" : "ARM ARP"}</span>
+          <span className="relative">{arp.enabled ? "● ARMED" : "ARM"}</span>
         </button>
 
-        <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+        {/* Row 1 center — modes evenly spaced */}
+        <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-10">
           {modes.map((m) => {
             const active = arp.mode === m.id;
             return (
               <button
                 key={m.id}
                 onClick={() => setArp({ mode: m.id })}
-                title={m.id}
-                className={`flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-medium uppercase tracking-wide transition ${
-                  active
-                    ? "border-[#ff6a3d]/70 bg-[#ff6a3d]/20 text-[#ffd9c9] shadow-[0_0_10px_rgb(255_106_61/0.2)]"
-                    : "border-white/10 bg-white/[0.03] text-white/50 hover:border-white/20 hover:bg-white/[0.06] hover:text-white/80"
-                }`}
+                title={m.label}
+                className={`flex h-10 flex-col items-center justify-center gap-0.5 px-0.5 ${chip(active)}`}
               >
                 <ArpModeGlyph mode={m.id} active={active} />
-                <span className="hidden sm:inline">{m.label}</span>
+                <span className="hidden text-[8px] leading-none xl:inline">{m.label}</span>
               </button>
             );
           })}
         </div>
 
-        <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-black/20 p-0.5" title="Octave span">
+        {/* Row 1 right — octaves */}
+        <div className="flex h-10 items-stretch rounded-lg border border-white/10 bg-black/20 p-0.5" title="Octave span">
           {[1, 2, 3, 4].map((o) => (
             <button
               key={o}
               onClick={() => setArp({ octaves: o })}
-              className={`min-w-[28px] rounded-md px-2 py-1.5 text-xs font-semibold transition ${
+              className={`flex-1 rounded-md text-xs font-semibold transition ${
                 arp.octaves === o
                   ? "bg-[#ff6a3d]/25 text-[#ffd9c9]"
                   : "text-white/45 hover:bg-white/5 hover:text-white/80"
@@ -1656,16 +1759,14 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
             >{o}º</button>
           ))}
         </div>
-      </div>
 
-      {/* Timing + feel */}
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <div className="flex flex-wrap gap-1">
+        {/* Row 2 left — divisions */}
+        <div className="grid grid-cols-2 gap-1">
           {(["1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"] as ArpDivision[]).map((d) => (
             <button
               key={d}
               onClick={() => setArp({ division: d })}
-              className={`rounded-md border px-2 py-1 font-mono text-[11px] transition ${
+              className={`h-7 rounded-md border font-mono text-[10px] transition ${
                 arp.division === d
                   ? "border-[#ff6a3d]/60 bg-[#ff6a3d]/15 text-[#ffd9c9]"
                   : "border-white/10 bg-white/[0.03] text-white/50 hover:bg-white/5"
@@ -1673,34 +1774,37 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
             >{d}</button>
           ))}
         </div>
-        <div className="flex items-center gap-3">
+
+        {/* Row 2 center — knobs evenly spaced */}
+        <div className="flex items-center justify-evenly gap-1 px-1">
           <KnobMini label="Tempo" value={arp.bpm} min={40} max={300} integer format={fmtBpm} onChange={(v) => setArp({ bpm: Math.round(v) })} />
           <KnobMini label="Gate" value={arp.gate} min={0.1} max={1} format={fmtPct} onChange={(v) => setArp({ gate: v })} />
           <KnobMini label="Swing" value={arp.swing ?? 0} min={0} max={0.33} format={(v) => `${Math.round(v * 300)}%`} onChange={(v) => setArp({ swing: v })} />
           <KnobMini label="Ratchet" value={arp.ratchet ?? 0} min={0} max={1} format={fmtPct} onChange={(v) => setArp({ ratchet: v })} />
-        </div>
-        <div className="flex items-center gap-2" title="Velocity accents: accented steps hit full force, the rest sit back">
           <KnobMini label="Accent" value={arp.accent ?? 0} min={0} max={1} format={fmtPct} onChange={(v) => setArp({ accent: v })} />
-          <div className="flex flex-col items-center gap-0.5">
-            <div className="flex gap-0.5 rounded-md border border-white/10 bg-black/20 p-0.5">
-              {[2, 3, 4, 6, 8].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setArp({ accentEvery: n })}
-                  className={`min-w-[22px] rounded px-1.5 py-0.5 text-[10px] font-semibold transition ${
-                    (arp.accentEvery ?? 4) === n
-                      ? "bg-[#ffcf5c]/25 text-[#ffcf5c]"
-                      : "text-white/40 hover:text-white/70"
-                  }`}
-                >{n}</button>
-              ))}
-            </div>
-            <span className="text-[9px] uppercase tracking-wide text-dim">Every</span>
+        </div>
+
+        {/* Row 2 right — accent every (mirrors octave rail) */}
+        <div className="flex flex-col items-stretch gap-0.5" title="Velocity accents every N steps">
+          <div className="flex h-7 items-stretch rounded-md border border-white/10 bg-black/20 p-0.5">
+            {[2, 3, 4, 6, 8].map((n) => (
+              <button
+                key={n}
+                onClick={() => setArp({ accentEvery: n })}
+                className={`flex-1 rounded text-[10px] font-semibold transition ${
+                  (arp.accentEvery ?? 4) === n
+                    ? "bg-[#ffcf5c]/25 text-[#ffcf5c]"
+                    : "text-white/40 hover:text-white/70"
+                }`}
+              >{n}</button>
+            ))}
           </div>
+          <span className="text-center text-[9px] uppercase tracking-wide text-dim">Every</span>
         </div>
       </div>
-      <div className="mt-2 text-[10px] text-dim leading-relaxed">
-        Contour lights the note path · gold tips are accents · gate sets bar length · swing shifts odd steps · ratchet shimmers on double-hits.
+
+      <div className="mt-2.5 text-center text-[10px] text-dim leading-relaxed">
+        Contour = note path · gold tips = accents · columns = gate · odd steps swing · reticle blooms on hits
       </div>
     </Section>
   );
