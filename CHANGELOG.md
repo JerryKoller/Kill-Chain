@@ -2,6 +2,14 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.4] — 2026-07-26 — Collapse + Warp / Output / Mixer
+
+### Changed
+- **Collapsible Fire Command** — every section below the piano roll folds (persisted), including Output, Performance, Oscillators, Warp, Filter, Envelopes, LFOs, FX, Macros, Gate, Matrix, Arp, and Fire Mixer
+- **Spectral Warp — gold harmonic lattice** — hi-DPI stage showing Stretch / Tilt / Comb reshaping partials live
+- **Output · Scope** — collapsible output stage with wavetable stacks and a filled hi-DPI master trace
+- **Fire Mixer — bus deck** — collapsible mixer with overview bars mirroring fader levels. Mixing behavior unchanged
+
 ## [2.5.3] — 2026-07-26 — FX Stages
 
 ### Changed
