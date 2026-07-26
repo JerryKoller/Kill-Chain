@@ -6,455 +6,254 @@
     <title>Kill-Chain</title>
     <meta name="description" content="Kill-Chain — a tactical audio engine." />
     <style>
-      /* ───────────────────────────────────────────────────────────────
-         Boot splash — paints before the JS bundle. Timing must stay locked
-         to splashSound.ts: black 900 ms → reveal → DROP at +2.85 s →
-         dismiss at 4.2 s. Fire coral + tactical steel on deep void.
-         ─────────────────────────────────────────────────────────────── */
+      /*
+        Boot splash — single centered column, even spacing.
+        Timing locked to splashSound.ts: black 900ms → reveal → DROP +2.85s → end 4.2s.
+      */
       :root {
         --b-fire: #ff6a3d;
         --b-ember: #ffb08a;
-        --b-steel: #7cf6b0;
-        --b-ice: #62b6ff;
-        --b-void: #040508;
+        --b-steel: #9be564;
+        --b-void: #05060a;
       }
       #boot-splash {
         position: fixed;
         inset: 0;
         z-index: 99999;
         display: flex;
-        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 28px;
         overflow: hidden;
         background:
-          radial-gradient(90% 70% at 50% 35%, #1a0c08 0%, var(--b-void) 55%, #000 100%);
+          radial-gradient(70% 55% at 50% 42%, #140a08 0%, var(--b-void) 58%, #000 100%);
         font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
         opacity: 1;
         transition: opacity 0.6s ease;
-        color: #fff;
       }
       #boot-splash.boot-hide { opacity: 0; pointer-events: none; }
 
-      /* Atmosphere layers */
       #boot-splash::before {
         content: "";
         position: absolute;
         inset: 0;
-        background:
-          radial-gradient(ellipse 50% 35% at 50% 42%, rgba(255, 106, 61, 0.14), transparent 70%),
-          radial-gradient(ellipse 40% 30% at 20% 80%, rgba(98, 182, 255, 0.06), transparent 60%),
-          radial-gradient(ellipse 40% 30% at 80% 20%, rgba(124, 246, 176, 0.05), transparent 60%);
-        pointer-events: none;
-      }
-      #boot-splash::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background-image:
-          linear-gradient(rgba(255, 106, 61, 0.04) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(124, 246, 176, 0.035) 1px, transparent 1px);
-        background-size: 48px 48px;
-        mask-image: radial-gradient(ellipse at center, #000 35%, transparent 75%);
-        animation: boot-grid 18s linear infinite;
+        background: radial-gradient(45% 35% at 50% 40%, rgba(255, 106, 61, 0.12), transparent 70%);
         pointer-events: none;
       }
 
       .boot-stage {
         position: relative;
+        z-index: 1;
+        width: min(420px, 86vw);
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 22px;
+        text-align: center;
+        gap: 28px;
         opacity: 0;
-        transform: translateY(14px) scale(0.94);
-        transition: opacity 0.75s ease, transform 0.85s cubic-bezier(0.16, 1, 0.3, 1);
-        z-index: 2;
+        transform: translateY(12px);
+        transition: opacity 0.7s ease, transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
       }
       .boot-stage.reveal { opacity: 1; transform: none; }
 
-      /* Radar sweep behind emblem */
-      .boot-radar {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 420px;
-        height: 420px;
-        margin: -210px 0 0 -210px;
-        border-radius: 50%;
-        border: 1px solid rgba(255, 106, 61, 0.12);
-        pointer-events: none;
-        opacity: 0;
-      }
-      .boot-radar::before,
-      .boot-radar::after {
-        content: "";
-        position: absolute;
-        inset: 18%;
-        border-radius: 50%;
-        border: 1px solid rgba(124, 246, 176, 0.1);
-      }
-      .boot-radar::after { inset: 36%; border-color: rgba(98, 182, 255, 0.12); }
-      .boot-radar .sweep {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background: conic-gradient(from 0deg, transparent 0deg, rgba(255, 106, 61, 0.28) 40deg, transparent 70deg);
-        opacity: 0;
-      }
-      .reveal .boot-radar { opacity: 1; }
-      .reveal .boot-radar .sweep { animation: boot-sweep 2.4s linear infinite; opacity: 1; }
-
-      /* Converging lock brackets */
-      .boot-brackets {
-        position: absolute;
-        top: -36px;
-        width: 360px;
-        height: 360px;
-        pointer-events: none;
-      }
-      .boot-brackets i {
-        position: absolute;
-        width: 42px;
-        height: 42px;
-        border: 2px solid rgba(255, 106, 61, 0.75);
-        opacity: 0;
-        box-shadow: 0 0 12px rgba(255, 106, 61, 0.25);
-      }
-      .boot-brackets .b1 { top: 0; left: 0; border-right: none; border-bottom: none; }
-      .boot-brackets .b2 { top: 0; right: 0; border-left: none; border-bottom: none; }
-      .boot-brackets .b3 { bottom: 0; left: 0; border-right: none; border-top: none; }
-      .boot-brackets .b4 { bottom: 0; right: 0; border-left: none; border-top: none; }
-      .reveal .boot-brackets .b1 { animation: boot-brk 1s cubic-bezier(0.2, 0.85, 0.2, 1) 0.1s forwards; --tx: 70px; --ty: 70px; }
-      .reveal .boot-brackets .b2 { animation: boot-brk 1s cubic-bezier(0.2, 0.85, 0.2, 1) 0.18s forwards; --tx: -70px; --ty: 70px; }
-      .reveal .boot-brackets .b3 { animation: boot-brk 1s cubic-bezier(0.2, 0.85, 0.2, 1) 0.26s forwards; --tx: 70px; --ty: -70px; }
-      .reveal .boot-brackets .b4 { animation: boot-brk 1s cubic-bezier(0.2, 0.85, 0.2, 1) 0.34s forwards; --tx: -70px; --ty: -70px; }
-      @keyframes boot-brk {
-        0% { opacity: 0; transform: translate(calc(var(--tx) * -1.8), calc(var(--ty) * -1.8)); }
-        55% { opacity: 1; }
-        100% { opacity: 0.95; transform: translate(0, 0); }
-      }
-
-      .boot-scanline {
-        position: absolute;
-        left: 0; right: 0; top: 0;
-        height: 3px;
-        background: linear-gradient(90deg, transparent, rgba(255, 106, 61, 0.55), rgba(124, 246, 176, 0.4), transparent);
-        box-shadow: 0 0 18px rgba(255, 106, 61, 0.45);
-        opacity: 0;
-        z-index: 5;
-      }
-      #boot-splash:has(.reveal) .boot-scanline {
-        animation: boot-scan 1.35s cubic-bezier(0.4, 0, 0.6, 1) 0.15s 1;
-      }
-      @keyframes boot-scan {
-        0% { opacity: 0; transform: translateY(0); }
-        8% { opacity: 1; }
-        92% { opacity: 1; }
-        100% { opacity: 0; transform: translateY(100vh); }
-      }
-
-      .boot-flash {
-        position: absolute;
-        inset: 0;
-        background: radial-gradient(55% 55% at 50% 40%, rgba(255, 106, 61, 0.55), rgba(255, 176, 138, 0.15) 40%, transparent 72%);
-        opacity: 0;
-        pointer-events: none;
-        z-index: 4;
-      }
-      #boot-splash:has(.reveal) .boot-flash {
-        animation: boot-flash 0.65s ease-out 2.85s 1;
-      }
-      @keyframes boot-flash {
-        0% { opacity: 0; }
-        12% { opacity: 1; }
-        100% { opacity: 0; }
-      }
-
-      /* Emblem — kill-chain reticle */
+      /* Emblem — one ring + core, centered */
       .boot-emblem {
         position: relative;
-        width: 210px;
-        height: 210px;
+        width: 160px;
+        height: 160px;
         display: grid;
         place-items: center;
+        flex-shrink: 0;
       }
-      .boot-emblem span {
+      .boot-ring {
         position: absolute;
         inset: 0;
-        margin: auto;
         border-radius: 50%;
-        border: 1.5px solid transparent;
-      }
-      .boot-emblem .r1 {
-        width: 210px; height: 210px;
+        border: 2px solid transparent;
         border-top-color: var(--b-fire);
         border-right-color: rgba(255, 106, 61, 0.25);
-        box-shadow: 0 0 28px rgba(255, 106, 61, 0.18);
-        animation: boot-spin 3.2s cubic-bezier(0.55, 0, 0.45, 1) infinite;
+        box-shadow: 0 0 32px rgba(255, 106, 61, 0.2);
+        animation: boot-spin 3s linear infinite;
       }
-      .boot-emblem .r2 {
-        width: 158px; height: 158px;
-        border-bottom-color: var(--b-steel);
-        border-left-color: rgba(124, 246, 176, 0.3);
-        box-shadow: 0 0 18px rgba(124, 246, 176, 0.12);
-        animation: boot-spin 2.4s linear infinite reverse;
-      }
-      .boot-emblem .r3 {
-        width: 108px; height: 108px;
-        border-top-color: var(--b-ice);
-        border-right-color: rgba(98, 182, 255, 0.35);
-        animation: boot-spin 1.7s ease-in-out infinite;
-      }
-      /* Chain-link diamond in the core */
-      .boot-link {
-        width: 36px;
-        height: 36px;
-        border: none !important;
-        border-radius: 3px !important;
-        transform: rotate(45deg);
-        background: linear-gradient(145deg, var(--b-ember), var(--b-fire) 55%, #8f2a14);
-        box-shadow:
-          0 0 0 2px rgba(0, 0, 0, 0.6),
-          0 0 22px 4px rgba(255, 106, 61, 0.55),
-          inset 0 1px 0 rgba(255, 255, 255, 0.45);
-        animation: boot-core 1.6s ease-in-out infinite;
-      }
-      .boot-link::after {
-        content: "";
+      .boot-ring-inner {
         position: absolute;
-        inset: 8px;
-        border: 2px solid rgba(255, 255, 255, 0.35);
-      }
-      .reveal .boot-emblem { animation: boot-punch 0.55s cubic-bezier(0.2, 0.9, 0.3, 1) 2.85s 1; }
-      @keyframes boot-punch {
-        0% { transform: scale(1); filter: brightness(1); }
-        20% { transform: scale(1.14); filter: brightness(1.35); }
-        100% { transform: scale(1); filter: brightness(1); }
-      }
-
-      /* Orbiting ticks */
-      .boot-orbit {
-        position: absolute;
-        inset: -8px;
-        animation: boot-spin 8s linear infinite;
-        pointer-events: none;
-      }
-      .boot-orbit i {
-        position: absolute;
-        width: 6px;
-        height: 6px;
+        inset: 28px;
         border-radius: 50%;
-        background: var(--b-fire);
-        box-shadow: 0 0 10px var(--b-fire);
+        border: 1.5px solid transparent;
+        border-bottom-color: var(--b-steel);
+        border-left-color: rgba(155, 229, 100, 0.3);
+        animation: boot-spin 4.2s linear infinite reverse;
       }
-      .boot-orbit i:nth-child(1) { top: 0; left: 50%; margin-left: -3px; }
-      .boot-orbit i:nth-child(2) { bottom: 12%; right: 8%; background: var(--b-steel); box-shadow: 0 0 10px var(--b-steel); }
-      .boot-orbit i:nth-child(3) { bottom: 12%; left: 8%; background: var(--b-ice); box-shadow: 0 0 10px var(--b-ice); }
+      .boot-core {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #fff, var(--b-fire) 55%, #8f2a14);
+        box-shadow:
+          0 0 12px 2px rgba(255, 255, 255, 0.45),
+          0 0 28px 6px rgba(255, 106, 61, 0.45);
+        animation: boot-pulse 1.8s ease-in-out infinite;
+      }
+      .reveal .boot-emblem {
+        animation: boot-punch 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) 2.85s 1;
+      }
 
-      /* Spectrum bars */
-      .boot-eq {
+      /* Wordmark block */
+      .boot-wordmark {
         display: flex;
-        align-items: flex-end;
-        gap: 4px;
-        height: 28px;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
       }
-      .boot-eq i {
-        display: block;
-        width: 4px;
-        border-radius: 2px;
-        background: linear-gradient(180deg, var(--b-ember), var(--b-fire));
-        transform-origin: bottom;
-        animation: boot-eq 0.95s ease-in-out infinite;
-      }
-      .boot-eq i:nth-child(odd) { background: linear-gradient(180deg, var(--b-steel), var(--b-fire)); }
-      .boot-eq i:nth-child(1) { animation-delay: 0s; height: 28px; }
-      .boot-eq i:nth-child(2) { animation-delay: 0.08s; height: 28px; }
-      .boot-eq i:nth-child(3) { animation-delay: 0.16s; height: 28px; }
-      .boot-eq i:nth-child(4) { animation-delay: 0.24s; height: 28px; }
-      .boot-eq i:nth-child(5) { animation-delay: 0.32s; height: 28px; }
-      .boot-eq i:nth-child(6) { animation-delay: 0.2s; height: 28px; }
-      .boot-eq i:nth-child(7) { animation-delay: 0.12s; height: 28px; }
-      .boot-eq i:nth-child(8) { animation-delay: 0.28s; height: 28px; }
-      .boot-eq i:nth-child(9) { animation-delay: 0.04s; height: 28px; }
-
-      .boot-wordmark { text-align: center; }
       .boot-title {
         position: relative;
-        font-size: clamp(26px, 4.5vw, 34px);
+        margin: 0;
+        font-size: clamp(22px, 5vw, 30px);
         font-weight: 800;
-        letter-spacing: 0.38em;
-        text-indent: 0.38em;
+        letter-spacing: 0.42em;
+        text-indent: 0.42em;
         text-transform: uppercase;
-        background: linear-gradient(105deg, #ffd9c9, #ffffff 40%, var(--b-fire) 75%, var(--b-ember));
-        background-size: 220% 100%;
+        background: linear-gradient(100deg, #ffe0d0, #fff 42%, var(--b-fire));
+        background-size: 200% 100%;
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
-        filter: drop-shadow(0 0 18px rgba(255, 106, 61, 0.35));
-        animation: boot-shimmer 3.8s ease-in-out infinite;
+        animation: boot-shimmer 4s ease-in-out infinite;
       }
       .boot-title::before,
       .boot-title::after {
         content: attr(data-text);
         position: absolute;
-        left: 0; right: 0; top: 0;
+        inset: 0;
+        opacity: 0;
         background: none;
         -webkit-background-clip: initial;
         background-clip: initial;
-        opacity: 0;
       }
-      .boot-title::before { color: rgba(255, 106, 61, 0.9); }
-      .boot-title::after { color: rgba(98, 182, 255, 0.85); }
-      .reveal .boot-title::before { animation: boot-glitch-a 1s steps(2, jump-none) 0.4s 2; }
-      .reveal .boot-title::after { animation: boot-glitch-b 1s steps(3, jump-none) 0.4s 2; }
-      @keyframes boot-glitch-a {
-        0% { opacity: 0.85; transform: translate(-4px, -2px); clip-path: inset(8% 0 60% 0); }
-        40% { opacity: 0.6; transform: translate(3px, 1px); clip-path: inset(45% 0 20% 0); }
-        100% { opacity: 0; transform: none; }
-      }
-      @keyframes boot-glitch-b {
-        0% { opacity: 0.7; transform: translate(4px, 2px); clip-path: inset(55% 0 15% 0); }
-        45% { opacity: 0.5; transform: translate(-3px, -1px); clip-path: inset(5% 0 75% 0); }
-        100% { opacity: 0; transform: none; }
-      }
+      .boot-title::before { color: rgba(255, 106, 61, 0.85); }
+      .boot-title::after { color: rgba(155, 229, 100, 0.7); }
+      .reveal .boot-title::before { animation: boot-glitch-a 0.9s steps(2) 0.5s 2; }
+      .reveal .boot-title::after { animation: boot-glitch-b 0.9s steps(2) 0.5s 2; }
 
       .boot-sub {
-        margin-top: 10px;
+        margin: 0;
         font-size: 10px;
-        font-weight: 700;
+        font-weight: 600;
         letter-spacing: 0.55em;
         text-indent: 0.55em;
         text-transform: uppercase;
-        color: rgba(255, 200, 170, 0.55);
+        color: rgba(255, 200, 175, 0.5);
       }
-
-      .boot-hud {
-        display: flex;
-        gap: 18px;
-        margin-top: 6px;
-        font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-        font-size: 9px;
-        letter-spacing: 0.12em;
-        color: rgba(124, 246, 176, 0.55);
-        opacity: 0;
-      }
-      .reveal .boot-hud { animation: boot-hud-in 0.5s ease 0.9s forwards; }
-      .boot-hud b { color: rgba(255, 176, 138, 0.85); font-weight: 600; }
-      @keyframes boot-hud-in { to { opacity: 1; } }
 
       .boot-armed {
-        margin-top: 4px;
+        margin: 0;
+        min-height: 16px;
         font-size: 11px;
         font-weight: 800;
-        letter-spacing: 0.65em;
-        text-indent: 0.65em;
+        letter-spacing: 0.55em;
+        text-indent: 0.55em;
         text-transform: uppercase;
         color: var(--b-fire);
-        text-shadow: 0 0 16px rgba(255, 106, 61, 0.7);
+        text-shadow: 0 0 14px rgba(255, 106, 61, 0.55);
         opacity: 0;
       }
-      .reveal .boot-armed { animation: boot-armed 0.4s cubic-bezier(0.1, 1.5, 0.3, 1) 2.85s forwards; }
-      @keyframes boot-armed {
-        0% { opacity: 0; transform: scale(2.6) skewX(-8deg); }
-        100% { opacity: 1; transform: scale(1) skewX(0); }
+      .reveal .boot-armed {
+        animation: boot-armed 0.35s cubic-bezier(0.1, 1.4, 0.3, 1) 2.85s forwards;
       }
 
+      /* Progress */
       .boot-bar {
-        width: min(280px, 70vw);
-        height: 3px;
-        border-radius: 3px;
+        width: 100%;
+        max-width: 240px;
+        height: 2px;
+        border-radius: 2px;
         background: rgba(255, 255, 255, 0.08);
         overflow: hidden;
-        position: relative;
-        box-shadow: inset 0 0 0 1px rgba(255, 106, 61, 0.15);
       }
       .boot-bar::after {
         content: "";
-        position: absolute;
-        left: 0; top: 0; bottom: 0;
+        display: block;
+        height: 100%;
         width: 0%;
-        border-radius: 3px;
-        background: linear-gradient(90deg, var(--b-steel), var(--b-ice), var(--b-fire));
-        box-shadow: 0 0 14px rgba(255, 106, 61, 0.65);
+        border-radius: 2px;
+        background: linear-gradient(90deg, var(--b-steel), var(--b-fire));
+        box-shadow: 0 0 10px rgba(255, 106, 61, 0.5);
       }
       .boot-stage.reveal .boot-bar::after {
         animation: boot-fill 4.2s cubic-bezier(0.4, 0.05, 0.2, 1) forwards;
       }
 
-      .boot-status {
-        font-family: ui-monospace, Consolas, monospace;
-        font-size: 9px;
-        letter-spacing: 0.2em;
-        text-transform: uppercase;
-        color: rgba(255, 255, 255, 0.28);
+      /* Drop flash overlay */
+      .boot-flash {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(50% 45% at 50% 42%, rgba(255, 106, 61, 0.45), transparent 70%);
         opacity: 0;
+        pointer-events: none;
+        z-index: 2;
       }
-      .reveal .boot-status { animation: boot-hud-in 0.4s ease 0.55s forwards; }
+      #boot-splash:has(.reveal) .boot-flash {
+        animation: boot-flash 0.55s ease-out 2.85s 1;
+      }
 
       @keyframes boot-spin { to { transform: rotate(360deg); } }
-      @keyframes boot-sweep { to { transform: rotate(360deg); } }
-      @keyframes boot-core {
-        0%, 100% { transform: rotate(45deg) scale(1); opacity: 1; }
-        50% { transform: rotate(45deg) scale(1.18); opacity: 0.85; }
+      @keyframes boot-pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.35); opacity: 0.75; }
       }
-      @keyframes boot-eq {
-        0%, 100% { transform: scaleY(0.22); opacity: 0.65; }
-        50% { transform: scaleY(1); opacity: 1; }
+      @keyframes boot-punch {
+        0% { transform: scale(1); }
+        25% { transform: scale(1.1); }
+        100% { transform: scale(1); }
       }
-      @keyframes boot-shimmer { to { background-position: 250% 0; } }
-      @keyframes boot-grid { to { background-position: 48px 48px; } }
-      @keyframes boot-fill { 0% { width: 0%; } 100% { width: 100%; } }
+      @keyframes boot-shimmer { to { background-position: 220% 0; } }
+      @keyframes boot-fill { from { width: 0%; } to { width: 100%; } }
+      @keyframes boot-flash {
+        0% { opacity: 0; }
+        15% { opacity: 1; }
+        100% { opacity: 0; }
+      }
+      @keyframes boot-armed {
+        0% { opacity: 0; transform: scale(1.8); }
+        100% { opacity: 1; transform: scale(1); }
+      }
+      @keyframes boot-glitch-a {
+        0% { opacity: 0.8; transform: translate(-3px, -1px); clip-path: inset(10% 0 65% 0); }
+        50% { opacity: 0.5; transform: translate(2px, 1px); clip-path: inset(50% 0 20% 0); }
+        100% { opacity: 0; }
+      }
+      @keyframes boot-glitch-b {
+        0% { opacity: 0.6; transform: translate(3px, 1px); clip-path: inset(55% 0 15% 0); }
+        50% { opacity: 0.4; transform: translate(-2px, -1px); clip-path: inset(5% 0 70% 0); }
+        100% { opacity: 0; }
+      }
 
       @media (prefers-reduced-motion: reduce) {
-        .boot-emblem .r1, .boot-emblem .r2, .boot-emblem .r3,
-        .boot-link, .boot-eq i, .boot-title, #boot-splash::after,
-        .boot-title::before, .boot-title::after,
-        .boot-brackets i, .boot-scanline, .boot-flash, .boot-emblem,
-        .boot-orbit, .boot-radar .sweep {
+        .boot-ring, .boot-ring-inner, .boot-core, .boot-title,
+        .boot-title::before, .boot-title::after, .boot-flash, .boot-emblem {
           animation: none !important;
         }
-        .boot-brackets i { opacity: 0.8; transform: none; }
         .boot-armed { animation: none; }
         .reveal .boot-armed { opacity: 1; }
-        .boot-stage { transition: opacity 0.4s ease; transform: none; }
+        .boot-stage { transition: opacity 0.35s ease; transform: none; }
         .boot-stage.reveal .boot-bar::after { animation: boot-fill 1s linear forwards; }
-        .boot-radar, .boot-hud, .boot-status { opacity: 1; }
       }
     </style>
   </head>
   <body class="bg-ink overflow-hidden">
     <div id="boot-splash">
-      <div class="boot-scanline"></div>
       <div class="boot-flash"></div>
       <div id="boot-stage" class="boot-stage">
-        <div class="boot-radar"><div class="sweep"></div></div>
-        <div class="boot-brackets">
-          <i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="b4"></i>
-        </div>
-        <div class="boot-emblem">
-          <div class="boot-orbit"><i></i><i></i><i></i></div>
-          <span class="r1"></span>
-          <span class="r2"></span>
-          <span class="r3"></span>
-          <span class="boot-link"></span>
-        </div>
-        <div class="boot-eq">
-          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        <div class="boot-emblem" aria-hidden="true">
+          <span class="boot-ring"></span>
+          <span class="boot-ring-inner"></span>
+          <span class="boot-core"></span>
         </div>
         <div class="boot-wordmark">
-          <div class="boot-title" data-text="Kill-Chain">Kill-Chain</div>
-          <div class="boot-sub">Tactical Audio Engine</div>
-          <div class="boot-hud">
-            <span>DSP <b>ONLINE</b></span>
-            <span>CHAIN <b>STANDBY</b></span>
-            <span>FX <b>ARMED</b></span>
-          </div>
-          <div class="boot-armed">Systems Armed</div>
+          <h1 class="boot-title" data-text="Kill-Chain">Kill-Chain</h1>
+          <p class="boot-sub">Tactical Audio Engine</p>
+          <p class="boot-armed">Systems Armed</p>
         </div>
-        <div class="boot-bar"></div>
-        <div class="boot-status">acquiring signal lock…</div>
+        <div class="boot-bar" role="progressbar" aria-label="Boot progress"></div>
       </div>
     </div>
     <div id="root"></div>

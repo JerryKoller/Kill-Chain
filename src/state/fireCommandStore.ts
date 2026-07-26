@@ -20,6 +20,7 @@ import {
 } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset } from "@/audio/dsp/firePresetBank";
+import { MISSION_SHOWCASE_PRESETS } from "@/audio/dsp/fireMissionPresets";
 
 /**
  * fireCommandStore — single source of truth for the "Fire Command" synth.
@@ -608,7 +609,7 @@ const FLAGSHIP_PRESETS: FirePreset[] = [
 ];
 
 /** Full factory bank: flagships first, then the generated arsenal (~500 total). */
-export const FIRE_PRESETS: FirePreset[] = [...FLAGSHIP_PRESETS, ...GENERATED_PRESETS];
+export const FIRE_PRESETS: FirePreset[] = [...FLAGSHIP_PRESETS, ...MISSION_SHOWCASE_PRESETS, ...GENERATED_PRESETS];
 
 // Fast lookup for loadPreset — linear scans over 500 entries add up.
 const PRESET_BY_ID = new Map(FIRE_PRESETS.map((p) => [p.id, p]));
