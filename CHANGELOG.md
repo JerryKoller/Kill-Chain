@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.7] — 2026-07-26 — Category Bands
+
+### Changed
+- **Fire Command category bands** — Mix & Output, Sources, Tone, Modulation, FX, Performance Tools
+- **Equal-width collapsed chips** — folded modules inside an open band render as a uniform chip grid instead of jagged multi-column headers
+- Band and module fold state still persists under `killchain.firecmd.fold.*`. Layout chrome only — audio unchanged
+
 ## [2.5.6] — 2026-07-26 — Symmetry + Stage Depth
 
 ### Changed
