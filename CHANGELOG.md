@@ -2,6 +2,30 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.0] — 2026-07-26 — Fire Command MK IV
+
+**The synth release.** Fire Command graduates to MK IV: a deeper, more playable, more visual wavetable weapons platform.
+
+### Added
+- **Natural Selection mutate** — Mutate now breeds **two candidate patches** from the current sound; audition A / B, keep the winner, and evolve in that direction. A strength slider under the button sets the mutation from subtle drift to full rework
+- **1000 factory presets** — 27 hand-tuned flagships (including the new **Acid Reactor** 303-style bass) plus 973 archetype-generated patches with unique forged names; every existing preset is preserved byte-for-byte
+- **Precision knobs** — shift-drag fine tuning, **click-to-type** exact values, double-click reset to the true default, and a hover reset pip on every knob
+- **Next / Prev patch cycling** — step through the whole bank from the header without opening the preset browser
+- **Rebuilt onscreen keyboard** — two full octaves, an octave scroll slider, and click-position velocity (strike lower on a key for harder hits)
+- **Per-module eye candy** — live visualizations across the panel: envelope and lowpass-gate curves, an animated LFO scope, filter frequency response, spectral-warp harmonic display, drive transfer curve, arp pattern preview, and a spectral FX readout
+- **Robust arpeggiator** — new **down-up, converge, diverge, pedal, and walk** modes plus **swing**, **velocity accents** (every N steps), and **probabilistic ratchets**
+- **Trance gate v2** — pattern preset menu, **shift / invert / randomize** controls, a **smooth** knob for click-free gating, and a live playhead on the step display
+- **12-slot mod matrix** — up from 8, with crosshair hover highlighting, source-family color coding, and a slot-usage meter
+- **Four new mission packs** — Neuro Assault, Acid Offensive, Trance Protocol, and Dubstep Sortie join the roster (10 total); existing packs re-tuned to sound more like their claimed genre
+- **Sequencer flow guide** — a numbered ① Pattern → ② Sections → ③ Chain strip with a dismissible explainer and an "editing section" chip, making track building far more intuitive
+
+### Changed
+- **MK IV banner** — the Fire Command header is redesigned around a reticle emblem with a proper weapons-platform aesthetic (the fire emoji is gone)
+
+### Fixed
+- **Talking Bass clipping** — the filter drive stage now uses a soft-knee curve and resonant presets were re-trimmed, ending harsh clipping on high-resonance patches
+- **Spectral FX wonkiness** — Freeze no longer captures silence (energy-gated capture), Smear no longer blows up into a noise wash at low levels, and mono-into-stereo routing is handled correctly
+
 ## [2.4.1] — 2026-07-22
 
 **Legal and Universal Output Repositioning** — commercial hygiene pass, not a feature release.
