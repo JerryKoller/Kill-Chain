@@ -38,7 +38,6 @@ const DEFAULT_CORNER_IDS: Record<Corner, string> = {
 
 const STORAGE_KEY = "killchain.firemorph.v1";
 const FIRE = "#ff6a3d";
-const PAD_SIZE = 240;
 
 type TrailParticle = { x: number; y: number; life: number; hue: number };
 
@@ -282,17 +281,15 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
       </div>
 
       {open && (
-        <div className="mt-2.5 flex flex-wrap gap-4">
+        <div className="mt-2.5 flex flex-wrap gap-4 min-w-0">
           <div
             ref={padRef}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            className="relative shrink-0 cursor-crosshair touch-none select-none overflow-hidden rounded-2xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_28px_rgba(0,0,0,0.35)]"
+            className="relative w-full max-w-[min(100%,280px)] aspect-square cursor-crosshair touch-none select-none overflow-hidden rounded-2xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_28px_rgba(0,0,0,0.35)]"
             style={{
-              width: PAD_SIZE,
-              height: PAD_SIZE,
               background:
                 "linear-gradient(160deg, rgba(8,6,10,0.92), rgba(0,0,0,0.75))",
             }}
@@ -392,7 +389,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
             />
           </div>
 
-          <div className="flex min-w-[220px] flex-1 flex-col gap-2">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
             {CORNERS.map((c) => (
               <div key={c} className="flex items-center gap-2">
                 <span

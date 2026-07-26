@@ -61,12 +61,12 @@ function MeterBridge({
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(280, Math.floor(wrap.clientWidth));
+      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       const cssH = 88;
       sizeRef.current = { w: cssW, h: cssH };
       canvas.width = Math.floor(cssW * dpr);
       canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = `${cssW}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${cssH}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -239,9 +239,9 @@ function Strip({
       }}
       title={meta.hint}
     >
-      <div className="flex w-full items-center justify-between gap-1">
+      <div className="flex w-full items-center justify-between gap-1 min-w-0">
         <span
-          className="text-[10px] font-bold uppercase tracking-[0.16em]"
+          className="text-[10px] font-bold uppercase tracking-[0.16em] truncate min-w-0"
           style={{ color: strip.mute ? "rgba(255,255,255,0.28)" : meta.color }}
         >
           {meta.label}

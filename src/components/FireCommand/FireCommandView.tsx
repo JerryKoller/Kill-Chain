@@ -69,29 +69,40 @@ const fmtBpm = (v: number) => `${Math.round(v)}`;
 const fmtInt = (v: number) => `${Math.round(v)}`;
 const fmtHzRate = (v: number) => `${v.toFixed(2)}Hz`;
 
-function UndoRedoButtons() {
+function StudioBay({ onLibrary }: { onLibrary: () => void }) {
   const undoDepth = useFireHistoryStore((s) => s.undoDepth);
   const redoDepth = useFireHistoryStore((s) => s.redoDepth);
-  const btn = (enabled: boolean) =>
-    `rounded-lg border px-2.5 py-1 text-xs transition ${
+  const cell = (enabled: boolean) =>
+    `h-9 rounded-xl border text-[11px] font-semibold transition truncate ${
       enabled
-        ? "border-white/12 bg-white/5 hover:bg-white/10 text-white/80"
-        : "border-white/5 bg-white/[0.02] text-white/25 cursor-default"
+        ? "border-white/14 bg-white/[0.06] hover:bg-white/10 text-white/85"
+        : "border-white/6 bg-white/[0.02] text-white/25 cursor-default"
     }`;
   return (
-    <div className="flex items-center gap-1">
-      <button
-        onClick={() => undoFire()}
-        disabled={undoDepth === 0}
-        className={btn(undoDepth > 0)}
-        title="Undo (Ctrl+Z) — piano roll, drums, samples and patch edits share one timeline"
-      >↶ Undo</button>
-      <button
-        onClick={() => redoFire()}
-        disabled={redoDepth === 0}
-        className={btn(redoDepth > 0)}
-        title="Redo (Ctrl+Y)"
-      >↷ Redo</button>
+    <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px]">
+      <div className="flex items-center gap-2 w-full">
+        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Studio</span>
+        <span className="text-[9px] text-white/25">undo · redo · library</span>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5 w-full">
+        <button
+          onClick={() => undoFire()}
+          disabled={undoDepth === 0}
+          className={cell(undoDepth > 0)}
+          title="Undo (Ctrl+Z)"
+        >↶ Undo</button>
+        <button
+          onClick={() => redoFire()}
+          disabled={redoDepth === 0}
+          className={cell(redoDepth > 0)}
+          title="Redo (Ctrl+Y)"
+        >↷ Redo</button>
+        <button
+          onClick={onLibrary}
+          className={cell(true)}
+          title="Save / manage presets"
+        >＋ Library</button>
+      </div>
     </div>
   );
 }
@@ -306,21 +317,8 @@ export function FireCommandView() {
             <MutateCluster />
           </div>
 
-          {/* History bay */}
-          <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px] xl:items-end">
-            <div className="flex items-center gap-2 w-full xl:justify-end">
-              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Studio</span>
-              <span className="text-[9px] text-white/25">undo · save</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 w-full xl:justify-end">
-              <UndoRedoButtons />
-              <button
-                onClick={() => setBrowserOpen(true)}
-                className="h-8 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-3 text-[11px] text-white/80 transition"
-                title="Save / manage presets"
-              >＋ Save · Library</button>
-            </div>
-          </div>
+          {/* Studio bay — equal-width actions fill the panel */}
+          <StudioBay onLibrary={() => setBrowserOpen(true)} />
         </div>
       </GlassPanel>
 
@@ -344,9 +342,9 @@ export function FireCommandView() {
               <WaveDisplay group="c" color="#ffcf5c" />
             </div>
             <div className="rounded-xl border border-[#ff6a3d]/28 bg-gradient-to-b from-[#ff6a3d]/[0.1] to-black/50 p-2 shadow-[0_0_22px_rgba(255,106,61,0.12)] lg:col-span-2">
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-widest text-dim">Master Trace</span>
-                <span className="text-[9px] text-white/30">post-synth · pre Kill-Chain</span>
+              <div className="mb-1 flex items-center justify-between gap-2 min-w-0">
+                <span className="text-[10px] uppercase tracking-widest text-dim shrink-0">Master Trace</span>
+                <span className="text-[9px] text-white/30 truncate hidden sm:inline">post-synth · pre Kill-Chain</span>
               </div>
               <Scope />
             </div>
@@ -579,24 +577,41 @@ export function FireCommandView() {
 function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }) {
   const table = useFireCommandStore((s) => (group === "a" ? s.patch.oscATable : group === "b" ? s.patch.oscBTable : s.patch.oscCTable));
   const ref = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const canvas = ref.current;
-    if (!canvas) return;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     let raf = 0;
     let lastTick = 0;
     let lastPos = -1;
-    const MIN_INTERVAL = 33; // cap at ~30 fps — plenty for a morph readout
+    const MIN_INTERVAL = 33;
     const cache: Float32Array[] = [];
     let cacheTable = "";
     const N = 96;
+    const size = { w: 250, h: 96 };
     const ensureCache = (id: string) => {
       if (cacheTable === id && cache.length) return;
       cache.length = 0;
       for (let i = 0; i < FRAME_COUNT; i++) cache.push(frameSamples(id, i / (FRAME_COUNT - 1), N));
       cacheTable = id;
     };
+    const sync = () => {
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
+      size.h = 96;
+      canvas.width = Math.floor(size.w * dpr);
+      canvas.height = Math.floor(size.h * dpr);
+      canvas.style.width = "100%";
+      canvas.style.height = `${size.h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      lastPos = -1; // force redraw after resize
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(wrap);
     const draw = (nowMs: number) => {
       raf = requestAnimationFrame(draw);
       if (document.hidden) return;
@@ -604,24 +619,19 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
       lastTick = nowMs;
       let pos = 0.5;
       try { pos = getEngine().fireCommand.getMorphPositions()[group]; } catch { /* not ready */ }
-      // The wavetable stack is static unless the morph position actually moves
-      // (a note's mod-env / LFO, or dragging the Morph knob). Skip the whole
-      // redraw when nothing changed — the common idle case on this page.
       if (lastPos >= 0 && Math.abs(pos - lastPos) < 0.0008) return;
       lastPos = pos;
       ensureCache(table);
-      const w = canvas.width;
-      const h = canvas.height;
+      const w = size.w;
+      const h = size.h;
       ctx.clearRect(0, 0, w, h);
 
-      // Depth plate
       const bg = ctx.createLinearGradient(0, 0, w, h);
       bg.addColorStop(0, `${color}22`);
       bg.addColorStop(0.45, "rgba(4,4,8,0.85)");
       bg.addColorStop(1, `${color}10`);
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, w, h);
-      // Perspective grid
       ctx.strokeStyle = "rgba(255,255,255,0.04)";
       for (let g = 0; g < 5; g++) {
         const y = 12 + g * ((h - 28) / 4);
@@ -633,11 +643,10 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
 
       const curFrame = pos * (FRAME_COUNT - 1);
       const padX = 14;
-      const skew = 28;
+      const skew = Math.min(28, w * 0.08);
       const topY = 14;
-      const usableW = w - padX * 2 - skew;
+      const usableW = Math.max(8, w - padX * 2 - skew);
       const amp = h * 0.075;
-      // back-to-front stack of frames
       for (let i = 0; i < FRAME_COUNT; i++) {
         const depth = i / (FRAME_COUNT - 1);
         const baseY = topY + depth * (h - topY - 24);
@@ -665,7 +674,6 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
           ctx.globalAlpha = 1;
         }
       }
-      // current interpolated waveform, bold at front with fill
       const lo = Math.floor(curFrame);
       const hi = Math.min(lo + 1, FRAME_COUNT - 1);
       const frac = curFrame - lo;
@@ -701,25 +709,25 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Morph position marker
       const mx = padX + pos * (w - padX * 2);
       ctx.fillStyle = "rgba(255,255,255,0.7)";
       ctx.fillRect(mx - 1, 4, 2, 8);
     };
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, [table, group, color]);
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] uppercase tracking-widest text-dim">Osc {group.toUpperCase()}</span>
-        <span className="text-[10px] font-mono" style={{ color }}>{wavetableName(table)}</span>
+    <div ref={wrapRef} className="min-w-0">
+      <div className="flex items-center justify-between gap-2 mb-1 min-w-0">
+        <span className="text-[10px] uppercase tracking-widest text-dim shrink-0">Osc {group.toUpperCase()}</span>
+        <span className="text-[10px] font-mono truncate" style={{ color }} title={wavetableName(table)}>{wavetableName(table)}</span>
       </div>
       <canvas
         ref={ref}
-        width={250}
-        height={96}
-        className="w-full h-[96px] rounded-xl border bg-black/50"
+        className="block w-full h-[96px] rounded-xl border bg-black/50"
         style={{ borderColor: `${color}33`, boxShadow: `inset 0 0 24px ${color}14` }}
       />
     </div>
@@ -743,11 +751,11 @@ function Scope() {
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      size.w = Math.max(200, Math.floor(wrap.clientWidth));
+      size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       size.h = 100;
       canvas.width = Math.floor(size.w * dpr);
       canvas.height = Math.floor(size.h * dpr);
-      canvas.style.width = `${size.w}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${size.h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -1114,12 +1122,12 @@ function ArpViz({ arp }: { arp: ArpSettings }) {
 
     const syncSize = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(320, Math.floor(wrap.clientWidth));
+      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       const cssH = 132;
       sizeRef.current = { w: cssW, h: cssH, dpr };
       canvas.width = Math.floor(cssW * dpr);
       canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = `${cssW}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${cssH}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -1564,11 +1572,11 @@ function MacroClusterViz() {
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      size.w = Math.max(280, Math.floor(wrap.clientWidth));
+      size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       size.h = 118;
       canvas.width = Math.floor(size.w * dpr);
       canvas.height = Math.floor(size.h * dpr);
-      canvas.style.width = `${size.w}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${size.h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -1673,7 +1681,7 @@ function MacroClusterViz() {
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
       ctx.fillStyle = "rgba(255,179,92,0.55)";
-      ctx.fillText("WIRED DESTINATIONS", x0, 16);
+      ctx.fillText(W < 360 ? "DESTINATIONS" : "WIRED DESTINATIONS", x0, 16);
 
       for (let i = 0; i < 4; i++) {
         const src = MACRO_KEYS[i];
@@ -1798,11 +1806,11 @@ function GateChopViz({
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      size.w = Math.max(280, Math.floor(wrap.clientWidth));
+      size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       size.h = 96;
       canvas.width = Math.floor(size.w * dpr);
       canvas.height = Math.floor(size.h * dpr);
-      canvas.style.width = `${size.w}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${size.h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -2648,21 +2656,21 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
 
   return (
     <GlassPanel className={`p-2.5 ${className ?? ""}`}>
-      <div className={`flex items-center justify-between gap-2 ${collapsed ? "" : "mb-2"}`}>
+      <div className={`flex items-center justify-between gap-2 min-w-0 ${collapsed ? "" : "mb-2"}`}>
         {collapseKey ? (
           <button
             onClick={toggle}
             aria-expanded={!collapsed}
-            className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 min-w-0"
             title={collapsed ? "Expand section" : "Collapse section"}
           >
             <CollapseToggle collapsed={collapsed} color={color} />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color }}>{title}</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.22em] truncate" style={{ color }}>{title}</span>
           </button>
         ) : (
-          <div className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color }}>{title}</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] truncate min-w-0" style={{ color }}>{title}</div>
         )}
-        {!collapsed && right}
+        {!collapsed && right ? <div className="shrink-0 max-w-[55%] overflow-x-auto">{right}</div> : null}
       </div>
       {!collapsed && children}
     </GlassPanel>

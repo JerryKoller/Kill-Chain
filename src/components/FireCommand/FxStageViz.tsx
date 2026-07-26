@@ -26,11 +26,11 @@ function useHiDpiCanvas(
     if (!ctx) return;
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(200, Math.floor(wrap.clientWidth));
+      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       sizeRef.current = { w: cssW, h: cssH };
       canvas.width = Math.floor(cssW * dpr);
       canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = `${cssW}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${cssH}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -636,7 +636,7 @@ export function SpectralStageViz() {
         ctx.fillStyle = "rgba(201,139,255,0.35)";
         ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText("SELECT A MODE TO ARM THE FFT BAY", W / 2, H / 2 + 4);
+        ctx.fillText(W < 340 ? "SELECT A MODE" : "SELECT A MODE TO ARM THE FFT BAY", W / 2, H / 2 + 4);
         return;
       }
 
@@ -937,14 +937,15 @@ export function WarpStageViz() {
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = "rgba(255,207,92,0.58)";
       ctx.textAlign = "left";
-      ctx.fillText("HARMONIC FORGE", 10, H - 8);
+      ctx.fillText(W < 360 ? "FORGE" : "HARMONIC FORGE", 10, H - 8);
       ctx.textAlign = "right";
       const bits = [
-        Math.abs(S) > 0.02 ? (S > 0 ? "STRETCH+" : "STRETCH−") : null,
-        Math.abs(T) > 0.02 ? (T > 0 ? "BRIGHT" : "DARK") : null,
-        C > 0.05 ? `COMB ${Math.round(C * 100)}%` : null,
+        Math.abs(S) > 0.02 ? (S > 0 ? "ST+" : "ST−") : null,
+        Math.abs(T) > 0.02 ? (T > 0 ? "BRT" : "DRK") : null,
+        C > 0.05 ? `CMB ${Math.round(C * 100)}` : null,
       ].filter(Boolean);
-      ctx.fillText(bits.length ? bits.join(" · ") : "NEUTRAL", W - 10, H - 8);
+      const right = bits.length ? bits.join(" · ") : "NEUTRAL";
+      ctx.fillText(W < 280 && bits.length > 1 ? bits.slice(0, 2).join(" · ") : right, W - 10, H - 8);
     };
 
     raf = requestAnimationFrame(draw);

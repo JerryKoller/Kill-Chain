@@ -25,7 +25,7 @@ const LFO_H = 96;
 const FM_H = 100;
 const PITCH_H = 96;
 const OSC_H = 88;
-const PERF_H = 64;
+const PERF_H = 76;
 
 function useHiDpiCanvas(
   wrapRef: RefObject<HTMLDivElement | null>,
@@ -41,11 +41,11 @@ function useHiDpiCanvas(
     if (!ctx) return;
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(180, Math.floor(wrap.clientWidth));
+      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       sizeRef.current = { w: cssW, h: cssH };
       canvas.width = Math.floor(cssW * dpr);
       canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = `${cssW}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${cssH}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -1489,7 +1489,7 @@ export function PerformanceStageViz() {
 
       const slots = Math.min(32, p.maxVoices);
       const pad = 12;
-      const usable = W - pad * 2 - 110;
+      const usable = W - pad * 2;
       const gap = usable / Math.max(1, slots);
       const baseY = H * 0.52;
 

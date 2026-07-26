@@ -175,23 +175,23 @@ export function MutateCluster() {
             })}
           </div>
 
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5 shrink-0 min-w-[92px]">
             <button
               onClick={() => {
                 act().commitMutation();
                 toast(`✓ Kept ${mutation.listening.toUpperCase()} — the lineage continues. Mutate again to evolve.`);
               }}
-              className="h-7 px-2.5 rounded-lg border border-lime-300/60 bg-lime-400/20 hover:bg-lime-400/30 text-[10px] font-black uppercase tracking-[0.12em] text-lime-100 transition shadow-[0_0_12px_rgb(163_230_53/0.25)]"
+              className="h-9 px-2.5 rounded-xl border border-lime-300/60 bg-lime-400/20 hover:bg-lime-400/30 text-[9px] font-black uppercase tracking-[0.08em] leading-tight text-lime-100 transition shadow-[0_0_12px_rgb(163_230_53/0.25)] whitespace-normal"
               title="Keep the offspring you're hearing — it becomes the new parent"
             >
-              Keep winner
+              Keep<br />winner
             </button>
             <button
               onClick={() => {
                 act().discardMutation();
                 toast("↩ Round discarded — parent patch restored");
               }}
-              className="h-6 px-2 rounded-lg border border-white/12 bg-white/[0.04] hover:bg-white/10 text-[9px] uppercase tracking-[0.12em] text-white/50 hover:text-white/80 transition"
+              className="h-7 px-2.5 rounded-lg border border-white/12 bg-white/[0.04] hover:bg-white/10 text-[9px] uppercase tracking-[0.1em] text-white/50 hover:text-white/80 transition"
               title="Discard both offspring and restore the parent"
             >
               Extinct

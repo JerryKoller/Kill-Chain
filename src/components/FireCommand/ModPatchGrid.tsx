@@ -64,11 +64,11 @@ function SignalFlowViz() {
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      size.w = Math.max(280, Math.floor(wrap.clientWidth));
+      size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       size.h = 88;
       canvas.width = Math.floor(size.w * dpr);
       canvas.height = Math.floor(size.h * dpr);
-      canvas.style.width = `${size.w}px`;
+      canvas.style.width = "100%";
       canvas.style.height = `${size.h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
@@ -121,7 +121,7 @@ function SignalFlowViz() {
       if (routes.length === 0) {
         ctx.fillStyle = "rgba(255,255,255,0.28)";
         ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillText("NO ACTIVE PATCHES — click a cell below", W / 2, midY + 4);
+        ctx.fillText(W < 360 ? "NO ACTIVE PATCHES" : "NO ACTIVE PATCHES — click a cell below", W / 2, midY + 4);
         return;
       }
 
