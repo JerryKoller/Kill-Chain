@@ -69,11 +69,11 @@ const fmtBpm = (v: number) => `${Math.round(v)}`;
 const fmtInt = (v: number) => `${Math.round(v)}`;
 const fmtHzRate = (v: number) => `${v.toFixed(2)}Hz`;
 
-function StudioBay({ onLibrary }: { onLibrary: () => void }) {
+function StudioBay() {
   const undoDepth = useFireHistoryStore((s) => s.undoDepth);
   const redoDepth = useFireHistoryStore((s) => s.redoDepth);
   const cell = (enabled: boolean) =>
-    `h-9 rounded-xl border text-[11px] font-semibold transition truncate ${
+    `h-10 rounded-xl border text-[12px] font-semibold transition truncate ${
       enabled
         ? "border-white/14 bg-white/[0.06] hover:bg-white/10 text-white/85"
         : "border-white/6 bg-white/[0.02] text-white/25 cursor-default"
@@ -82,9 +82,12 @@ function StudioBay({ onLibrary }: { onLibrary: () => void }) {
     <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px]">
       <div className="flex items-center gap-2 w-full">
         <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Studio</span>
-        <span className="text-[9px] text-white/25">undo · redo · library</span>
+        <span className="text-[9px] text-white/25">undo · redo</span>
+        <span className="ml-auto font-mono text-[9px] text-white/30 tabular-nums">
+          {undoDepth}/{redoDepth}
+        </span>
       </div>
-      <div className="grid grid-cols-3 gap-1.5 w-full">
+      <div className="grid grid-cols-2 gap-1.5 w-full">
         <button
           onClick={() => undoFire()}
           disabled={undoDepth === 0}
@@ -97,11 +100,21 @@ function StudioBay({ onLibrary }: { onLibrary: () => void }) {
           className={cell(redoDepth > 0)}
           title="Redo (Ctrl+Y)"
         >↷ Redo</button>
-        <button
-          onClick={onLibrary}
-          className={cell(true)}
-          title="Save / manage presets"
-        >＋ Library</button>
+      </div>
+      {/* Depth rails — how deep the history stacks run */}
+      <div className="grid grid-cols-2 gap-1.5 w-full">
+        <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]" title={`${undoDepth} undo steps`}>
+          <div
+            className="h-full rounded-full bg-[#ff6a3d]/55 transition-[width] duration-200"
+            style={{ width: `${Math.min(100, undoDepth * 8)}%` }}
+          />
+        </div>
+        <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]" title={`${redoDepth} redo steps`}>
+          <div
+            className="h-full rounded-full bg-[#62b6ff]/55 transition-[width] duration-200"
+            style={{ width: `${Math.min(100, redoDepth * 8)}%` }}
+          />
+        </div>
       </div>
     </div>
   );
@@ -317,8 +330,8 @@ export function FireCommandView() {
             <MutateCluster />
           </div>
 
-          {/* Studio bay — equal-width actions fill the panel */}
-          <StudioBay onLibrary={() => setBrowserOpen(true)} />
+          {/* Studio bay — undo / redo only (library lives in Patch bay) */}
+          <StudioBay />
         </div>
       </GlassPanel>
 
@@ -710,8 +723,20 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
       ctx.shadowBlur = 0;
 
       const mx = padX + pos * (w - padX * 2);
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      // Morph scan beam through the stack
+      const beam = ctx.createLinearGradient(mx, 0, mx, h);
+      beam.addColorStop(0, `${color}00`);
+      beam.addColorStop(0.35, `${color}55`);
+      beam.addColorStop(1, `${color}00`);
+      ctx.fillStyle = beam;
+      ctx.fillRect(mx - 1.5, 4, 3, h - 10);
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
       ctx.fillRect(mx - 1, 4, 2, 8);
+
+      ctx.font = "700 8px ui-monospace, Menlo, monospace";
+      ctx.fillStyle = `${color}99`;
+      ctx.textAlign = "right";
+      ctx.fillText(`${Math.round(pos * 100)}%`, w - 8, h - 6);
     };
     raf = requestAnimationFrame(draw);
     return () => {
@@ -727,8 +752,11 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
       </div>
       <canvas
         ref={ref}
-        className="block w-full h-[96px] rounded-xl border bg-black/50"
-        style={{ borderColor: `${color}33`, boxShadow: `inset 0 0 24px ${color}14` }}
+        className="block w-full h-[96px] rounded-md border bg-[#06060a]/90"
+        style={{
+          borderColor: `${color}44`,
+          boxShadow: `inset 0 0 0 1px ${color}14, inset 0 0 28px ${color}18, 0 0 16px ${color}10`,
+        }}
       />
     </div>
   );
@@ -748,6 +776,9 @@ function Scope() {
     let idleCleared = false;
     let buf: Uint8Array<ArrayBuffer> | null = null;
     const size = { w: 520, h: 100 };
+    /** Phosphor persistence — recent frames fade behind the live trace. */
+    const phosphor: Float32Array[] = [];
+    const PHOSPHOR_N = 5;
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
@@ -758,6 +789,7 @@ function Scope() {
       canvas.style.width = "100%";
       canvas.style.height = `${size.h}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      phosphor.length = 0;
     };
     sync();
     const ro = new ResizeObserver(sync);
@@ -794,14 +826,17 @@ function Scope() {
       ctx.clearRect(0, 0, w, h);
 
       const bg = ctx.createLinearGradient(0, 0, w, h);
-      bg.addColorStop(0, "rgba(255,106,61,0.10)");
-      bg.addColorStop(0.45, "rgba(6,4,8,0.72)");
-      bg.addColorStop(1, "rgba(98,182,255,0.06)");
+      bg.addColorStop(0, "rgba(255,106,61,0.08)");
+      bg.addColorStop(0.45, "rgba(4,6,4,0.88)");
+      bg.addColorStop(1, "rgba(40,90,40,0.08)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, w, h);
 
-      // Depth grid
-      ctx.strokeStyle = "rgba(255,255,255,0.045)";
+      // CRT scanlines
+      ctx.fillStyle = "rgba(0,0,0,0.12)";
+      for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
+
+      ctx.strokeStyle = "rgba(120,255,140,0.06)";
       for (let i = 1; i < 4; i++) {
         const y = (h / 4) * i;
         ctx.beginPath();
@@ -809,7 +844,7 @@ function Scope() {
         ctx.lineTo(w, y);
         ctx.stroke();
       }
-      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.strokeStyle = "rgba(120,255,140,0.12)";
       ctx.beginPath();
       ctx.moveTo(0, h / 2);
       ctx.lineTo(w, h / 2);
@@ -818,57 +853,72 @@ function Scope() {
       if (!buf || buf.length !== analyser.fftSize) buf = new Uint8Array(analyser.fftSize);
       analyser.getByteTimeDomainData(buf);
       const N = buf.length;
+      const samples = new Float32Array(N);
+      for (let i = 0; i < N; i++) samples[i] = (buf[i] - 128) / 128;
+      phosphor.push(samples);
+      if (phosphor.length > PHOSPHOR_N) phosphor.shift();
 
-      // Glow under-fill
+      // Phosphor ghosts (oldest → newest)
+      for (let g = 0; g < phosphor.length; g++) {
+        const ghost = phosphor[g];
+        const age = (g + 1) / phosphor.length;
+        ctx.beginPath();
+        for (let i = 0; i < N; i++) {
+          const x = (i / (N - 1)) * w;
+          const y = h / 2 - ghost[i] * (h / 2) * 0.88;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = `rgba(140,255,120,${0.08 + age * 0.18})`;
+        ctx.lineWidth = 1.2 + age * 0.8;
+        ctx.stroke();
+      }
+
+      // Live under-fill
       ctx.beginPath();
       ctx.moveTo(0, h / 2);
       for (let i = 0; i < N; i++) {
         const x = (i / (N - 1)) * w;
-        const v = (buf[i] - 128) / 128;
-        const y = h / 2 - v * (h / 2) * 0.88;
+        const y = h / 2 - samples[i] * (h / 2) * 0.88;
         ctx.lineTo(x, y);
       }
       ctx.lineTo(w, h / 2);
       ctx.closePath();
       const fill = ctx.createLinearGradient(0, 0, 0, h);
-      fill.addColorStop(0, "rgba(255,106,61,0.28)");
-      fill.addColorStop(0.55, "rgba(255,106,61,0.08)");
+      fill.addColorStop(0, "rgba(160,255,120,0.22)");
+      fill.addColorStop(0.55, "rgba(255,106,61,0.1)");
       fill.addColorStop(1, "rgba(255,106,61,0)");
       ctx.fillStyle = fill;
       ctx.fill();
 
-      // Ghost trail (slightly attenuated copy)
-      ctx.lineWidth = 3.5;
-      ctx.strokeStyle = "rgba(255,106,61,0.18)";
-      ctx.beginPath();
-      for (let i = 0; i < N; i++) {
-        const x = (i / (N - 1)) * w;
-        const v = (buf[i] - 128) / 128;
-        const y = h / 2 - v * (h / 2) * 0.88;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-
       ctx.lineWidth = 2.2;
-      ctx.strokeStyle = FIRE;
+      ctx.strokeStyle = "#b8ff8a";
       ctx.shadowBlur = 14;
-      ctx.shadowColor = FIRE;
+      ctx.shadowColor = "#7cff5a";
       ctx.beginPath();
       for (let i = 0; i < N; i++) {
         const x = (i / (N - 1)) * w;
-        const v = (buf[i] - 128) / 128;
-        const y = h / 2 - v * (h / 2) * 0.88;
+        const y = h / 2 - samples[i] * (h / 2) * 0.88;
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
       ctx.shadowBlur = 0;
 
+      // Sweep pip
+      const pipX = ((nowMs / 18) % w);
+      ctx.fillStyle = "rgba(200,255,160,0.35)";
+      ctx.fillRect(pipX, 0, 2, h);
+
+      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(160,255,120,0.45)";
+      ctx.textAlign = "left";
+      ctx.fillText("MASTER SCOPE · PHOSPHOR", 8, h - 6);
+
       // Edge vignette
       const vig = ctx.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, w * 0.65);
       vig.addColorStop(0, "rgba(0,0,0,0)");
-      vig.addColorStop(1, "rgba(0,0,0,0.35)");
+      vig.addColorStop(1, "rgba(0,0,0,0.4)");
       ctx.fillStyle = vig;
       ctx.fillRect(0, 0, w, h);
     };
@@ -881,10 +931,10 @@ function Scope() {
   return (
     <div
       ref={wrapRef}
-      className="relative overflow-hidden rounded-md border border-[#ff6a3d]/35 bg-[#080504]/95 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05),inset_0_0_32px_rgba(0,0,0,0.7),0_0_24px_rgba(255,106,61,0.12)]"
+      className="relative overflow-hidden rounded-md border border-[#7cff5a]/28 bg-[#050805]/95 shadow-[inset_0_0_0_1px_rgba(120,255,140,0.06),inset_0_0_32px_rgba(0,0,0,0.75),0_0_22px_rgba(100,255,120,0.1)]"
     >
       <canvas ref={ref} className="block w-full" style={{ height: 100 }} />
-      <span className="pointer-events-none absolute inset-1 rounded-[3px] border border-white/[0.04]" />
+      <span className="pointer-events-none absolute inset-1 rounded-[3px] border border-[#7cff5a]/10" />
     </div>
   );
 }

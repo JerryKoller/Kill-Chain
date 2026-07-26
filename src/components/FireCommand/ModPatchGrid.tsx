@@ -44,7 +44,7 @@ const DESTS: { id: ModDest; label: string; hint: string }[] = [
   { id: "delay", label: "Dly", hint: "Delay send" },
 ];
 
-/** Animated cable bay — active routes as bezier wires with traveling packets. */
+/** Animated cable bay — patchbay personality with glowing trunks + dual packets. */
 function SignalFlowViz() {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -60,12 +60,12 @@ function SignalFlowViz() {
     if (!ctx) return;
     let raf = 0;
     let last = 0;
-    const size = { w: 400, h: 88 };
+    const size = { w: 400, h: 108 };
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
       size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      size.h = 88;
+      size.h = 108;
       canvas.width = Math.floor(size.w * dpr);
       canvas.height = Math.floor(size.h * dpr);
       canvas.style.width = "100%";
@@ -77,107 +77,135 @@ function SignalFlowViz() {
     ro.observe(wrap);
 
     const srcTint = (id: string) => SOURCES.find((s) => s.id === id)?.tint ?? GRN;
+    const srcLabel = (id: string) => SOURCES.find((s) => s.id === id)?.label ?? id;
+    const destLabel = (id: string) => DESTS.find((d) => d.id === id)?.label ?? id;
 
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 24) return;
+      if (document.hidden || t - last < 22) return;
       last = t;
       const mx = stateRef.current;
       const { w: W, h: H } = size;
       ctx.clearRect(0, 0, W, H);
 
-      // Green lattice depth
-      const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, "rgba(124,246,176,0.07)");
-      bg.addColorStop(0.5, "rgba(4,14,10,0.55)");
-      bg.addColorStop(1, "rgba(124,246,176,0.04)");
+      const bg = ctx.createRadialGradient(W * 0.5, H * 0.45, 8, W * 0.5, H * 0.5, W * 0.55);
+      bg.addColorStop(0, "rgba(124,246,176,0.1)");
+      bg.addColorStop(0.55, "rgba(4,14,10,0.7)");
+      bg.addColorStop(1, "rgba(0,0,0,0.45)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
-      // Faint lattice
-      ctx.strokeStyle = "rgba(124,246,176,0.05)";
-      for (let x = 0; x < W; x += 24) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-      }
-      for (let y = 0; y < H; y += 18) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      ctx.fillStyle = "rgba(124,246,176,0.05)";
+      for (let y = 16; y < H - 14; y += 10) {
+        for (let x = 62; x < W - 62; x += 14) {
+          ctx.beginPath();
+          ctx.arc(x + ((y / 10) % 2) * 4, y, 1.1, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       const routes = mx.filter((r) => r.source !== "none" && r.dest !== "none");
-      const leftX = 70;
-      const rightX = W - 70;
+      const leftX = 78;
+      const rightX = W - 78;
       const midY = H / 2;
 
-      // Source / dest pillars
-      ctx.fillStyle = "rgba(124,246,176,0.12)";
-      ctx.fillRect(18, 12, 36, H - 24);
-      ctx.fillRect(W - 54, 12, 36, H - 24);
-      ctx.font = "600 8px ui-sans-serif, system-ui, sans-serif";
+      const railGrad = ctx.createLinearGradient(0, 12, 0, H - 12);
+      railGrad.addColorStop(0, "rgba(124,246,176,0.18)");
+      railGrad.addColorStop(0.5, "rgba(124,246,176,0.08)");
+      railGrad.addColorStop(1, "rgba(124,246,176,0.18)");
+      ctx.fillStyle = railGrad;
+      ctx.fillRect(14, 10, 48, H - 20);
+      ctx.fillRect(W - 62, 10, 48, H - 20);
+      ctx.strokeStyle = "rgba(124,246,176,0.25)";
+      ctx.strokeRect(14.5, 10.5, 47, H - 21);
+      ctx.strokeRect(W - 61.5, 10.5, 47, H - 21);
+
+      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillStyle = "rgba(124,246,176,0.55)";
-      ctx.fillText("SRC", 36, H - 8);
-      ctx.fillText("DST", W - 36, H - 8);
+      ctx.fillStyle = "rgba(124,246,176,0.6)";
+      ctx.fillText("SRC", 38, H - 6);
+      ctx.fillText("DST", W - 38, H - 6);
 
       if (routes.length === 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.28)";
+        ctx.fillStyle = "rgba(255,255,255,0.3)";
         ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillText(W < 360 ? "NO ACTIVE PATCHES" : "NO ACTIVE PATCHES — click a cell below", W / 2, midY + 4);
+        ctx.fillText(W < 360 ? "PATCH BAY IDLE" : "PATCH BAY IDLE — click a cell below", W / 2, midY + 4);
         return;
       }
 
       routes.slice(0, 12).forEach((r, i) => {
-        const n = routes.length;
-        const y1 = 18 + ((i + 0.5) / Math.max(1, n)) * (H - 36);
+        const n = Math.min(12, routes.length);
+        const y1 = 18 + ((i + 0.5) / Math.max(1, n)) * (H - 40);
         const destIdx = DESTS.findIndex((d) => d.id === r.dest);
-        const y2 = 18 + ((Math.max(0, destIdx) + 0.5) / DESTS.length) * (H - 36);
+        const y2 = 18 + ((Math.max(0, destIdx) + 0.5) / DESTS.length) * (H - 40);
         const tint = srcTint(r.source);
         const color = r.amount >= 0 ? tint : AMB;
         const mag = Math.abs(r.amount);
         const cpx = (leftX + rightX) / 2;
+        const bend = 28 + mag * 36;
 
-        // Cable
         ctx.beginPath();
         ctx.moveTo(leftX, y1);
-        ctx.bezierCurveTo(cpx - 40, y1, cpx + 40, y2, rightX, y2);
+        ctx.bezierCurveTo(cpx - bend, y1, cpx + bend, y2, rightX, y2);
         ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.25 + mag * 0.55;
-        ctx.lineWidth = 1.2 + mag * 2;
+        ctx.globalAlpha = 0.1 + mag * 0.2;
+        ctx.lineWidth = 4 + mag * 4;
         ctx.stroke();
         ctx.globalAlpha = 1;
 
-        // Traveling packet along bezier
-        const u = ((t / 1400) + i * 0.13) % 1;
-        // Approximate point on cubic bezier
-        const mt = 1 - u;
-        const px =
-          mt * mt * mt * leftX +
-          3 * mt * mt * u * (cpx - 40) +
-          3 * mt * u * u * (cpx + 40) +
-          u * u * u * rightX;
-        const py =
-          mt * mt * mt * y1 +
-          3 * mt * mt * u * y1 +
-          3 * mt * u * u * y2 +
-          u * u * u * y2;
-        const rg = ctx.createRadialGradient(px, py, 0, px, py, 5);
-        rg.addColorStop(0, "#fff");
-        rg.addColorStop(0.4, color);
-        rg.addColorStop(1, `${color}00`);
-        ctx.fillStyle = rg;
         ctx.beginPath();
-        ctx.arc(px, py, 5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(leftX, y1);
+        ctx.bezierCurveTo(cpx - bend, y1, cpx + bend, y2, rightX, y2);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.35 + mag * 0.55;
+        ctx.lineWidth = 1.4 + mag * 2.2;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
 
-        // End nodes
+        for (let p = 0; p < 2; p++) {
+          const u = ((t / (1200 - mag * 400)) + i * 0.11 + p * 0.5) % 1;
+          const mt = 1 - u;
+          const px =
+            mt * mt * mt * leftX +
+            3 * mt * mt * u * (cpx - bend) +
+            3 * mt * u * u * (cpx + bend) +
+            u * u * u * rightX;
+          const py =
+            mt * mt * mt * y1 +
+            3 * mt * mt * u * y1 +
+            3 * mt * u * u * y2 +
+            u * u * u * y2;
+          const rg = ctx.createRadialGradient(px, py, 0, px, py, 6);
+          rg.addColorStop(0, "#fff");
+          rg.addColorStop(0.35, color);
+          rg.addColorStop(1, `${color}00`);
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.arc(px, py, 5.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
         ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(leftX, y1, 2.5, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(rightX, y2, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = color;
+        ctx.beginPath(); ctx.arc(leftX, y1, 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(rightX, y2, 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+
+        if (W > 420 && i < 6) {
+          ctx.font = "600 7px ui-sans-serif, system-ui, sans-serif";
+          ctx.fillStyle = `${color}aa`;
+          ctx.textAlign = "right";
+          ctx.fillText(srcLabel(r.source), leftX - 8, y1 + 2);
+          ctx.textAlign = "left";
+          ctx.fillText(destLabel(r.dest), rightX + 8, y2 + 2);
+        }
       });
 
-      ctx.fillStyle = "rgba(124,246,176,0.45)";
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(124,246,176,0.55)";
+      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText(`${routes.length} LIVE`, 12, 12);
+      ctx.fillText(`${routes.length} LIVE CABLE${routes.length === 1 ? "" : "S"}`, 14, 12);
     };
 
     raf = requestAnimationFrame(draw);
@@ -187,13 +215,11 @@ function SignalFlowViz() {
   return (
     <div
       ref={wrapRef}
-      className="relative mb-2.5 overflow-hidden rounded-xl border border-[#7cf6b0]/15 bg-black/50 shadow-[inset_0_1px_0_rgba(124,246,176,0.06),0_8px_24px_rgba(0,0,0,0.3)]"
+      className="relative mb-2.5 overflow-hidden rounded-md border border-[#7cf6b0]/25 bg-[#050a08]/90 shadow-[inset_0_0_0_1px_rgba(124,246,176,0.06),inset_0_0_28px_rgba(0,0,0,0.55),0_6px_18px_rgba(0,0,0,0.3)]"
     >
-      <canvas ref={canvasRef} className="block w-full" style={{ height: 88 }} aria-hidden />
-      <span className="pointer-events-none absolute left-1.5 top-1.5 h-2 w-2 border-l border-t border-[#7cf6b0]/40" />
-      <span className="pointer-events-none absolute right-1.5 top-1.5 h-2 w-2 border-r border-t border-[#7cf6b0]/40" />
-      <span className="pointer-events-none absolute bottom-1.5 left-1.5 h-2 w-2 border-b border-l border-[#7cf6b0]/40" />
-      <span className="pointer-events-none absolute bottom-1.5 right-1.5 h-2 w-2 border-b border-r border-[#7cf6b0]/40" />
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 108 }} aria-hidden />
+      <span className="pointer-events-none absolute inset-x-3 top-1 h-px bg-[#7cf6b0]/35" />
+      <span className="pointer-events-none absolute inset-x-3 bottom-1 h-px bg-[#7cf6b0]/35" />
     </div>
   );
 }

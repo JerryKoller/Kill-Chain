@@ -652,6 +652,16 @@ export function ReverbStageViz() {
         ctx.beginPath();
         ctx.ellipse(ring.x, ring.y, rad * 1.6, rad * 0.55, 0, 0, Math.PI * 2);
         ctx.stroke();
+        // Impulse spike at birth
+        if (age < 0.12) {
+          const spikeA = (1 - age / 0.12) * (0.5 + mx * 0.4);
+          ctx.strokeStyle = `rgba(230,235,255,${spikeA})`;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(ring.x, ring.y - 14);
+          ctx.lineTo(ring.x, ring.y + 4);
+          ctx.stroke();
+        }
         // Secondary denser early reflection
         if (age < 0.4) {
           ctx.strokeStyle = `rgba(200,210,255,${alpha * 0.6})`;

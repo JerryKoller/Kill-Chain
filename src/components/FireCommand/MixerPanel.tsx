@@ -131,6 +131,15 @@ function MeterBridge({
         ctx.strokeStyle = isMaster ? "rgba(255,255,255,0.18)" : `${meta.color}33`;
         ctx.strokeRect(x + 0.5, meterTop - 3.5, slotW - 1, meterH + 7);
 
+        // Activity bloom under live signal
+        if (v > 0.04) {
+          const bloom = ctx.createRadialGradient(x + slotW / 2, meterBot - v * meterH, 0, x + slotW / 2, meterBot, slotW * 0.7);
+          bloom.addColorStop(0, `${meta.color}33`);
+          bloom.addColorStop(1, `${meta.color}00`);
+          ctx.fillStyle = bloom;
+          ctx.fillRect(x, meterTop, slotW, meterH);
+        }
+
         // Segmented LED meter
         const barW = Math.min(22, slotW * 0.38);
         const barX = x + (slotW - barW) / 2;

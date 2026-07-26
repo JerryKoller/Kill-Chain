@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "2.6.3";
+export const APP_VERSION = "2.6.4";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,23 +12,23 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Macros command cards",
-    body: "Four equal macro cards with ring meters and destination chips — no more cramped radar or clipped text.",
+    title: "Morph Pad type-search",
+    body: "Corner presets are searchable — type a name, category, or keyword instead of scrolling a dropdown. Living blend field follows the puck.",
+  },
+  {
+    title: "Studio bay cleanup",
+    body: "Duplicate Library removed from Undo/Redo — Patch bay Browse owns the library. History depth rails show stack fill.",
+  },
+  {
+    title: "Deeper stage play",
+    body: "Patchbay cables with dual packets, phosphor master scope, wavetable scan beams, meter bloom, reverb impulse spikes.",
   },
   {
     title: "Unique stage personalities",
-    body: "Each Fire Command visualizer gets its own chrome and metaphor — forge plate, CRT scope, comb bloom, piano keys, ping-pong lanes, and more.",
-  },
-  {
-    title: "Visualizer fidelity pass",
-    body: "Stages resize to their bay. Morph Pad, Meter Bridge, Arp, Gate, and FX/Core stages fit the full-width band layout.",
+    body: "Macros command cards and distinct chrome across FX/Core stages.",
   },
   {
     title: "Armory Deploy + Natural Selection",
     body: "Tumbling-dice randomize and evolution mutate bays — twin generative pods.",
-  },
-  {
-    title: "Drum + piano roll fill width",
-    body: "Step grids and the piano roll stretch across the sequencer — no dead black voids.",
   },
 ];
