@@ -85,7 +85,7 @@ Open the in-app **Glossary** for definitions of every term and module.
 
 See **[CHANGELOG.md](CHANGELOG.md)** for full release notes.
 
-**v2.5.1 highlights:** Arpeggiator visual overhaul — live contour stage with playhead beam, accent tips, gate columns, swing offset, ratchet shimmer, spark bursts, and mode contour glyphs. Same arp engine; just more fun to watch and play.
+**v2.5.1 highlights:** Arpeggiator visual overhaul — hi-DPI contour stage with depth and color shifting, targeting-reticle blooms on hits, and a symmetrical control layout. Same arp engine; sharper and more fun to watch.
 
 **v2.5.0 highlights (Fire Command MK IV):** Natural Selection mutate — breed two candidate patches, audition A/B, keep the winner and evolve; 1000 factory presets; precision knobs with shift-drag fine tuning, click-to-type values, and reset; next/prev patch cycling; a rebuilt two-octave keyboard with octave scroll; live visualizations on every synth module; new arp modes with swing, accents, and ratchets; trance gate presets with smoothing and a playhead; a 12-slot mod matrix; ten genre-accurate mission packs; and fixes for filter-drive clipping and spectral FX misbehavior.
 

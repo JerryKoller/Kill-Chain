@@ -5,7 +5,7 @@ All notable changes to Kill Chain are documented here.
 ## [2.5.1] — 2026-07-26 — Arp Stage
 
 ### Changed
-- **Arpeggiator visual overhaul** — a live contour stage replaces the old step dots: glowing note path, playhead beam with floating note labels, gold accent tips, gate-length columns, swing-nudged odd steps, ratchet shimmer rings, spark bursts on every fire, weapons-platform reticle framing, and mode chips with contour glyphs. Scheduling and sound are untouched — display only.
+- **Arpeggiator visual overhaul** — hi-DPI contour stage with depth field and vignette, pitch-linked color shifting along the note path, targeting-reticle blooms (no particle sparks), gate columns with afterglow, and a symmetrical 3-column control layout. Scheduling and sound are untouched — display only.
 
 ## [2.5.0] — 2026-07-26 — Fire Command MK IV
 
