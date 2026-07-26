@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.2] — 2026-07-26 — Macro / Gate / Matrix Stages
+
+### Changed
+- **Macros — amber command cluster** — radar constellation of the four macros with live wiring readout and per-macro destination chips
+- **Trance Gate — ice chop field** — hi-DPI amplitude silhouette with playhead crest, tall step pads, preset chip strip, and symmetric control rails
+- **Mod Matrix — green signal bay** — animated cable flow of active routes with traveling packets, deeper patch-grid cells, and clearer slot meter. Patching behavior unchanged
+
 ## [2.5.1] — 2026-07-26 — Arp Stage
 
 ### Changed
