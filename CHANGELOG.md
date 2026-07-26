@@ -2,6 +2,17 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.10] — 2026-07-26 — Missions That Hit + Splash Bite
+
+### Fixed
+- **Sidechain** — ducks Synth A only; Synth B (bass / 808 / wobble) bypasses the pump
+- **Mission Synth B** — showcase presets apply synchronously so the first note isn’t a default patch
+- **Drums** — fatter kick/snare, milder hats, higher kit trim
+
+### Changed
+- **Mission demos** — hard rebuild: A = color (pads/leads), B = solid bass; leaner grids, louder patches
+- **Boot splash** — same centered layout with HUD brackets, scanline, crosshair ticks, bloom, drop punch
+
 ## [2.6.9] — 2026-07-26 — Mission Showcase Presets + Clean Splash
 
 ### Added
