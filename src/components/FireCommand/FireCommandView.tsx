@@ -5,6 +5,7 @@ import {
   useFireCommandStore,
   FIRE_PRESETS,
   buildArpSequence,
+  SCENE_SLOTS,
   type ArpMode,
   type ArpDivision,
   type ArpSettings,
@@ -12,7 +13,7 @@ import {
 import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
 import { getEngine } from "@/audio/AudioEngine";
-import { useFireSequencerStore } from "@/state/fireSequencerStore";
+import { useFireSequencerStore, NOTE_NAMES, SCALES } from "@/state/fireSequencerStore";
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
@@ -29,6 +30,10 @@ import {
   OscStageViz,
   PerformanceStageViz,
 } from "./CoreStageViz";
+import {
+  NoiseStageViz, SubStageViz, PluckStageViz, WidthStageViz, GlueStageViz, AirStageViz,
+  HarmonyStageViz, ScaleStageViz, ChordStageViz, HumanStageViz, ScenesStageViz,
+} from "./ModuleStageViz";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
 import { FireBand, useFireBandRegister } from "./FireBand";
@@ -59,7 +64,6 @@ const KEY_TO_SEMITONE: Record<string, number> = {
 const SEMITONE_TO_KEY: Record<number, string> = Object.fromEntries(
   Object.entries(KEY_TO_SEMITONE).map(([k, v]) => [v, k === ";" ? ";" : k.toUpperCase()]),
 );
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const noteName = (midi: number) => `${NOTE_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
 const fmtHz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)}k` : `${Math.round(v)}`);
 const fmtSec = (v: number) => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`);
@@ -406,21 +410,48 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">PWM · sync · chip noise · acid accent/slide</div>
         </Section>
+        <Section title="Noise" color={FC.noise} collapseKey="noise" chipHosted defaultCollapsed>
+          <NoiseStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="noiseLevel" label="Level" min={0} max={1} format={fmtPct} def={0} color={FC.noise} />
+            <FParamKnob paramKey="noiseColor" label="Color" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.noise} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Bed level · tilt · chip noise type lives on Chip</div>
+        </Section>
+        <Section
+          title="Sub"
+          color={FC.sub}
+          collapseKey="sub"
+          chipHosted
+          defaultCollapsed
+          right={
+            <FSeg<SubWave>
+              paramKey="subWave"
+              color={FC.sub}
+              options={[
+                { id: "sine", label: "Sin" },
+                { id: "triangle", label: "Tri" },
+                { id: "square", label: "Sqr" },
+                { id: "sawtooth", label: "Saw" },
+              ]}
+            />
+          }
+        >
+          <SubStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="subLevel" label="Level" min={0} max={1} format={fmtPct} def={0.3} color={FC.sub} />
+            <FParamKnob paramKey="subOctave" label="Oct" min={-2} max={0} integer format={fmtOct} def={-1} color={FC.sub} />
+          </div>
+        </Section>
       </FireBand>
 
       <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes">
-        <Section title="Unison · Sub" color={FC.unison} collapseKey="mixer.unison" chipHosted right={
-          <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
-        }>
+        <Section title="Unison" color={FC.unison} collapseKey="mixer.unison" chipHosted>
           <UnisonStageViz />
           <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="subLevel" label="Sub" min={0} max={1} format={fmtPct} def={0.3} color={FC.unison} />
-            <FParamKnob paramKey="noiseLevel" label="Noise" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
-            <FParamKnob paramKey="noiseColor" label="Color" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.unison} />
             <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={3} color={FC.unison} />
             <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={14} color={FC.unison} />
             <FParamKnob paramKey="unisonWidth" label="Width" min={0} max={1} format={fmtPct} def={0.5} color={FC.unison} />
-            <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} color={FC.unison} />
             <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
           </div>
         </Section>
@@ -446,7 +477,7 @@ export function FireCommandView() {
             <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} color={FC.filter} />
           </div>
         </Section>
-        <Section title="Amp Envelope" color={FC.envAmp} collapseKey="env.amp" chipHosted right={<LpgToggle />}>
+        <Section title="Amp Envelope" color={FC.envAmp} collapseKey="env.amp" chipHosted>
           <AmpEnvStageViz />
           <LpgAwareAmpRow />
         </Section>
@@ -457,6 +488,15 @@ export function FireCommandView() {
         <Section title="Filter Envelope" color={FC.envFilt} collapseKey="env.filt" chipHosted>
           <FiltEnvStageViz />
           <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" color={FC.envFilt} />
+        </Section>
+        <Section title="Pluck Gate" color={FC.pluck} collapseKey="pluck" chipHosted defaultCollapsed right={<LpgToggle />}>
+          <PluckStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} color={FC.pluck} size={46} />
+            <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} color={FC.pluck} />
+            <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={FC.pluck} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Strike drives amp + brightness · replaces ADSR while on</div>
         </Section>
       </FireBand>
 
@@ -609,6 +649,26 @@ export function FireCommandView() {
       <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="bus · morph · scope · performance">
         <MixerPanel chipHosted />
         <FireMorphPad chipHosted />
+        <Section title="Width" color={FC.width} collapseKey="width" chipHosted defaultCollapsed>
+          <WidthStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} color={FC.width} />
+          </div>
+        </Section>
+        <Section title="Glue" color={FC.glue} collapseKey="glue" chipHosted defaultCollapsed>
+          <GlueStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} color={FC.glue} />
+          </div>
+        </Section>
+        <Section title="Air" color={FC.air} collapseKey="air" chipHosted defaultCollapsed>
+          <AirStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="airLow" label="Low" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.air} />
+            <FParamKnob paramKey="airHigh" label="High" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.air} />
+            <FParamKnob paramKey="airAmount" label="Amount" min={0} max={1} format={fmtPct} def={0} color={FC.air} />
+          </div>
+        </Section>
         <Section title="Output · Scope" color={FC.scope} collapseKey="output" chipHosted defaultCollapsed right={<VoiceCount />}>
           <PathScopeGate>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
@@ -645,7 +705,6 @@ export function FireCommandView() {
               onChange={(v) => setParam("mono", v === "mono")}
               options={[{ id: "poly", label: "Poly" }, { id: "mono", label: "Mono" }]}
             />
-            <HarmonyPicker />
             <button
               onClick={() => setRouteThroughFx(!fxOn)}
               className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
@@ -674,9 +733,14 @@ export function FireCommandView() {
         </Section>
       </FireBand>
 
-      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate" defaultCollapsed>
+      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate · harmony · scenes" defaultCollapsed>
         <MacrosPanel chipHosted />
         <GatePanel chipHosted />
+        <HarmonyPanel chipHosted />
+        <ScalePanel chipHosted />
+        <ChordPanel chipHosted />
+        <HumanPanel chipHosted />
+        <ScenesPanel chipHosted />
       </FireBand>
 
       {/* Keyboard */}
@@ -2676,46 +2740,146 @@ function FParamKnob({
 }
 
 /**
- * Harmonizer picker (v1.7) — scale-locked companion notes on live input.
+ * Harmonizer module — scale-locked companion notes on live input.
  * Follows the sequencer's Root/Scale controls; sequenced notes are untouched.
  */
-function HarmonyPicker() {
-  const mode = useFireCommandStore((s) => s.patch.harmonyMode);
-  const level = useFireCommandStore((s) => s.patch.harmonyLevel);
-  const setParam = useFireCommandStore((s) => s.setParam);
+function HarmonyPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   return (
-    <div
-      className="flex items-center gap-1.5"
-      title="Harmonizer: every key you play brings scale-locked companion notes (uses the piano roll's Root + Scale). Live input only."
-    >
-      <span className="text-[10px] uppercase tracking-widest text-dim">Harmony</span>
-      <Seg<HarmonyMode>
-        value={mode ?? "off"}
-        onChange={(v) => setParam("harmonyMode", v)}
-        options={[
-          { id: "off", label: "Off" },
-          { id: "third", label: "3rd" },
-          { id: "fifth", label: "5th" },
-          { id: "octave", label: "Oct" },
-          { id: "triad", label: "Triad" },
-        ]}
-        color={GRN}
-      />
-      {mode !== "off" && (
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={level ?? 0.6}
-          onChange={(e) => setParam("harmonyLevel", Number(e.target.value))}
-          className="w-[56px]"
-          style={{ accentColor: GRN }}
-          aria-label="Harmony level"
-          title={`Companion note level: ${Math.round((level ?? 0.6) * 100)}%`}
+    <Section
+      title="Harmony"
+      color={FC.harmony}
+      collapseKey="harmony"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={
+        <FSeg<HarmonyMode>
+          paramKey="harmonyMode"
+          color={FC.harmony}
+          options={[
+            { id: "off", label: "Off" },
+            { id: "third", label: "3rd" },
+            { id: "fifth", label: "5th" },
+            { id: "octave", label: "Oct" },
+            { id: "triad", label: "Triad" },
+          ]}
         />
-      )}
-    </div>
+      }
+    >
+      <HarmonyStageViz />
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="harmonyLevel" label="Level" min={0} max={1} format={fmtPct} def={0.6} color={FC.harmony} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] text-dim">Live companions · uses Patterns root + scale</div>
+    </Section>
+  );
+}
+
+function ScalePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const scaleRoot = useFireSequencerStore((s) => s.scaleRoot);
+  const scaleId = useFireSequencerStore((s) => s.scaleId);
+  const label = SCALES.find((s) => s.id === scaleId)?.label ?? scaleId;
+  return (
+    <Section title="Scale Lock" color={FC.scale} collapseKey="scale" chipHosted={chipHosted} defaultCollapsed>
+      <ScaleStageViz />
+      <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
+        <BoolToggle paramKey="scaleLock" label="Lock" color={FC.scale} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] text-dim">
+        Uses Patterns scale root · {NOTE_NAMES[scaleRoot % 12]} {label}
+      </div>
+    </Section>
+  );
+}
+
+function ChordPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const intervals = useFireCommandStore((s) => s.patch.chordIntervals);
+  const learnChordFromHeld = useFireCommandStore((s) => s.learnChordFromHeld);
+  const ivs = intervals ?? [0, 4, 7];
+  return (
+    <Section title="Chord Memory" color={FC.chord} collapseKey="chord" chipHosted={chipHosted} defaultCollapsed>
+      <ChordStageViz />
+      <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
+        <BoolToggle paramKey="chordMemoryOn" label="Memory" color={FC.chord} />
+        <button
+          onClick={() => learnChordFromHeld()}
+          className="h-6 px-2.5 rounded-md text-[10px] font-bold border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 transition"
+          title="Learn chord intervals from currently held notes"
+        >
+          Learn from held
+        </button>
+      </div>
+      <div className="mt-1.5 text-center text-[10px] text-dim font-mono">
+        Intervals · {ivs.map((n) => (n > 0 ? `+${n}` : `${n}`)).join(" ")}
+      </div>
+    </Section>
+  );
+}
+
+function HumanPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  return (
+    <Section title="Humanize" color={FC.human} collapseKey="human" chipHosted={chipHosted} defaultCollapsed>
+      <HumanStageViz />
+      <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
+        <BoolToggle paramKey="humanizeOn" label="Human" color={FC.human} />
+      </div>
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="humanizeTiming" label="Timing" min={0} max={1} format={fmtPct} def={0.25} color={FC.human} />
+        <FParamKnob paramKey="humanizeVelocity" label="Vel" min={0} max={1} format={fmtPct} def={0.2} color={FC.human} />
+      </div>
+    </Section>
+  );
+}
+
+function ScenesPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const scenes = useFireCommandStore((s) => s.scenes);
+  const captureScene = useFireCommandStore((s) => s.captureScene);
+  const recallScene = useFireCommandStore((s) => s.recallScene);
+  const clearScene = useFireCommandStore((s) => s.clearScene);
+  return (
+    <Section title="Scenes" color={FC.scenes} collapseKey="scenes" chipHosted={chipHosted} defaultCollapsed>
+      <ScenesStageViz />
+      <div className="mt-2 grid grid-cols-4 gap-1.5 sm:grid-cols-8">
+        {Array.from({ length: SCENE_SLOTS }, (_, i) => {
+          const filled = !!scenes[i];
+          return (
+            <div
+              key={i}
+              className="flex flex-col gap-0.5 rounded-lg border border-white/10 bg-black/25 p-1"
+              style={filled ? { borderColor: `${FC.scenes}55` } : undefined}
+            >
+              <div className="text-center text-[9px] font-mono text-white/45">{i + 1}</div>
+              <button
+                onClick={() => captureScene(i)}
+                className="rounded px-1 py-0.5 text-[9px] font-semibold border border-white/15 bg-white/5 hover:bg-white/10 text-white/75 transition"
+                title={`Capture patch to scene ${i + 1}`}
+              >
+                Capture
+              </button>
+              <button
+                onClick={() => recallScene(i)}
+                disabled={!filled}
+                className={`rounded px-1 py-0.5 text-[9px] font-semibold border transition ${
+                  filled
+                    ? "border-[#ffcf5c]/55 bg-[#ffcf5c]/15 text-[#ffe4a0] hover:bg-[#ffcf5c]/25"
+                    : "border-white/8 text-white/25 cursor-default"
+                }`}
+                title={`Recall scene ${i + 1}`}
+              >
+                Recall
+              </button>
+              <button
+                onClick={() => clearScene(i)}
+                disabled={!filled}
+                className="rounded px-1 py-0.5 text-[9px] font-semibold border border-white/10 text-white/40 hover:text-rose-200 disabled:opacity-30 transition"
+                title={`Clear scene ${i + 1}`}
+              >
+                Clear
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
   );
 }
 

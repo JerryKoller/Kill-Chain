@@ -44,19 +44,22 @@ function m(
   return { id, title, short, color, bandKey, bandTitle };
 }
 
+/** Every column targets 7 modules (MOD/FX full). */
 export const FIRE_BANDS: FireBandEntry[] = [
   {
     id: "band.sources",
     title: "Sources",
     short: "Src",
     color: FC_BAND.sources,
-    hint: "oscillators · spectral warp · chip",
+    hint: "oscillators · warp · chip · noise · sub",
     modules: [
       m("osc.a", "Oscillator A", "Osc A", FC.oscA, "band.sources", "Sources"),
       m("osc.b", "Oscillator B", "Osc B", FC.oscB, "band.sources", "Sources"),
       m("osc.c", "Oscillator C", "Osc C", FC.oscC, "band.sources", "Sources"),
       m("fire.sec.warp", "Spectral Warp", "Warp", FC.warp, "band.sources", "Sources"),
       m("chip", "Chip · Acid", "Chip", FC.chip, "band.sources", "Sources"),
+      m("noise", "Noise Bed", "Noise", FC.noise, "band.sources", "Sources"),
+      m("sub", "Sub Osc", "Sub", FC.sub, "band.sources", "Sources"),
     ],
   },
   {
@@ -64,14 +67,15 @@ export const FIRE_BANDS: FireBandEntry[] = [
     title: "Tone",
     short: "Tone",
     color: FC_BAND.tone,
-    hint: "unison · analog life · filter · envelopes",
+    hint: "unison · life · filter · envelopes · pluck",
     modules: [
-      m("mixer.unison", "Unison · Sub", "Uni", FC.unison, "band.tone", "Tone"),
+      m("mixer.unison", "Unison", "Uni", FC.unison, "band.tone", "Tone"),
       m("analog.life", "Analog Life", "Life", FC.analogLife, "band.tone", "Tone"),
       m("filter", "Filter", "Filt", FC.filter, "band.tone", "Tone"),
       m("env.amp", "Amp Envelope", "Amp", FC.envAmp, "band.tone", "Tone"),
       m("env.mod", "Mod Envelope", "Mod", FC.envMod, "band.tone", "Tone"),
       m("env.filt", "Filter Envelope", "FEnv", FC.envFilt, "band.tone", "Tone"),
+      m("pluck", "Pluck Gate", "Pluck", FC.pluck, "band.tone", "Tone"),
     ],
   },
   {
@@ -111,10 +115,13 @@ export const FIRE_BANDS: FireBandEntry[] = [
     title: "Mix & Output",
     short: "Mix",
     color: FC_BAND.mix,
-    hint: "bus · morph · scope · performance",
+    hint: "bus · width · glue · air · morph · scope",
     modules: [
       m("mixer", "Fire Mixer", "Mix", FC.mixer, "band.mix", "Mix & Output"),
       m("morph", "Morph Pad", "Morph", FC.morph, "band.mix", "Mix & Output"),
+      m("width", "Stereo Width", "Width", FC.width, "band.mix", "Mix & Output"),
+      m("glue", "Bus Glue", "Glue", FC.glue, "band.mix", "Mix & Output"),
+      m("air", "Air · Tone", "Air", FC.air, "band.mix", "Mix & Output"),
       m("output", "Output · Scope", "Scope", FC.scope, "band.mix", "Mix & Output"),
       m("performance", "Live Controls", "Live", FC.performance, "band.mix", "Mix & Output"),
     ],
@@ -124,10 +131,15 @@ export const FIRE_BANDS: FireBandEntry[] = [
     title: "Macros & Gate",
     short: "Perf",
     color: FC_BAND.perf,
-    hint: "macros · trance gate",
+    hint: "macros · gate · harmony · scale · chord · human · scenes",
     modules: [
       m("macros", "Macros", "Macro", FC.macros, "band.perf", "Macros & Gate"),
       m("gate", "Trance Gate", "Gate", FC.gate, "band.perf", "Macros & Gate"),
+      m("harmony", "Harmony", "Harm", FC.harmony, "band.perf", "Macros & Gate"),
+      m("scale", "Scale Lock", "Scale", FC.scale, "band.perf", "Macros & Gate"),
+      m("chord", "Chord Memory", "Chord", FC.chord, "band.perf", "Macros & Gate"),
+      m("human", "Humanize", "Human", FC.human, "band.perf", "Macros & Gate"),
+      m("scenes", "Scenes", "Scenes", FC.scenes, "band.perf", "Macros & Gate"),
     ],
   },
 ];
@@ -157,3 +169,8 @@ export const SIGNAL_PATH: SignalNode[] = [
   { id: "mix", label: "MIX", color: FC_BAND.mix, moduleId: "mixer", hint: "Bus console" },
   { id: "scope", label: "SCOPE", color: FC.scope, moduleId: "output", hint: "Master trace" },
 ];
+
+/** True unless explicitly disabled in moduleEnable. */
+export function isModuleEnabled(enable: Record<string, boolean> | undefined, id: string): boolean {
+  return enable?.[id] !== false;
+}

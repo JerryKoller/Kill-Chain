@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
 import { useAudioStore } from "@/state/audioStore";
-import { useFireSequencerStore, inScale } from "@/state/fireSequencerStore";
+import { useFireSequencerStore, inScale, snapMidiToScale } from "@/state/fireSequencerStore";
 import type { ScaleId } from "@/state/fireSequencerStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
 import {
@@ -781,6 +781,17 @@ function randomPatch(): FirePatch {
     pathFx: true,
     pathMix: true,
     pathScope: true,
+    subOctave: -1,
+    airLow: 0,
+    airHigh: 0,
+    airAmount: chance(0.35) ? rand(0.2, 0.6) : 0,
+    scaleLock: false,
+    chordMemoryOn: false,
+    chordIntervals: [0, 4, 7],
+    humanizeOn: false,
+    humanizeTiming: 0.25,
+    humanizeVelocity: 0.2,
+    moduleEnable: {},
     stereoWidth: rand(0.85, 1.3),
     gateOn,
     gateRate: pick([4, 8, 8, 12, 16]),
@@ -882,6 +893,8 @@ interface PersistShape {
   mutateAmount: number;
   /** Last kept generation — survives Keep Winner so the next breed continues the lineage. */
   mutateLineage: number;
+  /** Performance scene slots (partial patch snapshots). */
+  scenes: (Partial<FirePatch> | null)[];
 }
 
 function defaults(): PersistShape {
@@ -896,6 +909,7 @@ function defaults(): PersistShape {
     maxVoices: 12,
     mutateAmount: 0.35,
     mutateLineage: 0,
+    scenes: Array.from({ length: SCENE_SLOTS }, () => null),
   };
 }
 
@@ -919,6 +933,9 @@ function load(): PersistShape {
       maxVoices: typeof parsed.maxVoices === "number" ? parsed.maxVoices : d.maxVoices,
       mutateAmount: typeof parsed.mutateAmount === "number" ? clamp(parsed.mutateAmount, 0, 1) : d.mutateAmount,
       mutateLineage: typeof parsed.mutateLineage === "number" ? Math.max(0, Math.floor(parsed.mutateLineage)) : d.mutateLineage,
+      scenes: Array.isArray(parsed.scenes)
+        ? Array.from({ length: SCENE_SLOTS }, (_, i) => (parsed.scenes?.[i] as Partial<FirePatch> | null) ?? null)
+        : d.scenes,
     };
   } catch {
     return defaults();
@@ -941,6 +958,7 @@ function schedulePersist(state: FireCommandState): void {
       maxVoices: state.maxVoices,
       mutateAmount: state.mutateAmount,
       mutateLineage: state.mutateLineage,
+      scenes: state.scenes,
     };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -1006,6 +1024,11 @@ export interface FireCommandState extends PersistShape {
   setArp: (patch: Partial<ArpSettings>) => void;
   toggleKeyboard: () => void;
   sync: () => void;
+  setModuleEnable: (moduleId: string, on: boolean) => void;
+  captureScene: (slot: number) => void;
+  recallScene: (slot: number) => void;
+  clearScene: (slot: number) => void;
+  learnChordFromHeld: () => void;
 }
 
 const genId = (): string =>
@@ -1048,6 +1071,10 @@ function harmonyCompanions(midi: number, mode: HarmonyMode): number[] {
 
 /** Live input midi → its sounding companion notes (for matching note-offs). */
 const harmonyHeld = new Map<number, number[]>();
+/** Chord-memory extras for matching note-offs. */
+const chordHeld = new Map<number, number[]>();
+
+export const SCENE_SLOTS = 8;
 
 export const useFireCommandStore = create<FireCommandState>((set, get) => {
   const persist = () => schedulePersist(get());
@@ -1278,37 +1305,59 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
     noteOn: (midi, velocity = 0.9) => {
       const s = get();
-      // One source at a time: the first key silences the file player and any
-      // media playing in Airspace (dynamic-import arbiter, ~free when idle).
       if (s.heldNotes.length === 0 && s.arpOrder.length === 0) {
         void import("@/lib/sourceArbiter").then(({ claimSource }) => claimSource("fire"));
       }
-      // v1.6: capture into the piano roll when REC is armed + playing.
-      // All live inputs funnel through here (QWERTY, on-screen keys, MIDI).
       useFireSequencerStore.getState().recordNoteOn(midi, velocity);
       if (s.arp.enabled) {
-        // Feed the arp pattern; the scheduler sounds the notes.
         const freshLatch = s.arp.hold && s.heldNotes.length === 0;
         const arpOrder = freshLatch ? [] : [...s.arpOrder];
         if (!arpOrder.includes(midi)) arpOrder.push(midi);
         const heldNotes = s.heldNotes.includes(midi) ? s.heldNotes : [...s.heldNotes, midi];
         set({ arpOrder, heldNotes });
-        // The scheduler parks itself when the pattern empties — re-arm it.
         if (arpTimer === null) startArpScheduler(get, set);
         return;
       }
       const engine = getEngine();
       void engine.resume();
-      engine.fireCommand.noteOn(midi, velocity);
-      // Harmonizer (v1.7): scale-locked companions ride along at reduced
-      // velocity. Live input only — the sequencer schedules notes directly.
+      const modOn = (id: string) => s.patch.moduleEnable?.[id] !== false;
+
+      // Scale Lock — snap live notes to the sequencer scale.
+      let playMidi = midi;
+      if (modOn("scale") && s.patch.scaleLock) {
+        const seq = useFireSequencerStore.getState();
+        playMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
+      }
+
+      // Humanize velocity on live input.
+      let playVel = velocity;
+      if (modOn("human") && s.patch.humanizeOn) {
+        const j = (s.patch.humanizeVelocity ?? 0.2) * 0.35;
+        playVel = clamp(velocity * (1 + (Math.random() * 2 - 1) * j), 0.05, 1);
+      }
+
+      engine.fireCommand.noteOn(playMidi, playVel);
+
+      // Harmony companions (module + mode).
       const mode = s.patch.harmonyMode ?? "off";
-      if (mode !== "off" && !harmonyHeld.has(midi)) {
-        const comps = harmonyCompanions(midi, mode).filter((c) => c <= 127);
+      if (modOn("harmony") && mode !== "off" && !harmonyHeld.has(midi)) {
+        const comps = harmonyCompanions(playMidi, mode).filter((c) => c <= 127);
         const lvl = clamp(s.patch.harmonyLevel ?? 0.6, 0, 1);
-        for (const c of comps) engine.fireCommand.noteOn(c, velocity * lvl);
+        for (const c of comps) engine.fireCommand.noteOn(c, playVel * lvl);
         harmonyHeld.set(midi, comps);
       }
+
+      // Chord Memory — fire stored intervals from the played root.
+      if (modOn("chord") && s.patch.chordMemoryOn && !chordHeld.has(midi)) {
+        const ivs = s.patch.chordIntervals ?? [0, 4, 7];
+        const extras = ivs
+          .filter((iv) => iv !== 0)
+          .map((iv) => playMidi + iv)
+          .filter((c) => c >= 0 && c <= 127);
+        for (const c of extras) engine.fireCommand.noteOn(c, playVel * 0.85);
+        chordHeld.set(midi, extras);
+      }
+
       if (!s.heldNotes.includes(midi)) set({ heldNotes: [...s.heldNotes, midi] });
     },
 
@@ -1322,11 +1371,23 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         return;
       }
       const engine = getEngine();
-      engine.fireCommand.noteOff(midi);
+      // Scale-locked note-off: release the snapped pitch if it differs.
+      let offMidi = midi;
+      if (s.patch.moduleEnable?.["scale"] !== false && s.patch.scaleLock) {
+        const seq = useFireSequencerStore.getState();
+        offMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
+      }
+      engine.fireCommand.noteOff(offMidi);
+      if (offMidi !== midi) engine.fireCommand.noteOff(midi);
       const comps = harmonyHeld.get(midi);
       if (comps) {
         harmonyHeld.delete(midi);
         for (const c of comps) engine.fireCommand.noteOff(c);
+      }
+      const chord = chordHeld.get(midi);
+      if (chord) {
+        chordHeld.delete(midi);
+        for (const c of chord) engine.fireCommand.noteOff(c);
       }
       set({ heldNotes: s.heldNotes.filter((n) => n !== midi) });
     },
@@ -1334,9 +1395,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     panic: () => {
       stopArpScheduler();
       harmonyHeld.clear();
+      chordHeld.clear();
       getEngine().fireCommand.allNotesOff();
       set({ heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
-      // Keep arp enabled flag, just restart the (now-empty) scheduler if on.
       if (get().arp.enabled) startArpScheduler(get, set);
     },
 
@@ -1388,6 +1449,53 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       engine.fireCommand.setPatch(s.patch);
       useAudioStore.getState().setBypass(!s.routeThroughFx);
       if (s.arp.enabled) startArpScheduler(get, set);
+    },
+
+    setModuleEnable: (moduleId, on) => {
+      pushFireHistory(`module:${moduleId}`);
+      const moduleEnable = { ...(get().patch.moduleEnable ?? {}), [moduleId]: on };
+      const patch = { ...get().patch, moduleEnable };
+      set({ patch, presetId: "custom" });
+      getEngine().fireCommand.set("moduleEnable", moduleEnable);
+      persist();
+    },
+
+    captureScene: (slot) => {
+      const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
+      const scenes = [...get().scenes];
+      const { moduleEnable: _me, ...rest } = get().patch;
+      scenes[i] = { ...rest };
+      set({ scenes });
+      persist();
+    },
+
+    recallScene: (slot) => {
+      const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
+      const snap = get().scenes[i];
+      if (!snap) return;
+      pushFireHistory(`scene:${i}`);
+      const patch = { ...DEFAULT_FIRE_PATCH, ...get().patch, ...snap, moduleEnable: get().patch.moduleEnable ?? {} };
+      patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      set({ patch, presetId: "custom", mutation: null });
+      getEngine().fireCommand.setPatch(patch);
+      persist();
+    },
+
+    clearScene: (slot) => {
+      const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
+      const scenes = [...get().scenes];
+      scenes[i] = null;
+      set({ scenes });
+      persist();
+    },
+
+    learnChordFromHeld: () => {
+      const held = [...get().heldNotes].sort((a, b) => a - b);
+      if (held.length < 2) return;
+      const root = held[0];
+      const chordIntervals = held.map((n) => n - root);
+      get().setParam("chordIntervals", chordIntervals);
+      get().setParam("chordMemoryOn", true);
     },
   };
 });

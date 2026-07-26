@@ -1086,8 +1086,19 @@ function startScheduler(get: () => FireSequencerState): void {
               if (isB ? !s.synthBEnabled : !s.synthEnabled) continue;
               const target = isB ? engine.fireCommandB : engine.fireCommand;
               const offset = (n.step - step) * dur;
+              // Humanize from the live synth patch (A path drives Perf humanize).
+              const fp = engine.fireCommand.getPatch();
+              const humanOn = fp.moduleEnable?.["human"] !== false && fp.humanizeOn;
+              let when = whenSynth + offset;
+              let vel = n.vel;
+              if (humanOn) {
+                const tj = (fp.humanizeTiming ?? 0.25) * dur * 0.35;
+                const vj = (fp.humanizeVelocity ?? 0.2) * 0.4;
+                when += (Math.random() * 2 - 1) * tj;
+                vel = Math.max(0.05, Math.min(1, n.vel * (1 + (Math.random() * 2 - 1) * vj)));
+              }
               target.playNote(
-                n.midi, n.vel, whenSynth + offset, Math.max(0.03, n.len * dur * 0.98),
+                n.midi, vel, when, Math.max(0.03, n.len * dur * 0.98),
               );
             }
           }

@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.1";
+export const APP_VERSION = "3.0.2";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,19 +12,19 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Ambiguous Character names",
-    body: "All Character cards use original names — no brand fingerprints. Patch Library chrome cleaned (no emoji).",
+    title: "All Modules filled",
+    body: "SRC · TONE · MIX · PERF now match MOD/FX at 7 each — Noise, Sub, Pluck, Width, Glue, Air, Harmony, Scale, Chord, Human, Scenes.",
   },
   {
-    title: "Signal Path On/Off",
-    body: "Every stage on the Signal Path rack (OSC → SCOPE) can bypass independently.",
+    title: "Per-module On/Off",
+    body: "Every entry in All Modules has a real bypass toggle — not just jump/solo.",
   },
   {
-    title: "Stage visualizers",
-    body: "Vintage Age, Chip, and Analog Life get their own viz; Reverb blooms with Damp / Pre / Diff; Sidechain is hi-DPI sharp.",
+    title: "Unique stage identities",
+    body: "Each new module ships its own visualizer personality — grain, sub sine, strike bloom, M/S fan, GR meter, air shelves, and more.",
   },
   {
-    title: "Chip + Analog Life feel",
-    body: "Stronger PWM, sync grit, chip-noise bed, drift/instability/tune/env variance — actually audible now.",
+    title: "Playable Perf bay",
+    body: "Scale Lock, Chord Memory, Humanize, and 8 Scene slots for live capture/recall.",
   },
 ];

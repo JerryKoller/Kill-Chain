@@ -269,6 +269,32 @@ export interface FirePatch {
   gateSmooth: number;
   // ── Master ──
   masterGain: number;
+  // ── v3.0.2 module fill ──
+  /** Sub oscillator octave offset (−2..0). */
+  subOctave: number;
+  /** Bus air — low shelf gain in dB-ish (−1..1). */
+  airLow: number;
+  /** Bus air — high shelf gain (−1..1). */
+  airHigh: number;
+  /** 0..1 wet amount for air shelves (0 = bypass). */
+  airAmount: number;
+  /** Live scale-lock (snap played notes to sequencer scale). */
+  scaleLock: boolean;
+  /** Chord memory: fire stored intervals with each key. */
+  chordMemoryOn: boolean;
+  /** Relative semis from the played root, e.g. [0, 4, 7]. */
+  chordIntervals: number[];
+  /** Sequencer / live humanize enable. */
+  humanizeOn: boolean;
+  /** 0..1 timing jitter strength. */
+  humanizeTiming: number;
+  /** 0..1 velocity jitter strength. */
+  humanizeVelocity: number;
+  /**
+   * Per-module enable map. Missing key = on; `false` = bypassed.
+   * Keys match fireModuleAtlas module ids.
+   */
+  moduleEnable: Record<string, boolean>;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -735,7 +761,7 @@ class Voice {
     for (const o of this.groupA.osc) setFreq(o, fA);
     for (const o of this.groupB.osc) setFreq(o, fB);
     if (this.groupC) for (const o of this.groupC.osc) setFreq(o, fC);
-    setFreq(this.sub, this.baseFreq * 0.5);
+    setFreq(this.sub, this.baseFreq * Math.pow(2, p.subOctave ?? -1));
     this.applyUnisonSpread(p);
   }
 
@@ -784,7 +810,7 @@ class Voice {
     const va = clamp(p.velAmount ?? 1, 0, 1);
     const peak = clamp(1 - va * (1 - clamp(velocity, 0, 1)), 0, 1);
 
-    if (p.lpgOn) {
+    if (p.lpgOn && p.moduleEnable?.["pluck"] !== false) {
       // ── Lowpass gate (v1.7): a struck vactrol drives BOTH the VCA and the
       // cutoff instead of the ADSR pair. 1–3 ms strike (harder hits snap
       // faster, like a real photoresistor), exponential ring-out, and the
@@ -857,7 +883,7 @@ class Voice {
     const now = this.ctx.currentTime;
     const t = Math.max(now, when ?? now);
     this.releaseAt = t;
-    if (p.lpgOn) {
+    if (p.lpgOn && p.moduleEnable?.["pluck"] !== false) {
       // LPG notes ring out on their own strike decay — note-off doesn't cut
       // them, it just schedules cleanup once the vactrol has fully closed.
       const decay = clamp(p.lpgDecay ?? 0.4, 0.05, 2.5);
@@ -932,13 +958,20 @@ class Voice {
     const t = this.ctx.currentTime;
     const mute = p.pathOsc === false;
     const nMul = mute ? 0 : 1;
-    // Non-white chip noise stays audible even when the Noise knob is low.
-    const chipBed = (p.chipNoise && p.chipNoise !== "white") ? 0.1 : 0;
-    const noise = mute ? 0 : Math.max(p.noiseLevel, chipBed * Math.min(1, 0.35 + p.noiseLevel));
-    this.groupA.level.gain.setTargetAtTime(p.oscALevel * this.uNorm * nMul, t, 0.02);
-    this.groupB.level.gain.setTargetAtTime(p.oscBLevel * this.uNorm * nMul, t, 0.02);
-    if (this.groupC) this.groupC.level.gain.setTargetAtTime(p.oscCLevel * this.uNorm * nMul, t, 0.02);
-    this.gSub.gain.setTargetAtTime(p.subLevel * nMul, t, 0.02);
+    const modOn = (id: string) => p.moduleEnable?.[id] !== false;
+    const noiseOn = modOn("noise");
+    const subOn = modOn("sub");
+    // Non-white chip noise stays audible even when the Noise knob is low (if Chip module on).
+    const chipOn = modOn("chip");
+    const chipBed = (chipOn && p.chipNoise && p.chipNoise !== "white") ? 0.1 : 0;
+    const noise = (!noiseOn || mute) ? 0 : Math.max(p.noiseLevel, chipBed * Math.min(1, 0.35 + p.noiseLevel));
+    const oscAOn = modOn("osc.a");
+    const oscBOn = modOn("osc.b");
+    const oscCOn = modOn("osc.c");
+    this.groupA.level.gain.setTargetAtTime((oscAOn ? p.oscALevel : 0) * this.uNorm * nMul, t, 0.02);
+    this.groupB.level.gain.setTargetAtTime((oscBOn ? p.oscBLevel : 0) * this.uNorm * nMul, t, 0.02);
+    if (this.groupC) this.groupC.level.gain.setTargetAtTime((oscCOn ? p.oscCLevel : 0) * this.uNorm * nMul, t, 0.02);
+    this.gSub.gain.setTargetAtTime((subOn ? p.subLevel : 0) * nMul, t, 0.02);
     this.gNoise.gain.setTargetAtTime(noise, t, 0.02);
     this.applyNoiseColor(p);
   }
@@ -1102,6 +1135,8 @@ export class FireCommandSynth {
   private readonly tone: BiquadFilterNode;
   private readonly punchComp: DynamicsCompressorNode;
   private readonly punchMakeup: GainNode;
+  private readonly airLow: BiquadFilterNode;
+  private readonly airHigh: BiquadFilterNode;
   private readonly reverbIn: GainNode;
   private readonly reverbPredelay: DelayNode;
   private readonly reverbConv: ConvolverNode;
@@ -1257,6 +1292,14 @@ export class FireCommandSynth {
     this.punchComp.attack.value = 0.004;
     this.punchComp.release.value = 0.12;
     this.punchMakeup = ctx.createGain();
+    this.airLow = ctx.createBiquadFilter();
+    this.airLow.type = "lowshelf";
+    this.airLow.frequency.value = 180;
+    this.airLow.gain.value = 0;
+    this.airHigh = ctx.createBiquadFilter();
+    this.airHigh.type = "highshelf";
+    this.airHigh.frequency.value = 6500;
+    this.airHigh.gain.value = 0;
     this.reverbIn = ctx.createGain();
     this.reverbPredelay = ctx.createDelay(0.25);
     this.reverbPredelay.delayTime.value = 0;
@@ -1338,7 +1381,7 @@ export class FireCommandSynth {
     this.dR.connect(this.dFbRL).connect(this.dL);
     this.delayWet.connect(this.delayOut);
     this.delayOut.connect(this.tone);
-    this.tone.connect(this.punchComp).connect(this.punchMakeup).connect(this.reverbIn);
+    this.tone.connect(this.punchComp).connect(this.punchMakeup).connect(this.airLow).connect(this.airHigh).connect(this.reverbIn);
     this.reverbIn.connect(this.reverbDry).connect(this.reverbOut);
     this.reverbIn.connect(this.reverbPredelay).connect(this.reverbConv).connect(this.reverbWet).connect(this.reverbOut);
     // Spectral FX sits between reverb and autopan (freezing reverb tails is
@@ -1722,7 +1765,7 @@ export class FireCommandSynth {
 
     // ── trance gate ── (only touch the param when the target actually moves)
     let gateTarget = 1;
-    if (p.gateOn) {
+    if (p.gateOn && p.moduleEnable?.["gate"] !== false) {
       const steps = Math.max(1, Math.min(16, Math.round(p.gateSteps)));
       const idx = Math.floor(now * clamp(p.gateRate, 0.25, 24)) % steps;
       gateTarget = (p.gatePattern[idx] ?? 1) > 0.5 ? 1 : clamp(1 - p.gateDepth, 0, 1);
@@ -2042,12 +2085,12 @@ export class FireCommandSynth {
       case "chorusRate": case "chorusDepth": case "chorusMix":
       case "delayTime": case "delayFeedback": case "delayMix": case "tone":
       case "reverbSize": case "reverbMix": case "reverbDamp": case "reverbPredelay": case "reverbDiffusion":
-      case "stereoWidth":
+      case "stereoWidth": case "airLow": case "airHigh": case "airAmount": case "punch":
       case "cassetteGen": case "tapeSpeed": case "wowFlutter": case "vhsColor":
       case "bitDepth": case "sampleRateReduce": case "bbdChorus": case "analogComp":
       case "dust": case "hiss": case "hum": case "printThrough":
       case "pathOsc": case "pathFilter": case "pathDrive": case "pathAge":
-      case "pathFx": case "pathMix": case "pathScope":
+      case "pathFx": case "pathMix": case "pathScope": case "moduleEnable":
         this.applyBusParams(p); break;
       case "lfo1Wave": case "lfo1Rate": case "lfo1Depth": case "lfo1Dest":
       case "lfo2Wave": case "lfo2Rate": case "lfo2Depth": case "lfo2Dest":
@@ -2073,7 +2116,7 @@ export class FireCommandSynth {
       case "oscALevel": case "oscBLevel": case "oscCLevel": case "subLevel": case "noiseLevel":
       case "noiseColor":
         for (const v of this.voices) v.setOscLevels(p); break;
-      case "oscAOctave": case "oscBOctave": case "oscCOctave":
+      case "oscAOctave": case "oscBOctave": case "oscCOctave": case "subOctave":
         for (const v of this.voices) v.applyTuning(p, this.ctx.currentTime, false); break;
       case "oscADetune": case "oscBDetune": case "oscCDetune": case "unisonDetune": case "unisonWidth":
         for (const v of this.voices) v.applyUnisonSpread(p); break;
@@ -2148,9 +2191,10 @@ export class FireCommandSynth {
       sampleRateReduce: 0, bbdChorus: 0, analogComp: 0, dust: 0, hiss: 0, hum: 0, printThrough: 0,
     });
 
-    const punch = pathDrive ? clamp(p.punch, 0, 1) : 0;
+    // Glue module owns bus compress (punch knob). Age analogComp still layers lightly.
+    const glueAmt = p.moduleEnable?.["glue"] === false ? 0 : clamp(p.punch, 0, 1);
     const ac = pathAge ? clamp(p.analogComp ?? 0, 0, 1) : 0;
-    const glue = clamp(punch + ac * 0.55, 0, 1);
+    const glue = clamp(glueAmt + ac * 0.55, 0, 1);
     this.punchComp.threshold.setTargetAtTime(-glue * 30, t, 0.05);
     this.punchComp.ratio.setTargetAtTime(1 + glue * 7, t, 0.05);
     this.punchMakeup.gain.setTargetAtTime(1 + glue * 0.3, t, 0.05);
@@ -2193,7 +2237,15 @@ export class FireCommandSynth {
       this.lastPredelay = pre;
     }
 
-    this.widthSideAmt.gain.setTargetAtTime(clamp(p.stereoWidth ?? 1, 0, 1.4), t, 0.03);
+    const widthOn = p.moduleEnable?.["width"] !== false;
+    this.widthSideAmt.gain.setTargetAtTime(widthOn ? clamp(p.stereoWidth ?? 1, 0, 1.4) : 1, t, 0.03);
+
+    // Air shelves — amount scales shelf gain; module Off forces flat.
+    const airOn = p.moduleEnable?.["air"] !== false;
+    const airAmt = airOn ? clamp(p.airAmount ?? 0, 0, 1) : 0;
+    this.airLow.gain.setTargetAtTime(clamp(p.airLow ?? 0, -1, 1) * 12 * airAmt, t, 0.04);
+    this.airHigh.gain.setTargetAtTime(clamp(p.airHigh ?? 0, -1, 1) * 10 * airAmt, t, 0.04);
+
     this.updateReverbConvolver(p, pathFx);
 
     // Keep pathOsc / pathFilter live on existing voices.
@@ -2389,4 +2441,15 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   gatePattern: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
   gateSmooth: 0,
   masterGain: 0.72,
+  subOctave: -1,
+  airLow: 0,
+  airHigh: 0,
+  airAmount: 0,
+  scaleLock: false,
+  chordMemoryOn: false,
+  chordIntervals: [0, 4, 7],
+  humanizeOn: false,
+  humanizeTiming: 0.25,
+  humanizeVelocity: 0.2,
+  moduleEnable: {},
 };

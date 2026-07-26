@@ -58,6 +58,19 @@ export const FC = {
   chip: "#6ee7a8",
   fmRack: "#8ec5ff",
 
+  /** v3.0.2 module fill */
+  noise: "#c4b5a0",
+  sub: "#ffb07a",
+  pluck: "#f0a060",
+  width: "#ff8f6a",
+  glue: "#e07050",
+  air: "#ffc8a0",
+  harmony: "#ffb35c",
+  scale: "#62b6ff",
+  chord: "#ff9a6b",
+  human: "#9be564",
+  scenes: "#ffcf5c",
+
   /** Mix & output */
   mixer: "#ff6a3d",
   morph: "#ff8a5c",

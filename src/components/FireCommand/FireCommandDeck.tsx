@@ -92,6 +92,8 @@ export function FireCommandDeck() {
   const heat = useSignalHeat();
   const [mapOpen, setMapOpen] = useState(false);
   const setParam = useFireCommandStore((s) => s.setParam);
+  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
+  const moduleEnable = useFireCommandStore((s) => s.patch.moduleEnable ?? {});
   const pathOsc = useFireCommandStore((s) => s.patch.pathOsc !== false);
   const pathFilter = useFireCommandStore((s) => s.patch.pathFilter !== false);
   const pathDrive = useFireCommandStore((s) => s.patch.pathDrive !== false);
@@ -264,7 +266,7 @@ export function FireCommandDeck() {
             All modules
           </span>
           <span className="hidden md:inline text-[9px] text-white/25 flex-1 truncate">
-            every stage · jump · solo
+            every stage · jump · On/Off
           </span>
           <span className="text-[10px] text-white/35">{mapOpen ? "▴" : "▾"}</span>
         </button>
@@ -296,8 +298,9 @@ export function FireCommandDeck() {
                 <div className="flex flex-col gap-0.5">
                   {band.modules.map((mod) => {
                     const focused = focusId === mod.id;
+                    const enabled = moduleEnable[mod.id] !== false;
                     return (
-                      <div key={mod.id} className="flex items-center gap-0.5 min-w-0">
+                      <div key={mod.id} className={`flex items-center gap-0.5 min-w-0 ${enabled ? "" : "opacity-40"}`}>
                         <button
                           type="button"
                           onClick={() => onNodeClick(mod.id)}
@@ -306,6 +309,7 @@ export function FireCommandDeck() {
                             color: mod.color,
                             borderColor: focused ? `${mod.color}88` : `${mod.color}28`,
                             background: focused ? `${mod.color}22` : "transparent",
+                            filter: enabled ? undefined : "grayscale(0.6)",
                           }}
                           title={`${mod.title} — jump`}
                         >
@@ -313,17 +317,20 @@ export function FireCommandDeck() {
                         </button>
                         <button
                           type="button"
-                          onClick={(e) => onNodeFocus(mod.id, e)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setModuleEnable(mod.id, !enabled);
+                          }}
                           className={`shrink-0 rounded-md border px-1 py-1 text-[8px] font-bold transition ${
-                            focused
-                              ? "border-white/35 bg-white/15 text-white"
-                              : "border-white/8 text-white/30 hover:text-white/60"
+                            enabled
+                              ? "border-emerald-400/40 bg-emerald-400/15 text-emerald-200"
+                              : "border-white/12 bg-black/40 text-white/35 hover:text-white/60"
                           }`}
-                          title={focused ? "Exit solo" : `Solo ${mod.title}`}
-                          aria-label={`Solo ${mod.title}`}
-                          aria-pressed={focused}
+                          title={enabled ? `Bypass ${mod.title}` : `Enable ${mod.title}`}
+                          aria-label={`${enabled ? "Disable" : "Enable"} ${mod.title}`}
+                          aria-pressed={enabled}
                         >
-                          ◉
+                          {enabled ? "On" : "Off"}
                         </button>
                       </div>
                     );
