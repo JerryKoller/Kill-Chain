@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.6.3-c41e3a?style=flat-square" alt="Version 2.6.3" />
+  <img src="https://img.shields.io/badge/version-2.6.4-c41e3a?style=flat-square" alt="Version 2.6.4" />
   <img src="https://img.shields.io/badge/platform-Windows%2064--bit-1e2430?style=flat-square" alt="Windows 64-bit" />
   <img src="https://img.shields.io/badge/license-Proprietary-8b95a8?style=flat-square" alt="Proprietary license" />
 </p>
@@ -26,12 +26,12 @@
 
 ## Download
 
-**[⬇ Download Kill-Chain-Setup-2.6.3.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.3.exe)**
+**[⬇ Download Kill-Chain-Setup-2.6.4.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.4.exe)**
 
 | | |
 |---|---|
-| **Version** | 2.6.3 |
-| **File** | `Kill-Chain-Setup-2.6.3.exe` |
+| **Version** | 2.6.4 |
+| **File** | `Kill-Chain-Setup-2.6.4.exe` |
 | **Size** | ~77 MB |
 | **Platform** | Windows 10/11 (64-bit) |
 
@@ -44,7 +44,7 @@ You can also use the [download page](https://jerrykoller.github.io/Kill-Chain/) 
 ## Install
 
 1. Download the installer above.
-2. Run `Kill-Chain-Setup-2.6.3.exe` and follow the setup wizard.
+2. Run `Kill-Chain-Setup-2.6.4.exe` and follow the setup wizard.
 3. Launch **Kill Chain** from the Start menu or desktop shortcut.
 
 ### Windows security notice
@@ -85,7 +85,7 @@ Open the in-app **Glossary** for definitions of every term and module.
 
 See **[CHANGELOG.md](CHANGELOG.md)** for full release notes.
 
-**v2.6.3 highlights:** Unique stage personalities + Macros command cards (no clipped radar text). Display only.
+**v2.6.4 highlights:** Morph Pad type-search + deeper stage play (patchbay, phosphor scope). Studio Library duplicate removed.
 
 **v2.5.6 highlights:** Symmetrical Delay/Reverb-style knob rows; Fire Mixer meter bridge (A/B/Drums/Samples/Master); deeper Morph, Output, OSC, Harmonic Forge Warp, Unison, Filter, Envelopes, LFOs, FM·Ring, Pitch·Glide. Display only.
 

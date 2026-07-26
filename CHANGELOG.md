@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.4] — 2026-07-26 — Morph Search + Stage Depth
+
+### Changed
+- **Morph Pad** — type-to-search corner presets (factory + user); living blend-field wash + filaments
+- **Studio bay** — Library button removed (Browse in Patch bay); Undo/Redo with history depth rails
+- **Stage depth** — Mod Matrix patchbay cables, phosphor Scope, WaveDisplay scan beam, Meter Bridge bloom, Reverb impulse spikes. Display only
+
 ## [2.6.3] — 2026-07-26 — Unique Stage Personalities
 
 ### Changed
