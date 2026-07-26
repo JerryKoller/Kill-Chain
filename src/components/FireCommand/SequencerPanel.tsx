@@ -883,7 +883,7 @@ export function SequencerPanel() {
           <AutomationLane />
         </RollFitProvider>
       ) : (
-        <div className="overflow-x-auto pb-1">
+        <div className="w-full min-w-0">
           <DrumMachine />
         </div>
       )}

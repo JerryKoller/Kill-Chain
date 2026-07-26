@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "2.5.9";
+export const APP_VERSION = "2.6.0";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,23 +12,23 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
+    title: "Natural Selection mutate",
+    body: "Mutate is now an evolution bay — helix mark, Mild→Wild pressure, Gen counter, rival A/B organism cards, Keep winner / Extinct. Same breeding engine, much more fun to play.",
+  },
+  {
+    title: "Drum bay fills the width",
+    body: "Drum + sample step grids stretch across the sequencer — no dead black void. Plated Drum Bay / Sample Deck chrome, fixed tools rail, clearer bar markers.",
+  },
+  {
     title: "Piano roll fills the bay",
-    body: "The pattern grid now fit-to-widths the sequencer — no more dead black void on the right. Zoom in for detail; Fit snaps back to full width. Velocity and automation stay aligned.",
+    body: "Pattern grid fit-to-widths the sequencer. Zoom in for detail; Fit snaps back. Velocity and automation stay aligned.",
   },
   {
-    title: "Sequencer symmetry + polish",
-    body: "Transport splits into balanced Play / Bars / Channels zones. Editor chrome uses a three-column layout. Arrangement and tool bars get roomier controls and stage plating.",
-  },
-  {
-    title: "Breathing room for open modules",
-    body: "When several Fire Command modules in a band are open, they stack full-width instead of squeezing into multi-column grids.",
-  },
-  {
-    title: "Sequencer chrome cleaned up",
-    body: "Arrangement is one compact row (chain on demand). Piano / Drums, Draw A/B, and a File menu replace stacked toolbars above the roll.",
+    title: "Sequencer symmetry",
+    body: "Transport and editor chrome in balanced zones with roomier plating.",
   },
   {
     title: "Fire Command category bands",
-    body: "Below the piano roll, modules live in Mix & Output, Sources, Tone, Modulation, FX, and Performance Tools with equal-width collapsed chips.",
+    body: "Modules live in Mix & Output, Sources, Tone, Modulation, FX, and Performance Tools with equal-width collapsed chips.",
   },
 ];

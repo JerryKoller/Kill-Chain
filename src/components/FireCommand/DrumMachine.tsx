@@ -1,14 +1,8 @@
 /**
  * DrumMachine — FL-Studio-style step sequencer for the Fire Command drum kit.
  *
- * 8 synthesized lanes × pattern steps. Click toggles a step; drag paints;
- * Shift+click cycles velocity (100% → 70% → 40%). Lane name auditions the
- * sound. The step playhead is a DOM highlight driven by a RAF loop that only
- * runs while playing.
- *
- * Any lane can swap its synthesized hit for the operator's OWN sample (📁 on
- * hover), and below the kit sits the SAMPLE DECK — up to six loaded sounds
- * step-sequenced exactly like drum lanes.
+ * Lanes stretch to fill the bay (no dead black void). Click toggles; drag paints;
+ * Shift+click cycles velocity. Lane tools stay in a fixed right rail.
  */
 
 import { memo, useEffect, useRef } from "react";
@@ -21,6 +15,9 @@ import {
 } from "@/state/fireSequencerStore";
 import { getEngine } from "@/audio/AudioEngine";
 import { useUIStore } from "@/state/uiStore";
+
+const LABEL_W = 92;
+const TOOLS_W = 112;
 
 export function DrumMachine() {
   const drums = useFireSequencerStore((s) => s.drums);
@@ -37,7 +34,6 @@ export function DrumMachine() {
   const hydrateSamples = useFireSequencerStore((s) => s.hydrateSamples);
   const toast = useUIStore((s) => s.toast);
 
-  // Re-load persisted sample buffers into the engine on mount.
   useEffect(() => { void hydrateSamples(); }, [hydrateSamples]);
 
   const pickSampleFor = async (lane: DrumLane) => {
@@ -49,11 +45,11 @@ export function DrumMachine() {
 
   const totalSteps = bars * STEPS_PER_BAR;
   const paintRef = useRef<{ value: number } | null>(null);
-  const headerRef = useRef<HTMLDivElement>(null);
+  const playheadRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
-  // Playhead: highlight the current step column via a moving DOM bar.
   useEffect(() => {
-    const el = headerRef.current;
+    const el = playheadRef.current;
     if (!el) return;
     if (!playing) { el.style.opacity = "0"; return; }
     el.style.opacity = "1";
@@ -65,13 +61,14 @@ export function DrumMachine() {
       const step = Math.floor(getPlayheadStep(bpm, bars));
       if (step === lastStep) return;
       lastStep = step;
-      // -1 = song mode is sounding a DIFFERENT section — hide the head.
       el.style.opacity = step < 0 ? "0" : "1";
-      el.style.transform = `translateX(calc(${Math.max(0, step)} * (var(--step-w) + 3px)))`;
+      if (step < 0) return;
+      el.style.left = `${(step / totalSteps) * 100}%`;
+      el.style.width = `${100 / totalSteps}%`;
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [playing, bpm, bars]);
+  }, [playing, bpm, bars, totalSteps]);
 
   const audition = (lane: DrumLane) => {
     const eng = getEngine();
@@ -81,7 +78,6 @@ export function DrumMachine() {
 
   const onCellDown = (lane: DrumLane, step: number, vel: number, shift: boolean) => {
     if (shift && vel > 0) {
-      // Cycle velocity accents: 1 → 0.7 → 0.4 → 1 …
       const next = vel > 0.85 ? 0.7 : vel > 0.55 ? 0.4 : 1;
       setStep(lane, step, next);
       paintRef.current = { value: next };
@@ -106,54 +102,68 @@ export function DrumMachine() {
   }, []);
 
   return (
-    <div
-      className="select-none"
-      style={{ ["--step-w" as string]: totalSteps > 32 ? "16px" : "22px" }}
-    >
-      {/* kit toolbar (v1.6) */}
-      <div className="flex items-center gap-1.5 mb-1.5">
+    <div className="select-none w-full min-w-0 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-[#12151c] via-[#0c0e14] to-[#090b10] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-200/80">Drum Bay</div>
+          <div className="text-[9px] text-white/35 mt-0.5">{bars} bar{bars === 1 ? "" : "s"} · {totalSteps} steps · paint the grid</div>
+        </div>
+        <div className="flex-1" />
         <button
           onClick={() => {
             useFireSequencerStore.getState().generateDrumFill();
             useUIStore.getState().toast("Fill dropped on the last bar — press again to reroll, Ctrl+Z to undo");
           }}
-          className="px-2.5 py-1 rounded-lg border border-amber-400/40 bg-amber-400/8 text-amber-300 text-[10px] uppercase tracking-[0.12em] hover:bg-amber-400/18 transition"
-          title="Fill generator: rewrites the last bar — snare ramp, tom tumble, kick thin-out, crash on the loop point. Every press is a new roll of the dice."
+          className="px-3 py-1.5 rounded-xl border border-amber-400/45 bg-amber-400/10 text-amber-200 text-[10px] font-bold uppercase tracking-[0.14em] hover:bg-amber-400/20 transition shadow-[0_0_16px_rgb(251_191_36/0.15)]"
+          title="Fill generator: rewrites the last bar — snare ramp, tom tumble, kick thin-out, crash on the loop point."
         >
           ⚡ Fill last bar
         </button>
       </div>
 
-      {/* step ruler + playhead */}
-      <div className="relative ml-[86px] mb-1 h-3 overflow-hidden">
-        <div className="flex gap-[3px]">
-          {Array.from({ length: totalSteps }, (_, s) => (
-            <div
-              key={s}
-              className="text-center text-[8px] leading-3 font-mono shrink-0"
-              style={{
-                width: "var(--step-w)",
-                color: s % STEPS_PER_BAR === 0 ? "rgba(255,150,80,0.9)" : s % 4 === 0 ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.15)",
-              }}
-            >
-              {s % 4 === 0 ? s / 4 + 1 : "·"}
-            </div>
-          ))}
+      {/* Column chrome: label | expanding step grid | tools */}
+      <div
+        className="grid gap-2 items-center mb-1.5"
+        style={{ gridTemplateColumns: `${LABEL_W}px minmax(0,1fr) ${TOOLS_W}px` }}
+      >
+        <div className="text-[8px] uppercase tracking-[0.18em] text-white/30 pl-1">Lane</div>
+        <div className="relative" ref={gridRef}>
+          <div
+            className="grid gap-[3px]"
+            style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(0, 1fr))` }}
+          >
+            {Array.from({ length: totalSteps }, (_, s) => (
+              <div
+                key={s}
+                className="text-center text-[8px] leading-3 font-mono truncate"
+                style={{
+                  color:
+                    s % STEPS_PER_BAR === 0
+                      ? "rgba(255,150,80,0.9)"
+                      : s % 4 === 0
+                        ? "rgba(255,255,255,0.45)"
+                        : "rgba(255,255,255,0.15)",
+                }}
+              >
+                {s % STEPS_PER_BAR === 0 ? Math.floor(s / STEPS_PER_BAR) + 1 : s % 4 === 0 ? "·" : ""}
+              </div>
+            ))}
+          </div>
+          <div
+            ref={playheadRef}
+            className="absolute top-0 h-full pointer-events-none opacity-0 rounded-sm"
+            style={{
+              background: "rgba(255,150,70,0.28)",
+              boxShadow: "0 0 10px rgba(255,140,60,0.45)",
+              willChange: "left, width, opacity",
+              transition: "opacity 0.2s",
+            }}
+          />
         </div>
-        <div
-          ref={headerRef}
-          className="absolute top-0 h-full pointer-events-none opacity-0 rounded-sm"
-          style={{
-            width: "var(--step-w)",
-            background: "rgba(255,150,70,0.3)",
-            boxShadow: "0 0 8px rgba(255,140,60,0.5)",
-            willChange: "transform",
-            transition: "opacity 0.2s",
-          }}
-        />
+        <div className="text-[8px] uppercase tracking-[0.18em] text-white/30 text-right pr-1">Tools</div>
       </div>
 
-      <div className="space-y-[3px]">
+      <div className="space-y-1">
         {DRUM_LANES.map((lane) => (
           <DrumRow
             key={lane.id}
@@ -175,9 +185,9 @@ export function DrumMachine() {
           />
         ))}
       </div>
-      <div className="mt-2 text-[10px] text-dim">
-        Click to toggle · drag to paint · Shift+click cycles accent (100/70/40%) · lane name auditions ·
-        Ⓔ euclid rhythm · ⚄ random fill · 📁 load your own hit · ✕ clear lane
+
+      <div className="mt-2.5 text-[9px] text-white/30 leading-relaxed">
+        Click toggle · drag paint · Shift+click accent · name auditions · Ⓔ euclid · ⚄ random · 📁 sample · ✕ clear
       </div>
 
       <SampleDeck totalSteps={totalSteps} />
@@ -185,7 +195,6 @@ export function DrumMachine() {
   );
 }
 
-/** SAMPLE DECK — operator sounds step-sequenced like drum lanes. */
 function SampleDeck({ totalSteps }: { totalSteps: number }) {
   const samples = useFireSequencerStore((s) => s.samples);
   const addSampleLane = useFireSequencerStore((s) => s.addSampleLane);
@@ -212,39 +221,49 @@ function SampleDeck({ totalSteps }: { totalSteps: number }) {
   };
 
   return (
-    <div className="mt-3 pt-3 border-t border-white/8">
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] uppercase tracking-[0.25em] text-dim">Sample Deck</span>
-        <span className="text-[9px] text-white/30">{samples.length}/{MAX_SAMPLE_LANES}</span>
+    <div className="mt-3.5 pt-3 border-t border-white/[0.07]">
+      <div className="flex items-center gap-2 mb-2.5">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-300/80">Sample Deck</div>
+          <div className="text-[9px] text-white/30 mt-0.5">{samples.length}/{MAX_SAMPLE_LANES} racks · same step grid</div>
+        </div>
         <button
           onClick={() => void addSample()}
           disabled={samples.length >= MAX_SAMPLE_LANES}
-          className="ml-auto px-2.5 py-1 rounded-lg border border-cyan/40 bg-cyan/10 text-cyan text-[10px] uppercase tracking-[0.12em] hover:bg-cyan/20 disabled:opacity-30 transition"
+          className="ml-auto px-3 py-1.5 rounded-xl border border-fuchsia-400/45 bg-fuchsia-500/10 text-fuchsia-200 text-[10px] font-bold uppercase tracking-[0.14em] hover:bg-fuchsia-500/20 disabled:opacity-30 transition shadow-[0_0_14px_rgb(232_121_249/0.12)]"
           title="Load any sound (wav/mp3/flac…) as a new sequenced lane"
         >
           ⊕ Rack a sample
         </button>
       </div>
       {samples.length === 0 ? (
-        <div className="text-[10px] text-white/30 italic">
-          Rack your own sounds — risers, vocal chops, FX — and paint them on the same step grid.
+        <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-3 py-3 text-[10px] text-white/35 italic">
+          Rack risers, vocal chops, FX — they paint on the same full-width step grid.
         </div>
       ) : (
-        <div className="space-y-[3px]">
+        <div className="space-y-1">
           {samples.map((sl) => (
-            <div key={sl.id} className="flex items-center gap-2 group/lane">
+            <div
+              key={sl.id}
+              className="grid gap-2 items-center group/lane"
+              style={{ gridTemplateColumns: `${LABEL_W}px minmax(0,1fr) ${TOOLS_W}px` }}
+            >
               <button
                 onClick={() => auditionSample(sl.id)}
-                className="w-[78px] shrink-0 text-left text-[11px] font-semibold tracking-wide px-2 py-1 rounded-md border border-fuchsia-400/25 bg-fuchsia-500/[0.06] hover:bg-fuchsia-500/[0.14] transition truncate text-fuchsia-300"
+                className="h-7 text-left text-[11px] font-semibold tracking-wide px-2 rounded-lg border border-fuchsia-400/30 bg-fuchsia-500/[0.08] hover:bg-fuchsia-500/[0.16] transition truncate text-fuchsia-300"
                 title={`Audition ${sl.name}`}
               >
                 {sl.name}
               </button>
-              <div className="flex gap-[3px]">
+              <div
+                className="grid gap-[3px] min-w-0"
+                style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(0, 1fr))` }}
+              >
                 {Array.from({ length: totalSteps }, (_, s) => {
                   const vel = sl.steps[s] ?? 0;
                   const on = vel > 0;
                   const beatGroup = Math.floor(s / 4) % 2 === 0;
+                  const barStart = s % STEPS_PER_BAR === 0;
                   return (
                     <button
                       key={s}
@@ -259,24 +278,26 @@ function SampleDeck({ totalSteps }: { totalSteps: number }) {
                         const paint = paintRef.current;
                         if (paint && (paint.value > 0) !== on) setSampleStep(sl.id, s, paint.value);
                       }}
-                      className="rounded-[4px] border transition-colors shrink-0"
+                      className="h-[26px] rounded-md border transition-colors min-w-0"
                       style={{
-                        width: "var(--step-w)",
-                        height: 22,
-                        borderColor: on ? "rgba(232,121,249,0.8)" : "rgba(255,255,255,0.07)",
+                        borderColor: on
+                          ? "rgba(232,121,249,0.85)"
+                          : barStart
+                            ? "rgba(255,255,255,0.12)"
+                            : "rgba(255,255,255,0.06)",
                         background: on
-                          ? "rgba(232,121,249,0.75)"
+                          ? "rgba(232,121,249,0.78)"
                           : beatGroup
-                            ? "rgba(255,255,255,0.045)"
-                            : "rgba(255,255,255,0.016)",
-                        boxShadow: on ? "0 0 7px rgba(232,121,249,0.4)" : "none",
+                            ? "rgba(255,255,255,0.05)"
+                            : "rgba(255,255,255,0.02)",
+                        boxShadow: on ? "0 0 8px rgba(232,121,249,0.4)" : "none",
                       }}
                       aria-label={`${sl.name} step ${s + 1}${on ? " (on)" : ""}`}
                     />
                   );
                 })}
               </div>
-              <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover/lane:opacity-100 transition-opacity">
+              <div className="flex items-center justify-end gap-1 opacity-70 group-hover/lane:opacity-100 transition-opacity">
                 <input
                   type="range"
                   min={0}
@@ -284,7 +305,7 @@ function SampleDeck({ totalSteps }: { totalSteps: number }) {
                   step={0.05}
                   value={sl.level}
                   onChange={(e) => setSampleLevel(sl.id, Number(e.target.value))}
-                  className="w-14 accent-fuchsia-400"
+                  className="w-12 accent-fuchsia-400"
                   title={`Level ${(sl.level * 100).toFixed(0)}%`}
                 />
                 <button
@@ -310,10 +331,8 @@ function SampleDeck({ totalSteps }: { totalSteps: number }) {
   );
 }
 
-/** Euclid pulse counts cycled by repeated clicks — the classic groove set. */
 const EUCLID_CYCLE = [2, 3, 4, 5, 7, 0];
 
-/** One lane row — memoized so painting one lane doesn't re-render the rest. */
 const DrumRow = memo(function DrumRow({
   laneId, name, isSample, color, steps, totalSteps,
   onDown, onEnter, onAudition, onEuclid, onRandom, onClear, onPickSample, onResetSample,
@@ -337,22 +356,32 @@ const DrumRow = memo(function DrumRow({
   const euclidIdx = useRef(0);
   const hasSteps = steps.some((v) => v > 0);
   return (
-    <div className="flex items-center gap-2 group/lane">
+    <div
+      className="grid gap-2 items-center group/lane rounded-xl px-0.5 py-0.5 hover:bg-white/[0.02] transition-colors"
+      style={{ gridTemplateColumns: `${LABEL_W}px minmax(0,1fr) ${TOOLS_W}px` }}
+    >
       <button
         onClick={() => onAudition(laneId)}
-        className={`w-[78px] shrink-0 text-left text-[11px] font-semibold tracking-wide px-2 py-1 rounded-md border bg-white/[0.03] hover:bg-white/[0.08] transition truncate ${
-          isSample ? "border-fuchsia-400/40" : "border-white/8"
+        className={`h-7 text-left text-[11px] font-semibold tracking-wide px-2 rounded-lg border bg-black/30 hover:bg-black/45 transition truncate ${
+          isSample ? "border-fuchsia-400/45" : "border-white/10"
         }`}
-        style={{ color }}
+        style={{
+          color,
+          boxShadow: `inset 3px 0 0 ${color}99`,
+        }}
         title={isSample ? `Audition ${name} (your sample)` : `Audition ${name}`}
       >
         {name}
       </button>
-      <div className="flex gap-[3px]">
+      <div
+        className="grid gap-[3px] min-w-0"
+        style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(0, 1fr))` }}
+      >
         {Array.from({ length: totalSteps }, (_, s) => {
           const vel = steps[s] ?? 0;
           const on = vel > 0;
           const beatGroup = Math.floor(s / 4) % 2 === 0;
+          const barStart = s % STEPS_PER_BAR === 0;
           return (
             <button
               key={s}
@@ -361,25 +390,26 @@ const DrumRow = memo(function DrumRow({
                 onDown(laneId, s, vel, e.shiftKey);
               }}
               onPointerEnter={() => onEnter(laneId, s, vel)}
-              className="rounded-[4px] border transition-colors shrink-0"
+              className="h-[26px] rounded-md border transition-colors min-w-0"
               style={{
-                width: "var(--step-w)",
-                height: 22,
-                borderColor: on ? `${color}cc` : "rgba(255,255,255,0.07)",
+                borderColor: on
+                  ? `${color}dd`
+                  : barStart
+                    ? "rgba(255,255,255,0.12)"
+                    : "rgba(255,255,255,0.06)",
                 background: on
-                  ? `${color}${vel > 0.85 ? "e8" : vel > 0.55 ? "99" : "55"}`
+                  ? `${color}${vel > 0.85 ? "ee" : vel > 0.55 ? "a0" : "5c"}`
                   : beatGroup
-                    ? "rgba(255,255,255,0.045)"
-                    : "rgba(255,255,255,0.016)",
-                boxShadow: on && vel > 0.85 ? `0 0 7px ${color}66` : "none",
+                    ? "rgba(255,255,255,0.05)"
+                    : "rgba(255,255,255,0.02)",
+                boxShadow: on && vel > 0.85 ? `0 0 9px ${color}77` : "none",
               }}
               aria-label={`${name} step ${s + 1}${on ? " (on)" : ""}`}
             />
           );
         })}
       </div>
-      {/* Lane tools — visible on row hover so the grid stays clean. */}
-      <div className="flex gap-1 shrink-0 opacity-0 group-hover/lane:opacity-100 transition-opacity">
+      <div className="flex gap-1 justify-end opacity-55 group-hover/lane:opacity-100 transition-opacity">
         <button
           onClick={() => {
             const pulses = EUCLID_CYCLE[euclidIdx.current % EUCLID_CYCLE.length];

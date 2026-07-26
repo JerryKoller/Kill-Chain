@@ -37,6 +37,7 @@ import { MixerPanel } from "./MixerPanel";
 import { ModPatchGrid } from "./ModPatchGrid";
 import { FireMorphPad } from "./FireMorphPad";
 import { undoFire, redoFire, useFireHistoryStore } from "@/lib/fireHistory";
+import { MutateCluster } from "./MutateCluster";
 
 const FIRE = "#ff6a3d"; // primary
 const ICE = "#62b6ff"; // LFOs
@@ -90,71 +91,6 @@ function UndoRedoButtons() {
         className={btn(redoDepth > 0)}
         title="Redo (Ctrl+Y)"
       >↷ Redo</button>
-    </div>
-  );
-}
-
-/**
- * Natural Selection (MK IV): Mutate breeds TWO offspring of the current
- * patch; A/B audition either, Keep adopts the winner, and hitting Mutate
- * again breeds the next generation from whichever one is playing.
- */
-function MutateCluster() {
-  const mutation = useFireCommandStore((s) => s.mutation);
-  const amount = useFireCommandStore((s) => s.mutateAmount);
-  const toast = useUIStore((s) => s.toast);
-  const act = useFireCommandStore.getState;
-  return (
-    <div className="flex items-center gap-1.5">
-      <div className="flex flex-col items-stretch gap-0.5">
-        <button
-          onClick={() => {
-            act().mutate();
-            toast(mutation ? "🧬 Next generation bred — A is playing" : "🧬 Two mutations bred — A is playing, tap B to compare");
-          }}
-          className="rounded-lg border border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-200 transition"
-          title="Natural selection: breeds two offspring of the current sound. Audition A/B, keep the one you like, then mutate again to evolve further in that direction."
-        >🧬 Mutate</button>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={amount}
-          onChange={(e) => act().setMutateAmount(Number(e.target.value))}
-          className="w-full h-1 cursor-pointer"
-          style={{ accentColor: "#34d399" }}
-          aria-label="Mutation amount"
-          title={`Mutation amount: ${Math.round(amount * 100)}% — small = subtle drift, large = wild offspring`}
-        />
-      </div>
-      {mutation && (
-        <div className="flex items-center gap-1 rounded-lg border border-emerald-400/30 bg-emerald-500/[0.06] px-1.5 py-1">
-          <span className="text-[9px] font-mono uppercase tracking-wider text-emerald-300/70 pr-0.5" title="Generation">G{mutation.generation}</span>
-          {(["a", "b"] as const).map((w) => (
-            <button
-              key={w}
-              onClick={() => act().auditionMutation(w)}
-              className={`w-6 h-6 rounded-md text-[11px] font-black transition border ${
-                mutation.listening === w
-                  ? "border-emerald-300 bg-emerald-400/25 text-emerald-100 shadow-[0_0_10px_rgb(52_211_153/0.4)]"
-                  : "border-white/15 bg-white/5 text-white/50 hover:text-white/80"
-              }`}
-              title={`Audition mutation ${w.toUpperCase()}`}
-            >{w.toUpperCase()}</button>
-          ))}
-          <button
-            onClick={() => { act().commitMutation(); toast(`✓ Kept mutation ${mutation.listening.toUpperCase()} — mutate again to keep evolving`); }}
-            className="h-6 px-2 rounded-md border border-emerald-400/60 bg-emerald-500/20 hover:bg-emerald-500/30 text-[10px] font-bold text-emerald-100 transition"
-            title="Keep the offspring you're hearing"
-          >✓ Keep</button>
-          <button
-            onClick={() => { act().discardMutation(); toast("↩ Round discarded — parent patch restored"); }}
-            className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/60 hover:text-white/85 transition"
-            title="Discard both offspring and restore the parent"
-          >✕</button>
-        </div>
-      )}
     </div>
   );
 }
@@ -361,7 +297,7 @@ export function FireCommandView() {
               const p = randomPreset();
               toast(`🎲 Deployed: ${p.name} · ${p.category}`);
             }}
-            className="rounded-lg border border-[#ff6a3d]/60 bg-[#ff6a3d]/15 hover:bg-[#ff6a3d]/25 px-3 py-1 text-xs font-bold transition shadow-[0_0_18px_rgb(255_106_61/0.25)]"
+            className="h-[52px] rounded-2xl border border-[#ff6a3d]/55 bg-gradient-to-b from-[#ff6a3d]/22 to-[#ff6a3d]/08 hover:from-[#ff6a3d]/30 hover:to-[#ff6a3d]/12 px-3.5 text-xs font-black uppercase tracking-[0.12em] transition shadow-[0_0_20px_rgb(255_106_61/0.22)]"
             style={{ color: "#ffd9c9" }}
             title="Deploy a random preset from the armory (the name shows here and in the Patch box)"
           >🎲 Randomize</button>

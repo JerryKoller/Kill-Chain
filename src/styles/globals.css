@@ -415,6 +415,19 @@ select option:checked {
     0% { background-position: 0% 50%; }
     100% { background-position: -200% 50%; }
   }
+  @keyframes evolve-breathe {
+    0%, 100% { opacity: 0.45; transform: scale(1); }
+    50% { opacity: 0.85; transform: scale(1.12); }
+  }
+  @keyframes evolve-bloom {
+    0% { opacity: 0.2; transform: scale(0.6); }
+    40% { opacity: 0.9; transform: scale(1.35); }
+    100% { opacity: 0.35; transform: scale(1); }
+  }
+  @keyframes evolve-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
   .fire-status-dot {
     display: inline-block;
     width: 6px;
