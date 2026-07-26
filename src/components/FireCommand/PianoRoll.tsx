@@ -633,13 +633,16 @@ export function PianoRoll() {
 
   return (
     <div>
-      {/* ── Scale + tools bar ── */}
-      <div className="mb-1.5 flex items-center gap-1.5 flex-wrap text-[11px]">
-        <span className="uppercase tracking-[0.2em] text-dim text-[9px]">Key</span>
+      {/* ── Scale + tools bar (compact) ── */}
+      <div
+        className="mb-1 flex items-center gap-1 flex-wrap text-[11px]"
+        title="Click draw · drag move · edge resize · right-drag erase · Shift+drag velocity · Ctrl+wheel zoom · orange=A · blue=B"
+      >
+        <span className="uppercase tracking-[0.16em] text-dim text-[9px]">Key</span>
         <select
           value={scaleRoot}
           onChange={(e) => setScaleRoot(Number(e.target.value))}
-          className="bg-black/50 border border-white/10 rounded-lg px-1.5 py-1 text-[11px] font-mono outline-none focus:border-cyan/50"
+          className="bg-black/50 border border-white/10 rounded-md px-1 py-0.5 text-[10px] font-mono outline-none focus:border-cyan/50 h-6"
           title="Scale root note"
         >
           {NOTE_NAMES.map((n, i) => (
@@ -649,7 +652,7 @@ export function PianoRoll() {
         <select
           value={scaleId}
           onChange={(e) => setScaleId(e.target.value as ScaleId)}
-          className="bg-black/50 border border-white/10 rounded-lg px-1.5 py-1 text-[11px] outline-none focus:border-cyan/50"
+          className="bg-black/50 border border-white/10 rounded-md px-1 py-0.5 text-[10px] outline-none focus:border-cyan/50 h-6"
           title="Scale — in-scale rows glow in the roll"
         >
           {SCALES.map((s) => (
@@ -661,18 +664,17 @@ export function PianoRoll() {
           data-ui-sound="toggle"
           data-ui-on={scaleSnap ? "true" : "false"}
           disabled={scaleId === "off"}
-          className={`px-2 py-1 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
+          className={`h-6 px-1.5 rounded-md border text-[9px] uppercase tracking-[0.1em] transition ${
             scaleId === "off"
               ? "border-white/8 text-white/25"
               : scaleSnap
                 ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-300"
                 : "border-white/10 bg-white/[0.03] text-white/50 hover:text-white/80"
           }`}
-          title="Snap drawn + dragged notes to the scale — you can't hit a wrong note"
+          title="Snap drawn + dragged notes to the scale"
         >
-          {scaleSnap ? "⚿ Snap" : "○ Snap"}
+          {scaleSnap ? "Snap on" : "Snap"}
         </button>
-        {/* Key assists (v1.6) */}
         <button
           onClick={() => {
             const hit = useFireSequencerStore.getState().detectAndApplyKey();
@@ -685,10 +687,10 @@ export function PianoRoll() {
                   : "Not enough notes to call a key yet",
               );
           }}
-          className="px-2 py-1 rounded-lg border border-white/10 bg-white/[0.03] text-white/60 hover:text-cyan text-[10px] uppercase tracking-[0.12em] transition"
-          title="Detect the key from the notes in the roll (Krumhansl profile match) and set the scale controls to it"
+          className="h-6 px-1.5 rounded-md border border-white/10 bg-white/[0.03] text-white/55 hover:text-cyan text-[9px] uppercase tracking-[0.1em] transition"
+          title="Detect key from notes in the roll"
         >
-          ◎ Detect key
+          Detect
         </button>
         <button
           onClick={() => {
@@ -705,47 +707,44 @@ export function PianoRoll() {
               );
           }}
           disabled={scaleId === "off"}
-          className={`px-2 py-1 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
+          className={`h-6 px-1.5 rounded-md border text-[9px] uppercase tracking-[0.1em] transition ${
             scaleId === "off"
               ? "border-white/8 text-white/25"
-              : "border-white/10 bg-white/[0.03] text-white/60 hover:text-emerald-300"
+              : "border-white/10 bg-white/[0.03] text-white/55 hover:text-emerald-300"
           }`}
-          title="Move every out-of-scale note to its nearest scale tone (undo-able)"
+          title="Move out-of-scale notes to nearest scale tone"
         >
-          ⇥ Conform
+          Conform
         </button>
-        <div className="w-px h-4 bg-white/10 mx-0.5" />
         <button
           onClick={() => { humanizeNotes(); playUi("press"); }}
-          className="px-2 py-1 rounded-lg border border-white/10 bg-white/[0.03] text-white/60 hover:text-white/90 text-[10px] uppercase tracking-[0.12em] transition"
-          title="Humanize: small velocity + micro-timing jitter across all notes — loosens the machine grid"
+          className="h-6 px-1.5 rounded-md border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[9px] uppercase tracking-[0.1em] transition"
+          title="Humanize velocity + micro-timing"
         >
-          ⚄ Humanize
+          Humanize
         </button>
         {selectedIds.size > 0 && (
-          <span className="text-[10px] text-cyan/80 ml-1">
-            {selectedIds.size} selected — Ctrl+D duplicates · ↑↓ transpose · ←→ nudge
+          <span className="text-[9px] text-cyan/80">
+            {selectedIds.size} sel · Ctrl+D · ↑↓ · ←→
           </span>
         )}
         <span className="flex-1" />
-        {/* Zoom controls */}
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => setCellW((w) => clamp(w - 5, ZOOM_MIN, ZOOM_MAX))}
-            className="w-6 h-6 rounded-lg border border-white/10 bg-white/[0.03] text-white/60 hover:text-white text-[12px] leading-none transition"
+            className="w-5 h-5 rounded border border-white/10 bg-white/[0.03] text-white/60 hover:text-white text-[11px] leading-none transition"
             title="Zoom out (Ctrl+wheel)"
           >
             −
           </button>
           <button
             onClick={() => setCellW((w) => clamp(w + 5, ZOOM_MIN, ZOOM_MAX))}
-            className="w-6 h-6 rounded-lg border border-white/10 bg-white/[0.03] text-white/60 hover:text-white text-[12px] leading-none transition"
+            className="w-5 h-5 rounded border border-white/10 bg-white/[0.03] text-white/60 hover:text-white text-[11px] leading-none transition"
             title="Zoom in (Ctrl+wheel)"
           >
             +
           </button>
         </div>
-        <span className="text-[9px] text-dim">Ctrl+drag = select · R-drag = erase</span>
       </div>
 
       <div

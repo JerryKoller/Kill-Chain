@@ -99,38 +99,33 @@ function ArrangementStrip() {
     setRenaming(null);
   };
 
-  // MK IV: inline explainer — the #1 point of confusion was how sections,
-  // the chain and the editors relate. Persisted so it only intrudes once.
-  const [showHelp, setShowHelp] = useState<boolean>(() => {
-    try { return window.localStorage.getItem("killchain.firecmd.arrhelp") !== "0"; } catch { return true; }
+  // Help is opt-in (v2.5.8) — never eat a full row on first launch.
+  const [showHelp, setShowHelp] = useState(false);
+  // Chain row stays visible in Song mode; otherwise starts folded.
+  const [chainOpen, setChainOpen] = useState<boolean>(() => {
+    try {
+      const saved = window.localStorage.getItem("killchain.firecmd.chainopen");
+      if (saved === "1") return true;
+      if (saved === "0") return false;
+    } catch { /* ignore */ }
+    return false;
   });
-  const dismissHelp = () => {
-    setShowHelp(false);
-    try { window.localStorage.setItem("killchain.firecmd.arrhelp", "0"); } catch { /* ignore */ }
+  const showChain = playMode === "song" || chainOpen;
+
+  const toggleChainOpen = () => {
+    const next = !chainOpen;
+    setChainOpen(next);
+    try { window.localStorage.setItem("killchain.firecmd.chainopen", next ? "1" : "0"); } catch { /* ignore */ }
   };
 
   return (
-    <div className="mb-2 rounded-xl border border-white/10 bg-white/[0.02] p-2 space-y-1.5">
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/70">Arrangement</span>
-        <span className="text-[10px] text-dim hidden md:block">pattern → sections → song</span>
-        <button
-          onClick={() => (showHelp ? dismissHelp() : setShowHelp(true))}
-          className="w-4.5 h-4.5 px-1.5 rounded-full border border-white/15 text-[10px] text-white/50 hover:text-white hover:border-white/40 transition"
-          title="How sections and the chain work"
-        >?</button>
-      </div>
-      {showHelp && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-[#ff6a3d]/20 bg-[#ff6a3d]/[0.05] px-2.5 py-1.5 text-[10px] leading-relaxed text-white/65">
-          <span><b className="text-[#ffbfa0]">① Pattern</b> — draw notes &amp; drums in the editors below. They always edit the highlighted section.</span>
-          <span><b className="text-[#ffbfa0]">② Sections</b> — each tab is a full pattern variant (Verse, Drop…). ＋ Section copies the current one.</span>
-          <span><b className="text-[#ffbfa0]">③ Chain</b> — drag section blocks into song order, then hit <b>▸▸ Song</b> to play it front to back.</span>
-          <button onClick={dismissHelp} className="ml-auto px-1.5 rounded border border-white/15 text-white/50 hover:text-white transition">Got it</button>
-        </div>
-      )}
-      {/* section tabs */}
+    <div className="mb-2 rounded-xl border border-white/10 bg-white/[0.02] px-2 py-1.5 space-y-1">
+      {/* One primary row: sections + play mode */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] uppercase tracking-[0.22em] text-dim" title="Pattern variants — the editors below edit the highlighted one">② Sections</span>
+        <span
+          className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/55"
+          title="Pattern variants — the editors below edit the highlighted one"
+        >Sections</span>
         {sections.map((sec) => {
           const active = sec.id === activeSectionId;
           const sounding = playingSection === sec.id;
@@ -156,7 +151,7 @@ function ArrangementStrip() {
               <button
                 onClick={() => setActiveSection(sec.id)}
                 onDoubleClick={() => { setRenaming(sec.id); setRenameValue(sec.name); }}
-                className={`h-7 px-2.5 rounded-l-lg ${sections.length > 1 ? "" : "rounded-r-lg"} text-xs font-bold border transition ${
+                className={`h-6 px-2 rounded-l-md ${sections.length > 1 ? "" : "rounded-r-md"} text-[11px] font-bold border transition ${
                   active ? "" : "border-white/10 bg-white/[0.03] text-white/55 hover:bg-white/[0.08]"
                 }`}
                 style={{
@@ -168,7 +163,7 @@ function ArrangementStrip() {
                 title={`Edit section "${sec.name}" (${sec.bars} bar${sec.bars === 1 ? "" : "s"}) — double-click to rename`}
               >
                 <span
-                  className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle"
+                  className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle"
                   style={{ background: color, opacity: active ? 1 : 0.55 }}
                 />
                 {sec.name}
@@ -177,7 +172,7 @@ function ArrangementStrip() {
               {sections.length > 1 && (
                 <button
                   onClick={() => removeSection(sec.id)}
-                  className="h-7 px-1 rounded-r-lg text-[10px] border border-l-0 text-white/25 hover:text-rose-300 hover:bg-rose-500/10 transition"
+                  className="h-6 px-1 rounded-r-md text-[10px] border border-l-0 text-white/25 hover:text-rose-300 hover:bg-rose-500/10 transition"
                   style={active ? { borderColor: `${color}b0` } : { borderColor: "rgba(255,255,255,0.1)" }}
                   title={`Delete section "${sec.name}" (also removed from the chain)`}
                 >✕</button>
@@ -191,19 +186,18 @@ function ArrangementStrip() {
             if (!id) toast(`Max ${MAX_SECTIONS} sections`);
           }}
           disabled={sections.length >= MAX_SECTIONS}
-          className="h-7 px-2.5 rounded-lg text-xs border border-dashed border-white/20 text-white/50 hover:text-[#ffbfa0] hover:border-[#ff6a3d]/50 disabled:opacity-30 transition"
+          className="h-6 px-2 rounded-md text-[11px] border border-dashed border-white/20 text-white/50 hover:text-[#ffbfa0] hover:border-[#ff6a3d]/50 disabled:opacity-30 transition"
           title="New section — starts as a copy of the current one"
-        >＋ Section</button>
+        >＋</button>
 
-        <div className="w-px h-5 bg-white/10 mx-1" />
+        <div className="w-px h-4 bg-white/10 mx-0.5" />
 
-        {/* play mode */}
-        <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+        <div className="inline-flex rounded-md border border-white/10 bg-white/[0.03] p-0.5">
           {(["section", "song"] as const).map((m) => (
             <button
               key={m}
               onClick={() => setPlayMode(m)}
-              className="px-2.5 py-1 text-[11px] font-bold rounded-md transition"
+              className="px-2 py-0.5 text-[10px] font-bold rounded transition"
               style={
                 playMode === m
                   ? { background: "rgba(255,255,255,0.1)", color: FIRE }
@@ -212,95 +206,121 @@ function ArrangementStrip() {
               title={
                 m === "section"
                   ? "Loop the section you're editing"
-                  : "Play the chain below start-to-finish, then loop"
+                  : "Play the chain start-to-finish, then loop"
               }
             >
-              {m === "section" ? "⟳ Section" : "▸▸ Song"}
+              {m === "section" ? "Section" : "Song"}
             </button>
           ))}
         </div>
+
+        <button
+          onClick={toggleChainOpen}
+          className={`h-6 px-2 rounded-md text-[10px] border transition ${
+            showChain
+              ? "border-[#ff6a3d]/40 bg-[#ff6a3d]/10 text-[#ffbfa0]"
+              : "border-white/10 text-white/45 hover:text-white/70"
+          }`}
+          title={showChain ? "Hide song chain" : "Show song chain"}
+        >
+          Chain {chain.length > 0 ? `(${chain.length})` : ""} {showChain ? "▴" : "▾"}
+        </button>
+
+        <button
+          onClick={() => setShowHelp((v) => !v)}
+          className="ml-auto h-5 w-5 rounded-full border border-white/15 text-[10px] text-white/45 hover:text-white hover:border-white/40 transition"
+          title="How sections and the chain work"
+        >?</button>
       </div>
 
-      {/* song chain — block timeline (v1.7): width ∝ bars, drag to reorder */}
-      <div className="flex flex-wrap items-center gap-1">
-        <span
-          className={`text-[10px] uppercase tracking-[0.22em] ${playMode === "song" ? "text-[#ffbfa0]" : "text-dim"}`}
-          title="The song: sections play in this order, left to right. Drag blocks to rearrange; click one to edit that section."
-        >③ Chain</span>
-        {chain.length === 0 && (
-          <span className="text-[11px] text-white/35 italic">empty — Song mode falls back to the active section</span>
-        )}
-        {chain.map((id, i) => {
-          const sec = sections.find((s) => s.id === id);
-          const barsOf = sec?.bars ?? 1;
-          const color = colorOf(id);
-          const sounding = playingSlot === i;
-          const isDropTarget = dropAt === i && dragFrom !== null && dragFrom !== i;
-          return (
-            <div
-              key={`${id}-${i}`}
-              draggable
-              onDragStart={(e) => {
-                setDragFrom(i);
-                e.dataTransfer.effectAllowed = "move";
-              }}
-              onDragOver={(e) => {
-                if (dragFrom === null) return;
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                if (dropAt !== i) setDropAt(i);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (dragFrom !== null && dragFrom !== i) moveChainTo(dragFrom, i);
-                setDragFrom(null);
-                setDropAt(null);
-              }}
-              onDragEnd={() => { setDragFrom(null); setDropAt(null); }}
-              onClick={() => setActiveSection(id)}
-              className={`group relative h-8 rounded-md border cursor-grab active:cursor-grabbing select-none overflow-hidden transition ${
-                isDropTarget ? "ring-2 ring-white/60" : ""
-              } ${dragFrom === i ? "opacity-40" : ""}`}
-              style={{
-                width: Math.max(44, barsOf * 26),
-                borderColor: sounding ? color : `${color}55`,
-                background: `linear-gradient(180deg, ${color}${sounding ? "38" : "1f"}, ${color}${sounding ? "22" : "10"})`,
-                boxShadow: sounding ? `0 0 14px ${color}66` : undefined,
-              }}
-              title={`${sec?.name ?? "?"} — ${barsOf} bar${barsOf === 1 ? "" : "s"}. Click to edit · drag to reorder`}
-            >
-              <span
-                className="absolute inset-0 flex items-center justify-center gap-1 text-[11px] font-bold"
-                style={{ color: sounding ? "#fff" : color }}
+      {showHelp && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-[#ff6a3d]/20 bg-[#ff6a3d]/[0.05] px-2 py-1 text-[10px] leading-relaxed text-white/65">
+          <span><b className="text-[#ffbfa0]">Sections</b> — each tab is a full pattern variant. Editors below always edit the highlighted one.</span>
+          <span><b className="text-[#ffbfa0]">Chain</b> — drag blocks into song order, then hit Song to play front to back.</span>
+          <button onClick={() => setShowHelp(false)} className="ml-auto px-1.5 rounded border border-white/15 text-white/50 hover:text-white transition">Got it</button>
+        </div>
+      )}
+
+      {showChain && (
+        <div className="flex flex-wrap items-center gap-1 pt-0.5 border-t border-white/[0.06]">
+          <span
+            className={`text-[9px] uppercase tracking-[0.18em] ${playMode === "song" ? "text-[#ffbfa0]" : "text-dim"}`}
+            title="Sections play in this order. Drag to rearrange; click to edit."
+          >Chain</span>
+          {chain.length === 0 && (
+            <span className="text-[10px] text-white/35 italic">empty — Song falls back to active section</span>
+          )}
+          {chain.map((id, i) => {
+            const sec = sections.find((s) => s.id === id);
+            const barsOf = sec?.bars ?? 1;
+            const color = colorOf(id);
+            const sounding = playingSlot === i;
+            const isDropTarget = dropAt === i && dragFrom !== null && dragFrom !== i;
+            return (
+              <div
+                key={`${id}-${i}`}
+                draggable
+                onDragStart={(e) => {
+                  setDragFrom(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  if (dragFrom === null) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (dropAt !== i) setDropAt(i);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragFrom !== null && dragFrom !== i) moveChainTo(dragFrom, i);
+                  setDragFrom(null);
+                  setDropAt(null);
+                }}
+                onDragEnd={() => { setDragFrom(null); setDropAt(null); }}
+                onClick={() => setActiveSection(id)}
+                className={`group relative h-7 rounded-md border cursor-grab active:cursor-grabbing select-none overflow-hidden transition ${
+                  isDropTarget ? "ring-2 ring-white/60" : ""
+                } ${dragFrom === i ? "opacity-40" : ""}`}
+                style={{
+                  width: Math.max(40, barsOf * 24),
+                  borderColor: sounding ? color : `${color}55`,
+                  background: `linear-gradient(180deg, ${color}${sounding ? "38" : "1f"}, ${color}${sounding ? "22" : "10"})`,
+                  boxShadow: sounding ? `0 0 14px ${color}66` : undefined,
+                }}
+                title={`${sec?.name ?? "?"} — ${barsOf} bar${barsOf === 1 ? "" : "s"}. Click to edit · drag to reorder`}
               >
-                {nameOf(id)}
-                <span className="font-mono font-normal opacity-55 text-[9px]">{barsOf}</span>
-              </span>
-              {/* bar ticks inside the block */}
-              {barsOf > 1 && Array.from({ length: barsOf - 1 }, (_, b) => (
                 <span
-                  key={b}
-                  className="absolute top-0 bottom-0 w-px opacity-25"
-                  style={{ left: `${((b + 1) / barsOf) * 100}%`, background: color }}
-                />
-              ))}
-              <button
-                onClick={(e) => { e.stopPropagation(); removeChainAt(i); }}
-                className="absolute top-0 right-0 hidden group-hover:flex items-center justify-center w-4 h-4 text-[9px] rounded-bl bg-black/60 text-white/60 hover:text-rose-300"
-                title="Remove from the chain"
-              >✕</button>
-            </div>
-          );
-        })}
-        <button
-          onClick={() => {
-            if (chain.length >= MAX_CHAIN) { toast(`Max ${MAX_CHAIN} chain slots`); return; }
-            appendToChain(activeSectionId);
-          }}
-          className="h-8 px-2 rounded-md text-[11px] border border-dashed border-white/20 text-white/50 hover:text-[#ffbfa0] hover:border-[#ff6a3d]/50 transition"
-          title="Append the ACTIVE section to the end of the chain"
-        >＋ {nameOf(activeSectionId)}</button>
-      </div>
+                  className="absolute inset-0 flex items-center justify-center gap-1 text-[10px] font-bold"
+                  style={{ color: sounding ? "#fff" : color }}
+                >
+                  {nameOf(id)}
+                  <span className="font-mono font-normal opacity-55 text-[9px]">{barsOf}</span>
+                </span>
+                {barsOf > 1 && Array.from({ length: barsOf - 1 }, (_, b) => (
+                  <span
+                    key={b}
+                    className="absolute top-0 bottom-0 w-px opacity-25"
+                    style={{ left: `${((b + 1) / barsOf) * 100}%`, background: color }}
+                  />
+                ))}
+                <button
+                  onClick={(e) => { e.stopPropagation(); removeChainAt(i); }}
+                  className="absolute top-0 right-0 hidden group-hover:flex items-center justify-center w-4 h-4 text-[9px] rounded-bl bg-black/60 text-white/60 hover:text-rose-300"
+                  title="Remove from the chain"
+                >✕</button>
+              </div>
+            );
+          })}
+          <button
+            onClick={() => {
+              if (chain.length >= MAX_CHAIN) { toast(`Max ${MAX_CHAIN} chain slots`); return; }
+              appendToChain(activeSectionId);
+            }}
+            className="h-7 px-2 rounded-md text-[10px] border border-dashed border-white/20 text-white/50 hover:text-[#ffbfa0] hover:border-[#ff6a3d]/50 transition"
+            title="Append the ACTIVE section to the end of the chain"
+          >＋ {nameOf(activeSectionId)}</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -421,6 +441,7 @@ export function SequencerPanel() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("wav");
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const toast = useUIStore((s) => s.toast);
 
   const doExportWav = async () => {
@@ -557,10 +578,10 @@ export function SequencerPanel() {
   return (
     <GlassPanel intense className="p-3">
       {/* transport row */}
-      <div className="flex flex-wrap items-center gap-2.5 mb-2.5">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
         <button
           onClick={togglePlay}
-          className={`h-10 px-5 rounded-xl font-bold text-sm tracking-wide border transition ${
+          className={`h-9 px-4 rounded-xl font-bold text-sm tracking-wide border transition ${
             playing
               ? "border-[#ff6a3d] bg-[#ff6a3d]/25 text-[#ffd9c9] shadow-[0_0_22px_rgb(255_106_61/0.4)]"
               : "border-[#ff6a3d]/50 bg-[#ff6a3d]/10 text-[#ffbfa0] hover:bg-[#ff6a3d]/20"
@@ -573,7 +594,7 @@ export function SequencerPanel() {
         {/* record arm + quantize (v1.6) */}
         <button
           onClick={() => setRecording(!recording)}
-          className={`h-10 px-3 rounded-xl font-bold text-sm border transition ${
+          className={`h-9 px-3 rounded-xl font-bold text-sm border transition ${
             recording
               ? "border-rose-500 bg-rose-500/25 text-rose-200 shadow-[0_0_18px_rgb(244_63_94/0.45)] animate-pulse"
               : "border-white/12 bg-white/[0.03] text-white/50 hover:text-rose-300 hover:border-rose-400/50"
@@ -697,147 +718,153 @@ export function SequencerPanel() {
       {/* arrangement: sections + song chain (v1.6) */}
       <ArrangementStrip />
 
-      {/* editor tabs — always edit the ACTIVE section */}
-      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+      {/* Editor chrome — one row: view + draw + file menu */}
+      <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
         {(() => {
           const idx = Math.max(0, sections.findIndex((s) => s.id === activeSectionId));
           const sec = sections[idx];
           const color = SECTION_COLORS[idx % SECTION_COLORS.length];
           return (
             <span
-              className="inline-flex items-center gap-1.5 h-7 px-2 rounded-lg border text-[10px] uppercase tracking-[0.14em]"
+              className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md border text-[10px] font-bold"
               style={{ borderColor: `${color}66`, background: `${color}12`, color }}
-              title="The piano roll and drum grid below edit THIS section. Switch sections in the Arrangement strip above."
+              title="Editors below edit this section"
             >
-              <span className="text-white/45 normal-case tracking-normal">① Pattern of</span>
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-              <b>{sec?.name ?? "?"}</b>
+              {sec?.name ?? "?"}
             </span>
           );
         })()}
-        <button
-          onClick={() => setTab("roll")}
-          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-            tab === "roll"
-              ? "border-[#ff6a3d]/60 bg-[#ff6a3d]/12 text-[#ffbfa0]"
-              : "border-white/8 bg-white/[0.02] text-white/50 hover:bg-white/[0.06]"
-          }`}
-        >
-          ♪ Piano Roll <span className="opacity-60 font-mono">{noteCount}</span>
-        </button>
-        <button
-          onClick={() => setTab("drums")}
-          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
-            tab === "drums"
-              ? "border-[#9be564]/60 bg-[#9be564]/12 text-[#d3f5b0]"
-              : "border-white/8 bg-white/[0.02] text-white/50 hover:bg-white/[0.06]"
-          }`}
-        >
-          ▦ Drum Grid
-        </button>
+        <div className="inline-flex rounded-md border border-white/10 bg-white/[0.03] p-0.5">
+          <button
+            onClick={() => setTab("roll")}
+            className="px-2.5 py-1 text-[11px] font-semibold rounded transition"
+            style={
+              tab === "roll"
+                ? { background: "rgba(255,106,61,0.18)", color: "#ffbfa0" }
+                : { color: "rgba(255,255,255,0.45)" }
+            }
+          >
+            Piano <span className="opacity-55 font-mono">{noteCount}</span>
+          </button>
+          <button
+            onClick={() => setTab("drums")}
+            className="px-2.5 py-1 text-[11px] font-semibold rounded transition"
+            style={
+              tab === "drums"
+                ? { background: "rgba(155,229,100,0.18)", color: "#d3f5b0" }
+                : { color: "rgba(255,255,255,0.45)" }
+            }
+          >
+            Drums
+          </button>
+        </div>
 
         {tab === "roll" && (
           <>
-            <div className="w-px h-6 bg-white/10 mx-1" />
-            {/* Which instrument new notes are drawn into (issue #11) */}
-            <span className="text-[10px] uppercase tracking-[0.2em] text-dim">Draw</span>
-            <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+            <div className="w-px h-4 bg-white/10" />
+            <div className="inline-flex rounded-md border border-white/10 bg-white/[0.03] p-0.5">
               {([0, 1] as const).map((ch) => (
                 <button
                   key={ch}
                   onClick={() => setActiveChannel(ch)}
-                  className="px-2.5 py-1 text-[11px] font-bold rounded-md transition"
+                  className="px-2 py-0.5 text-[10px] font-bold rounded transition"
                   style={
                     activeChannel === ch
                       ? { background: "rgba(255,255,255,0.1)", color: ch === 0 ? FIRE : ICE }
                       : { color: "rgba(255,255,255,0.4)" }
                   }
-                  title={ch === 0 ? "Draw notes for Synth A (orange)" : "Draw notes for Synth B (blue)"}
+                  title={ch === 0 ? "Draw Synth A (orange)" : "Draw Synth B (blue)"}
                 >
-                  {ch === 0 ? "A" : "B"}
+                  Draw {ch === 0 ? "A" : "B"}
                 </button>
               ))}
             </div>
-            {/* Synth B voice — any preset from the armory */}
-            <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-dim">
-              <span style={{ color: synthBEnabled ? ICE : undefined }}>B voice</span>
-              <select
-                value={synthBPresetId}
-                onChange={(e) => setSynthBPresetId(e.target.value)}
-                className="max-w-[150px] rounded-lg border border-white/12 bg-black/40 px-2 py-1 text-[11px] normal-case tracking-normal text-white/85 outline-none focus:border-[#62b6ff]/60"
-                title="The preset voicing Synth B — its own oscillators, filter and FX"
-              >
-                {presetGroups.map((g) => (
-                  <optgroup key={g.cat} label={g.cat}>
-                    {g.items.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
+            <select
+              value={synthBPresetId}
+              onChange={(e) => setSynthBPresetId(e.target.value)}
+              className="max-w-[140px] h-6 rounded-md border border-white/12 bg-black/40 px-1.5 text-[10px] text-white/85 outline-none focus:border-[#62b6ff]/60"
+              title="Synth B voice preset"
+              style={{ color: synthBEnabled ? ICE : undefined }}
+            >
+              {presetGroups.map((g) => (
+                <optgroup key={g.cat} label={g.cat}>
+                  {g.items.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
           </>
         )}
 
         <div className="flex-1" />
-        {/* Studio I/O: project save/open + WAV export */}
-        <button
-          onClick={() => void doOpenProject()}
-          className="px-2.5 py-1 rounded-lg text-[11px] border border-white/8 text-white/50 hover:text-white/90 hover:border-white/25 transition"
-          title="Open a .kcproj project — patch, pattern, drums, samples"
-        >
-          ⌸ Open
-        </button>
-        <button
-          onClick={() => void doSaveProject()}
-          className="px-2.5 py-1 rounded-lg text-[11px] border border-white/8 text-white/50 hover:text-white/90 hover:border-white/25 transition"
-          title="Save everything (patch + pattern + samples) as a .kcproj project file"
-        >
-          ⛃ Save
-        </button>
-        <select
-          value={exportFormat}
-          onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
-          className="rounded-lg border border-white/12 bg-black/40 px-1.5 py-1 text-[11px] text-white/75 outline-none"
-          title="Export format — WAV (lossless) or MP3 (320 kbps, shareable)"
-        >
-          <option value="wav">WAV</option>
-          <option value="mp3">MP3</option>
-        </select>
-        <button
-          onClick={() => void doExportWav()}
-          disabled={!!exporting}
-          className={`px-2.5 py-1 rounded-lg text-[11px] border transition ${
-            exporting
-              ? "border-amber-400/60 bg-amber-400/10 text-amber-300"
-              : "border-cyan/40 bg-cyan/8 text-cyan hover:bg-cyan/15"
-          }`}
-          title={
-            playMode === "song"
-              ? "Record one full pass of the SONG CHAIN to a file (clean synth+drums, no chain FX)"
-              : "Record one pattern pass to a file (clean synth+drums, no chain FX)"
-          }
-        >
-          {exporting ?? (playMode === "song" ? "⬇ Export Song" : "⬇ Export")}
-        </button>
-        <button
-          onClick={() => void doExportStems()}
-          disabled={!!exporting}
-          className="px-2.5 py-1 rounded-lg text-[11px] border border-violet/40 bg-violet/8 text-violet hover:bg-violet/15 transition"
-          title="Chain-aware stems: one pass, six files into a folder — Synth A, Synth B, drums, samples (dry), the dry master, and the through-Kill-Chain master"
-        >
-          ⬇ Stems
-        </button>
-        <div className="w-px h-5 bg-white/10" />
+
+        <div className="relative">
+          <button
+            onClick={() => setFileMenuOpen((v) => !v)}
+            className={`h-6 px-2.5 rounded-md text-[10px] font-semibold border transition ${
+              fileMenuOpen || exporting
+                ? "border-cyan/50 bg-cyan/10 text-cyan"
+                : "border-white/10 text-white/50 hover:text-white/80 hover:border-white/25"
+            }`}
+            title="Open, save, export"
+          >
+            {exporting ?? "File ▾"}
+          </button>
+          {fileMenuOpen && (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-20 cursor-default"
+                aria-label="Close file menu"
+                onClick={() => setFileMenuOpen(false)}
+              />
+              <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-white/12 bg-[#12151c] shadow-xl p-1 space-y-0.5">
+                <button
+                  onClick={() => { setFileMenuOpen(false); void doOpenProject(); }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-white/70 hover:bg-white/8 hover:text-white transition"
+                >Open project…</button>
+                <button
+                  onClick={() => { setFileMenuOpen(false); void doSaveProject(); }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-white/70 hover:bg-white/8 hover:text-white transition"
+                >Save project…</button>
+                <div className="h-px bg-white/8 my-0.5" />
+                <div className="flex items-center gap-1 px-2 py-1">
+                  <span className="text-[9px] uppercase tracking-wider text-white/35">Format</span>
+                  <select
+                    value={exportFormat}
+                    onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
+                    className="flex-1 rounded border border-white/12 bg-black/40 px-1 py-0.5 text-[10px] text-white/75 outline-none"
+                  >
+                    <option value="wav">WAV</option>
+                    <option value="mp3">MP3</option>
+                  </select>
+                </div>
+                <button
+                  onClick={() => { setFileMenuOpen(false); void doExportWav(); }}
+                  disabled={!!exporting}
+                  className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-cyan/90 hover:bg-cyan/10 transition disabled:opacity-40"
+                >{playMode === "song" ? "Export song…" : "Export…"}</button>
+                <button
+                  onClick={() => { setFileMenuOpen(false); void doExportStems(); }}
+                  disabled={!!exporting}
+                  className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-violet-300/90 hover:bg-violet-500/10 transition disabled:opacity-40"
+                >Export stems…</button>
+              </div>
+            </>
+          )}
+        </div>
         <button
           onClick={doClear}
-          className={`px-2.5 py-1 rounded-lg text-[11px] border transition ${
+          className={`h-6 px-2 rounded-md text-[10px] border transition ${
             confirmClear
               ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
-              : "border-white/8 text-white/40 hover:text-rose-300 hover:border-rose-400/40"
+              : "border-white/10 text-white/40 hover:text-rose-300 hover:border-rose-400/40"
           }`}
+          title={`Clear ${tab === "roll" ? "notes" : "drums"}`}
         >
-          {confirmClear ? "CONFIRM PURGE" : `Clear ${tab === "roll" ? "notes" : "drums"}`}
+          {confirmClear ? "Confirm?" : "Clear"}
         </button>
       </div>
 
@@ -845,12 +872,6 @@ export function SequencerPanel() {
         <>
           <PianoRoll />
           <AutomationLane />
-          <div className="mt-2 text-[10px] text-dim">
-            Click to draw · drag to move · drag right edge to resize · hold right-click to erase ·
-            Shift+drag sets velocity · Ctrl+wheel zooms · piano keys audition ·{" "}
-            <span style={{ color: FIRE }}>orange</span> notes fire Synth A,{" "}
-            <span style={{ color: ICE }}>blue</span> notes fire Synth B
-          </div>
         </>
       ) : (
         <div className="overflow-x-auto pb-1">

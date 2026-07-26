@@ -1,9 +1,10 @@
 /**
- * FireBand — category shell for Fire Command modules (v2.5.7).
+ * FireBand — category shell for Fire Command modules (v2.5.8).
  *
  * When the band is folded, only the band header shows.
  * When open, collapsed modules appear as equal-width chips;
- * expanded modules render below in an even grid.
+ * expanded modules stack full-width (never side-by-side — that
+ * crushes mixers / pads / scopes when several are open).
  */
 
 import {
@@ -91,13 +92,9 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
   );
 }
 
-function openGridClass(n: number): string {
-  if (n <= 1) return "grid grid-cols-1 gap-2";
-  if (n === 2) return "grid grid-cols-1 md:grid-cols-2 gap-2";
-  if (n === 3) return "grid grid-cols-1 md:grid-cols-3 gap-2";
-  if (n === 4) return "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2";
-  if (n === 5) return "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2";
-  return "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2";
+/** Open modules always get the full band width — no multi-column squeeze. */
+function openStackClass(): string {
+  return "flex flex-col gap-2 min-w-0";
 }
 
 export function FireBand({
@@ -183,7 +180,7 @@ export function FireBand({
         {!bandCollapsed && (
           <>
             <ChipGrid modules={collapsedList} />
-            <div className={openGridClass(Math.max(1, openCount))}>
+            <div className={openStackClass()}>
               {children}
             </div>
           </>
