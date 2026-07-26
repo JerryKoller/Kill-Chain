@@ -2,6 +2,15 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.9] — 2026-07-26 — Mission Showcase Presets + Clean Splash
+
+### Added
+- **20 mission showcase presets** (`Mission · …`) — purpose-built Fire Command patches for demos (trap 808, floor reese, neon chord, neuro growl, acid 303, uplift saw, halftime wobble, etc.)
+
+### Changed
+- **Mission demos** — rebuilt around the showcase presets with leaner arrangements so each genre actually reads
+- **Boot splash** — single centered column (emblem → wordmark → bar); even spacing, no cluttered HUD/EQ/radar pile-up
+
 ## [2.6.8] — 2026-07-26 — Mission Auth + Boot Splash
 
 ### Changed
