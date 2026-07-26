@@ -99,11 +99,38 @@ function ArrangementStrip() {
     setRenaming(null);
   };
 
+  // MK IV: inline explainer — the #1 point of confusion was how sections,
+  // the chain and the editors relate. Persisted so it only intrudes once.
+  const [showHelp, setShowHelp] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("killchain.firecmd.arrhelp") !== "0"; } catch { return true; }
+  });
+  const dismissHelp = () => {
+    setShowHelp(false);
+    try { window.localStorage.setItem("killchain.firecmd.arrhelp", "0"); } catch { /* ignore */ }
+  };
+
   return (
-    <div className="mb-2 space-y-1.5">
+    <div className="mb-2 rounded-xl border border-white/10 bg-white/[0.02] p-2 space-y-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-white/70">Arrangement</span>
+        <span className="text-[10px] text-dim hidden md:block">pattern → sections → song</span>
+        <button
+          onClick={() => (showHelp ? dismissHelp() : setShowHelp(true))}
+          className="w-4.5 h-4.5 px-1.5 rounded-full border border-white/15 text-[10px] text-white/50 hover:text-white hover:border-white/40 transition"
+          title="How sections and the chain work"
+        >?</button>
+      </div>
+      {showHelp && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-[#ff6a3d]/20 bg-[#ff6a3d]/[0.05] px-2.5 py-1.5 text-[10px] leading-relaxed text-white/65">
+          <span><b className="text-[#ffbfa0]">① Pattern</b> — draw notes &amp; drums in the editors below. They always edit the highlighted section.</span>
+          <span><b className="text-[#ffbfa0]">② Sections</b> — each tab is a full pattern variant (Verse, Drop…). ＋ Section copies the current one.</span>
+          <span><b className="text-[#ffbfa0]">③ Chain</b> — drag section blocks into song order, then hit <b>▸▸ Song</b> to play it front to back.</span>
+          <button onClick={dismissHelp} className="ml-auto px-1.5 rounded border border-white/15 text-white/50 hover:text-white transition">Got it</button>
+        </div>
+      )}
       {/* section tabs */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] uppercase tracking-[0.22em] text-dim">Sections</span>
+        <span className="text-[10px] uppercase tracking-[0.22em] text-dim" title="Pattern variants — the editors below edit the highlighted one">② Sections</span>
         {sections.map((sec) => {
           const active = sec.id === activeSectionId;
           const sounding = playingSection === sec.id;
@@ -199,7 +226,7 @@ function ArrangementStrip() {
         <span
           className={`text-[10px] uppercase tracking-[0.22em] ${playMode === "song" ? "text-[#ffbfa0]" : "text-dim"}`}
           title="The song: sections play in this order, left to right. Drag blocks to rearrange; click one to edit that section."
-        >Chain</span>
+        >③ Chain</span>
         {chain.length === 0 && (
           <span className="text-[11px] text-white/35 italic">empty — Song mode falls back to the active section</span>
         )}
@@ -387,6 +414,8 @@ export function SequencerPanel() {
   const recordQuantize = useFireSequencerStore((s) => s.recordQuantize);
   const setRecording = useFireSequencerStore((s) => s.setRecording);
   const setRecordQuantize = useFireSequencerStore((s) => s.setRecordQuantize);
+  const sections = useFireSequencerStore((s) => s.sections);
+  const activeSectionId = useFireSequencerStore((s) => s.activeSectionId);
 
   const [tab, setTab] = useState<Tab>("roll");
   const [confirmClear, setConfirmClear] = useState(false);
@@ -610,6 +639,10 @@ export function SequencerPanel() {
         <div className="flex-1" />
 
         {/* channel arm toggles */}
+        <span
+          className="text-[10px] uppercase tracking-[0.22em] text-dim"
+          title="The three instruments this sequencer drives: Synth A (the big synth below), Synth B (a second preset voice) and the drum kit"
+        >Channels</span>
         <button
           onClick={() => setSynthEnabled(!synthEnabled)}
           className={`h-8 px-3 rounded-lg text-xs font-semibold border transition ${
@@ -664,8 +697,24 @@ export function SequencerPanel() {
       {/* arrangement: sections + song chain (v1.6) */}
       <ArrangementStrip />
 
-      {/* editor tabs */}
-      <div className="flex items-center gap-1.5 mb-2">
+      {/* editor tabs — always edit the ACTIVE section */}
+      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+        {(() => {
+          const idx = Math.max(0, sections.findIndex((s) => s.id === activeSectionId));
+          const sec = sections[idx];
+          const color = SECTION_COLORS[idx % SECTION_COLORS.length];
+          return (
+            <span
+              className="inline-flex items-center gap-1.5 h-7 px-2 rounded-lg border text-[10px] uppercase tracking-[0.14em]"
+              style={{ borderColor: `${color}66`, background: `${color}12`, color }}
+              title="The piano roll and drum grid below edit THIS section. Switch sections in the Arrangement strip above."
+            >
+              <span className="text-white/45 normal-case tracking-normal">① Pattern of</span>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+              <b>{sec?.name ?? "?"}</b>
+            </span>
+          );
+        })()}
         <button
           onClick={() => setTab("roll")}
           className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${

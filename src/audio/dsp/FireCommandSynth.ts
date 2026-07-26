@@ -41,7 +41,9 @@ export type ModDest =
   | "none" | "pitch" | "cutoff" | "resonance" | "wtA" | "wtB" | "wtC"
   | "levelA" | "levelB" | "levelC" | "fm" | "pan" | "volume" | "reverb" | "delay";
 export interface ModRoute { source: ModSource; dest: ModDest; amount: number; }
-export const MOD_SLOTS = 8;
+// MK IV: 8 → 12 slots. makeModMatrix pads shorter (legacy) matrices with
+// inert routes, so every persisted patch/preset loads unchanged.
+export const MOD_SLOTS = 12;
 /** Build a fixed-length (MOD_SLOTS) matrix, padding/truncating as needed. */
 export function makeModMatrix(routes: ModRoute[] = []): ModRoute[] {
   const out: ModRoute[] = [];
@@ -196,6 +198,8 @@ export interface FirePatch {
   gateDepth: number;  // 0..1, how deep closed steps cut
   gateSteps: number;  // 2..16 active steps
   gatePattern: number[]; // length 16, 0/1
+  /** 0..1 edge softness — 0 = hard chop (legacy), 1 = pumping swells. */
+  gateSmooth: number;
   // ── Master ──
   masterGain: number;
 }
@@ -325,9 +329,23 @@ function makeFilterDriveCurve(drive: number): Float32Array<ArrayBuffer> {
   const w = clamp(d * 3, 0, 1);
   const k = 1 + d * 6;
   const makeup = 1 / (0.55 + 0.45 * k);
+  // ROOT CAUSE (clipping, part 7 — "Talking Bass"): at drive 0 this curve was
+  // the pure identity over ±CLIP_RANGE, which still HARD-clamps at the curve
+  // endpoints. A resonant filter peak (Q 6+ riding an LFO wobble over the
+  // fundamental) routinely pushes a bass voice past ±CLIP_RANGE, so wobble
+  // presets sheared off flat once per LFO cycle — heard as rhythmic crunch.
+  // The clean transfer is now identity to 85% of the range with a tanh
+  // shoulder into the same ±CLIP_RANGE bound: bit-identical for normal
+  // levels, rounded instead of sheared for resonant overs.
+  const knee = CLIP_RANGE * 0.85;
+  const span = CLIP_RANGE - knee;
+  const soft = (x: number): number => {
+    const a = Math.abs(x);
+    return a <= knee ? x : Math.sign(x) * (knee + span * Math.tanh((a - knee) / span));
+  };
   for (let i = 0; i < n; i++) {
     const x = ((i / (n - 1)) * 2 - 1) * CLIP_RANGE;
-    curve[i] = (1 - w) * x + w * Math.tanh(k * x) * makeup;
+    curve[i] = (1 - w) * soft(x) + w * Math.tanh(k * x) * makeup;
   }
   return curve;
 }
@@ -1490,7 +1508,10 @@ export class FireCommandSynth {
       gateTarget = (p.gatePattern[idx] ?? 1) > 0.5 ? 1 : clamp(1 - p.gateDepth, 0, 1);
     }
     if (gateTarget !== this.lastGateTarget) {
-      this.gateGain.gain.setTargetAtTime(gateTarget, now, p.gateOn ? 0.004 : 0.02);
+      // gateSmooth stretches the edge time-constant: 4 ms (legacy chop) up to
+      // ~60 ms (sidechain-style pump).
+      const tc = 0.004 + clamp(p.gateSmooth ?? 0, 0, 1) * 0.056;
+      this.gateGain.gain.setTargetAtTime(gateTarget, now, p.gateOn ? tc : 0.02);
       this.lastGateTarget = gateTarget;
     }
 
@@ -1588,6 +1609,23 @@ export class FireCommandSynth {
 
   getMorphPositions(): { a: number; b: number; c: number } {
     return { a: this.displayPosA, b: this.displayPosB, c: this.displayPosC };
+  }
+
+  /** Current trance-gate step for the UI playhead (-1 when the gate is off). */
+  getGateStep(): number {
+    const p = this.patch;
+    if (!p.gateOn) return -1;
+    const steps = Math.max(1, Math.min(16, Math.round(p.gateSteps)));
+    return Math.floor(this.ctx.currentTime * clamp(p.gateRate, 0.25, 24)) % steps;
+  }
+
+  /** Live LFO value (-1..1) for UI scopes — same math the mod loop uses. */
+  getLfoValue(idx: 1 | 2): number {
+    const p = this.patch;
+    const now = this.ctx.currentTime;
+    return idx === 1
+      ? this.jsLfoValue(p.lfo1Wave, p.lfo1Rate, this.sh1Val, now)
+      : this.jsLfoValue(p.lfo2Wave, p.lfo2Rate, this.sh2Val, now);
   }
 
   // ── notes ──
@@ -2011,5 +2049,6 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   stereoWidth: 1,
   gateOn: false, gateRate: 8, gateDepth: 1, gateSteps: 16,
   gatePattern: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+  gateSmooth: 0,
   masterGain: 0.72,
 };

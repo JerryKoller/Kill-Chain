@@ -4,6 +4,7 @@ import { SequencerPanel } from "./SequencerPanel";
 import {
   useFireCommandStore,
   FIRE_PRESETS,
+  buildArpSequence,
   type ArpMode,
   type ArpDivision,
   type ArpSettings,
@@ -13,7 +14,7 @@ import { useUIStore } from "@/state/uiStore";
 import { getEngine } from "@/audio/AudioEngine";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
-import type { FirePatch, LfoWave, FireFilterType, LfoDest, SubWave, DriveMode, ModSource, ModDest, ModRoute, HarmonyMode, SpectralMode } from "@/audio/dsp/FireCommandSynth";
+import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { PresetBrowser } from "./PresetBrowser";
 import { MixerPanel } from "./MixerPanel";
@@ -37,10 +38,6 @@ const SEMITONE_TO_KEY: Record<number, string> = Object.fromEntries(
 );
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const noteName = (midi: number) => `${NOTE_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
-const BLACK_SET = new Set([1, 3, 6, 8, 10, 13, 15]);
-const BLACK_LEFT_INDEX: Record<number, number> = { 1: 0, 3: 1, 6: 3, 8: 4, 10: 5, 13: 7, 15: 8 };
-const WHITE_SEMITONES = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16];
-
 const fmtHz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)}k` : `${Math.round(v)}`);
 const fmtSec = (v: number) => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`);
 const fmtPct = (v: number) => `${Math.round(v * 100)}%`;
@@ -81,6 +78,71 @@ function UndoRedoButtons() {
   );
 }
 
+/**
+ * Natural Selection (MK IV): Mutate breeds TWO offspring of the current
+ * patch; A/B audition either, Keep adopts the winner, and hitting Mutate
+ * again breeds the next generation from whichever one is playing.
+ */
+function MutateCluster() {
+  const mutation = useFireCommandStore((s) => s.mutation);
+  const amount = useFireCommandStore((s) => s.mutateAmount);
+  const toast = useUIStore((s) => s.toast);
+  const act = useFireCommandStore.getState;
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="flex flex-col items-stretch gap-0.5">
+        <button
+          onClick={() => {
+            act().mutate();
+            toast(mutation ? "🧬 Next generation bred — A is playing" : "🧬 Two mutations bred — A is playing, tap B to compare");
+          }}
+          className="rounded-lg border border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-200 transition"
+          title="Natural selection: breeds two offspring of the current sound. Audition A/B, keep the one you like, then mutate again to evolve further in that direction."
+        >🧬 Mutate</button>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={amount}
+          onChange={(e) => act().setMutateAmount(Number(e.target.value))}
+          className="w-full h-1 cursor-pointer"
+          style={{ accentColor: "#34d399" }}
+          aria-label="Mutation amount"
+          title={`Mutation amount: ${Math.round(amount * 100)}% — small = subtle drift, large = wild offspring`}
+        />
+      </div>
+      {mutation && (
+        <div className="flex items-center gap-1 rounded-lg border border-emerald-400/30 bg-emerald-500/[0.06] px-1.5 py-1">
+          <span className="text-[9px] font-mono uppercase tracking-wider text-emerald-300/70 pr-0.5" title="Generation">G{mutation.generation}</span>
+          {(["a", "b"] as const).map((w) => (
+            <button
+              key={w}
+              onClick={() => act().auditionMutation(w)}
+              className={`w-6 h-6 rounded-md text-[11px] font-black transition border ${
+                mutation.listening === w
+                  ? "border-emerald-300 bg-emerald-400/25 text-emerald-100 shadow-[0_0_10px_rgb(52_211_153/0.4)]"
+                  : "border-white/15 bg-white/5 text-white/50 hover:text-white/80"
+              }`}
+              title={`Audition mutation ${w.toUpperCase()}`}
+            >{w.toUpperCase()}</button>
+          ))}
+          <button
+            onClick={() => { act().commitMutation(); toast(`✓ Kept mutation ${mutation.listening.toUpperCase()} — mutate again to keep evolving`); }}
+            className="h-6 px-2 rounded-md border border-emerald-400/60 bg-emerald-500/20 hover:bg-emerald-500/30 text-[10px] font-bold text-emerald-100 transition"
+            title="Keep the offspring you're hearing"
+          >✓ Keep</button>
+          <button
+            onClick={() => { act().discardMutation(); toast("↩ Round discarded — parent patch restored"); }}
+            className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/60 hover:text-white/85 transition"
+            title="Discard both offspring and restore the parent"
+          >✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FireCommandView() {
   const presetId = useFireCommandStore((s) => s.presetId);
   const octave = useFireCommandStore((s) => s.octave);
@@ -109,6 +171,25 @@ export function FireCommandView() {
       : FIRE_PRESETS.find((p) => p.id === presetId)?.name ??
         userPresets.find((p) => p.id === presetId)?.name ??
         "Custom";
+
+  // Prev/Next patch cycling — walks factory bank then user presets, wrapping
+  // at the ends. From "Custom" it re-enters the bank at the start.
+  const cyclePreset = useCallback(
+    (dir: 1 | -1) => {
+      const s = useFireCommandStore.getState();
+      const ids = [...FIRE_PRESETS.map((p) => p.id), ...s.userPresets.map((p) => p.id)];
+      if (ids.length === 0) return;
+      const cur = ids.indexOf(s.presetId);
+      const next = cur === -1
+        ? (dir === 1 ? 0 : ids.length - 1)
+        : (cur + dir + ids.length) % ids.length;
+      s.loadPreset(ids[next]);
+      const all = [...FIRE_PRESETS, ...s.userPresets];
+      const p = all[next];
+      useUIStore.getState().toast(`♪ ${p.name}${"category" in p ? ` · ${(p as { category?: string }).category ?? ""}` : ""}`);
+    },
+    [],
+  );
 
   useEffect(() => {
     useFireCommandStore.getState().sync();
@@ -185,17 +266,36 @@ export function FireCommandView() {
 
   return (
     <div className="space-y-2 pb-6">
-      {/* Fire Command command-deck header — compact strip */}
+      {/* MK IV command-deck header — targeting-reticle mark, no mascot */}
       <div className="fire-header relative overflow-hidden rounded-2xl border border-[#ff6a3d]/25 px-4 py-2.5">
+        {/* hazard chevrons along the bottom edge */}
+        <div
+          className="absolute inset-x-0 bottom-0 h-[3px] opacity-40 pointer-events-none"
+          style={{ background: "repeating-linear-gradient(115deg, #ff6a3d 0 10px, transparent 10px 20px)" }}
+        />
         <div className="relative z-10 flex flex-wrap items-center gap-3">
           <div
-            className="w-8 h-8 rounded-lg grid place-items-center text-lg shrink-0"
-            style={{ background: "linear-gradient(145deg, #ff6a3d2e, #ff2e1a1a)", border: "1px solid #ff6a3d55", boxShadow: "0 0 24px #ff6a3d33" }}
-          >🔥</div>
+            className="w-9 h-9 rounded-lg grid place-items-center shrink-0"
+            style={{ background: "linear-gradient(145deg, #ff6a3d24, #0a0a0a)", border: "1px solid #ff6a3d55", boxShadow: "0 0 24px #ff6a3d2e, inset 0 0 12px #ff6a3d1a" }}
+            title="Fire Command MK IV"
+          >
+            {/* targeting reticle */}
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <circle cx="12" cy="12" r="8" stroke="#ff6a3d" strokeWidth="1.4" opacity="0.9" />
+              <circle cx="12" cy="12" r="3.4" stroke="#ffcf5c" strokeWidth="1.2" opacity="0.85" />
+              <circle cx="12" cy="12" r="1" fill="#ff6a3d" />
+              <path d="M12 1v4.4M12 18.6V23M1 12h4.4M18.6 12H23" stroke="#ff6a3d" strokeWidth="1.4" strokeLinecap="round" />
+              <path d="M5.2 5.2l1.8 1.8M18.8 5.2L17 7M5.2 18.8L7 17M18.8 18.8L17 17" stroke="#ff6a3d" strokeWidth="1" opacity="0.45" strokeLinecap="round" />
+            </svg>
+          </div>
           <div className="min-w-0 flex items-baseline gap-3">
             <h1 className="fire-title text-lg font-black tracking-[0.08em] leading-none">FIRE COMMAND</h1>
+            <span
+              className="text-[10px] font-black tracking-[0.18em] leading-none px-1.5 py-0.5 rounded"
+              style={{ color: "#ffcf5c", border: "1px solid #ffcf5c44", background: "#ffcf5c12", textShadow: "0 0 10px #ffcf5c66" }}
+            >MK IV</span>
             <div className="hidden sm:block text-[9px] uppercase tracking-[0.3em] text-[#ff9a6b]/80">
-              Wavetable Weapons Platform · MK III
+              Wavetable Weapons Platform
             </div>
           </div>
           <div className="flex-1" />
@@ -204,7 +304,7 @@ export function FireCommandView() {
               <span className="fire-status-dot" style={{ background: "#9be564" }} />
               Systems Nominal
             </div>
-            <div className="text-white/35">3 OSC · 8-SLOT MATRIX · SEQ ARMED</div>
+            <div className="text-white/35">3 OSC · 12-SLOT MATRIX · 1000 PATCHES</div>
           </div>
         </div>
       </div>
@@ -214,6 +314,12 @@ export function FireCommandView() {
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[10px] uppercase tracking-[0.22em] text-dim pl-1">Patch</span>
           <button
+            onClick={() => cyclePreset(-1)}
+            className="w-7 h-7 rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
+            title="Previous preset"
+            aria-label="Previous preset"
+          >◂</button>
+          <button
             onClick={() => setBrowserOpen(true)}
             className="flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] hover:bg-white/[0.09] hover:border-white/25 px-3 py-1 transition min-w-[180px]"
             title="Open the preset library"
@@ -222,6 +328,12 @@ export function FireCommandView() {
             <span className="text-sm font-semibold text-white truncate">{currentName}</span>
             <span className="ml-auto text-[10px] uppercase tracking-widest text-white/40">Browse ▾</span>
           </button>
+          <button
+            onClick={() => cyclePreset(1)}
+            className="w-7 h-7 rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
+            title="Next preset"
+            aria-label="Next preset"
+          >▸</button>
           <button
             onClick={() => loadPreset("init")}
             className="rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 px-3 py-1 text-xs text-white/75 transition"
@@ -237,14 +349,7 @@ export function FireCommandView() {
             style={{ color: "#ffd9c9" }}
             title="Deploy a random preset from the armory (the name shows here and in the Patch box)"
           >🎲 Randomize</button>
-          <button
-            onClick={() => {
-              useFireCommandStore.getState().mutate();
-              toast("🧬 Mutated — the patch evolved a little");
-            }}
-            className="rounded-lg border border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-200 transition"
-            title="Evolve the CURRENT sound: every shaping parameter drifts a few percent. Hammer it to walk somewhere new — the patch keeps its identity but grows quirks."
-          >🧬 Mutate</button>
+          <MutateCluster />
           <div className="flex-1" />
           <UndoRedoButtons />
           <button
@@ -346,6 +451,7 @@ export function FireCommandView() {
           </span>
         }
       >
+        <WarpViz />
         <KnobRow>
           <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
           <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
@@ -373,6 +479,7 @@ export function FireCommandView() {
         <Section title="Filter" color={FIRE} right={
           <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
         }>
+          <FilterCurveViz />
           <KnobRow>
             <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={46} />
             <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={3} />
@@ -389,9 +496,11 @@ export function FireCommandView() {
           <LpgAwareAmpRow />
         </Section>
         <Section title="Mod Envelope → Morph" color={GRN}>
+          <EnvGraph a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
           <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
         </Section>
         <Section title="Filter Envelope" color={GRN}>
+          <EnvGraph a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" />
           <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" />
         </Section>
       </div>
@@ -424,6 +533,7 @@ export function FireCommandView() {
         <Section title="Drive · Punch" color={FIRE} right={
           <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
         }>
+          <DriveViz />
           <KnobRow>
             <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0.08} />
             <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} />
@@ -672,6 +782,269 @@ function VoiceCount() {
   return <span ref={ref} className="text-[10px] font-mono text-white/60">0 voices</span>;
 }
 
+// ════════════════════ module visualizations (MK IV eye candy) ════════════════════
+
+/** ADSR curve — a live picture of the envelope the knobs describe. */
+function EnvGraph({ a, d, s, r, color = GRN }: { a: NumericKey; d: NumericKey; s: NumericKey; r: NumericKey; color?: string }) {
+  const av = useFireCommandStore((st) => st.patch[a]) as number;
+  const dv = useFireCommandStore((st) => st.patch[d]) as number;
+  const sv = useFireCommandStore((st) => st.patch[s]) as number;
+  const rv = useFireCommandStore((st) => st.patch[r]) as number;
+  const W = 220, H = 44, PAD = 3;
+  // Log-ish time weighting so short attacks stay visible next to long tails.
+  const seg = (t: number) => Math.pow(Math.max(0.001, t), 0.5);
+  const holdW = 0.55; // fixed sustain-hold plateau share
+  const tot = seg(av) + seg(dv) + seg(rv);
+  const wA = (seg(av) / tot) * (1 - 0.22) * (W - PAD * 2) * (1 - holdW * 0.4);
+  const wD = (seg(dv) / tot) * (1 - 0.22) * (W - PAD * 2) * (1 - holdW * 0.4);
+  const wR = (seg(rv) / tot) * (1 - 0.22) * (W - PAD * 2) * (1 - holdW * 0.4);
+  const wS = (W - PAD * 2) - wA - wD - wR;
+  const y = (level: number) => PAD + (1 - level) * (H - PAD * 2);
+  const x0 = PAD;
+  const x1 = x0 + wA;
+  const x2 = x1 + wD;
+  const x3 = x2 + Math.max(6, wS);
+  const x4 = Math.min(W - PAD, x3 + wR);
+  const path = `M ${x0} ${y(0)} Q ${x0 + wA * 0.4} ${y(0.85)} ${x1} ${y(1)} Q ${x1 + wD * 0.35} ${y(sv + (1 - sv) * 0.25)} ${x2} ${y(sv)} L ${x3} ${y(sv)} Q ${x3 + wR * 0.35} ${y(sv * 0.25)} ${x4} ${y(0)}`;
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
+      <line x1={x3} y1={PAD} x2={x3} y2={H - PAD} stroke="rgba(255,255,255,0.06)" />
+      <line x1={x1} y1={PAD} x2={x1} y2={H - PAD} stroke="rgba(255,255,255,0.06)" />
+      <path d={`${path} L ${x4} ${H - PAD} L ${x0} ${H - PAD} Z`} fill={`${color}14`} stroke="none" />
+      <path d={path} fill="none" stroke={color} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 3px ${color}88)` }} />
+      <circle cx={x1} cy={y(1)} r={2} fill={color} />
+      <circle cx={x2} cy={y(sv)} r={2} fill={color} />
+    </svg>
+  );
+}
+
+/** Vactrol pluck curve for LPG mode — strike, ring, die. */
+function LpgGraph() {
+  const decay = useFireCommandStore((s) => s.patch.lpgDecay);
+  const color = "#ffcf5c";
+  const W = 220, H = 44, PAD = 3;
+  const k = 4 / Math.max(0.05, decay);
+  const pts: string[] = [];
+  for (let i = 0; i <= 60; i++) {
+    const t = (i / 60) * 2.5;
+    const v = Math.min(1, t / 0.012) * Math.exp(-k * t * 0.4);
+    pts.push(`${PAD + (i / 60) * (W - PAD * 2)},${PAD + (1 - v) * (H - PAD * 2)}`);
+  }
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
+      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 3px ${color}88)` }} />
+    </svg>
+  );
+}
+
+/** Animated LFO scope — the waveform with a phase-locked tracer dot. */
+function LfoScope({ idx }: { idx: 1 | 2 }) {
+  const wave = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Wave : s.patch.lfo2Wave));
+  const rate = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Rate : s.patch.lfo2Rate));
+  const depth = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Depth : s.patch.lfo2Depth));
+  const ref = useRef<HTMLCanvasElement>(null);
+  const stateRef = useRef({ wave, rate, depth });
+  stateRef.current = { wave, rate, depth };
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let lastTick = 0;
+    const shape = (w: LfoWave, ph: number): number => {
+      const p = ph - Math.floor(ph);
+      switch (w) {
+        case "sine": return Math.sin(p * Math.PI * 2);
+        case "triangle": return 1 - 4 * Math.abs(p - 0.5);
+        case "sawtooth": return 1 - 2 * p;
+        case "square": return p < 0.5 ? 1 : -1;
+        case "sample-hold": {
+          // Deterministic pseudo-random stairs so the picture is stable.
+          const step = Math.floor(ph * 8);
+          const h = Math.sin(step * 127.1) * 43758.5453;
+          return (h - Math.floor(h)) * 2 - 1;
+        }
+        default: return 0;
+      }
+    };
+    const draw = (nowMs: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden) return;
+      if (nowMs - lastTick < 40) return; // 25 fps is plenty
+      lastTick = nowMs;
+      const { wave: w, rate: rt, depth: dp } = stateRef.current;
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      const mid = H / 2;
+      const amp = (H / 2 - 3) * Math.max(0.12, dp);
+      // zero line
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
+      // two cycles of the waveform
+      ctx.strokeStyle = ICE;
+      ctx.lineWidth = 1.6;
+      ctx.shadowBlur = 5; ctx.shadowColor = ICE;
+      ctx.beginPath();
+      for (let x = 0; x <= W; x++) {
+        const y = mid - shape(w, (x / W) * 2) * amp;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      // tracer synced to the engine clock (same phase the DSP mod loop uses)
+      let t = nowMs / 1000;
+      try { t = getEngine().ctx.currentTime; } catch { /* fallback */ }
+      const ph = (t * rt) % 2;
+      const px = (ph / 2) * W;
+      const py = mid - shape(w, ph) * amp;
+      ctx.fillStyle = "#fff";
+      ctx.shadowBlur = 8; ctx.shadowColor = ICE;
+      ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return <canvas ref={ref} width={220} height={40} className="w-full h-[40px] rounded-md bg-black/30 mb-1.5" />;
+}
+
+/** Filter response sketch — type/cutoff/reso drawn on a log frequency axis. */
+function FilterCurveViz() {
+  const type = useFireCommandStore((s) => s.patch.filterType);
+  const cutoff = useFireCommandStore((s) => s.patch.filterCutoff);
+  const res = useFireCommandStore((s) => s.patch.filterResonance);
+  const W = 220, H = 44, PAD = 3;
+  const fLo = 20, fHi = 20000;
+  const xOf = (f: number) => PAD + (Math.log(f / fLo) / Math.log(fHi / fLo)) * (W - PAD * 2);
+  const peak = Math.min(1, Math.log10(Math.max(1, res)) * 0.75); // resonance bump 0..1
+  const gain = (f: number): number => {
+    const r = f / Math.max(30, cutoff);
+    const bump = peak * Math.exp(-Math.pow(Math.log2(r), 2) * 9);
+    let g: number;
+    if (type === "lowpass") g = 1 / Math.sqrt(1 + Math.pow(r, 4));
+    else if (type === "highpass") g = 1 / Math.sqrt(1 + Math.pow(1 / r, 4));
+    else if (type === "bandpass") g = Math.exp(-Math.pow(Math.log2(r), 2) * 1.4);
+    else g = 1 - Math.exp(-Math.pow(Math.log2(r), 2) * 9); // notch
+    return Math.min(1.6, g + (type === "notch" ? 0 : bump));
+  };
+  const pts: string[] = [];
+  for (let i = 0; i <= 72; i++) {
+    const f = fLo * Math.pow(fHi / fLo, i / 72);
+    const g = gain(f);
+    pts.push(`${xOf(f)},${PAD + (1 - Math.min(1, g / 1.6)) * (H - PAD * 2)}`);
+  }
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
+      {[100, 1000, 10000].map((f) => (
+        <line key={f} x1={xOf(f)} y1={PAD} x2={xOf(f)} y2={H - PAD} stroke="rgba(255,255,255,0.05)" />
+      ))}
+      <polyline points={pts.join(" ")} fill="none" stroke={FIRE} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 3px ${FIRE}88)` }} />
+      <line x1={xOf(Math.max(fLo, Math.min(fHi, cutoff)))} y1={PAD} x2={xOf(Math.max(fLo, Math.min(fHi, cutoff)))} y2={H - PAD} stroke={`${FIRE}55`} strokeDasharray="2 3" />
+    </svg>
+  );
+}
+
+/** Spectral-warp harmonic bars — what Stretch/Tilt/Comb do to the partials. */
+function WarpViz() {
+  const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
+  const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
+  const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
+  const GOLD = "#ffcf5c";
+  const W = 220, H = 44, PAD = 3;
+  const N = 24;
+  const bars = [];
+  for (let n = 1; n <= N; n++) {
+    let h = 1 / n; // saw-ish spectrum
+    h *= Math.pow(n / 6, -tilt * 1.2); // tilt: brighten or darken
+    if (n % 2 === 0) h *= 1 - comb * 0.9; // comb: notch even partials
+    h = Math.min(1, Math.max(0.015, h));
+    // stretch: partials slide apart (up) or squash (down)
+    const posN = n * (1 + stretch * 0.6 * ((n - 1) / N));
+    const x = PAD + ((posN - 1) / (N * 1.6)) * (W - PAD * 2);
+    if (x > W - PAD) continue;
+    bars.push(
+      <rect
+        key={n}
+        x={x}
+        y={PAD + (1 - h) * (H - PAD * 2)}
+        width={3}
+        height={h * (H - PAD * 2)}
+        rx={1}
+        fill={n % 2 === 0 ? `${GOLD}88` : GOLD}
+        style={{ transition: "all 120ms ease" }}
+      />,
+    );
+  }
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
+      {bars}
+    </svg>
+  );
+}
+
+/** Drive transfer curve — the exact waveshape each mode applies. */
+function DriveViz() {
+  const drive = useFireCommandStore((s) => s.patch.drive);
+  const mode = useFireCommandStore((s) => s.patch.driveMode);
+  const W = 110, H = 44, PAD = 3;
+  const k = 1 + drive * 14;
+  const f = (x: number): number => {
+    switch (mode) {
+      case "tube": { const y = Math.tanh(k * x * 0.8); return y + 0.15 * drive * Math.tanh(3 * x) * (1 - Math.abs(y)); }
+      case "fold": { const y = k * x * 0.7; return Math.sin(y * Math.min(2, 0.5 + drive * 2)); }
+      case "hard": return Math.max(-0.8, Math.min(0.8, k * x * 0.6)) / 0.8;
+      case "fuzz": return Math.sign(x) * Math.pow(Math.min(1, Math.abs(k * x * 0.6)), 0.4);
+      default: return Math.tanh(k * x * 0.7);
+    }
+  };
+  const pts: string[] = [];
+  for (let i = 0; i <= 60; i++) {
+    const x = (i / 60) * 2 - 1;
+    pts.push(`${PAD + ((x + 1) / 2) * (W - PAD * 2)},${PAD + (1 - (f(x) + 1) / 2) * (H - PAD * 2)}`);
+  }
+  return (
+    <svg width={W} viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
+      <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="rgba(255,255,255,0.07)" />
+      <line x1={W / 2} y1={PAD} x2={W / 2} y2={H - PAD} stroke="rgba(255,255,255,0.07)" />
+      <polyline points={pts.join(" ")} fill="none" stroke={FIRE} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 3px ${FIRE}88)` }} />
+    </svg>
+  );
+}
+
+/** Arp sequence lane — the actual note order, with the sounding step lit. */
+function ArpViz({ arp }: { arp: ArpSettings }) {
+  const arpOrder = useFireCommandStore((s) => s.arpOrder);
+  const arpCurrent = useFireCommandStore((s) => s.arpCurrent);
+  // Ghost pattern when idle so the lane still previews the mode's shape.
+  const order = arpOrder.length > 0 ? arpOrder : [60, 64, 67];
+  const seq = buildArpSequence(order, arp.mode, arp.octaves);
+  const ghost = arpOrder.length === 0;
+  if (seq.length === 0) return null;
+  const lo = Math.min(...seq), hi = Math.max(...seq);
+  const span = Math.max(1, hi - lo);
+  const W = 220, H = 34, PAD = 3;
+  const n = Math.min(seq.length, 32);
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-2" style={{ height: H }} aria-hidden>
+      {seq.slice(0, 32).map((m, i) => {
+        const x = PAD + (i / Math.max(1, n - 1 || 1)) * (W - PAD * 2 - 4);
+        const y = PAD + (1 - (m - lo) / span) * (H - PAD * 2 - 4);
+        const sounding = !ghost && arp.enabled && arpCurrent === m;
+        return (
+          <rect
+            key={i}
+            x={x} y={y} width={4} height={4} rx={1.5}
+            fill={sounding ? "#fff" : ghost ? "rgba(255,255,255,0.18)" : FIRE}
+            style={sounding ? { filter: `drop-shadow(0 0 4px ${FIRE})` } : undefined}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
 // ════════════════════ osc panel ════════════════════
 
 function OscPanel({ group }: { group: "a" | "b" | "c" }) {
@@ -707,6 +1080,7 @@ function LfoPanel({ idx }: { idx: 1 | 2 }) {
   const depthKey = `lfo${idx}Depth` as NumericKey;
   return (
     <Section title={`LFO ${idx}`} color={ICE} right={<FLfoWave paramKey={waveKey} />}>
+      <LfoScope idx={idx} />
       <div className="mb-2">
         <FSeg<LfoDest>
           paramKey={destKey}
@@ -745,12 +1119,37 @@ function MacrosPanel() {
   );
 }
 
+/** Named gate patterns — classic trance/electro chop shapes. */
+const GATE_PRESETS: { name: string; steps: number[] }[] = [
+  { name: "Offbeat", steps: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0] },
+  { name: "Four Floor", steps: [1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0] },
+  { name: "Gallop", steps: [1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1] },
+  { name: "3-3-2", steps: [1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0] },
+  { name: "Stutter", steps: [1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0] },
+  { name: "Sparse", steps: [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0] },
+  { name: "Long-Short", steps: [1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0] },
+];
+
 function GatePanel() {
   const on = useFireCommandStore((s) => s.patch.gateOn);
   const pattern = useFireCommandStore((s) => s.patch.gatePattern);
   const steps = useFireCommandStore((s) => s.patch.gateSteps);
   const setParam = useFireCommandStore((s) => s.setParam);
   const setGateStep = useFireCommandStore((s) => s.setGateStep);
+  // Live playhead — polls the engine's step counter while the gate runs.
+  const [playStep, setPlayStep] = useState(-1);
+  useEffect(() => {
+    if (!on) { setPlayStep(-1); return; }
+    const id = window.setInterval(() => {
+      setPlayStep(getEngine().fireCommand.getGateStep());
+    }, 45);
+    return () => window.clearInterval(id);
+  }, [on]);
+  const setPattern = (p: number[]) => setParam("gatePattern", p.slice(0, 16));
+  const shift = (dir: 1 | -1) => {
+    const n = pattern.length;
+    setPattern(pattern.map((_, i) => pattern[(i - dir + n) % n]));
+  };
   return (
     <Section title="Trance Gate" color={ICE} collapseKey="gate" defaultCollapsed right={
       <button
@@ -758,20 +1157,48 @@ function GatePanel() {
         className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${on ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_14px_rgb(var(--c-cyan)/0.3)]" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
       >{on ? "● ON" : "OFF"}</button>
     }>
+      {/* pattern toolbox */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        <select
+          value=""
+          onChange={(e) => {
+            const p = GATE_PRESETS.find((g) => g.name === e.target.value);
+            if (p) setPattern([...p.steps]);
+          }}
+          className="bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white/80 focus:outline-none cursor-pointer"
+          title="Load a classic gate shape"
+        >
+          <option value="" disabled className="bg-ink">Pattern…</option>
+          {GATE_PRESETS.map((g) => <option key={g.name} value={g.name} className="bg-ink">{g.name}</option>)}
+        </select>
+        <button onClick={() => shift(-1)} className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition" title="Rotate pattern left">◂ Shift</button>
+        <button onClick={() => shift(1)} className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition" title="Rotate pattern right">Shift ▸</button>
+        <button
+          onClick={() => setPattern(pattern.map((v) => (v > 0.5 ? 0 : 1)))}
+          className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition"
+          title="Invert — open steps close, closed steps open"
+        >Invert</button>
+        <button
+          onClick={() => setPattern(Array.from({ length: 16 }, () => (Math.random() < 0.55 ? 1 : 0)))}
+          className="h-6 px-2 rounded-md border border-white/15 bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition"
+          title="Random pattern"
+        >Rand</button>
+      </div>
       <div className="flex gap-1 mb-3">
         {pattern.map((v, i) => {
           const active = i < steps;
           const lit = v > 0.5;
+          const isPlay = on && i === playStep && active;
           return (
             <button
               key={i}
               onClick={() => setGateStep(i, !lit)}
               className="flex-1 h-7 rounded-md border transition"
               style={{
-                borderColor: lit && active ? `${ICE}aa` : "rgba(255,255,255,0.1)",
-                background: !active ? "rgba(255,255,255,0.02)" : lit ? `${ICE}33` : "rgba(255,255,255,0.05)",
+                borderColor: isPlay ? "#fff" : lit && active ? `${ICE}aa` : "rgba(255,255,255,0.1)",
+                background: !active ? "rgba(255,255,255,0.02)" : lit ? (isPlay ? `${ICE}66` : `${ICE}33`) : "rgba(255,255,255,0.05)",
                 opacity: active ? 1 : 0.3,
-                boxShadow: lit && active ? `inset 0 0 10px ${ICE}55` : "none",
+                boxShadow: isPlay ? `inset 0 0 12px ${ICE}aa, 0 0 8px ${ICE}66` : lit && active ? `inset 0 0 10px ${ICE}55` : "none",
               }}
               title={`Step ${i + 1}`}
             />
@@ -782,8 +1209,9 @@ function GatePanel() {
         <FParamKnob paramKey="gateRate" label="Rate" min={0.5} max={24} curve="log" format={fmtHzRate} def={8} color={ICE} />
         <FParamKnob paramKey="gateDepth" label="Depth" min={0} max={1} format={fmtPct} def={1} color={ICE} />
         <FParamKnob paramKey="gateSteps" label="Steps" min={2} max={16} integer format={fmtInt} def={16} color={ICE} />
+        <FParamKnob paramKey="gateSmooth" label="Smooth" min={0} max={1} format={fmtPct} def={0} color={ICE} />
       </KnobRow>
-      <div className="mt-1 text-[10px] text-dim">Rhythmic amplitude gate — chops the synth into a pattern.</div>
+      <div className="mt-1 text-[10px] text-dim">Rhythmic amplitude gate. Smooth softens the chop into sidechain-style pumping.</div>
     </Section>
   );
 }
@@ -897,6 +1325,7 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
         title="Latch — keep arpeggiating after you let go"
       >Hold</button>
     }>
+      <ArpViz arp={arp} />
       <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={() => setArp({ enabled: !arp.enabled })}
@@ -907,8 +1336,11 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
           value={arp.mode}
           onChange={(v) => setArp({ mode: v })}
           options={[
-            { id: "up", label: "Up" }, { id: "down", label: "Dn" }, { id: "updown", label: "Up/Dn" },
-            { id: "random", label: "Rnd" }, { id: "asplayed", label: "Play" },
+            { id: "up", label: "Up" }, { id: "down", label: "Dn" },
+            { id: "updown", label: "Up/Dn" }, { id: "downup", label: "Dn/Up" },
+            { id: "converge", label: "Converge" }, { id: "diverge", label: "Diverge" },
+            { id: "pedal", label: "Pedal" }, { id: "random", label: "Rnd" },
+            { id: "walk", label: "Walk" }, { id: "asplayed", label: "Play" },
           ]}
         />
         <Seg<string>
@@ -929,19 +1361,44 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
         <div className="flex items-center gap-3">
           <KnobMini label="Tempo" value={arp.bpm} min={40} max={300} integer format={fmtBpm} onChange={(v) => setArp({ bpm: Math.round(v) })} />
           <KnobMini label="Gate" value={arp.gate} min={0.1} max={1} format={fmtPct} onChange={(v) => setArp({ gate: v })} />
+          <KnobMini label="Swing" value={arp.swing ?? 0} min={0} max={0.33} format={(v) => `${Math.round(v * 300)}%`} onChange={(v) => setArp({ swing: v })} />
+          <KnobMini label="Ratchet" value={arp.ratchet ?? 0} min={0} max={1} format={fmtPct} onChange={(v) => setArp({ ratchet: v })} />
         </div>
+        <div className="flex items-center gap-2" title="Velocity accents: accented steps hit full force, the rest sit back">
+          <KnobMini label="Accent" value={arp.accent ?? 0} min={0} max={1} format={fmtPct} onChange={(v) => setArp({ accent: v })} />
+          <div className="flex flex-col items-center gap-0.5">
+            <Seg<string>
+              value={String(arp.accentEvery ?? 4)}
+              onChange={(v) => setArp({ accentEvery: Number(v) })}
+              options={[{ id: "2", label: "2" }, { id: "3", label: "3" }, { id: "4", label: "4" }, { id: "6", label: "6" }, { id: "8", label: "8" }]}
+            />
+            <span className="text-[9px] uppercase tracking-wide text-dim">Every</span>
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 text-[10px] text-dim leading-relaxed">
+        <span className="text-white/60">Converge</span> plays outside-in, <span className="text-white/60">Diverge</span> inside-out,{" "}
+        <span className="text-white/60">Pedal</span> bounces the lowest note against the others,{" "}
+        <span className="text-white/60">Walk</span> wanders drunkenly. Ratchet adds probabilistic double-hits.
       </div>
     </Section>
   );
 }
 
-// ════════════════════ keyboard ════════════════════
+// ════════════════════ keyboard (MK IV: 2 octaves + octave scroll) ════════════════════
+
+const KB_OCTAVES = 2;
+const WHITE_IN_OCT = [0, 2, 4, 5, 7, 9, 11];
+const BLACK_IN_OCT = [1, 3, 6, 8, 10];
+/** White-key index (within an octave) that each black key sits after. */
+const BLACK_AFTER_WHITE: Record<number, number> = { 1: 0, 3: 1, 6: 3, 8: 4, 10: 5 };
 
 function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => void }) {
   const heldNotes = useFireCommandStore((s) => s.heldNotes);
   const arpOrder = useFireCommandStore((s) => s.arpOrder);
   const arpCurrent = useFireCommandStore((s) => s.arpCurrent);
   const arpEnabled = useFireCommandStore((s) => s.arp.enabled);
+  const setOctave = useFireCommandStore((s) => s.setOctave);
   const litSet = new Set(arpEnabled ? arpOrder : heldNotes);
   const mouseNote = useRef<number | null>(null);
   useEffect(() => {
@@ -952,71 +1409,120 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
     window.addEventListener("pointercancel", release);
     return () => { window.removeEventListener("pointerup", release); window.removeEventListener("pointercancel", release); };
   }, []);
-  const press = (midi: number) => {
+  // Velocity from strike position: hitting a key near its base plays loud,
+  // up by the fulcrum plays soft — like leaning into a real key.
+  const press = (midi: number, e?: React.PointerEvent) => {
     const store = useFireCommandStore.getState();
     if (mouseNote.current !== null && mouseNote.current !== midi) store.noteOff(mouseNote.current);
     mouseNote.current = midi;
-    store.noteOn(midi);
+    let vel = 0.9;
+    if (e) {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      vel = clamp(0.45 + ((e.clientY - r.top) / r.height) * 0.55, 0.45, 1);
+    }
+    store.noteOn(midi, vel);
   };
-  const enter = (midi: number, buttons: number) => { if (buttons & 1) press(midi); };
+  const enter = (midi: number, e: React.PointerEvent) => { if (e.buttons & 1) press(midi, e); };
   const base = (octave + 1) * 12;
-  const keyStyle = (midi: number, black: boolean) => {
+  const totalWhites = KB_OCTAVES * WHITE_IN_OCT.length;
+  const whiteW = 100 / totalWhites;
+
+  const keyVisual = (midi: number, black: boolean) => {
     const lit = litSet.has(midi);
     const cur = arpCurrent === midi;
-    if (cur) return { background: `linear-gradient(180deg, #fff2ec 0%, ${FIRE} 100%)`, boxShadow: `0 0 30px ${FIRE}` };
-    if (lit) return {
-      background: black ? `linear-gradient(180deg, ${FIRE} 0%, #8f2a14 100%)` : `linear-gradient(180deg, ${FIRE} 0%, #b8351a 100%)`,
-      boxShadow: `0 0 24px ${FIRE}`,
-    };
-    return black
-      ? { background: "linear-gradient(180deg, #2a2d36 0%, #05060a 100%)", boxShadow: "0 4px 8px rgba(0,0,0,0.5)" }
-      : { background: "linear-gradient(180deg, #e9ecf5 0%, #b9c0d0 100%)", boxShadow: "inset 0 -6px 10px rgba(0,0,0,0.18)" };
+    const pressed = lit || cur;
+    const style: React.CSSProperties = pressed
+      ? cur
+        ? { background: `linear-gradient(180deg, #fff2ec 0%, ${FIRE} 100%)`, boxShadow: `0 0 30px ${FIRE}` }
+        : {
+            background: black ? `linear-gradient(180deg, ${FIRE} 0%, #8f2a14 100%)` : `linear-gradient(180deg, ${FIRE} 0%, #b8351a 100%)`,
+            boxShadow: `0 0 24px ${FIRE}`,
+          }
+      : black
+        ? { background: "linear-gradient(180deg, #2f333d 0%, #05060a 92%)", boxShadow: "0 5px 10px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.12)" }
+        : { background: "linear-gradient(180deg, #f2f4fa 0%, #c3cadb 88%, #a9b1c4 100%)", boxShadow: "inset 0 -7px 12px rgba(0,0,0,0.2), inset 0 1px 0 #fff" };
+    // Key travel: pressed keys sink.
+    style.transform = pressed ? "translateY(2px) scaleY(0.985)" : undefined;
+    style.transformOrigin = "top";
+    return style;
   };
+
   return (
     <div className="sticky bottom-0 z-10 pt-2">
       <GlassPanel intense className="p-3">
-        <div className="flex items-center justify-between mb-2 px-1">
+        <div className="flex items-center justify-between mb-2 px-1 gap-3 flex-wrap">
           <div className="text-[10px] uppercase tracking-[0.3em] text-dim">Keyboard</div>
+          {/* Octave scroll: slider + readout, spanning the playable range */}
+          <div className="flex items-center gap-2" title="Scroll the keyboard across octaves (Z/X keys do the same)">
+            <span className="text-[9px] font-mono text-white/45">C{Math.max(0, octave)}</span>
+            <input
+              type="range"
+              min={0}
+              max={7}
+              step={1}
+              value={clamp(octave, 0, 7)}
+              onChange={(e) => setOctave(Number(e.target.value))}
+              className="w-40 h-1 cursor-pointer"
+              style={{ accentColor: FIRE }}
+              aria-label="Keyboard octave"
+            />
+            <span className="text-[9px] font-mono text-white/45">C{Math.min(9, octave + KB_OCTAVES)}</span>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-white/10 text-white/60">OCT {octave}–{octave + 1}</span>
+          </div>
           <div className="flex items-center gap-3">
-            <div className="text-[10px] text-dim hidden sm:block">Click &amp; drag · hold computer keys to perform</div>
+            <div className="text-[10px] text-dim hidden lg:block">Strike low on a key for full velocity · hold computer keys to perform</div>
             <button onClick={onMinimize} className="rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 px-2.5 py-1 text-xs text-white/70 transition">▼ Hide</button>
           </div>
         </div>
-        <div className="relative h-36 select-none" style={{ touchAction: "none" }}>
+        <div className="relative h-40 select-none" style={{ touchAction: "none" }}>
+          {/* felt strip above the keys */}
+          <div className="absolute -top-0.5 inset-x-0 h-1 rounded-full" style={{ background: `linear-gradient(90deg, ${FIRE}55, #8f2a1466, ${FIRE}55)` }} />
           <div className="absolute inset-0 flex gap-[2px]">
-            {WHITE_SEMITONES.map((semi) => {
-              const midi = base + semi;
-              const lit = litSet.has(midi) || arpCurrent === midi;
-              return (
-                <div
-                  key={semi}
-                  onPointerDown={() => press(midi)}
-                  onPointerEnter={(e) => enter(midi, e.buttons)}
-                  className="flex-1 rounded-b-lg border border-white/15 flex flex-col items-center justify-end pb-2 cursor-pointer transition-colors"
-                  style={keyStyle(midi, false)}
-                >
-                  <span className={`text-[11px] font-mono font-bold ${lit ? "text-white" : "text-black/55"}`}>{SEMITONE_TO_KEY[semi] ?? ""}</span>
-                  <span className={`text-[8px] ${lit ? "text-white/80" : "text-black/35"}`}>{noteName(midi)}</span>
-                </div>
-              );
-            })}
+            {Array.from({ length: KB_OCTAVES }, (_, o) =>
+              WHITE_IN_OCT.map((semi) => {
+                const midi = base + o * 12 + semi;
+                const lit = litSet.has(midi) || arpCurrent === midi;
+                const qwerty = SEMITONE_TO_KEY[midi - base];
+                const isC = semi === 0;
+                return (
+                  <div
+                    key={`${o}-${semi}`}
+                    onPointerDown={(e) => press(midi, e)}
+                    onPointerEnter={(e) => enter(midi, e)}
+                    className="flex-1 rounded-b-lg border border-white/15 flex flex-col items-center justify-end pb-1.5 cursor-pointer transition-[background,transform,box-shadow] duration-75"
+                    style={keyVisual(midi, false)}
+                  >
+                    <span className={`text-[10px] font-mono font-bold ${lit ? "text-white" : "text-black/55"}`}>{qwerty ?? ""}</span>
+                    <span className={`text-[8px] font-semibold ${lit ? "text-white/85" : isC ? "text-black/55" : "text-black/30"}`}>{isC || lit ? noteName(midi) : ""}</span>
+                  </div>
+                );
+              }),
+            )}
           </div>
           <div className="absolute inset-0 pointer-events-none">
-            {[...BLACK_SET].sort((a, b) => a - b).map((semi) => {
-              const midi = base + semi;
-              const leftIdx = BLACK_LEFT_INDEX[semi];
-              return (
-                <div
-                  key={semi}
-                  onPointerDown={() => press(midi)}
-                  onPointerEnter={(e) => enter(midi, e.buttons)}
-                  className="absolute top-0 h-[62%] rounded-b-md border border-black/60 flex items-end justify-center pb-1.5 cursor-pointer pointer-events-auto"
-                  style={{ width: "6%", left: `calc(${(leftIdx + 1) * 10}% - 3%)`, zIndex: 2, ...keyStyle(midi, true) }}
-                >
-                  <span className="text-[10px] font-mono font-bold text-white/85">{SEMITONE_TO_KEY[semi] ?? ""}</span>
-                </div>
-              );
-            })}
+            {Array.from({ length: KB_OCTAVES }, (_, o) =>
+              BLACK_IN_OCT.map((semi) => {
+                const midi = base + o * 12 + semi;
+                const whiteIdx = o * WHITE_IN_OCT.length + BLACK_AFTER_WHITE[semi];
+                const qwerty = SEMITONE_TO_KEY[midi - base];
+                return (
+                  <div
+                    key={`${o}-${semi}`}
+                    onPointerDown={(e) => press(midi, e)}
+                    onPointerEnter={(e) => enter(midi, e)}
+                    className="absolute top-0 h-[60%] rounded-b-md border border-black/60 flex items-end justify-center pb-1.5 cursor-pointer pointer-events-auto transition-[background,transform,box-shadow] duration-75"
+                    style={{
+                      width: `${whiteW * 0.62}%`,
+                      left: `${(whiteIdx + 1) * whiteW - whiteW * 0.31}%`,
+                      zIndex: 2,
+                      ...keyVisual(midi, true),
+                    }}
+                  >
+                    <span className="text-[9px] font-mono font-bold text-white/85">{qwerty ?? ""}</span>
+                  </div>
+                );
+              }),
+            )}
           </div>
         </div>
       </GlassPanel>
@@ -1035,7 +1541,11 @@ function FParamKnob({
   const value = useFireCommandStore((s) => s.patch[paramKey]) as number;
   const setNum = useFireCommandStore((s) => s.setParam) as (k: NumericKey, v: number) => void;
   const onChange = useCallback((v: number) => setNum(paramKey, v), [setNum, paramKey]);
-  return <Dial label={label} value={value} min={min} max={max} curve={curve} integer={integer} bipolar={bipolar} format={format} def={def} color={color} size={size} onChange={onChange} />;
+  // Every store-bound knob gets a true "default position" from the init
+  // patch, so the reset button always lands somewhere musical.
+  const fallbackDef = DEFAULT_FIRE_PATCH[paramKey] as number | undefined;
+  const effDef = def ?? (typeof fallbackDef === "number" ? clamp(fallbackDef, Math.min(min, max), Math.max(min, max)) : undefined);
+  return <Dial label={label} value={value} min={min} max={max} curve={curve} integer={integer} bipolar={bipolar} format={format} def={effDef} color={color} size={size} onChange={onChange} />;
 }
 
 /**
@@ -1087,6 +1597,74 @@ function HarmonyPicker() {
  * The amount knob means something different per mode, so the label follows.
  */
 const SPECTRAL_VIOLET = "#c98bff";
+
+/** Stylized spectrum animation — shows what each spectral mode DOES. */
+function SpectralViz() {
+  const mode = useFireCommandStore((s) => s.patch.spectralMode) ?? "off";
+  const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
+  const ref = useRef<HTMLCanvasElement>(null);
+  const stRef = useRef({ mode, amount });
+  stRef.current = { mode, amount };
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let lastTick = 0;
+    const N = 26;
+    const cur = new Float32Array(N).fill(0.2);
+    const draw = (nowMs: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden) return;
+      if (nowMs - lastTick < 50) return;
+      lastTick = nowMs;
+      const { mode: m, amount: a } = stRef.current;
+      const t = nowMs / 1000;
+      const W = canvas.width, H = canvas.height, PAD = 3;
+      ctx.clearRect(0, 0, W, H);
+      const bw = (W - PAD * 2) / N;
+      for (let i = 0; i < N; i++) {
+        // A living pseudo-spectrum: overlapping slow sines per bin.
+        const live = Math.max(0.04,
+          (0.6 / (1 + i * 0.18)) * (0.6 + 0.4 * Math.sin(t * (1.1 + i * 0.37) + i * 2.1)));
+        let v = live;
+        let x = PAD + i * bw;
+        let dim = false;
+        if (m === "freeze") {
+          v = cur[i] = cur[i] * (0.75 + a * 0.249) + live * (1 - (0.75 + a * 0.249));
+        } else if (m === "smear") {
+          cur[i] += (live - cur[i]) * (1 - a * 0.92);
+          v = cur[i];
+        } else if (m === "gate") {
+          const thr = a * 0.45;
+          dim = live < thr;
+          v = live;
+        } else if (m === "shift") {
+          x += (a * 2 - 1) * bw * 5;
+          if (x < PAD - bw || x > W - PAD) continue;
+        }
+        ctx.fillStyle = dim ? "rgba(201,139,255,0.12)" : SPECTRAL_VIOLET;
+        ctx.globalAlpha = dim ? 1 : 0.5 + v * 0.5;
+        ctx.fillRect(x, PAD + (1 - v) * (H - PAD * 2), Math.max(1.5, bw - 2), v * (H - PAD * 2));
+      }
+      ctx.globalAlpha = 1;
+      if (stRef.current.mode === "gate") {
+        const thr = stRef.current.amount * 0.45;
+        ctx.strokeStyle = "rgba(255,255,255,0.35)";
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(PAD, PAD + (1 - thr) * (H - PAD * 2));
+        ctx.lineTo(W - PAD, PAD + (1 - thr) * (H - PAD * 2));
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return <canvas ref={ref} width={220} height={40} className="w-full h-[40px] rounded-md bg-black/30 mb-1.5" />;
+}
 function SpectralPanel() {
   const mode = useFireCommandStore((s) => s.patch.spectralMode);
   const setParam = useFireCommandStore((s) => s.setParam);
@@ -1119,6 +1697,8 @@ function SpectralPanel() {
           <span className="text-white/60">Shift</span> slides every partial up or down.
         </div>
       ) : (
+        <>
+        <SpectralViz />
         <KnobRow>
           <FParamKnob
             paramKey="spectralAmount"
@@ -1131,6 +1711,7 @@ function SpectralPanel() {
           />
           <FParamKnob paramKey="spectralMix" label="Mix" min={0} max={1} format={fmtPct} def={0.5} color={SPECTRAL_VIOLET} />
         </KnobRow>
+        </>
       )}
     </Section>
   );
@@ -1161,6 +1742,7 @@ function LpgAwareAmpRow() {
   if (lpgOn) {
     return (
       <>
+        <LpgGraph />
         <KnobRow>
           <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} color="#ffcf5c" size={46} />
           <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} color="#ffcf5c" size={46} />
@@ -1173,13 +1755,16 @@ function LpgAwareAmpRow() {
     );
   }
   return (
-    <KnobRow>
-      <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
-      <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
-    </KnobRow>
+    <>
+      <EnvGraph a="ampAttack" d="ampDecay" s="ampSustain" r="ampRelease" />
+      <KnobRow>
+        <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
+        <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
+        <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
+        <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
+        <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
+      </KnobRow>
+    </>
   );
 }
 
@@ -1313,6 +1898,23 @@ function KnobMini({ label, value, min, max, integer = false, format, onChange }:
   return <Dial label={label} value={value} min={min} max={max} integer={integer} format={format} onChange={onChange} size={38} color={FIRE} />;
 }
 
+/**
+ * Extract the numeric part of a formatted knob readout (or user-typed text)
+ * and normalize unit suffixes onto the format's own scale: "500ms" → 0.5 (s),
+ * "1.20k" → 1200 (Hz), "−35%" → -35. Lets typed text be compared directly
+ * against what `format()` prints.
+ */
+function parseDisplayNumber(s: string): number {
+  const cleaned = s.replace(/\u2212/g, "-").replace(/,/g, "").trim().toLowerCase();
+  const m = cleaned.match(/^([+-]?\d*\.?\d+)\s*([a-z%×¢°]*)/);
+  if (!m) return NaN;
+  let n = parseFloat(m[1]);
+  const unit = m[2] ?? "";
+  if (unit.startsWith("ms")) n /= 1000;
+  else if (unit.startsWith("k")) n *= 1000;
+  return n;
+}
+
 function Dial({
   label, value, min, max, curve = "lin", integer = false, bipolar = false, format, def, color = FIRE, size = 40, onChange,
 }: {
@@ -1323,12 +1925,15 @@ function Dial({
   const startY = useRef(0);
   const startT = useRef(0);
   const [drag, setDrag] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState("");
   const toT = (v: number) => (curve === "log" ? Math.log(clamp(v, min, max) / min) / Math.log(max / min) : (v - min) / (max - min));
   const fromT = (tt: number) => {
     const raw = curve === "log" ? min * Math.pow(max / min, tt) : min + (max - min) * tt;
     return integer ? Math.round(raw) : raw;
   };
   const t = clamp(toT(value), 0, 1);
+  const resetVal = def !== undefined ? def : bipolar ? fromT(0.5) : min;
   const down = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
     startY.current = e.clientY;
@@ -1337,15 +1942,36 @@ function Dial({
   };
   const move = (e: React.PointerEvent) => {
     if (!drag) return;
-    const scale = e.shiftKey ? 640 : 220;
+    // Shift = ultra-fine: ~½ display unit per pixel, so any exact percentage
+    // is reachable by hand (the old 640 still skipped values on small knobs).
+    const scale = e.shiftKey ? 2400 : 220;
     const nt = clamp(startT.current + (startY.current - e.clientY) / scale, 0, 1);
+    // Re-anchor while shift is toggled mid-drag so the value doesn't jump.
+    startY.current = e.clientY;
+    startT.current = nt;
     onChange(fromT(nt));
   };
   const up = (e: React.PointerEvent) => {
     try { (e.target as Element).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
     setDrag(false);
   };
-  const dbl = () => onChange(def !== undefined ? def : fromT(0.5));
+  const dbl = () => onChange(resetVal);
+
+  /** Type-in commit: bisect t until format(value) prints the typed number. */
+  const commitTyped = (raw: string) => {
+    setEditing(false);
+    const target = parseDisplayNumber(raw);
+    if (!Number.isFinite(target)) return;
+    const dispNum = (tt: number) => parseDisplayNumber(format(fromT(tt)));
+    const ascending = dispNum(1) >= dispNum(0);
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 48; i++) {
+      const mid = (lo + hi) / 2;
+      if ((dispNum(mid) < target) === ascending) lo = mid; else hi = mid;
+    }
+    const best = Math.abs(dispNum(hi) - target) <= Math.abs(dispNum(lo) - target) ? hi : lo;
+    onChange(fromT(best));
+  };
 
   // Wheel + arrow-key adjust, matching the shared Knob. Wheel is registered
   // non-passively so tweaking a dial doesn't scroll the synth page.
@@ -1354,7 +1980,7 @@ function Dial({
     if (integer && !fine) {
       onChange(clamp(Math.round(value) + dir, min, max));
     } else {
-      onChange(fromT(clamp(t + dir * (fine ? 0.01 : 0.04), 0, 1)));
+      onChange(fromT(clamp(t + dir * (fine ? 0.005 : 0.04), 0, 1)));
     }
   };
   useEffect(() => {
@@ -1370,6 +1996,8 @@ function Dial({
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowUp" || e.key === "ArrowRight") { e.preventDefault(); nudgeRef.current(1, e.shiftKey); }
     else if (e.key === "ArrowDown" || e.key === "ArrowLeft") { e.preventDefault(); nudgeRef.current(-1, e.shiftKey); }
+    else if (e.key === "Enter") { e.preventDefault(); setEditText(""); setEditing(true); }
+    else if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); onChange(resetVal); }
   };
 
   const angle = -135 + t * 270;
@@ -1380,10 +2008,11 @@ function Dial({
   const cy = size / 2;
   const ix = cx + Math.sin((angle * Math.PI) / 180) * (r - 2);
   const iy = cy - Math.cos((angle * Math.PI) / 180) * (r - 2);
+  const atDefault = Math.abs(value - resetVal) < Math.abs(max - min) * 1e-4;
   return (
     // Width tracks knob size so small knobs pack densely (floor keeps the
     // value/label text readable).
-    <div className="flex flex-col items-center" style={{ width: Math.max(size + 10, 50) }}>
+    <div className="group flex flex-col items-center relative" style={{ width: Math.max(size + 10, 50) }}>
       <div
         ref={knobRef}
         role="slider"
@@ -1401,7 +2030,7 @@ function Dial({
         onPointerCancel={up}
         onDoubleClick={dbl}
         onKeyDown={onKeyDown}
-        title="Drag or scroll · Shift = fine · Double-click reset"
+        title="Drag or scroll · Shift = ultra-fine · Double-click reset · Click the value to type it"
       >
         <svg width={size} height={size} className="overflow-visible">
           <circle cx={cx} cy={cy} r={r + 2} fill="rgba(0,0,0,0.35)" stroke="rgba(255,255,255,0.07)" />
@@ -1411,7 +2040,41 @@ function Dial({
           <circle cx={ix} cy={iy} r={3} fill={color} />
         </svg>
       </div>
-      <div className="text-[10px] font-mono text-white/85 -mt-0.5 leading-none">{format(value)}</div>
+      {/* Reset pip — fades in on hover, hidden while already at default. */}
+      {!atDefault && (
+        <button
+          onClick={() => onChange(resetVal)}
+          tabIndex={-1}
+          className="absolute -top-1 -right-0.5 w-[14px] h-[14px] rounded-full border border-white/20 bg-black/70 text-white/60 hover:text-white hover:border-white/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center leading-none"
+          style={{ fontSize: 9 }}
+          title={`Reset to ${format(resetVal)}`}
+          aria-label={`Reset ${label} to ${format(resetVal)}`}
+        >⟲</button>
+      )}
+      {editing ? (
+        <input
+          autoFocus
+          value={editText}
+          placeholder={format(value)}
+          onChange={(e) => setEditText(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          onBlur={(e) => commitTyped(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitTyped((e.target as HTMLInputElement).value);
+            else if (e.key === "Escape") setEditing(false);
+            e.stopPropagation();
+          }}
+          className="w-[46px] text-[10px] font-mono text-center bg-black/70 border rounded -mt-0.5 leading-none text-white outline-none"
+          style={{ borderColor: color }}
+        />
+      ) : (
+        <button
+          onClick={() => { setEditText(""); setEditing(true); }}
+          tabIndex={-1}
+          className="text-[10px] font-mono text-white/85 -mt-0.5 leading-none hover:text-white rounded px-0.5 hover:bg-white/10 transition-colors cursor-text"
+          title="Click to type an exact value"
+        >{format(value)}</button>
+      )}
       <div className="text-[9px] uppercase tracking-wide text-dim leading-tight text-center">{label}</div>
     </div>
   );

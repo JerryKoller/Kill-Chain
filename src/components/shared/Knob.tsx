@@ -9,6 +9,8 @@ interface Props {
   label?: string;
   hint?: string;
   bipolar?: boolean;
+  /** Where the reset pip / double-click return to (default 0). */
+  defaultValue?: number;
 }
 
 /**
@@ -24,6 +26,7 @@ function KnobImpl({
   label,
   hint,
   bipolar = true,
+  defaultValue = 0,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const prevValueRef = useRef(value);
@@ -31,6 +34,11 @@ function KnobImpl({
   const startV = useRef(0);
   const lastTickRef = useRef(0);
   const [dragging, setDragging] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState("");
+  // Distinguish "stationary click on the readout" (open editor) from a drag
+  // that happened to start on the readout (adjust value as usual).
+  const movedRef = useRef(false);
 
   // Keep prevValueRef in sync when the external value prop changes (e.g. preset
   // load, undo) so the tick throttle below measures from the right baseline.
@@ -46,6 +54,7 @@ function KnobImpl({
       startY.current = e.clientY;
       startV.current = value;
       prevValueRef.current = value;
+      movedRef.current = false;
       setDragging(true);
     },
     [value],
@@ -55,13 +64,19 @@ function KnobImpl({
     (e: React.PointerEvent) => {
       if (!dragging) return;
       const dy = startY.current - e.clientY;
-      const scale = e.shiftKey ? 600 : 200;
+      if (Math.abs(dy) > 2) movedRef.current = true;
+      // Shift = ultra-fine (~0.5 display units per pixel) so exact
+      // percentages are reachable by hand. Re-anchor each move so toggling
+      // shift mid-drag never jumps the value.
+      const scale = e.shiftKey ? 2000 : 200;
       const range = bipolar ? 2 : 1;
       const next = clamp(
         startV.current + (dy / scale) * range,
         bipolar ? -1 : 0,
         1,
       );
+      startY.current = e.clientY;
+      startV.current = next;
       const delta = next - prevValueRef.current;
       // Only react to meaningful changes so a drag isn't a continuous buzz.
       if (Math.abs(delta) > 0.02) {
@@ -87,9 +102,19 @@ function KnobImpl({
   }, []);
 
   const onDoubleClick = useCallback(() => {
-    // Reset to "neutral" — 0 for bipolar (centre), 0 for unipolar (off).
-    onChange(0);
-  }, [onChange]);
+    onChange(defaultValue);
+  }, [onChange, defaultValue]);
+
+  /** Commit typed text — interpreted on the displayed ×100 scale. */
+  const commitTyped = useCallback(
+    (raw: string) => {
+      setEditing(false);
+      const n = parseFloat(raw.replace(/\u2212/g, "-").replace(/%/g, "").trim());
+      if (!Number.isFinite(n)) return;
+      onChange(clamp(n / 100, bipolar ? -1 : 0, 1));
+    },
+    [onChange, bipolar],
+  );
 
   // Kept in a ref so the wheel listener below registers once instead of
   // re-attaching on every value change mid-scroll.
@@ -124,10 +149,14 @@ function KnobImpl({
         nudge(-1, e.shiftKey);
       } else if (e.key === "Home" || e.key === "0") {
         e.preventDefault();
-        onChange(0);
+        onChange(defaultValue);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        setEditText("");
+        setEditing(true);
       }
     },
-    [nudge, onChange],
+    [nudge, onChange, defaultValue],
   );
 
   // Map value to angle: bipolar -135°..+135°
@@ -180,8 +209,19 @@ function KnobImpl({
     );
   }
 
+  const atDefault = Math.abs(value - defaultValue) < 1e-4;
   return (
-    <div className="flex flex-col items-center select-none">
+    <div className="group relative flex flex-col items-center select-none">
+      {!atDefault && (
+        <button
+          onClick={() => onChange(defaultValue)}
+          tabIndex={-1}
+          className="absolute top-0 right-0 z-10 w-4 h-4 rounded-full border border-white/20 bg-black/70 text-white/60 hover:text-white hover:border-white/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center leading-none"
+          style={{ fontSize: 10 }}
+          title={`Reset to ${Math.round(defaultValue * 100)}`}
+          aria-label={`Reset ${label ?? "knob"} to default`}
+        >⟲</button>
+      )}
       <div
         ref={ref}
         role="slider"
@@ -205,7 +245,7 @@ function KnobImpl({
         onPointerCancel={endDrag}
         onDoubleClick={onDoubleClick}
         onKeyDown={onKeyDown}
-        title="Drag or scroll to change · Double-click to reset · Shift for fine · Arrow keys when focused"
+        title="Drag or scroll to change · Double-click to reset · Shift for ultra-fine · Click the value to type it"
       >
         <svg width={size} height={size} className="overflow-visible">
           <defs>
@@ -260,19 +300,45 @@ function KnobImpl({
             filter={`url(#glow-${color})`}
           />
         </svg>
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div
-            className={`text-[11px] font-mono tabular-nums transition-all ${dragging ? "text-white" : "text-dim"}`}
-            style={
-              dragging
-                ? { textShadow: `0 0 8px ${color}`, transform: "scale(1.25)" }
-                : undefined
-            }
-          >
-            {bipolar
-              ? `${value >= 0 ? "+" : ""}${(value * 100).toFixed(0)}`
-              : `${Math.round(value * 100)}`}
-          </div>
+        <div className="absolute inset-0 flex items-center justify-center">
+          {editing ? (
+            <input
+              autoFocus
+              value={editText}
+              placeholder={(value * 100).toFixed(0)}
+              onChange={(e) => setEditText(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              onBlur={(e) => commitTyped(e.target.value)}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitTyped((e.target as HTMLInputElement).value);
+                else if (e.key === "Escape") setEditing(false);
+                e.stopPropagation();
+              }}
+              className="w-11 text-[11px] font-mono tabular-nums text-center bg-black/80 border rounded text-white outline-none"
+              style={{ borderColor: color }}
+            />
+          ) : (
+            <button
+              tabIndex={-1}
+              onClick={() => {
+                if (movedRef.current) return;
+                setEditText("");
+                setEditing(true);
+              }}
+              className={`text-[11px] font-mono tabular-nums transition-all rounded px-0.5 cursor-text hover:bg-white/10 ${dragging ? "text-white" : "text-dim hover:text-white"}`}
+              style={
+                dragging
+                  ? { textShadow: `0 0 8px ${color}`, transform: "scale(1.25)" }
+                  : undefined
+              }
+              title="Click to type an exact value"
+            >
+              {bipolar
+                ? `${value >= 0 ? "+" : ""}${(value * 100).toFixed(0)}`
+                : `${Math.round(value * 100)}`}
+            </button>
+          )}
         </div>
       </div>
       {label && (

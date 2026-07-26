@@ -1,7 +1,7 @@
 /**
- * firePresetBank — the Fire Command factory preset library (~500 patches).
+ * firePresetBank — the Fire Command factory preset library (1000 patches).
  *
- * Rather than shipping 500 hand-written JSON blobs (hundreds of KB and
+ * Rather than shipping 1000 hand-written JSON blobs (hundreds of KB and
  * unmaintainable), the bank is *generated* at module load from 48 hand-tuned
  * musical archetype recipes (4-8 per category), each with its own sonic
  * identity: non-overlapping filter bands, waveform combos, unison/detune
@@ -1618,32 +1618,52 @@ const ARCHETYPES: Archetype[] = [
 
 // ════════════════════ the generated bank ════════════════════
 
+/**
+ * MK IV expansion target: 1000 total presets = 27 hand-tuned flagships (in
+ * fireCommandStore) + 973 generated here. Generation runs in TWO passes:
+ *   · pass 1 is byte-identical to the pre-MK IV bank (same seed, same counts,
+ *     same draw order) so every existing preset id/name/sound is preserved,
+ *   · pass 2 round-robins the same archetypes on an INDEPENDENT seeded stream
+ *     until the target is reached (ids carry an `mk4-` prefix). The NameForge
+ *     is shared across both passes, so names stay unique bank-wide.
+ */
+const TARGET_GENERATED = 973;
+
 function buildBank(): FirePreset[] {
   const out: FirePreset[] = [];
   const rng = mulberry32(0xf17ecafe); // "FIRECAFE" — never change: preset ids/params derive from it
   const forge = new NameForge();
   const usedIds = new Set<string>();
+  const push = (arch: Archetype, prefix: string, r: Rng) => {
+    const { patch, arp } = arch.make(r);
+    const name = forge.next(r, arch.names);
+    let id = `${prefix}-${arch.category.toLowerCase()}-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+    // Names are globally unique, but slugging could theoretically collide
+    // ("X-Ray"/"X Ray") — de-dupe deterministically just in case.
+    while (usedIds.has(id)) id += "-i";
+    usedIds.add(id);
+    out.push({
+      id,
+      name,
+      desc: arch.desc,
+      category: arch.category,
+      patch: P(patch),
+      arp,
+    });
+  };
+  // Pass 1 — the legacy bank, byte-stable.
   for (const arch of ARCHETYPES) {
-    for (let i = 0; i < arch.count; i++) {
-      const { patch, arp } = arch.make(rng);
-      const name = forge.next(rng, arch.names);
-      let id = `bank-${arch.category.toLowerCase()}-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-      // Names are globally unique, but slugging could theoretically collide
-      // ("X-Ray"/"X Ray") — de-dupe deterministically just in case.
-      while (usedIds.has(id)) id += "-i";
-      usedIds.add(id);
-      out.push({
-        id,
-        name,
-        desc: arch.desc,
-        category: arch.category,
-        patch: P(patch),
-        arp,
-      });
-    }
+    for (let i = 0; i < arch.count; i++) push(arch, "bank", rng);
+  }
+  // Pass 2 — MK IV reinforcements on a separate stream (pass 1 untouched).
+  const rng2 = mulberry32(0x4d4b4956); // "MKIV" — never change: pass-2 ids/params derive from it
+  let ai = 0;
+  while (out.length < TARGET_GENERATED) {
+    push(ARCHETYPES[ai % ARCHETYPES.length], "mk4", rng2);
+    ai++;
   }
   return out;
 }
 
-/** ~480 generated presets. Combined with the hand-tuned flagships → ~500. */
+/** 973 generated presets. Combined with the 27 hand-tuned flagships → 1000. */
 export const GENERATED_PRESETS: FirePreset[] = buildBank();

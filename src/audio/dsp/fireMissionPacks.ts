@@ -148,7 +148,7 @@ export const MISSION_PACKS: MissionPack[] = [
           drums: {
             kick:  "X------------X--X---------------",
             snare: "--------X---------------X-------",
-            chat:  "x-x-x-x-x-xxx-x-x-x-x-x-xxxx-x-x",
+            chat:  "x-x-x-x-x-oxXx-x-x-x-x-oxoxXxox-",
             ohat:  "------x---------------x---------",
           },
           notes: [
@@ -167,7 +167,7 @@ export const MISSION_PACKS: MissionPack[] = [
             kick:  "X------X----X---X-----X---X-----",
             snare: "--------X---------------X------X",
             clap:  "--------X---------------X-------",
-            chat:  "xxx-xxx-xx-xxxxxx-xxxxx-xxxxxxxx",
+            chat:  "xox-xox-xo-xoxXxx-xoxxo-xoxXxxXX",
             ohat:  "------x-------x-------x---------",
             crash: "X-------------------------------",
           },
@@ -442,6 +442,236 @@ export const MISSION_PACKS: MissionPack[] = [
         },
       ],
       chain: [0, 1, 0],
+    }),
+  },
+
+  // ── MK IV reinforcements ──
+
+  {
+    id: "neuro-assault",
+    name: "Neuro Assault",
+    desc: "Neurofunk DnB at 174 — a snarling talk-bass carved by a two-step break.",
+    tagline: "Two-step break + growling neuro bass",
+    color: "#f43f5e",
+    bpm: 174,
+    payload: template({
+      bpm: 174,
+      scaleRoot: 6, // F# minor
+      scaleId: "minor",
+      presetA: "talking-bass",
+      presetB: "plasma-lead",
+      duck: { amount: 0.55, releaseMs: 120 },
+      sections: [
+        {
+          name: "Roller",
+          bars: 2,
+          drums: {
+            kick:  "X---------X-----X---------X-----",
+            snare: "----X---------------X-----------",
+            chat:  "x-o-x-o-xxo-x-o-x-o-xxo-x-o-x-oo",
+            ohat:  "------x---------------x---------",
+          },
+          notes: [
+            // growl line (A) — long gliding tears
+            [42, 0, 4, 0.95], [42, 6, 2, 0.8], [45, 8, 4, 0.9], [40, 14, 2, 0.85],
+            [42, 16, 4, 0.95], [49, 22, 2, 0.8], [47, 24, 4, 0.9], [45, 30, 2, 0.85],
+            // stab answers (B)
+            [66, 4, 1, 0.55, 1], [69, 12, 1, 0.5, 1], [73, 20, 1, 0.55, 1], [69, 28, 1, 0.5, 1],
+          ],
+        },
+        {
+          name: "Tear-Out",
+          bars: 2,
+          drums: {
+            kick:  "X---------X---X-X-----X---X-----",
+            snare: "----X---------------X--------X--",
+            clap:  "----X---------------X-----------",
+            chat:  "xxoxx-oxxxoxx-oxxxoxx-oxxxoxxxox",
+            ohat:  "------x-------x-------x-------x-",
+            crash: "X-------------------------------",
+          },
+          notes: [
+            [42, 0, 2, 1], [42, 3, 1, 0.8], [45, 4, 2, 0.9], [47, 8, 2, 0.95],
+            [45, 11, 1, 0.8], [42, 12, 4, 0.95], [40, 18, 2, 0.85], [42, 20, 2, 0.9],
+            [49, 24, 2, 0.95], [47, 27, 1, 0.8], [45, 28, 4, 0.95],
+            [66, 2, 1, 0.6, 1], [69, 6, 1, 0.55, 1], [73, 10, 1, 0.6, 1],
+            [74, 18, 1.5, 0.6, 1], [69, 26, 2, 0.55, 1],
+          ],
+        },
+      ],
+      chain: [0, 1, 0, 1],
+    }),
+  },
+  {
+    id: "acid-offensive",
+    name: "Acid Offensive",
+    desc: "Acid techno at 138 — the Acid Reactor squelches a 16th line over a relentless four-four.",
+    tagline: "303 squelch + warehouse kick",
+    color: "#facc15",
+    bpm: 138,
+    payload: template({
+      bpm: 138,
+      scaleRoot: 9, // A minor
+      scaleId: "minor",
+      presetA: "acid-reactor",
+      duck: { amount: 0.5, releaseMs: 160 },
+      sections: [
+        {
+          name: "Simmer",
+          bars: 2,
+          drums: {
+            kick: "X---X---X---X---X---X---X---X---",
+            chat: "--x---x---x---x---x---x---x---x-",
+            rim:  "----------o-----------o---------",
+          },
+          notes: [
+            // classic up-down acid run, accents via velocity
+            [45, 0, 1, 0.95], [45, 2, 1, 0.5], [57, 3, 1, 0.85], [45, 4, 1, 0.55],
+            [48, 6, 1, 0.9], [45, 8, 1, 0.5], [45, 10, 1, 0.95], [52, 11, 1, 0.6],
+            [45, 12, 1, 0.5], [57, 14, 1, 0.9], [45, 16, 1, 0.95], [45, 18, 1, 0.5],
+            [55, 19, 1, 0.85], [45, 20, 1, 0.55], [48, 22, 1, 0.9], [45, 24, 1, 0.5],
+            [52, 26, 1, 0.95], [45, 28, 1, 0.55], [43, 30, 1, 0.9], [45, 31, 1, 0.6],
+          ],
+        },
+        {
+          name: "Boil",
+          bars: 2,
+          drums: {
+            kick:  "X---X---X---X---X---X---X---X---",
+            snare: "--------X---------------X-------",
+            clap:  "--------X---------------X-------",
+            chat:  "--x---x---x---x---x---x---x---x-",
+            ohat:  "--X---X---X---X---X---X---X---X-",
+            crash: "X-------------------------------",
+          },
+          notes: [
+            [45, 0, 1, 1], [57, 1, 1, 0.7], [45, 2, 1, 0.55], [57, 3, 1, 0.9],
+            [48, 4, 1, 0.6], [60, 5, 1, 0.85], [48, 6, 1, 0.55], [45, 8, 1, 1],
+            [52, 9, 1, 0.6], [57, 10, 1, 0.9], [55, 12, 1, 0.6], [52, 14, 1, 0.95],
+            [45, 16, 1, 1], [57, 17, 1, 0.7], [45, 18, 1, 0.55], [59, 19, 1, 0.9],
+            [48, 20, 1, 0.6], [60, 21, 1, 0.85], [48, 22, 1, 0.55], [43, 24, 1, 1],
+            [55, 25, 1, 0.6], [55, 26, 1, 0.9], [52, 28, 1, 0.6], [45, 30, 2, 0.95],
+          ],
+        },
+      ],
+      chain: [0, 0, 1, 1],
+    }),
+  },
+  {
+    id: "trance-protocol",
+    name: "Trance Protocol",
+    desc: "Uplifting trance at 138 — rolling offbeat bass under wide supersaw chord stabs.",
+    tagline: "Supersaw lift + rolling bassline",
+    color: "#818cf8",
+    bpm: 138,
+    payload: template({
+      bpm: 138,
+      scaleRoot: 4, // E minor
+      scaleId: "minor",
+      presetA: "supersaw",
+      presetB: "pluck-stack",
+      duck: { amount: 0.6, releaseMs: 240 },
+      sections: [
+        {
+          name: "Roll",
+          bars: 2,
+          drums: {
+            kick: "X---X---X---X---X---X---X---X---",
+            chat: "--x---x---x---x---x---x---x---x-",
+            ohat: "--X---X---X---X---X---X---X---X-",
+          },
+          notes: [
+            // offbeat rolling bass (A, low)
+            [40, 2, 1, 0.9], [40, 3, 1, 0.6], [40, 6, 1, 0.9], [40, 7, 1, 0.6],
+            [40, 10, 1, 0.9], [40, 11, 1, 0.6], [40, 14, 1, 0.9], [40, 15, 1, 0.6],
+            [43, 18, 1, 0.9], [43, 19, 1, 0.6], [43, 22, 1, 0.9], [43, 23, 1, 0.6],
+            [38, 26, 1, 0.9], [38, 27, 1, 0.6], [38, 30, 1, 0.9], [38, 31, 1, 0.6],
+            // plucked arps (B)
+            [64, 0, 1, 0.7, 1], [67, 2, 1, 0.6, 1], [71, 4, 1, 0.7, 1], [76, 6, 1, 0.6, 1],
+            [71, 8, 1, 0.7, 1], [67, 10, 1, 0.6, 1], [64, 12, 1, 0.7, 1], [67, 14, 1, 0.6, 1],
+            [67, 16, 1, 0.7, 1], [71, 18, 1, 0.6, 1], [74, 20, 1, 0.7, 1], [79, 22, 1, 0.6, 1],
+            [74, 24, 1, 0.7, 1], [71, 26, 1, 0.6, 1], [67, 28, 1, 0.7, 1], [71, 30, 1, 0.6, 1],
+          ],
+        },
+        {
+          name: "Lift",
+          bars: 2,
+          drums: {
+            kick:  "X---X---X---X---X---X---X---X---",
+            snare: "--------X---------------X------X",
+            clap:  "--------X---------------X-------",
+            chat:  "x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-",
+            ohat:  "--X---X---X---X---X---X---X---X-",
+            crash: "X---------------X---------------",
+          },
+          notes: [
+            // big minor-lift chords (A)
+            [52, 0, 3, 0.85], [55, 0, 3, 0.8], [59, 0, 3, 0.8], [64, 0, 3, 0.75],
+            [52, 6, 2, 0.6], [55, 6, 2, 0.55], [59, 6, 2, 0.55],
+            [55, 16, 3, 0.85], [59, 16, 3, 0.8], [62, 16, 3, 0.8], [67, 16, 3, 0.75],
+            [50, 24, 3, 0.85], [55, 24, 3, 0.8], [59, 24, 3, 0.8],
+            // soaring pluck line (B)
+            [76, 0, 2, 0.7, 1], [79, 4, 2, 0.65, 1], [83, 8, 3, 0.7, 1],
+            [79, 12, 2, 0.6, 1], [78, 16, 3, 0.7, 1], [74, 20, 2, 0.65, 1],
+            [76, 24, 6, 0.75, 1],
+          ],
+        },
+      ],
+      chain: [0, 0, 1, 1],
+    }),
+  },
+  {
+    id: "dubstep-sortie",
+    name: "Dubstep Sortie",
+    desc: "140 halftime — vowel-wobble bass barks between a heavyweight kick and beat-three snare.",
+    tagline: "Wobble bass + halftime snap",
+    color: "#22d3ee",
+    bpm: 140,
+    payload: template({
+      bpm: 140,
+      scaleRoot: 5, // F minor
+      scaleId: "minor",
+      presetA: "talking-bass",
+      presetB: "laser",
+      duck: { amount: 0.4, releaseMs: 200 },
+      sections: [
+        {
+          name: "Wobble",
+          bars: 2,
+          drums: {
+            kick:  "X-------------X-X---------------",
+            snare: "--------X---------------X-------",
+            chat:  "x---x---x---x---x---x-x-x---x---",
+            rim:   "----------o-----------o---------",
+          },
+          notes: [
+            // long wobbles — the preset's LFO does the talking
+            [41, 0, 8, 0.95], [41, 8, 6, 0.85], [44, 14, 2, 0.8],
+            [39, 16, 8, 0.95], [36, 24, 8, 0.9],
+            // laser zaps (B)
+            [65, 6, 1, 0.5, 1], [72, 15, 1, 0.5, 1], [68, 22, 1, 0.5, 1],
+          ],
+        },
+        {
+          name: "Drop",
+          bars: 2,
+          drums: {
+            kick:  "X-------------X-X-----------X---",
+            snare: "--------X---------------X-------",
+            clap:  "--------X---------------X-------",
+            chat:  "x-x-x-x-x-x-x-x-x-x-x-x-xxx-x-x-",
+            ohat:  "------x---------------x---------",
+            crash: "X-------------------------------",
+          },
+          notes: [
+            [41, 0, 4, 1], [41, 5, 1, 0.8], [44, 6, 2, 0.85], [41, 8, 4, 0.95],
+            [46, 13, 1, 0.8], [44, 14, 2, 0.85], [39, 16, 4, 1], [39, 21, 1, 0.8],
+            [41, 22, 2, 0.85], [36, 24, 8, 1],
+            [65, 2, 1, 0.55, 1], [68, 10, 1, 0.5, 1], [72, 18, 1, 0.55, 1], [77, 26, 2, 0.55, 1],
+          ],
+        },
+      ],
+      chain: [0, 1, 0, 1],
     }),
   },
 ];

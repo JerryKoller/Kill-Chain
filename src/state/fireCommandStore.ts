@@ -32,7 +32,10 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 
 // ════════════════════ arpeggiator ════════════════════
 
-export type ArpMode = "up" | "down" | "updown" | "random" | "asplayed";
+export type ArpMode =
+  | "up" | "down" | "updown" | "downup"
+  | "converge" | "diverge" | "pedal"
+  | "random" | "walk" | "asplayed";
 export type ArpDivision = "1/4" | "1/8" | "1/8T" | "1/16" | "1/16T" | "1/32";
 
 export interface ArpSettings {
@@ -43,6 +46,14 @@ export interface ArpSettings {
   octaves: number;
   gate: number; // fraction of a step (0.1..1)
   hold: boolean; // latch held notes
+  /** MK IV — 0..0.33: every 2nd step lands late (shuffle feel). */
+  swing: number;
+  /** MK IV — 0..1: how much accented steps punch above the rest. */
+  accent: number;
+  /** MK IV — accent every Nth step (0 = off). */
+  accentEvery: number;
+  /** MK IV — 0..1 probability a step retriggers as a double-hit. */
+  ratchet: number;
 }
 
 export const DEFAULT_ARP: ArpSettings = {
@@ -53,6 +64,10 @@ export const DEFAULT_ARP: ArpSettings = {
   octaves: 1,
   gate: 0.6,
   hold: false,
+  swing: 0,
+  accent: 0,
+  accentEvery: 4,
+  ratchet: 0,
 };
 
 const DIV_MULT: Record<ArpDivision, number> = {
@@ -68,7 +83,7 @@ function divisionSec(bpm: number, division: ArpDivision): number {
   return (60 / clamp(bpm, 40, 300)) * DIV_MULT[division];
 }
 
-function buildArpSequence(order: number[], mode: ArpMode, octaves: number): number[] {
+export function buildArpSequence(order: number[], mode: ArpMode, octaves: number): number[] {
   if (order.length === 0) return [];
   const oct = clamp(Math.round(octaves), 1, 4);
   const baseList = mode === "asplayed" ? [...order] : [...order].sort((a, b) => a - b);
@@ -78,6 +93,32 @@ function buildArpSequence(order: number[], mode: ArpMode, octaves: number): numb
   else if (mode === "updown") {
     const down = expanded.slice(1, Math.max(1, expanded.length - 1)).reverse();
     expanded = expanded.concat(down);
+  } else if (mode === "downup") {
+    const rev = expanded.slice().reverse();
+    const up = rev.slice(1, Math.max(1, rev.length - 1)).reverse();
+    expanded = rev.concat(up);
+  } else if (mode === "converge") {
+    // Outside-in: lowest, highest, 2nd lowest, 2nd highest…
+    const out: number[] = [];
+    for (let lo = 0, hi = expanded.length - 1; lo <= hi; lo++, hi--) {
+      out.push(expanded[lo]);
+      if (hi !== lo) out.push(expanded[hi]);
+    }
+    expanded = out;
+  } else if (mode === "diverge") {
+    // Inside-out: middle first, spiralling to the extremes.
+    const out: number[] = [];
+    for (let lo = 0, hi = expanded.length - 1; lo <= hi; lo++, hi--) {
+      out.push(expanded[lo]);
+      if (hi !== lo) out.push(expanded[hi]);
+    }
+    expanded = out.reverse();
+  } else if (mode === "pedal") {
+    // Trance pedal: the lowest note bounces between every other note.
+    const [root, ...rest] = expanded;
+    const out: number[] = [];
+    for (const n of rest.length > 0 ? rest : [root + 12]) { out.push(root, n); }
+    expanded = out;
   }
   return expanded;
 }
@@ -85,6 +126,7 @@ function buildArpSequence(order: number[], mode: ArpMode, octaves: number): numb
 // Module-level scheduler so it survives store re-reads.
 let arpTimer: ReturnType<typeof setTimeout> | null = null;
 let arpStep = 0;
+let arpWalkPos = 0; // "walk" mode: drunken index into the sequence
 
 function stopArpScheduler(): void {
   if (arpTimer) {
@@ -92,6 +134,7 @@ function stopArpScheduler(): void {
     arpTimer = null;
   }
   arpStep = 0;
+  arpWalkPos = 0;
 }
 
 function startArpScheduler(
@@ -116,15 +159,43 @@ function startArpScheduler(
       return;
     }
     const fc = getEngine().fireCommand;
-    const idx = s.arp.mode === "random" ? Math.floor(Math.random() * seq.length) : arpStep % seq.length;
+    let idx: number;
+    if (s.arp.mode === "random") {
+      idx = Math.floor(Math.random() * seq.length);
+    } else if (s.arp.mode === "walk") {
+      // Drunken walk: mostly steps ±1, occasionally holds, clamped in range.
+      const r = Math.random();
+      arpWalkPos += r < 0.45 ? 1 : r < 0.85 ? -1 : 0;
+      arpWalkPos = clamp(arpWalkPos, 0, seq.length - 1);
+      idx = arpWalkPos;
+    } else {
+      idx = arpStep % seq.length;
+    }
     const midi = seq[idx];
     void getEngine().resume();
-    fc.noteOn(midi, 0.9);
+    // Accent pattern: accented steps hit full force, the rest sit back by
+    // up to 35% depending on the accent amount.
+    const every = Math.max(0, Math.round(s.arp.accentEvery));
+    const accented = s.arp.accent > 0 && every > 0 && arpStep % every === 0;
+    const vel = accented ? 1 : 0.9 - s.arp.accent * 0.35;
+    fc.noteOn(midi, vel);
     set({ arpCurrent: midi });
     const gateMs = Math.max(20, s.arp.gate * stepSec * 1000 - 8);
     setTimeout(() => fc.noteOff(midi), gateMs);
+    // Ratchet: probabilistic double-hit in the back half of the step.
+    if (s.arp.ratchet > 0 && Math.random() < s.arp.ratchet) {
+      const half = stepSec * 500;
+      setTimeout(() => {
+        if (!get().arp.enabled) return;
+        fc.noteOn(midi, Math.min(1, vel * 0.85));
+        setTimeout(() => fc.noteOff(midi), Math.max(15, gateMs * 0.4));
+      }, half);
+    }
     arpStep++;
-    arpTimer = setTimeout(tick, stepSec * 1000);
+    // Swing: every other step borrows time from its neighbour.
+    const sw = clamp(s.arp.swing, 0, 0.33);
+    const durMs = stepSec * 1000 * (arpStep % 2 === 1 ? 1 + sw : 1 - sw);
+    arpTimer = setTimeout(tick, durMs);
   };
   arpTimer = setTimeout(tick, 0);
 }
@@ -198,10 +269,30 @@ const FLAGSHIP_PRESETS: FirePreset[] = [
       oscATable: "vocal", oscAPos: 0.3, oscALfo: 0.55,
       oscBTable: "growl", oscBPos: 0.4, oscBDetune: 12, oscBLevel: 0.45,
       unison: 3, unisonDetune: 16, unisonWidth: 0.5, subWave: "triangle", subLevel: 0.5,
-      filterType: "lowpass", filterCutoff: 700, filterResonance: 6, filterEnvAmount: 0.15,
+      // Resonance 6 → 5 and master 0.8 → 0.72: with the LFO sweeping the
+      // resonant peak across the fundamental, the old settings rode the
+      // filter-drive ceiling every wobble cycle (audible crunch).
+      filterType: "lowpass", filterCutoff: 700, filterResonance: 5, filterEnvAmount: 0.15,
       ampAttack: 0.006, ampDecay: 0.3, ampSustain: 0.9, ampRelease: 0.25,
       lfo1Wave: "triangle", lfo1Rate: 3, lfo1Depth: 0.5, lfo1Dest: "filter",
-      drive: 0.28, mono: true, glide: 0.06, tone: 11000, masterGain: 0.8,
+      drive: 0.28, mono: true, glide: 0.06, tone: 11000, masterGain: 0.72,
+    }),
+  },
+  {
+    id: "acid-reactor", name: "Acid Reactor", desc: "303-style squelch — mono, gliding, resonant", category: "Bass",
+    patch: P({
+      oscATable: "saw", oscAPos: 0.15, oscALevel: 0.8,
+      oscBTable: "pulse", oscBPos: 0.35, oscBLevel: 0.25, oscBDetune: 4,
+      unison: 1, subLevel: 0,
+      filterType: "lowpass", filterCutoff: 480, filterResonance: 11,
+      filterEnvAmount: 0.85, filterKeyTrack: 0.3, filterDrive: 0.3,
+      filtAttack: 0.003, filtDecay: 0.22, filtSustain: 0.05, filtRelease: 0.12,
+      ampAttack: 0.002, ampDecay: 0.28, ampSustain: 0.55, ampRelease: 0.08,
+      velAmount: 1,
+      drive: 0.34, driveMode: "tube",
+      mono: true, glide: 0.055,
+      delayTime: 0.375, delayFeedback: 0.3, delayMix: 0.14,
+      reverbMix: 0.06, tone: 12500, masterGain: 0.7,
     }),
   },
   {
@@ -644,8 +735,78 @@ function randomPatch(): FirePatch {
     gateDepth: rand(0.6, 1),
     gateSteps: pick([8, 16, 16]),
     gatePattern: Array.from({ length: 16 }, (_, i) => (i % 2 === 0 ? 1 : (chance(0.3) ? 1 : 0))),
+    gateSmooth: gateOn && chance(0.4) ? rand(0.1, 0.6) : 0,
     masterGain: 0.72,
   };
+}
+
+// ════════════════════ mutation (natural selection) ════════════════════
+
+/**
+ * Breed one offspring from a patch. `amount` (0..1) scales every jitter:
+ * ~0 is a whisper of drift, 0.35 is the classic MK III nudge, 1 rewrites the
+ * character while keeping the patch's skeleton (tables, octaves, unison
+ * count and mod routing never change).
+ */
+export function mutatePatch(src: FirePatch, amount: number): FirePatch {
+  const p = structuredClone(src);
+  // 0..1 → 0.25..3× the legacy jitter sizes (legacy ≈ amount 0.35).
+  const g = 0.25 + clamp(amount, 0, 1) * 2.75;
+  const j = (v: number, amt: number, lo: number, hi: number) =>
+    clamp(v + (Math.random() * 2 - 1) * amt * g, lo, hi);
+  const jLog = (v: number, oct: number, lo: number, hi: number) =>
+    clamp(v * Math.pow(2, (Math.random() * 2 - 1) * oct * g), lo, hi);
+
+  const pn = p as unknown as Record<string, number>;
+  // Unipolar 0..1 shapers.
+  const uni = [
+    "oscAPos", "oscBPos", "oscCPos", "oscALevel", "oscBLevel",
+    "subLevel", "noiseLevel", "fmAmount", "fmBtoA", "ringAmount",
+    "filterDrive", "drive", "crush", "punch", "chorusMix", "phaserMix",
+    "lfo1Depth", "lfo2Depth", "unisonWidth", "ampSustain", "filtSustain",
+  ];
+  for (const k of uni) {
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], 0.09, 0, 1);
+  }
+  // Bipolar -1..1 modulation amounts.
+  const bi = [
+    "oscAEnv", "oscBEnv", "oscCEnv", "oscALfo", "oscBLfo", "oscCLfo",
+    "noiseColor", "filterEnvAmount",
+  ];
+  for (const k of bi) {
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], 0.12, -1, 1);
+  }
+  // Log-domain: cutoff, LFO rates, envelope times, detunes.
+  p.filterCutoff = jLog(p.filterCutoff, 0.25, 40, 18000);
+  p.filterResonance = jLog(Math.max(0.2, p.filterResonance), 0.3, 0.1, 24);
+  p.lfo1Rate = jLog(Math.max(0.05, p.lfo1Rate), 0.35, 0.05, 24);
+  p.lfo2Rate = jLog(Math.max(0.05, p.lfo2Rate), 0.35, 0.05, 24);
+  p.ampAttack = jLog(Math.max(0.002, p.ampAttack), 0.3, 0.001, 3);
+  p.ampDecay = jLog(Math.max(0.01, p.ampDecay), 0.3, 0.01, 4);
+  p.ampRelease = jLog(Math.max(0.01, p.ampRelease), 0.3, 0.01, 5);
+  p.filtAttack = jLog(Math.max(0.002, p.filtAttack), 0.3, 0.001, 3);
+  p.filtDecay = jLog(Math.max(0.01, p.filtDecay), 0.3, 0.01, 4);
+  p.unisonDetune = j(p.unisonDetune, 4, 0, 60);
+  // At high amounts, let the warp/spectral character drift too.
+  if (amount > 0.55) {
+    p.warpStretch = j(p.warpStretch ?? 0, 0.15, -1, 1);
+    p.warpTilt = j(p.warpTilt ?? 0, 0.15, -1, 1);
+    p.stereoWidth = j(p.stereoWidth ?? 1, 0.1, 0.5, 1.6);
+    p.reverbMix = j(p.reverbMix, 0.08, 0, 0.8);
+    p.delayMix = j(p.delayMix, 0.08, 0, 0.8);
+  }
+  return p;
+}
+
+/** A pending natural-selection round: base parent + two offspring. */
+export interface MutationRound {
+  base: FirePatch;
+  a: FirePatch;
+  b: FirePatch;
+  /** Which offspring is currently audible. */
+  listening: "a" | "b";
+  /** Generation counter — grows as the user keeps evolving. */
+  generation: number;
 }
 
 // ════════════════════ persistence ════════════════════
@@ -665,6 +826,8 @@ interface PersistShape {
   keyboardMinimized: boolean;
   userPresets: SavedPreset[];
   maxVoices: number;
+  /** Natural-selection mutation strength, 0 (subtle) .. 1 (wild). */
+  mutateAmount: number;
 }
 
 function defaults(): PersistShape {
@@ -677,6 +840,7 @@ function defaults(): PersistShape {
     keyboardMinimized: false,
     userPresets: [],
     maxVoices: 12,
+    mutateAmount: 0.35,
   };
 }
 
@@ -698,6 +862,7 @@ function load(): PersistShape {
       keyboardMinimized: typeof parsed.keyboardMinimized === "boolean" ? parsed.keyboardMinimized : d.keyboardMinimized,
       userPresets: Array.isArray(parsed.userPresets) ? parsed.userPresets : d.userPresets,
       maxVoices: typeof parsed.maxVoices === "number" ? parsed.maxVoices : d.maxVoices,
+      mutateAmount: typeof parsed.mutateAmount === "number" ? clamp(parsed.mutateAmount, 0, 1) : d.mutateAmount,
     };
   } catch {
     return defaults();
@@ -718,6 +883,7 @@ function schedulePersist(state: FireCommandState): void {
       keyboardMinimized: state.keyboardMinimized,
       userPresets: state.userPresets,
       maxVoices: state.maxVoices,
+      mutateAmount: state.mutateAmount,
     };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -733,14 +899,27 @@ export interface FireCommandState extends PersistShape {
   heldNotes: number[]; // physically held keys (keyboard highlight)
   arpOrder: number[]; // latched arp pattern source notes
   arpCurrent: number | null; // note the arp is currently sounding
+  /** Pending natural-selection round (null when not selecting). */
+  mutation: MutationRound | null;
 
   setParam: <K extends keyof FirePatch>(key: K, value: FirePatch[K]) => void;
   setModRoute: (index: number, partial: Partial<ModRoute>) => void;
   setGateStep: (index: number, on: boolean) => void;
   loadPreset: (id: string) => void;
   randomize: () => void;
-  /** Small random walk on the CURRENT patch — evolve, don't replace. */
+  /**
+   * Natural selection: breed TWO offspring of the current patch (strength =
+   * mutateAmount) and audition A. Call again while a round is open to breed
+   * the next generation from whichever offspring is playing.
+   */
   mutate: () => void;
+  setMutateAmount: (v: number) => void;
+  /** Audition the other offspring of the open round. */
+  auditionMutation: (which: "a" | "b") => void;
+  /** Keep the audible offspring — it becomes the patch. */
+  commitMutation: () => void;
+  /** Abandon the round and restore the parent patch. */
+  discardMutation: () => void;
   /** Replace patch + arp from a project file. */
   importPatch: (patch: unknown, arp?: unknown) => void;
   /** Deploy a random preset from the factory bank. Returns what it picked. */
@@ -814,12 +993,14 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     heldNotes: [],
     arpOrder: [],
     arpCurrent: null,
+    mutation: null,
 
     setParam: (key, value) => {
       // Knob drags stream setParam per mousemove — coalesce by param name.
       pushFireHistory(`param:${String(key)}`);
       const patch = { ...get().patch, [key]: value };
-      set({ patch, presetId: "custom" });
+      // Hand-editing adopts the audible sound and ends any selection round.
+      set({ patch, presetId: "custom", mutation: null });
       getEngine().fireCommand.set(key, value);
       persist();
     },
@@ -848,7 +1029,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const arp: ArpSettings = src.arp
         ? { ...DEFAULT_ARP, ...src.arp }
         : { ...get().arp, enabled: false };
-      set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, heldNotes: [] });
+      set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, heldNotes: [], mutation: null });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
@@ -860,56 +1041,60 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     randomize: () => {
       pushFireHistory();
       const patch = randomPatch();
-      set({ patch, presetId: "custom" });
+      set({ patch, presetId: "custom", mutation: null });
       getEngine().fireCommand.setPatch(patch);
       persist();
     },
 
     mutate: () => {
       pushFireHistory();
-      // Evolution, not a reroll: nudge the sound-shaping parameters a few
-      // percent around where they are. Wavetables, octaves, unison count and
-      // routing stay put, so the patch keeps its identity but grows quirks.
-      // Hammering the button walks the sound somewhere genuinely new.
-      const p = { ...get().patch };
-      const j = (v: number, amt: number, lo: number, hi: number) =>
-        clamp(v + (Math.random() * 2 - 1) * amt, lo, hi);
-      const jLog = (v: number, oct: number, lo: number, hi: number) =>
-        clamp(v * Math.pow(2, (Math.random() * 2 - 1) * oct), lo, hi);
+      const s = get();
+      // Breeding from an open round evolves from what's currently audible —
+      // the parent of the next generation is the offspring you're hearing.
+      const parent = s.patch;
+      const generation = s.mutation ? s.mutation.generation + 1 : 1;
+      const a = mutatePatch(parent, s.mutateAmount);
+      const b = mutatePatch(parent, s.mutateAmount);
+      set({
+        mutation: { base: structuredClone(parent), a, b, listening: "a", generation },
+        patch: structuredClone(a),
+        presetId: "custom",
+      });
+      getEngine().fireCommand.setPatch(get().patch);
+      persist();
+    },
 
-      const pn = p as unknown as Record<string, number>;
-      // Unipolar 0..1 shapers.
-      const uni = [
-        "oscAPos", "oscBPos", "oscCPos", "oscALevel", "oscBLevel",
-        "subLevel", "noiseLevel", "fmAmount", "fmBtoA", "ringAmount",
-        "filterDrive", "drive", "crush", "punch", "chorusMix", "phaserMix",
-        "lfo1Depth", "lfo2Depth", "unisonWidth", "ampSustain", "filtSustain",
-      ];
-      for (const k of uni) {
-        if (typeof pn[k] === "number") pn[k] = j(pn[k], 0.09, 0, 1);
-      }
-      // Bipolar -1..1 modulation amounts.
-      const bi = [
-        "oscAEnv", "oscBEnv", "oscCEnv", "oscALfo", "oscBLfo", "oscCLfo",
-        "noiseColor", "filterEnvAmount",
-      ];
-      for (const k of bi) {
-        if (typeof pn[k] === "number") pn[k] = j(pn[k], 0.12, -1, 1);
-      }
-      // Log-domain: cutoff, LFO rates, envelope times, detunes.
-      p.filterCutoff = jLog(p.filterCutoff, 0.25, 40, 18000);
-      p.filterResonance = jLog(Math.max(0.2, p.filterResonance), 0.3, 0.1, 24);
-      p.lfo1Rate = jLog(Math.max(0.05, p.lfo1Rate), 0.35, 0.05, 24);
-      p.lfo2Rate = jLog(Math.max(0.05, p.lfo2Rate), 0.35, 0.05, 24);
-      p.ampAttack = jLog(Math.max(0.002, p.ampAttack), 0.3, 0.001, 3);
-      p.ampDecay = jLog(Math.max(0.01, p.ampDecay), 0.3, 0.01, 4);
-      p.ampRelease = jLog(Math.max(0.01, p.ampRelease), 0.3, 0.01, 5);
-      p.filtAttack = jLog(Math.max(0.002, p.filtAttack), 0.3, 0.001, 3);
-      p.filtDecay = jLog(Math.max(0.01, p.filtDecay), 0.3, 0.01, 4);
-      p.unisonDetune = j(p.unisonDetune, 4, 0, 60);
+    setMutateAmount: (v) => {
+      set({ mutateAmount: clamp(v, 0, 1) });
+      persist();
+    },
 
-      set({ patch: p, presetId: "custom" });
-      getEngine().fireCommand.setPatch(p);
+    auditionMutation: (which) => {
+      const m = get().mutation;
+      if (!m || m.listening === which) return;
+      const next = which === "a" ? m.a : m.b;
+      set({
+        mutation: { ...m, listening: which },
+        patch: structuredClone(next),
+        presetId: "custom",
+      });
+      getEngine().fireCommand.setPatch(get().patch);
+      persist();
+    },
+
+    commitMutation: () => {
+      const m = get().mutation;
+      if (!m) return;
+      // Patch already holds the audible offspring — just close the round.
+      set({ mutation: null });
+      persist();
+    },
+
+    discardMutation: () => {
+      const m = get().mutation;
+      if (!m) return;
+      set({ mutation: null, patch: structuredClone(m.base), presetId: "custom" });
+      getEngine().fireCommand.setPatch(get().patch);
       persist();
     },
 
@@ -921,7 +1106,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
         : { ...get().arp };
       stopArpScheduler();
-      set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null });
+      set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null, mutation: null });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);

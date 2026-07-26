@@ -162,7 +162,9 @@ class SpectralProcessor extends AudioWorkletProcessor {
       return true;
     }
     for (let c = 0; c < nCh; c++) {
-      this.runChannel(this.ch[c], input[c] || null, output[c]);
+      // Mono source into a stereo node: feed BOTH channel states from ch 0.
+      // (This used to process silence on the right, halving the image.)
+      this.runChannel(this.ch[c], input[c] || input[0] || null, output[c]);
     }
     return true;
   }
@@ -197,8 +199,15 @@ class SpectralProcessor extends AudioWorkletProcessor {
     switch (this.mode) {
       case "freeze": {
         if (!st.captured) {
-          for (let k = 0; k <= HALF; k++) { st.frozenRe[k] = re[k]; st.frozenIm[k] = im[k]; }
-          st.captured = true;
+          // Energy-gated capture: engaging freeze during silence used to
+          // hold an empty frame (the mode then did nothing until re-armed).
+          // Stay armed and grab the first frame that actually has signal.
+          let energy = 0;
+          for (let k = 0; k <= HALF; k++) energy += re[k] * re[k] + im[k] * im[k];
+          if (energy > 1e-6) {
+            for (let k = 0; k <= HALF; k++) { st.frozenRe[k] = re[k]; st.frozenIm[k] = im[k]; }
+            st.captured = true;
+          }
         } else {
           for (let k = 0; k <= HALF; k++) {
             const fr = st.frozenRe[k], fi = st.frozenIm[k];
@@ -220,7 +229,11 @@ class SpectralProcessor extends AudioWorkletProcessor {
           const mag = Math.hypot(re[k], im[k]);
           const avg = st.avgMag[k] * c + mag * (1 - c);
           st.avgMag[k] = avg;
-          const scale = avg / (mag + 1e-9);
+          // Denominator floor: with a near-1e-9 floor, silent input produced
+          // scales in the millions, amplifying numerical noise into a hissy
+          // wash. Floored at 1e-4 the output amplitude can never exceed the
+          // averaged magnitude, so tails decay cleanly instead of fizzing.
+          const scale = Math.min(avg / Math.max(mag, 1e-4), 1e4);
           re[k] *= scale;
           im[k] *= scale;
         }

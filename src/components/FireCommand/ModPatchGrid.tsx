@@ -1,11 +1,12 @@
 /**
- * ModPatchGrid (v1.7) — the mod matrix as a patch-bay grid.
+ * ModPatchGrid (v1.7, MK IV facelift) — the mod matrix as a patch-bay grid.
  *
  * Sources are rows, destinations are columns. Click an empty cell to allocate
- * one of the 8 matrix slots to that (source → destination) pair; drag
+ * one of the 12 matrix slots to that (source → destination) pair; drag
  * vertically to set the bipolar amount (dot grows/changes color); right-click
  * clears the cell back into the free pool. It's purely a VIEW over the same
- * 8-slot `modMatrix` array — presets, undo and the engine see nothing new.
+ * 12-slot `modMatrix` array — presets, undo and the engine see nothing new.
+ * MK IV adds a crosshair hover, per-family row tints and a slot meter.
  */
 
 import { useRef, useState } from "react";
@@ -16,17 +17,17 @@ const GRN = "#7cf6b0";
 const AMB = "#ffb35c";
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-const SOURCES: { id: ModSource; label: string; hint: string }[] = [
-  { id: "lfo1", label: "LFO 1", hint: "LFO 1" },
-  { id: "lfo2", label: "LFO 2", hint: "LFO 2" },
-  { id: "modenv", label: "M.Env", hint: "Mod envelope (per note)" },
-  { id: "velocity", label: "Vel", hint: "Note velocity (per note)" },
-  { id: "keytrack", label: "Key", hint: "Key tracking (per note)" },
-  { id: "macro1", label: "M1", hint: "Macro 1" },
-  { id: "macro2", label: "M2", hint: "Macro 2" },
-  { id: "macro3", label: "M3", hint: "Macro 3" },
-  { id: "macro4", label: "M4", hint: "Macro 4" },
-  { id: "random", label: "Rnd", hint: "Random sample & hold" },
+const SOURCES: { id: ModSource; label: string; hint: string; tint: string }[] = [
+  { id: "lfo1", label: "LFO 1", hint: "LFO 1", tint: "#62b6ff" },
+  { id: "lfo2", label: "LFO 2", hint: "LFO 2", tint: "#62b6ff" },
+  { id: "modenv", label: "M.Env", hint: "Mod envelope (per note)", tint: "#7cf6b0" },
+  { id: "velocity", label: "Vel", hint: "Note velocity (per note)", tint: "#7cf6b0" },
+  { id: "keytrack", label: "Key", hint: "Key tracking (per note)", tint: "#7cf6b0" },
+  { id: "macro1", label: "M1", hint: "Macro 1", tint: "#ffb35c" },
+  { id: "macro2", label: "M2", hint: "Macro 2", tint: "#ffb35c" },
+  { id: "macro3", label: "M3", hint: "Macro 3", tint: "#ffb35c" },
+  { id: "macro4", label: "M4", hint: "Macro 4", tint: "#ffb35c" },
+  { id: "random", label: "Rnd", hint: "Random sample & hold", tint: "#c98bff" },
 ];
 
 const DESTS: { id: ModDest; label: string; hint: string }[] = [
@@ -50,6 +51,7 @@ export function ModPatchGrid() {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const setModRoute = useFireCommandStore((s) => s.setModRoute);
   const [budgetFlash, setBudgetFlash] = useState(false);
+  const [hover, setHover] = useState<{ r: number; c: number } | null>(null);
   const dragRef = useRef<{ slot: number; startY: number; startAmount: number } | null>(null);
 
   const slotOf = (src: ModSource, dest: ModDest) =>
@@ -97,10 +99,11 @@ export function ModPatchGrid() {
           <thead>
             <tr>
               <th />
-              {DESTS.map((dst) => (
+              {DESTS.map((dst, ci) => (
                 <th
                   key={dst.id}
-                  className="text-[8.5px] font-semibold uppercase tracking-wide text-white/40 pb-0.5 min-w-[26px]"
+                  className="text-[8.5px] font-semibold uppercase tracking-wide pb-0.5 min-w-[26px] transition-colors"
+                  style={{ color: hover?.c === ci ? "#fff" : "rgba(255,255,255,0.4)" }}
                   title={dst.hint}
                 >
                   {dst.label}
@@ -108,21 +111,23 @@ export function ModPatchGrid() {
               ))}
             </tr>
           </thead>
-          <tbody>
-            {SOURCES.map((src) => (
+          <tbody onPointerLeave={() => setHover(null)}>
+            {SOURCES.map((src, ri) => (
               <tr key={src.id}>
                 <td
-                  className="text-[9px] font-semibold uppercase tracking-wide text-white/45 pr-1.5 text-right whitespace-nowrap"
+                  className="text-[9px] font-semibold uppercase tracking-wide pr-1.5 text-right whitespace-nowrap transition-colors"
+                  style={{ color: hover?.r === ri ? src.tint : "rgba(255,255,255,0.45)" }}
                   title={src.hint}
                 >
                   {src.label}
                 </td>
-                {DESTS.map((dst) => {
+                {DESTS.map((dst, ci) => {
                   const slot = slotOf(src.id, dst.id);
                   const amount = slot >= 0 ? matrix[slot].amount : 0;
                   const active = slot >= 0;
                   const mag = Math.abs(amount);
                   const color = amount >= 0 ? GRN : AMB;
+                  const inCross = hover !== null && (hover.r === ri || hover.c === ci);
                   return (
                     <td key={dst.id} className="p-0">
                       <div
@@ -130,11 +135,16 @@ export function ModPatchGrid() {
                         onPointerMove={onCellMove}
                         onPointerUp={onCellUp}
                         onPointerCancel={onCellUp}
+                        onPointerEnter={() => setHover({ r: ri, c: ci })}
                         onContextMenu={(e) => e.preventDefault()}
                         className="w-[26px] h-[22px] rounded-[5px] border flex items-center justify-center cursor-pointer touch-none select-none transition-colors"
                         style={{
-                          borderColor: active ? `${color}66` : "rgba(255,255,255,0.06)",
-                          background: active ? `${color}14` : "rgba(255,255,255,0.015)",
+                          borderColor: active ? `${color}66` : inCross ? `${src.tint}33` : "rgba(255,255,255,0.06)",
+                          background: active
+                            ? `${color}14`
+                            : inCross
+                              ? `${src.tint}0d`
+                              : "rgba(255,255,255,0.015)",
                         }}
                         title={
                           active
@@ -174,6 +184,22 @@ export function ModPatchGrid() {
           }`}
         >
           {used}/{matrix.length} slots
+        </span>
+        {/* slot meter — one pip per matrix slot */}
+        <span className="flex items-center gap-[3px]" aria-hidden>
+          {matrix.map((r, i) => {
+            const on = r.source !== "none" && r.dest !== "none";
+            return (
+              <span
+                key={i}
+                className="w-[5px] h-[10px] rounded-[2px] transition-colors"
+                style={{
+                  background: on ? (r.amount >= 0 ? GRN : AMB) : "rgba(255,255,255,0.08)",
+                  boxShadow: on ? `0 0 5px ${(r.amount >= 0 ? GRN : AMB)}66` : "none",
+                }}
+              />
+            );
+          })}
         </span>
         <span>
           click a cell to patch · drag ↕ sets depth ({" "}
