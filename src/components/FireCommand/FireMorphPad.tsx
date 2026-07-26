@@ -14,6 +14,8 @@ import { pushFireHistory } from "@/lib/fireHistory";
 import { CollapseToggle } from "./CollapseToggle";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { useFireBandRegister } from "./FireBand";
+import { useFireLayout } from "./FireLayoutContext";
+import { ensureExpanded } from "./fireNavigate";
 
 const CORNERS = ["a", "b", "c", "d"] as const;
 type Corner = (typeof CORNERS)[number];
@@ -298,8 +300,12 @@ function MorphPresetSearch({
 export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const [persisted] = useState(loadPersist);
   const [collapsed, toggle] = useFireCollapsed("morph", !persisted.open);
+  const { focusActive, focusId, isFocused } = useFireLayout();
   useFireBandRegister("morph", "Morph Pad", FIRE, collapsed, toggle, chipHosted);
-  const open = !collapsed;
+  useEffect(() => {
+    if (isFocused("morph") && collapsed) ensureExpanded("morph");
+  }, [collapsed, isFocused]);
+  const open = !collapsed || isFocused("morph");
   const [cornerIds, setCornerIds] = useState(persisted.cornerIds);
   const [pos, setPos] = useState({ x: 0.5, y: 0.5 });
   const [isDragging, setIsDragging] = useState(false);
@@ -536,10 +542,11 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
     };
   }, [open]);
 
-  if (chipHosted && collapsed) return null;
+  if (focusActive && focusId !== "morph") return null;
+  if (chipHosted && collapsed && !isFocused("morph")) return null;
 
   return (
-    <GlassPanel className="p-3">
+    <GlassPanel className="p-3" data-fire-module="morph">
       <style>{`
         @keyframes morph-breathe {
           0%, 100% { opacity: 0.55; transform: scale(1); }

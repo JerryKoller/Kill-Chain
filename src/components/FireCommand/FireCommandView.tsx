@@ -39,6 +39,9 @@ import { FireMorphPad } from "./FireMorphPad";
 import { undoFire, redoFire, useFireHistoryStore } from "@/lib/fireHistory";
 import { MutateCluster } from "./MutateCluster";
 import { RandomizeCluster } from "./RandomizeCluster";
+import { FireLayoutProvider, useFireLayout } from "./FireLayoutContext";
+import { FireCommandDeck } from "./FireCommandDeck";
+import { ensureExpanded } from "./fireNavigate";
 
 const FIRE = "#ff6a3d"; // primary
 const ICE = "#62b6ff"; // LFOs
@@ -241,6 +244,7 @@ export function FireCommandView() {
   }, []);
 
   return (
+    <FireLayoutProvider>
     <div className="space-y-2 pb-6">
       {/* MK IV command-deck header — targeting-reticle mark, no mascot */}
       <div className="fire-header relative overflow-hidden rounded-2xl border border-[#ff6a3d]/25 px-4 py-2.5">
@@ -337,6 +341,9 @@ export function FireCommandView() {
 
       {/* Pattern sequencer: piano roll + drum grid */}
       <SequencerPanel />
+
+      {/* Signal Path Theater + Command Map */}
+      <FireCommandDeck />
 
       {/* ── Category bands (v2.5.7) — collapsed chips, even open grids ── */}
 
@@ -582,6 +589,7 @@ export function FireCommandView() {
 
       <PresetBrowser open={browserOpen} onClose={() => setBrowserOpen(false)} />
     </div>
+    </FireLayoutProvider>
   );
 }
 
@@ -2662,29 +2670,43 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
   chipHosted?: boolean;
 }) {
   const [collapsed, toggle] = useCollapsed(collapseKey, defaultCollapsed);
+  const { focusActive, focusId, isFocused } = useFireLayout();
   useFireBandRegister(collapseKey, title, color, collapsed, toggle, !!chipHosted && !!collapseKey);
 
-  if (chipHosted && collapseKey && collapsed) return null;
+  // Focus mode: keep the soloed module forced open
+  useEffect(() => {
+    if (collapseKey && isFocused(collapseKey) && collapsed) {
+      ensureExpanded(collapseKey);
+    }
+  }, [collapseKey, collapsed, isFocused]);
+
+  // Hide non-focused modules while focus mode is on
+  if (focusActive && collapseKey && focusId !== collapseKey) return null;
+
+  if (chipHosted && collapseKey && collapsed && !isFocused(collapseKey)) return null;
 
   return (
-    <GlassPanel className={`p-2.5 ${className ?? ""}`}>
-      <div className={`flex items-center justify-between gap-2 min-w-0 ${collapsed ? "" : "mb-2"}`}>
+    <GlassPanel
+      className={`p-2.5 ${className ?? ""}`}
+      data-fire-module={collapseKey || undefined}
+    >
+      <div className={`flex items-center justify-between gap-2 min-w-0 ${collapsed && !isFocused(collapseKey) ? "" : "mb-2"}`}>
         {collapseKey ? (
           <button
             onClick={toggle}
-            aria-expanded={!collapsed}
+            aria-expanded={!collapsed || isFocused(collapseKey)}
             className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 min-w-0"
             title={collapsed ? "Expand section" : "Collapse section"}
           >
-            <CollapseToggle collapsed={collapsed} color={color} />
+            <CollapseToggle collapsed={collapsed && !isFocused(collapseKey)} color={color} />
             <span className="text-[11px] font-semibold uppercase tracking-[0.22em] truncate" style={{ color }}>{title}</span>
           </button>
         ) : (
           <div className="text-[11px] font-semibold uppercase tracking-[0.22em] truncate min-w-0" style={{ color }}>{title}</div>
         )}
-        {!collapsed && right ? <div className="shrink-0 max-w-[55%] overflow-x-auto">{right}</div> : null}
+        {(!collapsed || isFocused(collapseKey)) && right ? <div className="shrink-0 max-w-[55%] overflow-x-auto">{right}</div> : null}
       </div>
-      {!collapsed && children}
+      {(!collapsed || isFocused(collapseKey)) && children}
     </GlassPanel>
   );
 }

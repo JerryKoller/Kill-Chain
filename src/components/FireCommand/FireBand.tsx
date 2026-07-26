@@ -1,16 +1,19 @@
 /**
- * FireBand — category shell for Fire Command modules (v2.5.8).
+ * FireBand — category shell for Fire Command modules (v2.5.8 / v2.6.5 focus).
  *
  * When the band is folded, only the band header shows.
  * When open, collapsed modules appear as equal-width chips;
  * expanded modules stack full-width (never side-by-side — that
  * crushes mixers / pads / scopes when several are open).
+ *
+ * Focus mode: if another band's module is focused, this band hides.
  */
 
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useState,
@@ -19,6 +22,9 @@ import {
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
+import { FIRE_BANDS, type FireBandId } from "./fireModuleAtlas";
+import { ensureExpanded } from "./fireNavigate";
+import { useFireLayout } from "./FireLayoutContext";
 
 export type BandModuleMeta = {
   id: string;
@@ -114,6 +120,22 @@ export function FireBand({
 }) {
   const [bandCollapsed, toggleBand] = useFireCollapsed(bandKey, defaultCollapsed);
   const [mods, setMods] = useState<Record<string, BandModuleMeta>>({});
+  const { focusId, focusActive } = useFireLayout();
+
+  const bandMeta = FIRE_BANDS.find((b) => b.id === bandKey);
+  const bandModuleIds = useMemo(
+    () => new Set((bandMeta?.modules ?? []).map((m) => m.id)),
+    [bandMeta],
+  );
+  const holdsFocus = !!(focusId && bandModuleIds.has(focusId));
+
+  // Focus mode: hide bands that don't own the focused module
+  const hiddenByFocus = focusActive && !holdsFocus;
+
+  // Keep the owning band expanded while focused
+  useEffect(() => {
+    if (holdsFocus) ensureExpanded(bandKey);
+  }, [holdsFocus, bandKey]);
 
   const register = useCallback((meta: BandModuleMeta) => {
     setMods((prev) => {
@@ -146,18 +168,27 @@ export function FireBand({
   const collapsedList = list.filter((m) => m.collapsed);
   const openCount = list.filter((m) => !m.collapsed).length;
 
+  if (hiddenByFocus) return null;
+
+  // In focus mode, force the band body open even if user had it folded
+  const showBody = holdsFocus || !bandCollapsed;
+
   return (
     <BandContext.Provider value={ctx}>
-      <GlassPanel intense className="p-2.5">
-        <div className={`flex items-center justify-between gap-2 ${bandCollapsed ? "" : "mb-2"}`}>
+      <GlassPanel
+        intense
+        className="p-2.5"
+        data-fire-band={bandKey as FireBandId}
+      >
+        <div className={`flex items-center justify-between gap-2 ${showBody ? "mb-2" : ""}`}>
           <button
             type="button"
             onClick={toggleBand}
-            aria-expanded={!bandCollapsed}
+            aria-expanded={showBody}
             className="flex items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-            title={bandCollapsed ? `Expand ${title}` : `Collapse ${title}`}
+            title={showBody ? `Collapse ${title}` : `Expand ${title}`}
           >
-            <CollapseToggle collapsed={bandCollapsed} color={color} />
+            <CollapseToggle collapsed={!showBody} color={color} />
             <span
               className="text-[12px] font-semibold uppercase tracking-[0.22em]"
               style={{ color }}
@@ -169,17 +200,25 @@ export function FireBand({
                 · {hint}
               </span>
             )}
+            {holdsFocus && (
+              <span
+                className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                style={{ borderColor: `${color}66`, color, background: `${color}18` }}
+              >
+                Focus
+              </span>
+            )}
           </button>
-          {!bandCollapsed && list.length > 0 && (
+          {showBody && list.length > 0 && (
             <span className="text-[9px] font-mono text-white/30">
               {openCount}/{list.length} open
             </span>
           )}
         </div>
 
-        {!bandCollapsed && (
+        {showBody && (
           <>
-            <ChipGrid modules={collapsedList} />
+            {!holdsFocus && <ChipGrid modules={collapsedList} />}
             <div className={openStackClass()}>
               {children}
             </div>

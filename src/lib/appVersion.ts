@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "2.6.4";
+export const APP_VERSION = "2.6.5";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,23 +12,23 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
+    title: "Signal Path Theater",
+    body: "OSC → Filter → Drive → FX → Mix → Scope — live heat from your patch. Click to jump, FOC to solo.",
+  },
+  {
+    title: "Command Map",
+    body: "Every Fire Command stage on one atlas. Jump any module; Focus Mode solos it full-bay.",
+  },
+  {
+    title: "Focus Mode",
+    body: "Hide every other band and work one instrument at a time. Sticky HUD always offers Show all.",
+  },
+  {
     title: "Morph Pad type-search",
-    body: "Corner presets are searchable — type a name, category, or keyword instead of scrolling a dropdown. Living blend field follows the puck.",
-  },
-  {
-    title: "Studio bay cleanup",
-    body: "Duplicate Library removed from Undo/Redo — Patch bay Browse owns the library. History depth rails show stack fill.",
-  },
-  {
-    title: "Deeper stage play",
-    body: "Patchbay cables with dual packets, phosphor master scope, wavetable scan beams, meter bloom, reverb impulse spikes.",
+    body: "Corner presets are searchable across the factory + user bank.",
   },
   {
     title: "Unique stage personalities",
-    body: "Macros command cards and distinct chrome across FX/Core stages.",
-  },
-  {
-    title: "Armory Deploy + Natural Selection",
-    body: "Tumbling-dice randomize and evolution mutate bays — twin generative pods.",
+    body: "Distinct chrome and metaphors across Macros, FX, Core, Scope, and Matrix.",
   },
 ];

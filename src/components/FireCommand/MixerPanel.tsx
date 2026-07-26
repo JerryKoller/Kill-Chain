@@ -17,6 +17,8 @@ import {
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
 import { useFireBandRegister } from "./FireBand";
+import { useFireLayout } from "./FireLayoutContext";
+import { ensureExpanded } from "./fireNavigate";
 
 const FIRE = "#ff6a3d";
 const ICE = "#62b6ff";
@@ -468,7 +470,11 @@ function SidechainRack() {
 
 export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const [collapsed, toggle] = useFireCollapsed("mixer", false);
+  const { focusActive, focusId, isFocused } = useFireLayout();
   useFireBandRegister("mixer", "Fire Mixer", FIRE, collapsed, toggle, chipHosted);
+  useEffect(() => {
+    if (isFocused("mixer") && collapsed) ensureExpanded("mixer");
+  }, [collapsed, isFocused]);
   const fireLimiterOn = useFireSequencerStore((s) => s.fireLimiterOn);
   const setFireLimiterOn = useFireSequencerStore((s) => s.setFireLimiterOn);
   const mixer = useFireSequencerStore((s) => s.mixer);
@@ -544,24 +550,25 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
     };
   }, []);
 
-  if (chipHosted && collapsed) return null;
+  if (focusActive && focusId !== "mixer") return null;
+  if (chipHosted && collapsed && !isFocused("mixer")) return null;
 
   return (
-    <GlassPanel intense className="p-3">
-      <div className={`flex items-center justify-between gap-2 ${collapsed ? "" : "mb-2"}`}>
+    <GlassPanel intense className="p-3" data-fire-module="mixer">
+      <div className={`flex items-center justify-between gap-2 ${collapsed && !isFocused("mixer") ? "" : "mb-2"}`}>
         <button
           onClick={toggle}
-          aria-expanded={!collapsed}
+          aria-expanded={!collapsed || isFocused("mixer")}
           className="flex items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
           title={collapsed ? "Expand Fire Mixer" : "Collapse Fire Mixer"}
         >
-          <CollapseToggle collapsed={collapsed} color={FIRE} />
+          <CollapseToggle collapsed={collapsed && !isFocused("mixer")} color={FIRE} />
           <span className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: FIRE }}>
             Fire Mixer
           </span>
           <span className="text-[9px] normal-case tracking-normal text-white/35">· parts sum before Kill-Chain</span>
         </button>
-        {!collapsed && (
+        {(!collapsed || isFocused("mixer")) && (
           <button
             onClick={() => setFireLimiterOn(!fireLimiterOn)}
             className={`h-7 px-3 rounded-lg text-[10px] font-bold border transition ${
@@ -576,7 +583,7 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
         )}
       </div>
 
-      {!collapsed && (
+      {(!collapsed || isFocused("mixer")) && (
         <>
           <MeterBridge levels={levels} live={liveRef.current} />
 
