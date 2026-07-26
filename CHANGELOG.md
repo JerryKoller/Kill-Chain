@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.7] — 2026-07-26 — Chrome Hover + Song Clarity + Keyboard
+
+### Changed
+- **Window controls** — minimize / maximize / close fade in only when you hover the top-right corner (no always-on native overlay)
+- **Patterns / Song order** — clearer two-row arrangement: Patterns you edit, Song order you play; Loop pattern vs Play song; chain always visible
+- **Keyboard** — 1–4 octaves on screen (default 2); high-contrast key labels; hover travel + fire polish
+
 ## [2.6.6] — 2026-07-26 — Path Fit + Lineage + Color Map
 
 ### Fixed
