@@ -2,6 +2,20 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.0] — 2026-07-26 — Fire Command Genesis
+
+### Added
+- **Characters** — 23 inspired cards (Vintage / Chip / FM) from Jupiter-8, Prophet-5, Juno-60, SH-101, CS-70M, ARP 2600, Game Boy, NES, C64, Genesis, Atari ST, TB-303, DX7/Operator, Synclavier, Wavestation, Pigments, Gladiator, Vanguard, Albino, Sumu, Synplant, Myth, MAP
+- **Vintage Age** bus — cassette generations, variable tape speed, wow/flutter, VHS Hi-Fi, 8/12-bit + downsample, BBD chorus, analog compress, dust / hiss / hum / print-through (transparent when off)
+- **Analog Life** — drift rate, voice instability, per-note tune variance, envelope inconsistency
+- **Chip & Acid** — pulse duty, hard sync DNA, NES/GB/periodic noise, chip voice limit, 303 accent + slide
+- **FM Rack & Vector** — 4-op FM engine mode (algorithms / ops / feedback), vector morph rate/depth
+- **Library categories** — Vintage, Chip, FM + Genesis · … presets
+
+### Changed
+- Fire Command patch bay: Characters button; rack sections for Vintage Age, Analog Life, Chip, FM Rack
+- Signal Path: AGE node heat; module atlas entries for Genesis stages
+
 ## [2.7.1] — 2026-07-26 — Splash Sync · Missions Punch · Fire Perf/UX
 
 ### Fixed
