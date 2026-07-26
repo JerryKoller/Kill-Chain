@@ -2,6 +2,12 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.9] — 2026-07-26 — Piano Roll Fit + Sequencer Symmetry
+
+### Changed
+- **Piano roll fills the bay** — pattern grid fit-to-widths the sequencer (no dead black gap); Fit / ± zoom; velocity + automation stay gutter-aligned
+- **Sequencer symmetry** — transport in Play · Bars · Channels zones; editor chrome in a three-column layout; roomier controls and stage plating. Layout only — audio unchanged
+
 ## [2.5.8] — 2026-07-26 — Layout Breathing Room
 
 ### Changed
