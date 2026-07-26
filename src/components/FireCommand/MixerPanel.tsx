@@ -417,7 +417,7 @@ function SidechainRack() {
             className="text-[10px] font-bold uppercase tracking-[0.18em]"
             style={{ color: duckEnabled ? FIRE : "rgba(255,255,255,0.4)" }}
           >Sidechain</div>
-          <div className="text-[9px] text-white/30">ducks Synth A+B</div>
+          <div className="text-[9px] text-white/30">ducks Synth A · B stays solid</div>
         </div>
         <button
           onClick={() => setDuck({ enabled: !duckEnabled })}

@@ -27,6 +27,7 @@ import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
 import { DRUM_LANES, type DrumLane } from "@/audio/dsp/FireDrumKit";
 import { DEFAULT_FIRE_PATCH, makeModMatrix } from "@/audio/dsp/FireCommandSynth";
+import { MISSION_SHOWCASE_PRESETS } from "@/audio/dsp/fireMissionPresets";
 import { audioUrlForPath } from "@/state/libraryStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
 
@@ -400,21 +401,29 @@ function starterNotes(): RollNote[] {
  */
 export const DEFAULT_SYNTH_B_PRESET = "hyperspace";
 
-// The preset bank is resolved through a dynamic import: this store now sits
-// in the MAIN chunk (the sidebar's activity hook reads it), and a static
-// import of fireCommandStore would drag the ~500-entry generated bank into
-// the boot bundle — the exact thing SystemMonitor's lazy import avoids.
+// Full factory bank stays a dynamic import (boot chunk). Mission showcase
+// presets apply synchronously so demos don't race the opening notes.
 let applySeq = 0;
+
+function setSynthBPatch(raw: typeof DEFAULT_FIRE_PATCH): void {
+  const patch = { ...DEFAULT_FIRE_PATCH, ...raw };
+  patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+  getEngine().fireCommandB.setPatch(patch);
+}
+
 function applySynthBPreset(presetId: string): void {
+  const mission = MISSION_SHOWCASE_PRESETS.find((p) => p.id === presetId);
+  if (mission) {
+    setSynthBPatch(mission.patch);
+    return;
+  }
   const token = ++applySeq;
   void import("@/state/fireCommandStore").then(({ FIRE_PRESETS }) => {
-    if (token !== applySeq) return; // a newer pick superseded this one
+    if (token !== applySeq) return;
     const preset = FIRE_PRESETS.find((p) => p.id === presetId)
       ?? FIRE_PRESETS.find((p) => p.id === DEFAULT_SYNTH_B_PRESET);
     if (!preset) return;
-    const patch = { ...DEFAULT_FIRE_PATCH, ...preset.patch };
-    patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-    getEngine().fireCommandB.setPatch(patch);
+    setSynthBPatch(preset.patch);
   });
 }
 

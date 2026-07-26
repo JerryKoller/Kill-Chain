@@ -53,7 +53,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.001, ampDecay: 0.9, ampSustain: 0.12, ampRelease: 0.8,
       delayTime: 0.375, delayFeedback: 0.42, delayMix: 0.32,
       reverbSize: 3.4, reverbMix: 0.38,
-      drive: 0.02, chorusMix: 0.15, masterGain: 0.58,
+      drive: 0.02, chorusMix: 0.15, masterGain: 0.80,
     }),
   },
 
@@ -72,7 +72,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.001, ampDecay: 0.14, ampSustain: 0, ampRelease: 0.12,
       delayTime: 0.5, delayFeedback: 0.35, delayMix: 0.18,
       reverbSize: 4, reverbMix: 0.22,
-      drive: 0.05, masterGain: 0.62,
+      drive: 0.05, masterGain: 0.84,
     }),
   },
   {
@@ -91,7 +91,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       lfo2Wave: "sine", lfo2Rate: 0.07, lfo2Depth: 0.15, lfo2Dest: "pan",
       chorusRate: 0.2, chorusDepth: 0.4, chorusMix: 0.35,
       reverbSize: 5, reverbMix: 0.45, phaserMix: 0.2, phaserRate: 0.15,
-      drive: 0.12, masterGain: 0.55,
+      drive: 0.12, masterGain: 0.77,
     }),
   },
 
@@ -113,7 +113,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       drive: 0.4, driveMode: "tube", punch: 0.35, tone: 9000,
       mono: true, glide: 0.03,
       chorusMix: 0.2, delayMix: 0, reverbMix: 0.08,
-      masterGain: 0.72,
+      masterGain: 0.84,
     }),
   },
   {
@@ -131,7 +131,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.001, ampDecay: 0.16, ampSustain: 0.05, ampRelease: 0.1,
       drive: 0.35, driveMode: "hard", crush: 0.08, punch: 0.5, tone: 11000,
       delayTime: 0.23, delayFeedback: 0.25, delayMix: 0.12,
-      mono: true, masterGain: 0.58,
+      mono: true, masterGain: 0.80,
     }),
   },
 
@@ -152,9 +152,9 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       phaserRate: 0.25, phaserDepth: 0.5, phaserMix: 0.22,
       delayTime: 0.375, delayFeedback: 0.35, delayMix: 0.22,
       reverbSize: 3.2, reverbMix: 0.28,
-      gateOn: true, gateRate: 8, gateDepth: 0.35, gateSmooth: 0.25,
-      gatePattern: [1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0],
-      drive: 0.08, masterGain: 0.58,
+      // Sidechain ducks A — no gate (would double-pump with kick duck)
+      gateOn: false,
+      drive: 0.08, masterGain: 0.80,
     }),
   },
   {
@@ -171,7 +171,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.005, ampDecay: 0.18, ampSustain: 0.75, ampRelease: 0.12,
       drive: 0.22, driveMode: "tube", punch: 0.4, tone: 10000,
       mono: true, glide: 0.04, chorusMix: 0, delayMix: 0, reverbMix: 0.05,
-      masterGain: 0.78,
+      masterGain: 0.90,
     }),
   },
 
@@ -190,7 +190,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.001, ampDecay: 0.7, ampSustain: 0.6, ampRelease: 0.35,
       drive: 0.2, punch: 0.65, tone: 6000,
       mono: true, glide: 0.18,
-      delayMix: 0, reverbMix: 0.03, masterGain: 0.9,
+      delayMix: 0, reverbMix: 0.03, masterGain: 0.90,
     }),
   },
   {
@@ -206,7 +206,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       filterEnvAmount: 0.6, filtDecay: 0.15,
       ampAttack: 0.001, ampDecay: 0.22, ampSustain: 0.05, ampRelease: 0.2,
       delayTime: 0.28, delayFeedback: 0.3, delayMix: 0.2,
-      reverbSize: 2, reverbMix: 0.18, drive: 0.1, masterGain: 0.55,
+      reverbSize: 2, reverbMix: 0.18, drive: 0.1, masterGain: 0.77,
     }),
   },
 
@@ -235,7 +235,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       delayTime: 0.75, delayFeedback: 0.45, delayMix: 0.28,
       reverbSize: 5.5, reverbMix: 0.55,
       spectralMode: "smear", spectralAmount: 0.35, spectralMix: 0.25,
-      drive: 0.04, masterGain: 0.5,
+      drive: 0.04, masterGain: 0.72,
     }),
   },
   {
@@ -253,7 +253,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       chorusMix: 0.4, reverbSize: 6, reverbMix: 0.6,
       delayTime: 0.9, delayFeedback: 0.4, delayMix: 0.22,
       spectralMode: "freeze", spectralAmount: 0.2, spectralMix: 0.15,
-      drive: 0.02, masterGain: 0.42,
+      drive: 0.02, masterGain: 0.64,
     }),
   },
 
@@ -277,7 +277,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.003, ampDecay: 0.15, ampSustain: 0.95, ampRelease: 0.08,
       drive: 0.38, driveMode: "tube", punch: 0.3, tone: 10500,
       mono: true, glide: 0.04,
-      delayMix: 0.08, reverbMix: 0.06, masterGain: 0.68,
+      delayMix: 0.08, reverbMix: 0.06, masterGain: 0.90,
     }),
   },
   {
@@ -294,7 +294,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.001, ampDecay: 0.12, ampSustain: 0.1, ampRelease: 0.1,
       lfo1Wave: "sine", lfo1Rate: 5.5, lfo1Depth: 0.15, lfo1Dest: "pitch",
       delayTime: 0.17, delayFeedback: 0.3, delayMix: 0.18,
-      drive: 0.25, driveMode: "fold", masterGain: 0.52,
+      drive: 0.25, driveMode: "fold", masterGain: 0.74,
     }),
   },
 
@@ -315,7 +315,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       drive: 0.42, driveMode: "tube", tone: 13000, punch: 0.25,
       mono: true, glide: 0.065,
       delayTime: 0.33, delayFeedback: 0.28, delayMix: 0.12,
-      reverbMix: 0.05, chorusMix: 0, masterGain: 0.65,
+      reverbMix: 0.05, chorusMix: 0, masterGain: 0.87,
     }),
   },
 
@@ -335,7 +335,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       chorusRate: 0.55, chorusDepth: 0.55, chorusMix: 0.45,
       delayTime: 0.375, delayFeedback: 0.38, delayMix: 0.28,
       reverbSize: 3.5, reverbMix: 0.3,
-      drive: 0.1, punch: 0.2, masterGain: 0.55,
+      drive: 0.1, punch: 0.2, masterGain: 0.77,
     }),
   },
   {
@@ -352,7 +352,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.003, ampDecay: 0.14, ampSustain: 0.55, ampRelease: 0.08,
       drive: 0.28, driveMode: "soft", punch: 0.55, tone: 11000,
       mono: true, glide: 0.02,
-      delayMix: 0, reverbMix: 0.04, masterGain: 0.8,
+      delayMix: 0, reverbMix: 0.04, masterGain: 0.80,
     }),
   },
 
@@ -381,7 +381,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.004, ampDecay: 0.2, ampSustain: 1, ampRelease: 0.12,
       drive: 0.45, driveMode: "fuzz", punch: 0.4, tone: 10000, crush: 0.05,
       mono: true, glide: 0.06,
-      delayMix: 0.1, reverbMix: 0.08, masterGain: 0.7,
+      delayMix: 0.1, reverbMix: 0.08, masterGain: 0.82,
     }),
   },
   {
@@ -399,7 +399,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
       ampAttack: 0.001, ampDecay: 0.18, ampSustain: 0, ampRelease: 0.15,
       delayTime: 0.2, delayFeedback: 0.4, delayMix: 0.35,
       reverbSize: 2, reverbMix: 0.2,
-      drive: 0.2, masterGain: 0.5,
+      drive: 0.2, masterGain: 0.72,
     }),
   },
 ];

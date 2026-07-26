@@ -328,10 +328,11 @@ export class AudioEngine {
       return { gain, pan };
     };
     this.firePart = { a: mkPart(), b: mkPart(), drums: mkPart(), samples: mkPart() };
+    // Sidechain ducks Synth A only — bass/808s on Synth B stay solid.
     this.fireDuck = this.ctx.createGain();
     this.firePart.a.pan.connect(this.fireDuck);
-    this.firePart.b.pan.connect(this.fireDuck);
     this.fireDuck.connect(this.fireBus);
+    this.firePart.b.pan.connect(this.fireBus);
     this.firePart.drums.pan.connect(this.fireBus);
     this.firePart.samples.pan.connect(this.fireBus);
 
@@ -389,9 +390,9 @@ export class AudioEngine {
   }
 
   /**
-   * Sidechain duck (v1.6): dip the Synth A+B path to `1 - amount` at `when`
-   * and ramp back to unity over `releaseSec` — scheduled sample-accurately
-   * alongside the drum trigger that causes it.
+   * Sidechain duck (v1.6): dip Synth A to `1 - amount` at `when` and ramp
+   * back to unity over `releaseSec`. Synth B bypasses the duck so bass roles
+   * stay solid while pads/leads pump.
    */
   fireDuckTrigger(when: number, amount: number, releaseSec: number): void {
     const g = this.fireDuck.gain;

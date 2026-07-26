@@ -39,7 +39,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  * the synth+drums SUM room under the limiter threshold. The user-facing
  * drumLevel range (0..1.2) is unchanged; it just scales inside this budget.
  */
-const DRUM_TRIM = 0.6;
+const DRUM_TRIM = 0.72;
 
 /**
  * Knee-style safety clip transfer, shared by the drum kit's output and the
@@ -187,58 +187,73 @@ export class FireDrumKit {
 
   private kick(t: number, v: number): void {
     const ctx = this.ctx;
-    // Body: sine with fast pitch drop 160→45 Hz.
+    // Body: deep sine pitch drop — longer sustain for club weight.
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = "sine";
-    osc.frequency.setValueAtTime(160, t);
-    osc.frequency.exponentialRampToValueAtTime(45, t + 0.09);
-    // 0.95 (was 1.1): body + click summed past full scale per hit.
-    g.gain.setValueAtTime(0.95 * v, t);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.42);
-    // Click transient: tiny burst of highpassed noise.
-    const click = ctx.createBufferSource();
-    click.buffer = this.noise();
-    const cf = ctx.createBiquadFilter();
-    cf.type = "highpass";
-    cf.frequency.value = 1200;
+    osc.frequency.setValueAtTime(110, t);
+    osc.frequency.exponentialRampToValueAtTime(38, t + 0.14);
+    g.gain.setValueAtTime(1.05 * v, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.58);
+    // Sub layer — fat bottom without raising the click.
+    const sub = ctx.createOscillator();
+    const sg = ctx.createGain();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(70, t);
+    sub.frequency.exponentialRampToValueAtTime(32, t + 0.18);
+    sg.gain.setValueAtTime(0.55 * v, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    // Short hard click (not hissy noise)
+    const click = ctx.createOscillator();
     const cg = ctx.createGain();
-    // 0.42 (was 0.5): body + click summed to ~1.45/hit; ~1.25 keeps a lone
-    // full-velocity kick inside the output clipper's identity region.
-    cg.gain.setValueAtTime(0.42 * v, t);
-    cg.gain.exponentialRampToValueAtTime(0.001, t + 0.02);
+    click.type = "triangle";
+    click.frequency.setValueAtTime(2400, t);
+    click.frequency.exponentialRampToValueAtTime(400, t + 0.018);
+    cg.gain.setValueAtTime(0.28 * v, t);
+    cg.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
     osc.connect(g).connect(this.output);
-    click.connect(cf).connect(cg).connect(this.output);
-    osc.start(t); osc.stop(t + 0.5);
-    click.start(t); click.stop(t + 0.03);
+    sub.connect(sg).connect(this.output);
+    click.connect(cg).connect(this.output);
+    osc.start(t); osc.stop(t + 0.65);
+    sub.start(t); sub.stop(t + 0.55);
+    click.start(t); click.stop(t + 0.04);
   }
 
   private snare(t: number, v: number): void {
     const ctx = this.ctx;
-    // Tone: two detuned triangles ~180/330 Hz, short.
+    // Body thud
+    const body = ctx.createOscillator();
+    const bg = ctx.createGain();
+    body.type = "sine";
+    body.frequency.setValueAtTime(210, t);
+    body.frequency.exponentialRampToValueAtTime(140, t + 0.08);
+    bg.gain.setValueAtTime(0.55 * v, t);
+    bg.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    // Tone snap
     const o1 = ctx.createOscillator();
     const o2 = ctx.createOscillator();
     const og = ctx.createGain();
     o1.type = "triangle"; o1.frequency.value = 185;
     o2.type = "triangle"; o2.frequency.value = 330;
-    // 0.42 (was 0.5): the two triangles sum coherently at onset (±2 → ±1.0
-    // through this gain), which put tone + rattle at ~1.75 per hit.
-    og.gain.setValueAtTime(0.42 * v, t);
-    og.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
-    // Rattle: bandpassed noise.
+    og.gain.setValueAtTime(0.32 * v, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    // Rattle — bandpass, less harsh than pure HP
     const n = ctx.createBufferSource();
     n.buffer = this.noise();
     const nf = ctx.createBiquadFilter();
-    nf.type = "highpass";
-    nf.frequency.value = 1800;
+    nf.type = "bandpass";
+    nf.frequency.value = 2800;
+    nf.Q.value = 0.7;
     const ng = ctx.createGain();
-    ng.gain.setValueAtTime(0.7 * v, t);
-    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.19);
+    ng.gain.setValueAtTime(0.55 * v, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    body.connect(bg).connect(this.output);
     o1.connect(og); o2.connect(og); og.connect(this.output);
     n.connect(nf).connect(ng).connect(this.output);
+    body.start(t); body.stop(t + 0.2);
     o1.start(t); o1.stop(t + 0.15);
     o2.start(t); o2.stop(t + 0.15);
-    n.start(t); n.stop(t + 0.22);
+    n.start(t); n.stop(t + 0.24);
   }
 
   private clap(t: number, v: number): void {
@@ -255,10 +270,10 @@ export class FireDrumKit {
     g.gain.setValueAtTime(0, t);
     for (let i = 0; i < 3; i++) {
       const bt = t + i * burst;
-      g.gain.setValueAtTime(0.9 * v, bt);
+      g.gain.setValueAtTime(0.85 * v, bt);
       g.gain.exponentialRampToValueAtTime(0.15 * v, bt + burst * 0.9);
     }
-    g.gain.setValueAtTime(0.8 * v, t + 3 * burst);
+    g.gain.setValueAtTime(0.75 * v, t + 3 * burst);
     g.gain.exponentialRampToValueAtTime(0.001, t + 3 * burst + 0.24);
     n.connect(f).connect(g).connect(this.output);
     n.start(t); n.stop(t + 0.32);
@@ -270,16 +285,16 @@ export class FireDrumKit {
     n.buffer = this.noise();
     const hp = ctx.createBiquadFilter();
     hp.type = "highpass";
-    hp.frequency.value = 7200;
-    // A resonant peak gives it a metallic ring rather than pure hiss.
+    hp.frequency.value = 6200;
+    // Mild metallic peak — not a sandpaper screech.
     const pk = ctx.createBiquadFilter();
     pk.type = "peaking";
-    pk.frequency.value = 10500;
-    pk.Q.value = 3;
-    pk.gain.value = 10;
+    pk.frequency.value = 9000;
+    pk.Q.value = 1.8;
+    pk.gain.value = 4.5;
     const g = ctx.createGain();
-    const dur = open ? 0.5 : 0.055;
-    g.gain.setValueAtTime((open ? 0.5 : 0.55) * v, t);
+    const dur = open ? 0.42 : 0.045;
+    g.gain.setValueAtTime((open ? 0.42 : 0.4) * v, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     n.connect(hp).connect(pk).connect(g).connect(this.output);
     n.start(t); n.stop(t + dur + 0.03);

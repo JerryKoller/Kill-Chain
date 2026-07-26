@@ -7,7 +7,7 @@
     <meta name="description" content="Kill-Chain — a tactical audio engine." />
     <style>
       /*
-        Boot splash — single centered column, even spacing.
+        Boot splash — centered column, room to breathe, more personality.
         Timing locked to splashSound.ts: black 900ms → reveal → DROP +2.85s → end 4.2s.
       */
       :root {
@@ -32,13 +32,55 @@
       }
       #boot-splash.boot-hide { opacity: 0; pointer-events: none; }
 
+      /* Soft ember bloom behind stage */
       #boot-splash::before {
         content: "";
         position: absolute;
         inset: 0;
-        background: radial-gradient(45% 35% at 50% 40%, rgba(255, 106, 61, 0.12), transparent 70%);
+        background: radial-gradient(42% 32% at 50% 40%, rgba(255, 106, 61, 0.16), transparent 72%);
         pointer-events: none;
+        animation: boot-bloom 3.2s ease-in-out infinite;
       }
+
+      /* Fine scanline veil */
+      #boot-splash::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent 0,
+          transparent 2px,
+          rgba(0, 0, 0, 0.18) 2px,
+          rgba(0, 0, 0, 0.18) 3px
+        );
+        opacity: 0.35;
+        pointer-events: none;
+        mix-blend-mode: multiply;
+      }
+
+      /* Corner brackets — HUD frame, still symmetric */
+      .boot-frame {
+        position: absolute;
+        inset: 28px;
+        pointer-events: none;
+        z-index: 0;
+      }
+      .boot-frame span {
+        position: absolute;
+        width: 28px;
+        height: 28px;
+        border-color: rgba(255, 106, 61, 0.45);
+        border-style: solid;
+        opacity: 0;
+        transition: opacity 0.6s ease 0.35s;
+      }
+      .reveal ~ .boot-frame span,
+      #boot-splash:has(.reveal) .boot-frame span { opacity: 1; }
+      .boot-frame .tl { top: 0; left: 0; border-width: 2px 0 0 2px; }
+      .boot-frame .tr { top: 0; right: 0; border-width: 2px 2px 0 0; }
+      .boot-frame .bl { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
+      .boot-frame .br { bottom: 0; right: 0; border-width: 0 2px 2px 0; }
 
       .boot-stage {
         position: relative;
@@ -55,11 +97,11 @@
       }
       .boot-stage.reveal { opacity: 1; transform: none; }
 
-      /* Emblem — one ring + core, centered */
+      /* Emblem — rings + crosshair ticks + core */
       .boot-emblem {
         position: relative;
-        width: 160px;
-        height: 160px;
+        width: 168px;
+        height: 168px;
         display: grid;
         place-items: center;
         flex-shrink: 0;
@@ -70,18 +112,30 @@
         border-radius: 50%;
         border: 2px solid transparent;
         border-top-color: var(--b-fire);
-        border-right-color: rgba(255, 106, 61, 0.25);
-        box-shadow: 0 0 32px rgba(255, 106, 61, 0.2);
+        border-right-color: rgba(255, 106, 61, 0.28);
+        box-shadow: 0 0 36px rgba(255, 106, 61, 0.28);
         animation: boot-spin 3s linear infinite;
       }
       .boot-ring-inner {
         position: absolute;
-        inset: 28px;
+        inset: 30px;
         border-radius: 50%;
         border: 1.5px solid transparent;
         border-bottom-color: var(--b-steel);
-        border-left-color: rgba(155, 229, 100, 0.3);
+        border-left-color: rgba(155, 229, 100, 0.35);
         animation: boot-spin 4.2s linear infinite reverse;
+      }
+      .boot-ticks {
+        position: absolute;
+        inset: 14px;
+        border-radius: 50%;
+        background:
+          linear-gradient(var(--b-ember), var(--b-ember)) center top / 2px 10px no-repeat,
+          linear-gradient(var(--b-ember), var(--b-ember)) center bottom / 2px 10px no-repeat,
+          linear-gradient(var(--b-ember), var(--b-ember)) left center / 10px 2px no-repeat,
+          linear-gradient(var(--b-ember), var(--b-ember)) right center / 10px 2px no-repeat;
+        opacity: 0.55;
+        animation: boot-spin 12s linear infinite;
       }
       .boot-core {
         width: 18px;
@@ -90,7 +144,7 @@
         background: radial-gradient(circle at 35% 30%, #fff, var(--b-fire) 55%, #8f2a14);
         box-shadow:
           0 0 12px 2px rgba(255, 255, 255, 0.45),
-          0 0 28px 6px rgba(255, 106, 61, 0.45);
+          0 0 32px 8px rgba(255, 106, 61, 0.5);
         animation: boot-pulse 1.8s ease-in-out infinite;
       }
       .reveal .boot-emblem {
@@ -103,6 +157,19 @@
         flex-direction: column;
         align-items: center;
         gap: 10px;
+      }
+      .boot-kicker {
+        margin: 0;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.48em;
+        text-indent: 0.48em;
+        text-transform: uppercase;
+        color: rgba(155, 229, 100, 0.55);
+        opacity: 0;
+      }
+      .reveal .boot-kicker {
+        animation: boot-fade-in 0.45s ease 0.15s forwards;
       }
       .boot-title {
         position: relative;
@@ -162,6 +229,7 @@
 
       /* Progress */
       .boot-bar {
+        position: relative;
         width: 100%;
         max-width: 240px;
         height: 2px;
@@ -169,14 +237,19 @@
         background: rgba(255, 255, 255, 0.08);
         overflow: hidden;
       }
+      .boot-bar::before,
       .boot-bar::after {
         content: "";
         display: block;
         height: 100%;
-        width: 0%;
         border-radius: 2px;
+      }
+      .boot-bar::after {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 0%;
         background: linear-gradient(90deg, var(--b-steel), var(--b-fire));
-        box-shadow: 0 0 10px rgba(255, 106, 61, 0.5);
+        box-shadow: 0 0 12px rgba(255, 106, 61, 0.55);
       }
       .boot-stage.reveal .boot-bar::after {
         animation: boot-fill 4.2s cubic-bezier(0.4, 0.05, 0.2, 1) forwards;
@@ -186,7 +259,7 @@
       .boot-flash {
         position: absolute;
         inset: 0;
-        background: radial-gradient(50% 45% at 50% 42%, rgba(255, 106, 61, 0.45), transparent 70%);
+        background: radial-gradient(50% 45% at 50% 42%, rgba(255, 106, 61, 0.5), transparent 70%);
         opacity: 0;
         pointer-events: none;
         z-index: 2;
@@ -202,8 +275,12 @@
       }
       @keyframes boot-punch {
         0% { transform: scale(1); }
-        25% { transform: scale(1.1); }
+        25% { transform: scale(1.12); }
         100% { transform: scale(1); }
+      }
+      @keyframes boot-bloom {
+        0%, 100% { opacity: 0.85; transform: scale(1); }
+        50% { opacity: 1; transform: scale(1.04); }
       }
       @keyframes boot-shimmer { to { background-position: 220% 0; } }
       @keyframes boot-fill { from { width: 0%; } to { width: 100%; } }
@@ -215,6 +292,10 @@
       @keyframes boot-armed {
         0% { opacity: 0; transform: scale(1.8); }
         100% { opacity: 1; transform: scale(1); }
+      }
+      @keyframes boot-fade-in {
+        from { opacity: 0; transform: translateY(4px); }
+        to { opacity: 1; transform: none; }
       }
       @keyframes boot-glitch-a {
         0% { opacity: 0.8; transform: translate(-3px, -1px); clip-path: inset(10% 0 65% 0); }
@@ -228,12 +309,13 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .boot-ring, .boot-ring-inner, .boot-core, .boot-title,
-        .boot-title::before, .boot-title::after, .boot-flash, .boot-emblem {
+        .boot-ring, .boot-ring-inner, .boot-ticks, .boot-core, .boot-title,
+        .boot-title::before, .boot-title::after, .boot-flash, .boot-emblem,
+        #boot-splash::before {
           animation: none !important;
         }
-        .boot-armed { animation: none; }
-        .reveal .boot-armed { opacity: 1; }
+        .boot-armed, .boot-kicker { animation: none; }
+        .reveal .boot-armed, .reveal .boot-kicker { opacity: 1; }
         .boot-stage { transition: opacity 0.35s ease; transform: none; }
         .boot-stage.reveal .boot-bar::after { animation: boot-fill 1s linear forwards; }
       }
@@ -242,13 +324,19 @@
   <body class="bg-ink overflow-hidden">
     <div id="boot-splash">
       <div class="boot-flash"></div>
+      <div class="boot-frame" aria-hidden="true">
+        <span class="tl"></span><span class="tr"></span>
+        <span class="bl"></span><span class="br"></span>
+      </div>
       <div id="boot-stage" class="boot-stage">
         <div class="boot-emblem" aria-hidden="true">
           <span class="boot-ring"></span>
           <span class="boot-ring-inner"></span>
+          <span class="boot-ticks"></span>
           <span class="boot-core"></span>
         </div>
         <div class="boot-wordmark">
+          <p class="boot-kicker">// initiate</p>
           <h1 class="boot-title" data-text="Kill-Chain">Kill-Chain</h1>
           <p class="boot-sub">Tactical Audio Engine</p>
           <p class="boot-armed">Systems Armed</p>
