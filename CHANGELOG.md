@@ -2,6 +2,16 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.3] — 2026-07-26 — FX Stages
+
+### Changed
+- **Drive — Magma Forge** — living transfer curve + crushed sine stage
+- **Phaser — Sweep Notches** — magenta notch combs crawling the spectrum
+- **Chorus — Ensemble Shimmer** — detuned voice ribbons around the dry signal
+- **Delay — Ping-Pong Corridor** — L↔R echo pulses decaying with feedback
+- **Reverb — Room Bloom** — expanding impulse rings sized by room Size
+- **Spectral — Violet FFT Bay** — hi-DPI mode-aware spectrum (freeze / smear / gate / shift). All display-only
+
 ## [2.5.2] — 2026-07-26 — Macro / Gate / Matrix Stages
 
 ### Changed
