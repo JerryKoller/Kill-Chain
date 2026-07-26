@@ -2,6 +2,12 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.2] — 2026-07-26 — Visualizer Fidelity + Patch Polish
+
+### Changed
+- **Visualizer fidelity** — stage canvases match container width (no floor clipping); Osc WaveDisplay hi-DPI; Morph Pad responsive; abbreviated edge labels under narrow bays
+- **Patch bar** — Keep winner padded/two-line; Studio bay equal Undo · Redo · Library cells. Layout only
+
 ## [2.6.1] — 2026-07-26 — Armory Deploy + Patch Bar Symmetry
 
 ### Changed

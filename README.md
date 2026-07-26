@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.6.1-c41e3a?style=flat-square" alt="Version 2.6.1" />
+  <img src="https://img.shields.io/badge/version-2.6.2-c41e3a?style=flat-square" alt="Version 2.6.2" />
   <img src="https://img.shields.io/badge/platform-Windows%2064--bit-1e2430?style=flat-square" alt="Windows 64-bit" />
   <img src="https://img.shields.io/badge/license-Proprietary-8b95a8?style=flat-square" alt="Proprietary license" />
 </p>
@@ -26,16 +26,16 @@
 
 ## Download
 
-**[⬇ Download Kill-Chain-Setup-2.6.1.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.1.exe)**
+**[⬇ Download Kill-Chain-Setup-2.6.2.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.2.exe)**
 
 | | |
 |---|---|
-| **Version** | 2.6.1 |
-| **File** | `Kill-Chain-Setup-2.6.1.exe` |
+| **Version** | 2.6.2 |
+| **File** | `Kill-Chain-Setup-2.6.2.exe` |
 | **Size** | ~77 MB |
 | **Platform** | Windows 10/11 (64-bit) |
 
-<sub>Previous releases: [2.6.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.0.exe) · [2.5.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.9.exe) · [2.5.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.8.exe) · [2.5.7](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.7.exe) · [2.5.6](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.6.exe) · [2.5.5](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.5.exe) · [2.5.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.4.exe) · [2.5.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.3.exe) · [2.5.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.2.exe) · [2.5.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.1.exe) · [2.5.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.0.exe) · [2.4.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.1.exe) · [2.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.0.exe) · [1.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-1.4.0.exe)</sub>
+<sub>Previous releases: [2.6.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.1.exe) · [2.6.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.0.exe) · [2.5.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.9.exe) · [2.5.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.8.exe) · [2.5.7](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.7.exe) · [2.5.6](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.6.exe) · [2.5.5](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.5.exe) · [2.5.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.4.exe) · [2.5.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.3.exe) · [2.5.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.2.exe) · [2.5.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.1.exe) · [2.5.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.0.exe) · [2.4.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.1.exe) · [2.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.0.exe) · [1.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-1.4.0.exe)</sub>
 
 You can also use the [download page](https://jerrykoller.github.io/Kill-Chain/) if GitHub Pages is enabled on this repo.
 
@@ -44,7 +44,7 @@ You can also use the [download page](https://jerrykoller.github.io/Kill-Chain/) 
 ## Install
 
 1. Download the installer above.
-2. Run `Kill-Chain-Setup-2.6.1.exe` and follow the setup wizard.
+2. Run `Kill-Chain-Setup-2.6.2.exe` and follow the setup wizard.
 3. Launch **Kill Chain** from the Start menu or desktop shortcut.
 
 ### Windows security notice
@@ -85,7 +85,7 @@ Open the in-app **Glossary** for definitions of every term and module.
 
 See **[CHANGELOG.md](CHANGELOG.md)** for full release notes.
 
-**v2.6.1 highlights:** Armory Deploy randomize pod + balanced Patch · Generative · Studio bar. Natural Selection mutate twin.
+**v2.6.2 highlights:** Visualizer fidelity pass (no clipped stage labels). Patch bar Keep/Studio polish.
 
 **v2.5.6 highlights:** Symmetrical Delay/Reverb-style knob rows; Fire Mixer meter bridge (A/B/Drums/Samples/Master); deeper Morph, Output, OSC, Harmonic Forge Warp, Unison, Filter, Envelopes, LFOs, FM·Ring, Pitch·Glide. Display only.
 
