@@ -28,6 +28,9 @@ const CAT_COLOR: Record<string, string> = {
   Arp: "#9be564",
   FX: "#c98bff",
   Atmos: "#8fa8ff",
+  Vintage: "#c9a66b",
+  Chip: "#6ee7a8",
+  FM: "#a78bfa",
   User: "#ff9a6b",
 };
 
@@ -42,6 +45,9 @@ const CAT_ICON: Record<string, string> = {
   Arp: "⇶",
   FX: "☄",
   Atmos: "🌫",
+  Vintage: "📼",
+  Chip: "▣",
+  FM: "◇",
   User: "★",
 };
 

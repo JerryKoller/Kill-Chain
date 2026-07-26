@@ -51,6 +51,12 @@ export const FC = {
   delay: "#82b4ff",
   reverb: "#a8b4ff",
   spectral: "#d4a5ff",
+  vintage: "#c9a66b",
+
+  /** Genesis modules */
+  analogLife: "#d4b06a",
+  chip: "#6ee7a8",
+  fmRack: "#8ec5ff",
 
   /** Mix & output */
   mixer: "#ff6a3d",

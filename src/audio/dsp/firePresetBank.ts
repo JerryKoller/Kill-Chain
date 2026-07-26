@@ -40,10 +40,12 @@ import {
 // ── public types (the store re-exports these) ──
 
 export type PresetCategory =
-  | "Bass" | "Lead" | "Pluck" | "Pad" | "Keys" | "Arp" | "FX" | "Atmos";
+  | "Bass" | "Lead" | "Pluck" | "Pad" | "Keys" | "Arp" | "FX" | "Atmos"
+  | "Vintage" | "Chip" | "FM";
 
 export const PRESET_CATEGORIES: PresetCategory[] = [
   "Bass", "Lead", "Pluck", "Pad", "Keys", "Arp", "FX", "Atmos",
+  "Vintage", "Chip", "FM",
 ];
 
 /** Loose arp shape (matches the store's ArpSettings without importing it — avoids a cycle). */

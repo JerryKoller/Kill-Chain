@@ -25,15 +25,21 @@ function useSignalHeat(): Record<SignalNodeId, number> {
   const phaser = useFireCommandStore((s) => s.patch.phaserMix);
   const chorus = useFireCommandStore((s) => s.patch.chorusMix);
   const master = useFireCommandStore((s) => s.patch.masterGain);
+  const cassette = useFireCommandStore((s) => s.patch.cassetteGen);
+  const wow = useFireCommandStore((s) => s.patch.wowFlutter);
+  const bbd = useFireCommandStore((s) => s.patch.bbdChorus);
+  const hiss = useFireCommandStore((s) => s.patch.hiss);
+  const vhs = useFireCommandStore((s) => s.patch.vhsColor);
 
   return useMemo(() => ({
     osc: clamp01((oscA + oscB + oscC) / 2.2),
     filter: clamp01(0.25 + (1 - Math.log10(Math.max(30, cutoff)) / 4.3) * 0.55 + Math.min(1, res / 12) * 0.35),
     drive: clamp01(drive),
+    age: clamp01(Math.max(cassette, wow, bbd, hiss, vhs) * 1.2),
     fx: clamp01(Math.max(delay, reverb, phaser, chorus) * 1.15),
     mix: clamp01(master / 1.2),
     scope: clamp01(0.35 + master * 0.4 + Math.max(oscA, oscB, oscC) * 0.25),
-  }), [oscA, oscB, oscC, cutoff, res, drive, delay, reverb, phaser, chorus, master]);
+  }), [oscA, oscB, oscC, cutoff, res, drive, delay, reverb, phaser, chorus, master, cassette, wow, bbd, hiss, vhs]);
 }
 
 /** Sticky strip while Focus Mode is on — always one click from exit. */

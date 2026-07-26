@@ -19,8 +19,9 @@ import {
   type HarmonyMode,
 } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
-import { GENERATED_PRESETS, type FirePreset } from "@/audio/dsp/firePresetBank";
+import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
 import { MISSION_SHOWCASE_PRESETS } from "@/audio/dsp/fireMissionPresets";
+import { CHARACTER_LINKED_PRESETS } from "@/audio/dsp/fireCharacters";
 
 /**
  * fireCommandStore — single source of truth for the "Fire Command" synth.
@@ -609,7 +610,12 @@ const FLAGSHIP_PRESETS: FirePreset[] = [
 ];
 
 /** Full factory bank: flagships first, then the generated arsenal (~500 total). */
-export const FIRE_PRESETS: FirePreset[] = [...FLAGSHIP_PRESETS, ...MISSION_SHOWCASE_PRESETS, ...GENERATED_PRESETS];
+export const FIRE_PRESETS: FirePreset[] = [
+  ...FLAGSHIP_PRESETS,
+  ...MISSION_SHOWCASE_PRESETS,
+  ...CHARACTER_LINKED_PRESETS,
+  ...GENERATED_PRESETS,
+];
 
 // Fast lookup for loadPreset — linear scans over 500 entries add up.
 const PRESET_BY_ID = new Map(FIRE_PRESETS.map((p) => [p.id, p]));
@@ -731,6 +737,40 @@ function randomPatch(): FirePatch {
     macro1: rand(0, 1), macro2: rand(0, 1), macro3: 0, macro4: 0,
     modMatrix: makeModMatrix(routes),
     drift: chance(0.5) ? rand(0.1, 0.5) : 0,
+    driftRate: 0.35,
+    voiceInstability: chance(0.2) ? rand(0.05, 0.25) : 0,
+    tuneVariance: chance(0.2) ? rand(0.05, 0.2) : 0,
+    envVariance: chance(0.15) ? rand(0.05, 0.2) : 0,
+    cassetteGen: chance(0.12) ? rand(0.1, 0.4) : 0,
+    tapeSpeed: chance(0.1) ? rand(-0.2, 0.2) : 0,
+    wowFlutter: chance(0.12) ? rand(0.05, 0.3) : 0,
+    vhsColor: chance(0.1) ? rand(0.1, 0.35) : 0,
+    bitDepth: "off",
+    sampleRateReduce: 0,
+    bbdChorus: chance(0.15) ? rand(0.15, 0.5) : 0,
+    analogComp: chance(0.2) ? rand(0.1, 0.4) : 0,
+    dust: chance(0.1) ? rand(0.02, 0.12) : 0,
+    hiss: chance(0.1) ? rand(0.02, 0.1) : 0,
+    hum: chance(0.08) ? rand(0.02, 0.08) : 0,
+    printThrough: chance(0.08) ? rand(0.02, 0.12) : 0,
+    pulseDuty: 0.5,
+    hardSync: false,
+    chipNoise: "white",
+    chipVoiceLimit: 0,
+    accentAmount: 0,
+    slideOn: false,
+    fmEngine: "classic",
+    fmAlg: 0,
+    fmOp1Level: 1,
+    fmOp2Level: 0.7,
+    fmOp3Level: 0.5,
+    fmOp4Level: 0.35,
+    fmOp2Ratio: 1,
+    fmOp3Ratio: 2,
+    fmOp4Ratio: 3,
+    fmFeedback: 0,
+    vectorRate: chance(0.12) ? rand(0.05, 0.3) : 0,
+    vectorDepth: chance(0.12) ? rand(0.15, 0.55) : 0,
     stereoWidth: rand(0.85, 1.3),
     gateOn,
     gateRate: pick([4, 8, 8, 12, 16]),
@@ -938,6 +978,11 @@ export interface FireCommandState extends PersistShape {
    * the pad takes ONE snapshot per gesture itself. commit=true also persists.
    */
   applyMorphPatch: (patch: FirePatch, commit: boolean) => void;
+  /**
+   * Genesis Characters: push a full/partial patch (+ optional arp), history,
+   * engine apply, persist. Marks presetId as custom.
+   */
+  applyCharacterPatch: (patch: FirePatch | Partial<FirePatch>, arp?: Partial<ArpSettings> | PresetArp) => void;
   savePreset: (name: string) => string;
   deleteUserPreset: (id: string) => void;
   renameUserPreset: (id: string, name: string) => void;
@@ -1148,6 +1193,32 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       }
       set({ patch: structuredClone(patch), presetId: "custom" });
       getEngine().fireCommand.setPatch(get().patch);
+      persist();
+    },
+
+    applyCharacterPatch: (rawPatch, rawArp) => {
+      pushFireHistory();
+      const patch = { ...DEFAULT_FIRE_PATCH, ...rawPatch };
+      patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      const arp: ArpSettings = rawArp
+        ? { ...DEFAULT_ARP, ...rawArp }
+        : { ...get().arp, enabled: false };
+      stopArpScheduler();
+      set({
+        patch,
+        arp,
+        presetId: "custom",
+        heldNotes: [],
+        arpOrder: [],
+        arpCurrent: null,
+        arpStepIndex: -1,
+        mutation: null,
+        mutateLineage: 0,
+      });
+      const fc = getEngine().fireCommand;
+      fc.allNotesOff();
+      fc.setPatch(patch);
+      if (arp.enabled) startArpScheduler(get, set);
       persist();
     },
 

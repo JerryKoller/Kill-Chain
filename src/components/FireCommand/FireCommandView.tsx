@@ -14,7 +14,7 @@ import { useUIStore } from "@/state/uiStore";
 import { getEngine } from "@/audio/AudioEngine";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
-import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode } from "@/audio/dsp/FireCommandSynth";
+import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz, WarpStageViz } from "./FxStageViz";
 import {
@@ -33,6 +33,7 @@ import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
 import { FireBand, useFireBandRegister } from "./FireBand";
 import { PresetBrowser } from "./PresetBrowser";
+import { CharacterBrowser } from "./CharacterBrowser";
 import { MixerPanel } from "./MixerPanel";
 import { ModPatchGrid } from "./ModPatchGrid";
 import { FireMorphPad } from "./FireMorphPad";
@@ -145,6 +146,7 @@ export function FireCommandView() {
   const fxOn = !bypass;
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browserFilter, setBrowserFilter] = useState<"All" | "Missions" | undefined>(undefined);
+  const [characterBrowserOpen, setCharacterBrowserOpen] = useState(false);
 
   const currentName =
     presetId === "custom"
@@ -319,6 +321,12 @@ export function FireCommandView() {
                 title="Browse mission packs"
               >Missions</button>
               <button
+                onClick={() => setCharacterBrowserOpen(true)}
+                className="h-8 shrink-0 rounded-xl border px-2.5 text-[11px] font-semibold transition"
+                style={{ color: "#c4b5fd", borderColor: "#a78bfa55", background: "#a78bfa18" }}
+                title="Genesis character cards"
+              >Characters</button>
+              <button
                 onClick={() => loadPreset("init")}
                 className="h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-2.5 text-[11px] text-white/75 transition"
                 title="Reset to Init patch"
@@ -345,7 +353,7 @@ export function FireCommandView() {
 
       {/* ── Category bands (v2.5.7) — collapsed chips, even open grids ── */}
 
-      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp">
+      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp · chip">
         <OscPanel group="a" chipHosted />
         <OscPanel group="b" chipHosted />
         <OscPanel group="c" chipHosted />
@@ -367,9 +375,39 @@ export function FireCommandView() {
             <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color={FC.warp} />
           </div>
         </Section>
+        <Section
+          title="Chip · Acid"
+          color={FC.chip}
+          collapseKey="chip"
+          chipHosted
+          defaultCollapsed
+          right={
+            <FSeg<ChipNoiseMode>
+              paramKey="chipNoise"
+              color={FC.chip}
+              options={[
+                { id: "white", label: "Wht" },
+                { id: "nes", label: "NES" },
+                { id: "gb", label: "GB" },
+                { id: "periodic", label: "Per" },
+              ]}
+            />
+          }
+        >
+          <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
+            <BoolToggle paramKey="hardSync" label="Hard Sync" color={FC.chip} />
+            <BoolToggle paramKey="slideOn" label="Slide" color={FC.chip} />
+          </div>
+          <div className="flex items-center justify-evenly gap-1 flex-wrap">
+            <FParamKnob paramKey="pulseDuty" label="Pulse" min={0.05} max={0.95} format={fmtPct} def={0.5} color={FC.chip} />
+            <FParamKnob paramKey="chipVoiceLimit" label="Voices" min={0} max={8} integer format={(v) => (v < 0.5 ? "Off" : fmtInt(v))} def={0} color={FC.chip} />
+            <FParamKnob paramKey="accentAmount" label="Accent" min={0} max={1} format={fmtPct} def={0} color={FC.chip} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">PWM · sync · chip noise · 303 accent/slide</div>
+        </Section>
       </FireBand>
 
-      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · filter · envelopes">
+      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes">
         <Section title="Unison · Sub" color={FC.unison} collapseKey="mixer.unison" chipHosted right={
           <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
         }>
@@ -384,6 +422,15 @@ export function FireCommandView() {
             <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} color={FC.unison} />
             <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
           </div>
+        </Section>
+        <Section title="Analog Life" color={FC.analogLife} collapseKey="analog.life" chipHosted defaultCollapsed>
+          <div className="flex items-center justify-evenly gap-1 flex-wrap">
+            <FParamKnob paramKey="driftRate" label="Rate" min={0.05} max={1} format={fmtPct} def={0.35} color={FC.analogLife} />
+            <FParamKnob paramKey="voiceInstability" label="Instab" min={0} max={1} format={fmtPct} def={0} color={FC.analogLife} />
+            <FParamKnob paramKey="tuneVariance" label="Tune Δ" min={0} max={1} format={fmtPct} def={0} color={FC.analogLife} />
+            <FParamKnob paramKey="envVariance" label="Env Δ" min={0} max={1} format={fmtPct} def={0} color={FC.analogLife} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Per-voice drift · tune · envelope organic variance</div>
         </Section>
         <Section title="Filter" color={FC.filter} collapseKey="filter" chipHosted right={
           <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
@@ -411,7 +458,7 @@ export function FireCommandView() {
         </Section>
       </FireBand>
 
-      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · pitch · matrix · arp">
+      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp">
         <LfoPanel idx={1} chipHosted />
         <LfoPanel idx={2} chipHosted />
         <Section title="FM · Ring" color={FC.fm} collapseKey="fm" chipHosted>
@@ -423,6 +470,42 @@ export function FireCommandView() {
             <FParamKnob paramKey="ringAmount" label="Ring" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
             <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} color={FC.fm} />
           </div>
+        </Section>
+        <Section
+          title="FM Rack · Vector"
+          color={FC.fmRack}
+          collapseKey="fm.rack"
+          chipHosted
+          defaultCollapsed
+          right={
+            <FSeg<FmEngineMode>
+              paramKey="fmEngine"
+              color={FC.fmRack}
+              options={[
+                { id: "classic", label: "2-op" },
+                { id: "ops4", label: "4-op" },
+              ]}
+            />
+          }
+        >
+          <div className="flex items-center justify-evenly gap-1 flex-wrap mb-2">
+            <FParamKnob paramKey="fmAlg" label="Alg" min={0} max={7} integer format={fmtInt} def={0} color={FC.fmRack} />
+            <FParamKnob paramKey="fmFeedback" label="Fbk" min={0} max={1} format={fmtPct} def={0} color={FC.fmRack} />
+            <FParamKnob paramKey="vectorRate" label="Vec Rate" min={0} max={1} format={fmtPct} def={0} color={FC.fmRack} />
+            <FParamKnob paramKey="vectorDepth" label="Vec Depth" min={0} max={1} format={fmtPct} def={0} color={FC.fmRack} />
+          </div>
+          <div className="flex items-center justify-evenly gap-1 flex-wrap">
+            <FParamKnob paramKey="fmOp1Level" label="Op1" min={0} max={1} format={fmtPct} def={1} color={FC.fmRack} />
+            <FParamKnob paramKey="fmOp2Level" label="Op2" min={0} max={1} format={fmtPct} def={0.7} color={FC.fmRack} />
+            <FParamKnob paramKey="fmOp3Level" label="Op3" min={0} max={1} format={fmtPct} def={0.5} color={FC.fmRack} />
+            <FParamKnob paramKey="fmOp4Level" label="Op4" min={0} max={1} format={fmtPct} def={0.35} color={FC.fmRack} />
+          </div>
+          <div className="flex items-center justify-evenly gap-1 flex-wrap mt-1">
+            <FParamKnob paramKey="fmOp2Ratio" label="R2" min={0.25} max={16} curve="log" format={fmtRatio} def={1} color={FC.fmRack} />
+            <FParamKnob paramKey="fmOp3Ratio" label="R3" min={0.25} max={16} curve="log" format={fmtRatio} def={2} color={FC.fmRack} />
+            <FParamKnob paramKey="fmOp4Ratio" label="R4" min={0.25} max={16} curve="log" format={fmtRatio} def={3} color={FC.fmRack} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">4-op algorithms · operator levels/ratios · vector morph</div>
         </Section>
         <Section title="Pitch · Glide" color={FC.pitch} collapseKey="pitch" chipHosted>
           <PitchGlideStageViz />
@@ -436,7 +519,7 @@ export function FireCommandView() {
         <ArpPanel arp={arp} setArp={setArp} chipHosted />
       </FireBand>
 
-      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive through spectral">
+      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive · vintage age · spectral">
         <Section title="Drive · Punch" color={FC.drive} collapseKey="fx.drive" chipHosted right={
           <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
         }>
@@ -447,6 +530,41 @@ export function FireCommandView() {
             <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={46} color={FC.drive} />
             <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
           </div>
+        </Section>
+        <Section
+          title="Vintage Age"
+          color={FC.vintage}
+          collapseKey="fx.vintage"
+          chipHosted
+          defaultCollapsed
+          right={
+            <FSeg<FireBitDepth>
+              paramKey="bitDepth"
+              color={FC.vintage}
+              options={[
+                { id: "off", label: "Off" },
+                { id: "12bit", label: "12b" },
+                { id: "8bit", label: "8b" },
+              ]}
+            />
+          }
+        >
+          <div className="flex items-center justify-evenly gap-1 flex-wrap">
+            <FParamKnob paramKey="cassetteGen" label="Cass" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="tapeSpeed" label="Speed" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="wowFlutter" label="Wow" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="vhsColor" label="VHS" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="sampleRateReduce" label="SR↓" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="bbdChorus" label="BBD" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="analogComp" label="Comp" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+          </div>
+          <div className="flex items-center justify-evenly gap-1 flex-wrap mt-1">
+            <FParamKnob paramKey="dust" label="Dust" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="hiss" label="Hiss" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="hum" label="Hum" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+            <FParamKnob paramKey="printThrough" label="Print" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Tape · VHS · bit depth · BBD · dust beds</div>
         </Section>
         <Section title="Phaser" color={FC.phaser} collapseKey="fx.phaser" chipHosted>
           <PhaserStageViz />
@@ -572,6 +690,10 @@ export function FireCommandView() {
         open={browserOpen}
         onClose={() => { setBrowserOpen(false); setBrowserFilter(undefined); }}
         initialFilter={browserFilter}
+      />
+      <CharacterBrowser
+        open={characterBrowserOpen}
+        onClose={() => setCharacterBrowserOpen(false)}
       />
     </div>
     </FireLayoutProvider>
@@ -2667,6 +2789,33 @@ function LpgToggle() {
       title="Lowpass gate (Aalto-style): notes become struck vactrol plucks — one strike drives both loudness AND brightness, so loud is bright and quiet is dark. Replaces the ADSR while on."
     >
       {lpgOn ? "● LPG" : "○ LPG"}
+    </button>
+  );
+}
+
+/** Boolean patch toggle (hard sync, slide, etc.). */
+function BoolToggle({
+  paramKey,
+  label,
+  color = FIRE,
+}: {
+  paramKey: { [K in keyof FirePatch]: FirePatch[K] extends boolean ? K : never }[keyof FirePatch];
+  label: string;
+  color?: string;
+}) {
+  const on = useFireCommandStore((s) => s.patch[paramKey]) as boolean;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  return (
+    <button
+      onClick={() => setParam(paramKey, !on)}
+      className="h-6 px-2.5 rounded-md text-[10px] font-bold border transition"
+      style={
+        on
+          ? { color, borderColor: `${color}70`, background: `${color}18` }
+          : { color: "rgba(255,255,255,0.4)", borderColor: "rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)" }
+      }
+    >
+      {on ? `● ${label}` : `○ ${label}`}
     </button>
   );
 }
