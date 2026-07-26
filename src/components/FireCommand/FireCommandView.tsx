@@ -16,6 +16,7 @@ import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
+import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz } from "./FxStageViz";
 import { PresetBrowser } from "./PresetBrowser";
 import { MixerPanel } from "./MixerPanel";
 import { ModPatchGrid } from "./ModPatchGrid";
@@ -528,45 +529,54 @@ export function FireCommandView() {
         </Section>
       </div>
 
-      {/* FX */}
+      {/* FX stages — each with its own visual personality (v2.5.3) */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-        <Section title="Drive · Punch" color={FIRE} right={
+        <Section title="Drive · Punch" color={FIRE} collapseKey="fx.drive" right={
           <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
         }>
-          <DriveViz />
-          <KnobRow>
+          <DriveStageViz />
+          <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0.08} />
             <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={46} />
             <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} />
-          </KnobRow>
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Magma forge — transfer curve left, living sine crushed right.</div>
         </Section>
-        <Section title="Phaser" color={ICE}>
-          <KnobRow>
-            <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} color={ICE} />
-            <FParamKnob paramKey="phaserDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.6} color={ICE} />
-            <FParamKnob paramKey="phaserMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={ICE} />
-          </KnobRow>
+        <Section title="Phaser" color="#e070ff" collapseKey="fx.phaser">
+          <PhaserStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} color="#e070ff" />
+            <FParamKnob paramKey="phaserDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.6} color="#e070ff" />
+            <FParamKnob paramKey="phaserMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color="#e070ff" />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Sweep notches crawl the spectrum — mix brings them in.</div>
         </Section>
-        <Section title="Chorus" color={ICE}>
-          <KnobRow>
-            <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} color={ICE} />
-            <FParamKnob paramKey="chorusDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.4} color={ICE} />
-            <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0.25} color={ICE} />
-          </KnobRow>
+        <Section title="Chorus" color="#5ce0c8" collapseKey="fx.chorus">
+          <ChorusStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} color="#5ce0c8" />
+            <FParamKnob paramKey="chorusDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.4} color="#5ce0c8" />
+            <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0.25} color="#5ce0c8" />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Ensemble shimmer — detuned voices breathe around the dry signal.</div>
         </Section>
-        <Section title="Delay (Ping-Pong)" color={ICE}>
-          <KnobRow>
+        <Section title="Delay (Ping-Pong)" color={ICE} collapseKey="fx.delay">
+          <DelayStageViz />
+          <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="delayTime" label="Time" min={0.01} max={1.5} curve="log" format={fmtSec} def={0.28} color={ICE} />
             <FParamKnob paramKey="delayFeedback" label="Fbk" min={0} max={0.92} format={fmtPct} def={0.3} color={ICE} />
             <FParamKnob paramKey="delayMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={ICE} />
-          </KnobRow>
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Ping-pong corridor — echoes bounce L↔R and decay with feedback.</div>
         </Section>
-        <Section title="Reverb" color={ICE}>
-          <KnobRow>
-            <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} color={ICE} />
-            <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={ICE} />
-          </KnobRow>
+        <Section title="Reverb" color="#a8b4ff" collapseKey="fx.reverb">
+          <ReverbStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} color="#a8b4ff" />
+            <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color="#a8b4ff" />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Room bloom — impulse rings expand with Size, denser with Mix.</div>
         </Section>
         <SpectralPanel />
       </div>
@@ -980,35 +990,6 @@ function WarpViz() {
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
       {bars}
-    </svg>
-  );
-}
-
-/** Drive transfer curve — the exact waveshape each mode applies. */
-function DriveViz() {
-  const drive = useFireCommandStore((s) => s.patch.drive);
-  const mode = useFireCommandStore((s) => s.patch.driveMode);
-  const W = 110, H = 44, PAD = 3;
-  const k = 1 + drive * 14;
-  const f = (x: number): number => {
-    switch (mode) {
-      case "tube": { const y = Math.tanh(k * x * 0.8); return y + 0.15 * drive * Math.tanh(3 * x) * (1 - Math.abs(y)); }
-      case "fold": { const y = k * x * 0.7; return Math.sin(y * Math.min(2, 0.5 + drive * 2)); }
-      case "hard": return Math.max(-0.8, Math.min(0.8, k * x * 0.6)) / 0.8;
-      case "fuzz": return Math.sign(x) * Math.pow(Math.min(1, Math.abs(k * x * 0.6)), 0.4);
-      default: return Math.tanh(k * x * 0.7);
-    }
-  };
-  const pts: string[] = [];
-  for (let i = 0; i <= 60; i++) {
-    const x = (i / 60) * 2 - 1;
-    pts.push(`${PAD + ((x + 1) / 2) * (W - PAD * 2)},${PAD + (1 - (f(x) + 1) / 2) * (H - PAD * 2)}`);
-  }
-  return (
-    <svg width={W} viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
-      <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="rgba(255,255,255,0.07)" />
-      <line x1={W / 2} y1={PAD} x2={W / 2} y2={H - PAD} stroke="rgba(255,255,255,0.07)" />
-      <polyline points={pts.join(" ")} fill="none" stroke={FIRE} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 3px ${FIRE}88)` }} />
     </svg>
   );
 }
@@ -2412,73 +2393,6 @@ function HarmonyPicker() {
  */
 const SPECTRAL_VIOLET = "#c98bff";
 
-/** Stylized spectrum animation — shows what each spectral mode DOES. */
-function SpectralViz() {
-  const mode = useFireCommandStore((s) => s.patch.spectralMode) ?? "off";
-  const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
-  const ref = useRef<HTMLCanvasElement>(null);
-  const stRef = useRef({ mode, amount });
-  stRef.current = { mode, amount };
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    let raf = 0;
-    let lastTick = 0;
-    const N = 26;
-    const cur = new Float32Array(N).fill(0.2);
-    const draw = (nowMs: number) => {
-      raf = requestAnimationFrame(draw);
-      if (document.hidden) return;
-      if (nowMs - lastTick < 50) return;
-      lastTick = nowMs;
-      const { mode: m, amount: a } = stRef.current;
-      const t = nowMs / 1000;
-      const W = canvas.width, H = canvas.height, PAD = 3;
-      ctx.clearRect(0, 0, W, H);
-      const bw = (W - PAD * 2) / N;
-      for (let i = 0; i < N; i++) {
-        // A living pseudo-spectrum: overlapping slow sines per bin.
-        const live = Math.max(0.04,
-          (0.6 / (1 + i * 0.18)) * (0.6 + 0.4 * Math.sin(t * (1.1 + i * 0.37) + i * 2.1)));
-        let v = live;
-        let x = PAD + i * bw;
-        let dim = false;
-        if (m === "freeze") {
-          v = cur[i] = cur[i] * (0.75 + a * 0.249) + live * (1 - (0.75 + a * 0.249));
-        } else if (m === "smear") {
-          cur[i] += (live - cur[i]) * (1 - a * 0.92);
-          v = cur[i];
-        } else if (m === "gate") {
-          const thr = a * 0.45;
-          dim = live < thr;
-          v = live;
-        } else if (m === "shift") {
-          x += (a * 2 - 1) * bw * 5;
-          if (x < PAD - bw || x > W - PAD) continue;
-        }
-        ctx.fillStyle = dim ? "rgba(201,139,255,0.12)" : SPECTRAL_VIOLET;
-        ctx.globalAlpha = dim ? 1 : 0.5 + v * 0.5;
-        ctx.fillRect(x, PAD + (1 - v) * (H - PAD * 2), Math.max(1.5, bw - 2), v * (H - PAD * 2));
-      }
-      ctx.globalAlpha = 1;
-      if (stRef.current.mode === "gate") {
-        const thr = stRef.current.amount * 0.45;
-        ctx.strokeStyle = "rgba(255,255,255,0.35)";
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        ctx.moveTo(PAD, PAD + (1 - thr) * (H - PAD * 2));
-        ctx.lineTo(W - PAD, PAD + (1 - thr) * (H - PAD * 2));
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  return <canvas ref={ref} width={220} height={40} className="w-full h-[40px] rounded-md bg-black/30 mb-1.5" />;
-}
 function SpectralPanel() {
   const mode = useFireCommandStore((s) => s.patch.spectralMode);
   const setParam = useFireCommandStore((s) => s.setParam);
@@ -2488,6 +2402,7 @@ function SpectralPanel() {
     <Section
       title="Spectral"
       color={SPECTRAL_VIOLET}
+      collapseKey="fx.spectral"
       right={
         <Seg<SpectralMode>
           value={m}
@@ -2503,28 +2418,31 @@ function SpectralPanel() {
         />
       }
     >
+      <SpectralStageViz />
       {m === "off" ? (
-        <div className="text-[10px] text-dim leading-relaxed px-1 py-2">
-          FFT effect on the synth bus — <span className="text-white/60">Freeze</span> holds the
-          spectrum (reverb tails become pads), <span className="text-white/60">Smear</span> washes
-          it out, <span className="text-white/60">Gate</span> keeps only the loudest partials,{" "}
-          <span className="text-white/60">Shift</span> slides every partial up or down.
+        <div className="text-center text-[10px] text-dim leading-relaxed px-1 pb-1">
+          Violet FFT bay — <span className="text-white/60">Freeze</span> holds,{" "}
+          <span className="text-white/60">Smear</span> washes,{" "}
+          <span className="text-white/60">Gate</span> keeps loudest partials,{" "}
+          <span className="text-white/60">Shift</span> slides the spectrum.
         </div>
       ) : (
         <>
-        <SpectralViz />
-        <KnobRow>
-          <FParamKnob
-            paramKey="spectralAmount"
-            label={amountLabel}
-            min={0} max={1}
-            bipolar={m === "shift"}
-            format={m === "shift" ? (v) => `${v < 0.5 ? "−" : "+"}${Math.round(Math.abs(v * 2 - 1) * 100)}%` : fmtPct}
-            def={m === "shift" ? 0.5 : 0.6}
-            color={SPECTRAL_VIOLET}
-          />
-          <FParamKnob paramKey="spectralMix" label="Mix" min={0} max={1} format={fmtPct} def={0.5} color={SPECTRAL_VIOLET} />
-        </KnobRow>
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob
+              paramKey="spectralAmount"
+              label={amountLabel}
+              min={0} max={1}
+              bipolar={m === "shift"}
+              format={m === "shift" ? (v) => `${v < 0.5 ? "−" : "+"}${Math.round(Math.abs(v * 2 - 1) * 100)}%` : fmtPct}
+              def={m === "shift" ? 0.5 : 0.6}
+              color={SPECTRAL_VIOLET}
+            />
+            <FParamKnob paramKey="spectralMix" label="Mix" min={0} max={1} format={fmtPct} def={0.5} color={SPECTRAL_VIOLET} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">
+            Mode colors the bay — Hold freezes bins, Time smears, Thresh gates, Shift slides.
+          </div>
         </>
       )}
     </Section>
