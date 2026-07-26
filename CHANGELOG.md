@@ -2,6 +2,12 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.8] — 2026-07-26 — Layout Breathing Room
+
+### Changed
+- **Full-width open modules** — when multiple modules in a Fire Command band are expanded, they stack vertically at full width instead of crushing into 2–4 columns
+- **Sequencer chrome** — arrangement is one compact row (song chain on demand); editor tabs + Draw A/B + File menu replace the stacked toolbars; piano-roll tools denser; long hint footers removed (shortcuts live in tooltips). Layout only — audio unchanged
+
 ## [2.5.7] — 2026-07-26 — Category Bands
 
 ### Changed
