@@ -734,10 +734,10 @@ export function WarpStageViz() {
   const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 400, h: 110 });
+  const sizeRef = useRef({ w: 400, h: 118 });
   const st = useRef({ stretch, tilt, comb });
   st.current = { stretch, tilt, comb };
-  useHiDpiCanvas(wrapRef, canvasRef, 110, sizeRef);
+  useHiDpiCanvas(wrapRef, canvasRef, 118, sizeRef);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -837,7 +837,7 @@ export function WarpStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.25)" height={110}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.32)" height={118}>
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );

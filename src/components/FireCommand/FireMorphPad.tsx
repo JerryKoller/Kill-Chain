@@ -1,11 +1,9 @@
 /**
- * FireMorphPad — XY morph between four Fire Command patches (v1.6).
+ * FireMorphPad — XY morph between four Fire Command patches (v2.5.5 stage).
  *
  * Pick a preset for each corner, then drag the puck: every numeric patch
  * field is bilinearly interpolated between the corners; discrete fields
- * (wavetable choice, filter type, mod matrix, gate pattern…) come from the
- * NEAREST corner so the sound never lands on a nonsense in-between. The pad
- * takes ONE undo snapshot per gesture, so Ctrl+Z steps back a whole drag.
+ * come from the NEAREST corner. One undo snapshot per gesture.
  */
 
 import { useRef, useState } from "react";
@@ -13,11 +11,11 @@ import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useFireCommandStore, FIRE_PRESETS } from "@/state/fireCommandStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { pushFireHistory } from "@/lib/fireHistory";
+import { CollapseToggle } from "./CollapseToggle";
 
 const CORNERS = ["a", "b", "c", "d"] as const;
 type Corner = (typeof CORNERS)[number];
 
-/** Corner geometry: a/b along the top, c/d along the bottom. */
 const CORNER_META: Record<Corner, { x: number; y: number; label: string; color: string }> = {
   a: { x: 0, y: 0, label: "A", color: "#ff6a3d" },
   b: { x: 1, y: 0, label: "B", color: "#62b6ff" },
@@ -25,7 +23,6 @@ const CORNER_META: Record<Corner, { x: number; y: number; label: string; color: 
   d: { x: 1, y: 1, label: "D", color: "#c792ea" },
 };
 
-/** Numeric fields that must stay whole numbers after interpolation. */
 const INT_FIELDS = new Set<keyof FirePatch>([
   "unison", "oscAOctave", "oscBOctave", "oscCOctave", "gateSteps",
 ]);
@@ -38,6 +35,7 @@ const DEFAULT_CORNER_IDS: Record<Corner, string> = {
 };
 
 const STORAGE_KEY = "killchain.firemorph.v1";
+const FIRE = "#ff6a3d";
 
 interface PersistShape {
   cornerIds: Record<Corner, string>;
@@ -74,8 +72,6 @@ function morphPatches(
   const w = bilinear(x, y);
   let nearest: Corner = "a";
   for (const c of CORNERS) if (w[c] > w[nearest]) nearest = c;
-  // Discrete fields (strings, booleans, arrays) ride along from the nearest
-  // corner; numeric fields get overwritten with the weighted blend below.
   const out = structuredClone(corners[nearest]);
   for (const key of Object.keys(DEFAULT_FIRE_PATCH) as (keyof FirePatch)[]) {
     if (typeof DEFAULT_FIRE_PATCH[key] !== "number") continue;
@@ -129,7 +125,6 @@ export function FireMorphPad() {
   const onPointerDown = (e: React.PointerEvent) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     draggingRef.current = true;
-    // ONE snapshot per gesture, taken before the first blend lands.
     pushFireHistory();
     const p = posFromEvent(e);
     setPos(p);
@@ -140,7 +135,6 @@ export function FireMorphPad() {
     if (!draggingRef.current) return;
     const p = posFromEvent(e);
     setPos(p);
-    // rAF-throttle: setPatch rebuilds the whole voice config, once per frame is plenty.
     if (rafRef.current) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = 0;
@@ -170,40 +164,42 @@ export function FireMorphPad() {
   const w = bilinear(pos.x, pos.y);
 
   return (
-    <GlassPanel className="p-2.5">
+    <GlassPanel className="p-3">
       <div className="flex items-center gap-2">
         <button
           onClick={toggleOpen}
-          className="flex items-center gap-2 text-left"
+          className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
           title="Morph pad: blend four patches by dragging a puck — every knob in between exists"
+          aria-expanded={open}
         >
-          <span className="text-[10px] uppercase tracking-[0.25em] text-dim">Morph Pad</span>
-          <span className="text-[10px] text-white/30">{open ? "▾" : "▸"}</span>
+          <CollapseToggle collapsed={!open} color={FIRE} />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: FIRE }}>
+            Morph Pad
+          </span>
         </button>
         {!open && (
-          <span className="text-[10px] text-white/30 italic">
+          <span className="text-[10px] text-white/35 italic">
             drag between {CORNERS.map((c) => nameFor(cornerIds[c])).join(" · ")}
           </span>
         )}
       </div>
 
       {open && (
-        <div className="mt-2 flex flex-wrap gap-3">
-          {/* the pad */}
+        <div className="mt-2.5 flex flex-wrap gap-4">
           <div
             ref={padRef}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            className="relative w-[210px] h-[210px] rounded-xl border border-white/12 cursor-crosshair touch-none select-none shrink-0"
+            className="relative h-[240px] w-[240px] shrink-0 cursor-crosshair touch-none select-none overflow-hidden rounded-2xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_28px_rgba(0,0,0,0.35)]"
             style={{
               background:
-                `radial-gradient(circle at 0% 0%, ${CORNER_META.a.color}30, transparent 60%),` +
-                `radial-gradient(circle at 100% 0%, ${CORNER_META.b.color}30, transparent 60%),` +
-                `radial-gradient(circle at 0% 100%, ${CORNER_META.c.color}30, transparent 60%),` +
-                `radial-gradient(circle at 100% 100%, ${CORNER_META.d.color}30, transparent 60%),` +
-                "rgba(0,0,0,0.45)",
+                `radial-gradient(circle at 0% 0%, ${CORNER_META.a.color}38, transparent 55%),` +
+                `radial-gradient(circle at 100% 0%, ${CORNER_META.b.color}38, transparent 55%),` +
+                `radial-gradient(circle at 0% 100%, ${CORNER_META.c.color}38, transparent 55%),` +
+                `radial-gradient(circle at 100% 100%, ${CORNER_META.d.color}38, transparent 55%),` +
+                "linear-gradient(160deg, rgba(8,6,10,0.92), rgba(0,0,0,0.75))",
             }}
             role="slider"
             aria-label="Patch morph pad — drag to blend the four corner presets"
@@ -212,48 +208,61 @@ export function FireMorphPad() {
             aria-valuemin={0}
             aria-valuemax={100}
           >
+            {/* Crosshair grid */}
+            <div className="pointer-events-none absolute inset-0 opacity-20"
+              style={{
+                backgroundImage:
+                  "linear-gradient(rgba(255,255,255,0.12) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.12) 1px, transparent 1px)",
+                backgroundSize: "40px 40px",
+              }}
+            />
             {CORNERS.map((c) => (
               <span
                 key={c}
-                className="absolute text-[10px] font-bold pointer-events-none"
+                className="absolute flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-bold pointer-events-none"
                 style={{
                   color: CORNER_META[c].color,
-                  left: CORNER_META[c].x === 0 ? 6 : undefined,
-                  right: CORNER_META[c].x === 1 ? 6 : undefined,
-                  top: CORNER_META[c].y === 0 ? 4 : undefined,
-                  bottom: CORNER_META[c].y === 1 ? 4 : undefined,
-                  opacity: 0.4 + w[c] * 0.6,
+                  borderColor: `${CORNER_META[c].color}${Math.round(60 + w[c] * 140).toString(16).padStart(2, "0")}`,
+                  background: `${CORNER_META[c].color}${Math.round(18 + w[c] * 50).toString(16).padStart(2, "0")}`,
+                  boxShadow: `0 0 ${8 + w[c] * 16}px ${CORNER_META[c].color}66`,
+                  left: CORNER_META[c].x === 0 ? 8 : undefined,
+                  right: CORNER_META[c].x === 1 ? 8 : undefined,
+                  top: CORNER_META[c].y === 0 ? 8 : undefined,
+                  bottom: CORNER_META[c].y === 1 ? 8 : undefined,
                 }}
               >
                 {CORNER_META[c].label}
               </span>
             ))}
-            {/* puck */}
             <div
-              className="absolute w-4 h-4 rounded-full border-2 border-white/90 pointer-events-none -translate-x-1/2 -translate-y-1/2"
+              className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white"
               style={{
                 left: `${pos.x * 100}%`,
                 top: `${pos.y * 100}%`,
-                background: "rgba(255,255,255,0.25)",
-                boxShadow: "0 0 12px rgba(255,255,255,0.55)",
+                background: "rgba(255,255,255,0.3)",
+                boxShadow: "0 0 18px rgba(255,255,255,0.7), 0 0 36px rgba(255,106,61,0.35)",
               }}
             />
           </div>
 
-          {/* corner pickers */}
-          <div className="flex flex-col gap-1.5 min-w-[180px] flex-1">
+          <div className="flex min-w-[220px] flex-1 flex-col gap-2">
             {CORNERS.map((c) => (
-              <label key={c} className="flex items-center gap-1.5">
+              <div key={c} className="flex items-center gap-2">
                 <span
-                  className="w-4 text-[11px] font-bold text-center"
-                  style={{ color: CORNER_META[c].color }}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-[11px] font-bold"
+                  style={{
+                    color: CORNER_META[c].color,
+                    borderColor: `${CORNER_META[c].color}77`,
+                    background: `${CORNER_META[c].color}22`,
+                    boxShadow: `0 0 10px ${CORNER_META[c].color}33`,
+                  }}
                 >
                   {CORNER_META[c].label}
                 </span>
                 <select
                   value={cornerIds[c]}
                   onChange={(e) => setCorner(c, e.target.value)}
-                  className="flex-1 rounded-lg border border-white/12 bg-black/40 px-1.5 py-1 text-[11px] text-white/75 outline-none focus:border-white/30"
+                  className="flex-1 rounded-lg border border-white/12 bg-black/40 px-2 py-1.5 text-[11px] text-white/80 outline-none focus:border-white/30"
                   title={`Corner ${CORNER_META[c].label} preset`}
                 >
                   {userPresets.length > 0 && (
@@ -269,9 +278,19 @@ export function FireMorphPad() {
                     ))}
                   </optgroup>
                 </select>
-              </label>
+                <div className="h-1.5 w-12 overflow-hidden rounded-full bg-white/10" title={`${Math.round(w[c] * 100)}% blend weight`}>
+                  <div
+                    className="h-full rounded-full transition-[width] duration-75"
+                    style={{
+                      width: `${Math.round(w[c] * 100)}%`,
+                      background: CORNER_META[c].color,
+                      boxShadow: `0 0 8px ${CORNER_META[c].color}`,
+                    }}
+                  />
+                </div>
+              </div>
             ))}
-            <div className="text-[9px] text-white/30 leading-snug">
+            <div className="mt-1 rounded-lg border border-white/8 bg-black/30 px-2.5 py-2 text-[10px] leading-snug text-white/40">
               Numbers blend across corners; wavetables, filter type and the mod
               matrix jump to the nearest corner. One drag = one undo step.
             </div>

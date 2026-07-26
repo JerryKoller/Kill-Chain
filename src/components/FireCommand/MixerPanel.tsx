@@ -1,8 +1,8 @@
 /**
- * MixerPanel (v1.6 + v2.5.4 stage) — the Fire Command bus mixer.
+ * MixerPanel (v2.5.5) — Fire Command bus console.
  * Five strips (Synth A · Synth B · Drums · Samples · Master) with level,
- * pan, mute and solo; a master limiter; sidechain duck; collapsible chrome
- * and a bus-overview stage (display only).
+ * pan, mute and solo; master limiter; sidechain duck. Display stage only —
+ * mixing math unchanged.
  */
 
 import { useEffect, useRef } from "react";
@@ -15,18 +15,19 @@ import {
   type MixerStripId,
 } from "@/state/fireSequencerStore";
 import { useFireCollapsed } from "./useFireCollapsed";
+import { CollapseToggle } from "./CollapseToggle";
 
 const FIRE = "#ff6a3d";
 const ICE = "#62b6ff";
 const GRN = "#9be564";
 const AMB = "#ffcf5c";
 
-const STRIP_META: Record<MixerStripId, { label: string; color: string; hint: string }> = {
-  a: { label: "SYNTH A", color: FIRE, hint: "The playable Fire Command synth" },
-  b: { label: "SYNTH B", color: ICE, hint: "The second instrument (preset-voiced)" },
-  drums: { label: "DRUMS", color: GRN, hint: "The synthesized drum kit (incl. lane sample overrides)" },
-  samples: { label: "SAMPLES", color: AMB, hint: "The sample deck lanes" },
-  master: { label: "MASTER", color: "#ffffff", hint: "The summed Fire output (pre Kill-Chain FX)" },
+const STRIP_META: Record<MixerStripId, { label: string; short: string; color: string; hint: string }> = {
+  a: { label: "SYNTH A", short: "A", color: FIRE, hint: "Playable Fire Command synth" },
+  b: { label: "SYNTH B", short: "B", color: ICE, hint: "Second instrument (preset-voiced)" },
+  drums: { label: "DRUMS", short: "DRM", color: GRN, hint: "Synthesized drum kit" },
+  samples: { label: "SAMPLES", short: "SMP", color: AMB, hint: "Sample deck lanes" },
+  master: { label: "MASTER", short: "MST", color: "#ffffff", hint: "Summed Fire output (pre Kill-Chain FX)" },
 };
 
 const fmtDb = (level: number) =>
@@ -34,13 +35,21 @@ const fmtDb = (level: number) =>
 
 type MeterEls = { fill: HTMLDivElement; peak: HTMLDivElement };
 
-/** Bus overview — five glowing channels with live energy. Display only. */
-function BusOverviewViz({ levels }: { levels: Record<MixerStripId, number> }) {
+/** Signal-flow summing bay — parts feed Master left→right. Display only. */
+function BusFlowViz({
+  levels,
+  live,
+}: {
+  levels: Record<MixerStripId, number>;
+  live: Record<MixerStripId, number>;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const levelsRef = useRef(levels);
+  const liveRef = useRef(live);
   levelsRef.current = levels;
-  const sizeRef = useRef({ w: 400, h: 56 });
+  liveRef.current = live;
+  const sizeRef = useRef({ w: 480, h: 72 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -51,8 +60,8 @@ function BusOverviewViz({ levels }: { levels: Record<MixerStripId, number> }) {
 
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(240, Math.floor(wrap.clientWidth));
-      const cssH = 56;
+      const cssW = Math.max(280, Math.floor(wrap.clientWidth));
+      const cssH = 72;
       sizeRef.current = { w: cssW, h: cssH };
       canvas.width = Math.floor(cssW * dpr);
       canvas.height = Math.floor(cssH * dpr);
@@ -66,8 +75,10 @@ function BusOverviewViz({ levels }: { levels: Record<MixerStripId, number> }) {
 
     let raf = 0;
     let last = 0;
-    const ids: MixerStripId[] = [...MIXER_PARTS, "master"];
-    const smooth = new Map<MixerStripId, number>(ids.map((id) => [id, 0]));
+    const parts: MixerStripId[] = [...MIXER_PARTS];
+    const smooth = new Map<MixerStripId, number>(
+      ([...parts, "master" as const] as MixerStripId[]).map((id) => [id, 0]),
+    );
 
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
@@ -75,56 +86,67 @@ function BusOverviewViz({ levels }: { levels: Record<MixerStripId, number> }) {
       last = t;
       const { w: W, h: H } = sizeRef.current;
       const lv = levelsRef.current;
+      const liv = liveRef.current;
       ctx.clearRect(0, 0, W, H);
 
       const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, "rgba(255,106,61,0.06)");
-      bg.addColorStop(0.5, "rgba(6,8,12,0.5)");
-      bg.addColorStop(1, "rgba(98,182,255,0.05)");
+      bg.addColorStop(0, "rgba(255,106,61,0.08)");
+      bg.addColorStop(0.5, "rgba(6,8,12,0.55)");
+      bg.addColorStop(1, "rgba(255,255,255,0.04)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
-      const gap = 8;
-      const pad = 10;
-      const slotW = (W - pad * 2 - gap * (ids.length - 1)) / ids.length;
+      const masterX = W - 70;
+      const masterY = H * 0.42;
+      const partY = H * 0.42;
+      const gap = (masterX - 90) / Math.max(1, parts.length - 1);
 
-      ids.forEach((id, i) => {
+      // Feed lines into master
+      parts.forEach((id, i) => {
         const meta = STRIP_META[id];
-        const target = Math.max(0, Math.min(1.2, lv[id] ?? 0)) / 1.2;
+        const target = Math.max(lv[id] ?? 0, liv[id] ?? 0);
         const prev = smooth.get(id) ?? 0;
-        const v = prev + (target - prev) * 0.25;
+        const v = prev + (target - prev) * 0.22;
         smooth.set(id, v);
-        const x = pad + i * (slotW + gap);
-        const barH = 8 + v * (H - 28);
-        const y = H - 14 - barH;
+        const x = 36 + i * gap;
+        ctx.strokeStyle = `${meta.color}${Math.round(40 + v * 140).toString(16).padStart(2, "0")}`;
+        ctx.lineWidth = 1.2 + v * 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x, partY + 10);
+        ctx.quadraticCurveTo((x + masterX) / 2, H * 0.78, masterX - 16, masterY + 4);
+        ctx.stroke();
 
-        const g = ctx.createLinearGradient(0, y, 0, H - 14);
+        const barH = 10 + v * 22;
+        const g = ctx.createLinearGradient(0, partY - barH, 0, partY + 8);
         g.addColorStop(0, meta.color);
         g.addColorStop(1, `${meta.color}22`);
         ctx.fillStyle = g;
-        ctx.beginPath();
-        const r = 4;
-        ctx.moveTo(x + r, y);
-        ctx.arcTo(x + slotW, y, x + slotW, y + barH, r);
-        ctx.arcTo(x + slotW, H - 14, x, H - 14, r);
-        ctx.arcTo(x, H - 14, x, y, r);
-        ctx.arcTo(x, y, x + slotW, y, r);
-        ctx.closePath();
-        ctx.fill();
-
-        if (v > 0.05) {
-          ctx.shadowBlur = 8;
-          ctx.shadowColor = meta.color;
-          ctx.fillStyle = `rgba(255,255,255,${0.15 + v * 0.25})`;
-          ctx.fillRect(x + 2, y, slotW - 4, 2);
-          ctx.shadowBlur = 0;
-        }
-
-        ctx.fillStyle = "rgba(255,255,255,0.4)";
-        ctx.font = "600 8px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillRect(x - 10, partY - barH, 20, barH + 8);
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText(meta.label.split(" ")[0], x + slotW / 2, H - 3);
+        ctx.fillText(meta.short, x, H - 8);
       });
+
+      const mPrev = smooth.get("master") ?? 0;
+      const mTarget = Math.max(lv.master ?? 0, liv.master ?? 0);
+      const mV = mPrev + (mTarget - mPrev) * 0.22;
+      smooth.set("master", mV);
+      const mH = 14 + mV * 26;
+      ctx.fillStyle = `rgba(255,255,255,${0.15 + mV * 0.55})`;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = "rgba(255,255,255,0.4)";
+      ctx.fillRect(masterX - 14, masterY - mH, 28, mH + 10);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("MASTER", masterX, H - 8);
+
+      ctx.fillStyle = "rgba(255,106,61,0.45)";
+      ctx.font = "600 8px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("PARTS → SUM", 10, 12);
     };
 
     raf = requestAnimationFrame(draw);
@@ -137,9 +159,9 @@ function BusOverviewViz({ levels }: { levels: Record<MixerStripId, number> }) {
   return (
     <div
       ref={wrapRef}
-      className="relative mb-2.5 overflow-hidden rounded-xl border border-[#ff6a3d]/18 bg-black/40"
+      className="relative mb-3 overflow-hidden rounded-xl border border-[#ff6a3d]/22 bg-black/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
     >
-      <canvas ref={canvasRef} className="block w-full" style={{ height: 56 }} aria-hidden />
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 72 }} aria-hidden />
     </div>
   );
 }
@@ -165,50 +187,74 @@ function Strip({
     return () => registerMeter(id, null);
   }, [id, registerMeter]);
 
+  const panLabel =
+    strip.pan === 0 ? "C" : strip.pan < 0 ? `L${Math.round(-strip.pan * 100)}` : `R${Math.round(strip.pan * 100)}`;
+
   return (
     <div
-      className="flex min-w-[86px] flex-1 flex-col items-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.02] px-2.5 py-2"
+      className={`flex min-w-[96px] flex-1 flex-col items-center gap-2 rounded-2xl border px-2.5 py-2.5 ${
+        isMaster
+          ? "border-white/25 bg-gradient-to-b from-white/[0.07] to-white/[0.02]"
+          : "border-white/10 bg-gradient-to-b from-white/[0.04] to-transparent"
+      }`}
+      style={{
+        boxShadow: isMaster
+          ? "0 0 24px rgba(255,255,255,0.06), inset 0 1px 0 rgba(255,255,255,0.08)"
+          : `0 0 18px ${meta.color}14, inset 0 1px 0 rgba(255,255,255,0.04)`,
+      }}
       title={meta.hint}
     >
-      <span
-        className="text-[9px] font-bold uppercase tracking-[0.18em]"
-        style={{ color: strip.mute ? "rgba(255,255,255,0.3)" : meta.color }}
-      >
-        {meta.label}
-      </span>
+      <div className="flex w-full items-center justify-between gap-1">
+        <span
+          className="text-[10px] font-bold uppercase tracking-[0.16em]"
+          style={{ color: strip.mute ? "rgba(255,255,255,0.28)" : meta.color }}
+        >
+          {meta.label}
+        </span>
+        {!isMaster && (
+          <span className="font-mono text-[9px] text-white/35">{panLabel}</span>
+        )}
+      </div>
 
-      <div className="flex items-end gap-1.5">
-        <input
-          type="range"
-          min={0}
-          max={1.5}
-          step={0.02}
-          value={strip.level}
-          onChange={(e) => setMixerStrip(id, { level: Number(e.target.value) })}
-          onDoubleClick={() => setMixerStrip(id, { level: 1 })}
-          className="fire-fader"
-          style={{
-            writingMode: "vertical-lr",
-            direction: "rtl",
-            width: 18,
-            height: 84,
-            accentColor: meta.color,
-          }}
-          aria-label={`${meta.label} level`}
-          title={`Level: ${fmtDb(strip.level)} — double-click to reset`}
-        />
+      <div className="flex items-end gap-2">
+        <div className="relative flex flex-col items-center">
+          <input
+            type="range"
+            min={0}
+            max={1.5}
+            step={0.02}
+            value={strip.level}
+            onChange={(e) => setMixerStrip(id, { level: Number(e.target.value) })}
+            onDoubleClick={() => setMixerStrip(id, { level: 1 })}
+            className="fire-fader"
+            style={{
+              writingMode: "vertical-lr",
+              direction: "rtl",
+              width: 22,
+              height: 110,
+              accentColor: meta.color,
+            }}
+            aria-label={`${meta.label} level`}
+            title={`Level: ${fmtDb(strip.level)} — double-click to reset`}
+          />
+        </div>
         <div
-          className="relative w-[5px] overflow-hidden rounded-full border border-white/8 bg-black/60"
-          style={{ height: 84 }}
+          className="relative w-[7px] overflow-hidden rounded-full border border-white/10 bg-black/70"
+          style={{ height: 110 }}
           title="Live level (RMS fill, peak tick)"
         >
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 h-2 opacity-40"
+            style={{ background: "linear-gradient(180deg, #ff5d5d, transparent)" }}
+          />
           <div
             ref={fillRef}
             className="absolute bottom-0 left-0 right-0"
             style={{
               height: "0%",
-              background: `linear-gradient(180deg, ${meta.color}, ${meta.color}66)`,
+              background: `linear-gradient(180deg, ${meta.color}, ${meta.color}55)`,
               transition: "height 60ms linear",
+              boxShadow: `0 0 8px ${meta.color}`,
             }}
           />
           <div
@@ -218,41 +264,47 @@ function Strip({
           />
         </div>
       </div>
-      <span className="font-mono text-[9px] text-white/45">{fmtDb(strip.level)}</span>
+
+      <span className="font-mono text-[10px] text-white/55">{fmtDb(strip.level)}</span>
 
       {!isMaster && (
-        <input
-          type="range"
-          min={-1}
-          max={1}
-          step={0.05}
-          value={strip.pan}
-          onChange={(e) => setMixerStrip(id, { pan: Number(e.target.value) })}
-          onDoubleClick={() => setMixerStrip(id, { pan: 0 })}
-          className="w-[64px]"
-          style={{ accentColor: meta.color }}
-          aria-label={`${meta.label} pan`}
-          title={`Pan: ${strip.pan === 0 ? "C" : strip.pan < 0 ? `L${Math.round(-strip.pan * 100)}` : `R${Math.round(strip.pan * 100)}`} — double-click to center`}
-        />
+        <div className="flex w-full flex-col items-center gap-0.5">
+          <input
+            type="range"
+            min={-1}
+            max={1}
+            step={0.05}
+            value={strip.pan}
+            onChange={(e) => setMixerStrip(id, { pan: Number(e.target.value) })}
+            onDoubleClick={() => setMixerStrip(id, { pan: 0 })}
+            className="w-full"
+            style={{ accentColor: meta.color }}
+            aria-label={`${meta.label} pan`}
+            title={`Pan: ${panLabel} — double-click to center`}
+          />
+          <div className="flex w-full justify-between px-0.5 text-[8px] uppercase tracking-wider text-white/25">
+            <span>L</span><span>C</span><span>R</span>
+          </div>
+        </div>
       )}
 
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
         <button
           onClick={() => setMixerStrip(id, { mute: !strip.mute })}
-          className={`h-6 w-6 rounded-md border text-[10px] font-bold transition ${
+          className={`h-7 w-7 rounded-lg border text-[11px] font-bold transition ${
             strip.mute
-              ? "border-rose-400/70 bg-rose-500/25 text-rose-200"
-              : "border-white/10 bg-white/[0.03] text-white/45 hover:bg-white/[0.08]"
+              ? "border-rose-400/70 bg-rose-500/25 text-rose-200 shadow-[0_0_12px_rgba(251,113,133,0.35)]"
+              : "border-white/12 bg-white/[0.04] text-white/45 hover:bg-white/[0.1]"
           }`}
           title="Mute"
         >M</button>
         {!isMaster && (
           <button
             onClick={() => setMixerStrip(id, { solo: !strip.solo })}
-            className={`h-6 w-6 rounded-md border text-[10px] font-bold transition ${
+            className={`h-7 w-7 rounded-lg border text-[11px] font-bold transition ${
               strip.solo
-                ? "border-amber-400/70 bg-amber-400/25 text-amber-200"
-                : "border-white/10 bg-white/[0.03] text-white/45 hover:bg-white/[0.08]"
+                ? "border-amber-400/70 bg-amber-400/25 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.35)]"
+                : "border-white/12 bg-white/[0.04] text-white/45 hover:bg-white/[0.1]"
             }`}
             title="Solo (mutes every non-solo part)"
           >S</button>
@@ -262,15 +314,118 @@ function Strip({
   );
 }
 
-export function MixerPanel() {
-  const [collapsed, toggle] = useFireCollapsed("mixer", false);
-  const fireLimiterOn = useFireSequencerStore((s) => s.fireLimiterOn);
-  const setFireLimiterOn = useFireSequencerStore((s) => s.setFireLimiterOn);
+function SidechainRack() {
   const duckEnabled = useFireSequencerStore((s) => s.duckEnabled);
   const duckAmount = useFireSequencerStore((s) => s.duckAmount);
   const duckReleaseMs = useFireSequencerStore((s) => s.duckReleaseMs);
   const duckSource = useFireSequencerStore((s) => s.duckSource);
   const setDuck = useFireSequencerStore((s) => s.setDuck);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 40) return;
+      last = t;
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = duckEnabled ? "rgba(255,106,61,0.08)" : "rgba(255,255,255,0.03)";
+      ctx.fillRect(0, 0, W, H);
+      const mid = H * 0.55;
+      ctx.beginPath();
+      for (let x = 0; x <= W; x++) {
+        const u = x / W;
+        const pulse = duckEnabled
+          ? Math.max(0, 1 - ((u * 3 + (t / 900) * duckAmount) % 1) * (1.4 + duckAmount))
+          : 0.15;
+        const y = mid - pulse * (H * 0.35) * (0.35 + duckAmount * 0.65);
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = duckEnabled ? FIRE : "rgba(255,255,255,0.15)";
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [duckEnabled, duckAmount]);
+
+  return (
+    <div
+      className={`flex min-w-[200px] max-w-[240px] flex-col gap-2 rounded-2xl border px-3 py-2.5 transition ${
+        duckEnabled
+          ? "border-[#ff6a3d]/45 bg-gradient-to-b from-[#ff6a3d]/[0.1] to-transparent shadow-[0_0_20px_rgba(255,106,61,0.12)]"
+          : "border-white/10 bg-white/[0.02]"
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <div
+            className="text-[10px] font-bold uppercase tracking-[0.18em]"
+            style={{ color: duckEnabled ? FIRE : "rgba(255,255,255,0.4)" }}
+          >Sidechain</div>
+          <div className="text-[9px] text-white/30">ducks Synth A+B</div>
+        </div>
+        <button
+          onClick={() => setDuck({ enabled: !duckEnabled })}
+          className={`h-7 px-2.5 rounded-lg text-[10px] font-bold border transition ${
+            duckEnabled
+              ? "border-[#ff6a3d]/70 bg-[#ff6a3d]/20 text-[#ffbfa0] shadow-[0_0_12px_rgba(255,106,61,0.3)]"
+              : "border-white/10 bg-white/[0.03] text-white/45"
+          }`}
+          title="Duck the synth (A+B) path on every hit of the source lane"
+        >{duckEnabled ? "ON" : "OFF"}</button>
+      </div>
+
+      <canvas ref={canvasRef} width={200} height={36} className="w-full rounded-lg border border-white/8 bg-black/40" aria-hidden />
+
+      <label className="flex items-center gap-1.5 text-[10px] text-dim">
+        <span className="w-12 uppercase tracking-wider">Source</span>
+        <select
+          value={duckSource}
+          onChange={(e) => setDuck({ source: e.target.value as typeof duckSource })}
+          className="flex-1 rounded-md border border-white/12 bg-black/40 px-1.5 py-0.5 text-[11px] text-white/85 outline-none"
+        >
+          {DRUM_LANES.map((l) => (
+            <option key={l.id} value={l.id}>{l.name}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex items-center gap-1.5 text-[10px] text-dim">
+        <span className="w-12 uppercase tracking-wider">Amount</span>
+        <input
+          type="range" min={0} max={1} step={0.02} value={duckAmount}
+          onChange={(e) => setDuck({ amount: Number(e.target.value) })}
+          className="flex-1" style={{ accentColor: FIRE }}
+        />
+        <span className="w-8 text-right font-mono text-white/50">{Math.round(duckAmount * 100)}%</span>
+      </label>
+
+      <label className="flex items-center gap-1.5 text-[10px] text-dim">
+        <span className="w-12 uppercase tracking-wider">Release</span>
+        <input
+          type="range" min={40} max={800} step={10} value={duckReleaseMs}
+          onChange={(e) => setDuck({ releaseMs: Number(e.target.value) })}
+          className="flex-1" style={{ accentColor: FIRE }}
+        />
+        <span className="w-8 text-right font-mono text-white/50">{duckReleaseMs}ms</span>
+      </label>
+    </div>
+  );
+}
+
+export function MixerPanel() {
+  const [collapsed, toggle] = useFireCollapsed("mixer", false);
+  const fireLimiterOn = useFireSequencerStore((s) => s.fireLimiterOn);
+  const setFireLimiterOn = useFireSequencerStore((s) => s.setFireLimiterOn);
   const mixer = useFireSequencerStore((s) => s.mixer);
 
   const levels: Record<MixerStripId, number> = {
@@ -280,6 +435,10 @@ export function MixerPanel() {
     samples: mixer.samples.mute ? 0 : mixer.samples.level,
     master: mixer.master.mute ? 0 : mixer.master.level,
   };
+
+  const liveRef = useRef<Record<MixerStripId, number>>({
+    a: 0, b: 0, drums: 0, samples: 0, master: 0,
+  });
 
   const meterEls = useRef(new Map<MixerStripId, MeterEls>());
   const registerMeter = useRef((id: MixerStripId, els: MeterEls | null) => {
@@ -308,7 +467,6 @@ export function MixerPanel() {
       if (document.hidden) return;
       for (const [id, an] of analysers) {
         const els = meterEls.current.get(id);
-        if (!els) continue;
         an.getFloatTimeDomainData(buf);
         let sum = 0;
         let peak = 0;
@@ -321,6 +479,8 @@ export function MixerPanel() {
         const rms = Math.sqrt(sum / buf.length);
         const norm = (v: number) =>
           v <= 0.001 ? 0 : Math.max(0, Math.min(1, (20 * Math.log10(v) + 60) / 60));
+        liveRef.current[id] = norm(rms);
+        if (!els) continue;
         const held = Math.max(peak, (peakHold.get(id) ?? 0) * 0.985);
         peakHold.set(id, held);
         els.fill.style.height = `${norm(rms) * 100}%`;
@@ -345,21 +505,21 @@ export function MixerPanel() {
         <button
           onClick={toggle}
           aria-expanded={!collapsed}
-          className="flex items-center gap-1.5 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+          className="flex items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
           title={collapsed ? "Expand Fire Mixer" : "Collapse Fire Mixer"}
         >
-          <span className="text-[9px] text-white/45">{collapsed ? "▸" : "▾"}</span>
+          <CollapseToggle collapsed={collapsed} color={FIRE} />
           <span className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: FIRE }}>
             Fire Mixer
           </span>
-          <span className="text-[9px] normal-case tracking-normal text-white/30">· bus before Kill-Chain</span>
+          <span className="text-[9px] normal-case tracking-normal text-white/35">· parts sum before Kill-Chain</span>
         </button>
         {!collapsed && (
           <button
             onClick={() => setFireLimiterOn(!fireLimiterOn)}
-            className={`h-6 px-2.5 rounded-md text-[10px] font-bold border transition ${
+            className={`h-7 px-3 rounded-lg text-[10px] font-bold border transition ${
               fireLimiterOn
-                ? "border-[#9be564]/60 bg-[#9be564]/12 text-[#d3f5b0]"
+                ? "border-[#9be564]/60 bg-[#9be564]/12 text-[#d3f5b0] shadow-[0_0_12px_rgba(155,229,100,0.25)]"
                 : "border-white/10 bg-white/[0.03] text-white/40"
             }`}
             title="Master limiter on the Fire output — glue + overload protection"
@@ -371,70 +531,26 @@ export function MixerPanel() {
 
       {!collapsed && (
         <>
-          <BusOverviewViz levels={levels} />
+          <BusFlowViz levels={levels} live={liveRef.current} />
 
-          <div className="flex flex-wrap items-stretch gap-2">
-            {([...MIXER_PARTS, "master"] as MixerStripId[]).map((id) => (
+          <div className="mb-2 flex items-center gap-2 text-[9px] uppercase tracking-[0.18em] text-white/30">
+            <span className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5">Inputs</span>
+            <span className="text-white/15">→</span>
+            <span className="rounded-md border border-white/15 bg-white/[0.05] px-2 py-0.5 text-white/50">Master bus</span>
+            <span className="text-white/15">→</span>
+            <span className="rounded-md border border-[#ff6a3d]/25 bg-[#ff6a3d]/10 px-2 py-0.5 text-[#ffbfa0]">Kill-Chain</span>
+          </div>
+
+          <div className="flex flex-wrap items-stretch gap-2.5">
+            {([...MIXER_PARTS] as MixerStripId[]).map((id) => (
               <Strip key={id} id={id} registerMeter={registerMeter} />
             ))}
-
-            <div
-              className={`flex min-w-[168px] flex-col gap-1.5 rounded-xl border px-3 py-2 transition ${
-                duckEnabled ? "border-[#ff6a3d]/40 bg-[#ff6a3d]/[0.05]" : "border-white/8 bg-white/[0.02]"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span
-                  className="text-[9px] font-bold uppercase tracking-[0.18em]"
-                  style={{ color: duckEnabled ? FIRE : "rgba(255,255,255,0.4)" }}
-                >Sidechain</span>
-                <button
-                  onClick={() => setDuck({ enabled: !duckEnabled })}
-                  className={`h-5 px-2 rounded-md text-[10px] font-bold border transition ${
-                    duckEnabled
-                      ? "border-[#ff6a3d]/70 bg-[#ff6a3d]/20 text-[#ffbfa0]"
-                      : "border-white/10 bg-white/[0.03] text-white/45"
-                  }`}
-                  title="Duck the synth (A+B) path on every hit of the source lane"
-                >{duckEnabled ? "ON" : "OFF"}</button>
-              </div>
-
-              <label className="flex items-center gap-1.5 text-[10px] text-dim">
-                <span className="w-12 uppercase tracking-wider">Source</span>
-                <select
-                  value={duckSource}
-                  onChange={(e) => setDuck({ source: e.target.value as typeof duckSource })}
-                  className="flex-1 rounded-md border border-white/12 bg-black/40 px-1.5 py-0.5 text-[11px] text-white/85 outline-none"
-                >
-                  {DRUM_LANES.map((l) => (
-                    <option key={l.id} value={l.id}>{l.name}</option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="flex items-center gap-1.5 text-[10px] text-dim">
-                <span className="w-12 uppercase tracking-wider">Amount</span>
-                <input
-                  type="range" min={0} max={1} step={0.02} value={duckAmount}
-                  onChange={(e) => setDuck({ amount: Number(e.target.value) })}
-                  className="flex-1" style={{ accentColor: FIRE }}
-                />
-                <span className="w-8 text-right font-mono text-white/50">{Math.round(duckAmount * 100)}%</span>
-              </label>
-
-              <label className="flex items-center gap-1.5 text-[10px] text-dim">
-                <span className="w-12 uppercase tracking-wider">Release</span>
-                <input
-                  type="range" min={40} max={800} step={10} value={duckReleaseMs}
-                  onChange={(e) => setDuck({ releaseMs: Number(e.target.value) })}
-                  className="flex-1" style={{ accentColor: FIRE }}
-                />
-                <span className="w-8 text-right font-mono text-white/50">{duckReleaseMs}ms</span>
-              </label>
-            </div>
+            <div className="hidden w-px self-stretch bg-white/10 sm:block" aria-hidden />
+            <Strip id="master" registerMeter={registerMeter} />
+            <SidechainRack />
           </div>
-          <div className="mt-2 text-center text-[10px] text-dim">
-            Bus deck — overview bars mirror fader levels · meters show live RMS/peak · sidechain pumps A+B.
+          <div className="mt-2.5 text-center text-[10px] text-dim">
+            Console deck — A/B/Drums/Samples feed Master · meters are live RMS/peak · sidechain pumps A+B.
           </div>
         </>
       )}

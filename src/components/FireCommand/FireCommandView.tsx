@@ -17,7 +17,20 @@ import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz, WarpStageViz } from "./FxStageViz";
+import {
+  UnisonStageViz,
+  FilterStageViz,
+  AmpEnvStageViz,
+  ModEnvStageViz,
+  FiltEnvStageViz,
+  LfoStageViz,
+  FmRingStageViz,
+  PitchGlideStageViz,
+  OscStageViz,
+  PerformanceStageViz,
+} from "./CoreStageViz";
 import { useFireCollapsed } from "./useFireCollapsed";
+import { CollapseToggle } from "./CollapseToggle";
 import { PresetBrowser } from "./PresetBrowser";
 import { MixerPanel } from "./MixerPanel";
 import { ModPatchGrid } from "./ModPatchGrid";
@@ -377,17 +390,17 @@ export function FireCommandView() {
       <Section title="Output · Scope" color={FIRE} collapseKey="output"
         right={<VoiceCount />}
       >
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
-          <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2 lg:col-span-1">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
+          <div className="rounded-xl border border-[#ff6a3d]/22 bg-gradient-to-b from-[#ff6a3d]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,106,61,0.08)] lg:col-span-1">
             <WaveDisplay group="a" color={FIRE} />
           </div>
-          <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2 lg:col-span-1">
+          <div className="rounded-xl border border-[#ff9a6b]/22 bg-gradient-to-b from-[#ff9a6b]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,154,107,0.08)] lg:col-span-1">
             <WaveDisplay group="b" color="#ff9a6b" />
           </div>
-          <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2 lg:col-span-1">
+          <div className="rounded-xl border border-[#ffcf5c]/22 bg-gradient-to-b from-[#ffcf5c]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,207,92,0.08)] lg:col-span-1">
             <WaveDisplay group="c" color="#ffcf5c" />
           </div>
-          <div className="rounded-xl border border-[#ff6a3d]/20 bg-black/40 p-2 lg:col-span-2">
+          <div className="rounded-xl border border-[#ff6a3d]/28 bg-gradient-to-b from-[#ff6a3d]/[0.1] to-black/50 p-2 shadow-[0_0_22px_rgba(255,106,61,0.12)] lg:col-span-2">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-[10px] uppercase tracking-widest text-dim">Master Trace</span>
               <span className="text-[9px] text-white/30">post-synth · pre Kill-Chain</span>
@@ -396,12 +409,13 @@ export function FireCommandView() {
           </div>
         </div>
         <div className="mt-2 text-center text-[10px] text-dim">
-          Output stage — three wavetable stacks plus the living master trace.
+          Output bay — three wavetable stacks plus the living master trace.
         </div>
       </Section>
 
       {/* Global control strip */}
       <Section title="Performance" color={FIRE} collapseKey="performance">
+        <PerformanceStageViz />
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-widest text-dim">Octave</span>
@@ -469,7 +483,7 @@ export function FireCommandView() {
           <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color="#ffcf5c" />
         </div>
         <div className="mt-2 text-center text-[10px] text-dim">
-          Gold lattice — Stretch slides partials, Tilt tips bright/dark, Comb notches even harmonics.
+          Gold lattice — Stretch slides partials · Tilt tips bright/dark · Comb notches even harmonics.
         </div>
       </Section>
 
@@ -478,6 +492,7 @@ export function FireCommandView() {
         <Section title="Mixer · Unison" color={FIRE} collapseKey="mixer.unison" right={
           <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
         }>
+          <UnisonStageViz />
           <KnobRow>
             <FParamKnob paramKey="subLevel" label="Sub" min={0} max={1} format={fmtPct} def={0.3} />
             <FParamKnob paramKey="noiseLevel" label="Noise" min={0} max={1} format={fmtPct} def={0} />
@@ -489,11 +504,12 @@ export function FireCommandView() {
             <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} />
             <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} />
           </KnobRow>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Voice fan — sub/noise rails below, detuned copies across the stereo field.</div>
         </Section>
         <Section title="Filter" color={FIRE} collapseKey="filter" right={
           <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
         }>
-          <FilterCurveViz />
+          <FilterStageViz />
           <KnobRow>
             <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={46} />
             <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={3} />
@@ -501,20 +517,22 @@ export function FireCommandView() {
             <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} />
             <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} />
           </KnobRow>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Frequency bay — response curve tracks type, cutoff, resonance and env push.</div>
         </Section>
       </div>
 
       {/* Envelopes */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
         <Section title="Amp Envelope" color={GRN} collapseKey="env.amp" right={<LpgToggle />}>
+          <AmpEnvStageViz />
           <LpgAwareAmpRow />
         </Section>
         <Section title="Mod Envelope → Morph" color={GRN} collapseKey="env.mod">
-          <EnvGraph a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
+          <ModEnvStageViz />
           <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
         </Section>
         <Section title="Filter Envelope" color={GRN} collapseKey="env.filt">
-          <EnvGraph a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" />
+          <FiltEnvStageViz />
           <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" />
         </Section>
       </div>
@@ -524,6 +542,7 @@ export function FireCommandView() {
         <LfoPanel idx={1} />
         <LfoPanel idx={2} />
         <Section title="FM · Ring" color={FIRE} collapseKey="fm">
+          <FmRingStageViz />
           <KnobRow>
             <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="fmRatio" label="FM Ratio" min={0.5} max={12} curve="log" format={fmtRatio} def={2} />
@@ -531,14 +550,16 @@ export function FireCommandView() {
             <FParamKnob paramKey="ringAmount" label="Ring" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} />
           </KnobRow>
+          <div className="mt-1 text-[10px] text-dim">FM lattice + ring beat — ratio spokes, sidebands, metallic chew.</div>
         </Section>
         <Section title="Pitch · Glide" color={FIRE} collapseKey="pitch">
+          <PitchGlideStageViz />
           <KnobRow>
             <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
             <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} color={GRN} />
             <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0.06} />
           </KnobRow>
-          <div className="mt-1 text-[10px] text-dim">Glide applies in Mono mode.</div>
+          <div className="mt-1 text-[10px] text-dim">Pitch rail — envelope ramp left, portamento trail right (Mono).</div>
         </Section>
       </div>
 
@@ -721,7 +742,13 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
         <span className="text-[10px] uppercase tracking-widest text-dim">Osc {group.toUpperCase()}</span>
         <span className="text-[10px] font-mono" style={{ color }}>{wavetableName(table)}</span>
       </div>
-      <canvas ref={ref} width={250} height={88} className="w-full h-[88px] rounded-lg bg-black/40" />
+      <canvas
+        ref={ref}
+        width={250}
+        height={96}
+        className="w-full h-[96px] rounded-xl border bg-black/50"
+        style={{ borderColor: `${color}33`, boxShadow: `inset 0 0 24px ${color}14` }}
+      />
     </div>
   );
 }
@@ -840,7 +867,7 @@ function Scope() {
     };
   }, []);
   return (
-    <div ref={wrapRef} className="overflow-hidden rounded-lg border border-[#ff6a3d]/15 bg-black/40">
+    <div ref={wrapRef} className="overflow-hidden rounded-xl border border-[#ff6a3d]/25 bg-black/50 shadow-[inset_0_0_28px_rgba(255,106,61,0.08)]">
       <canvas ref={ref} className="block w-full" style={{ height: 100 }} />
     </div>
   );
@@ -1450,8 +1477,10 @@ function OscPanel({ group }: { group: "a" | "b" | "c" }) {
   const lvlKey = `osc${cap}Level` as NumericKey;
   const defLevel = group === "a" ? 0.75 : group === "b" ? 0.5 : 0;
   const defOct = group === "c" ? -1 : 0;
+  const color = group === "a" ? FIRE : group === "b" ? "#ff9a6b" : "#ffcf5c";
   return (
-    <Section title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`} color={FIRE} collapseKey={`osc.${group}`} right={<TableSelect paramKey={tableKey} />}>
+    <Section title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`} color={color} collapseKey={`osc.${group}`} right={<TableSelect paramKey={tableKey} />}>
+      <OscStageViz group={group} color={color} />
       <KnobRow>
         <FParamKnob paramKey={posKey} label="Morph" min={0} max={1} format={fmtPct} def={group === "a" ? 0.66 : 0.4} size={46} />
         <FParamKnob paramKey={envKey} label="Env→WT" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
@@ -1472,7 +1501,7 @@ function LfoPanel({ idx }: { idx: 1 | 2 }) {
   const depthKey = `lfo${idx}Depth` as NumericKey;
   return (
     <Section title={`LFO ${idx}`} color={ICE} collapseKey={`lfo.${idx}`} right={<FLfoWave paramKey={waveKey} />}>
-      <LfoScope idx={idx} />
+      <LfoStageViz idx={idx} />
       <div className="mb-2">
         <FSeg<LfoDest>
           paramKey={destKey}
@@ -2509,13 +2538,12 @@ function LpgToggle() {
   );
 }
 
-/** Amp panel body: ADSR knobs normally, strike controls in LPG mode. */
+/** Amp panel body: knobs only — stage viz lives above in the Section. */
 function LpgAwareAmpRow() {
   const lpgOn = useFireCommandStore((s) => s.patch.lpgOn);
   if (lpgOn) {
     return (
       <>
-        <LpgGraph />
         <KnobRow>
           <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} color="#ffcf5c" size={46} />
           <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} color="#ffcf5c" size={46} />
@@ -2528,16 +2556,13 @@ function LpgAwareAmpRow() {
     );
   }
   return (
-    <>
-      <EnvGraph a="ampAttack" d="ampDecay" s="ampSustain" r="ampRelease" />
-      <KnobRow>
-        <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
-        <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
-        <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
-        <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
-        <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
-      </KnobRow>
-    </>
+    <KnobRow>
+      <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
+      <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
+      <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
+      <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
+      <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
+    </KnobRow>
   );
 }
 
@@ -2607,10 +2632,10 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
           <button
             onClick={toggle}
             aria-expanded={!collapsed}
-            className="flex items-center gap-1.5 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
             title={collapsed ? "Expand section" : "Collapse section"}
           >
-            <span className="text-[9px] text-white/45">{collapsed ? "▸" : "▾"}</span>
+            <CollapseToggle collapsed={collapsed} color={color} />
             <span className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color }}>{title}</span>
           </button>
         ) : (
