@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "2.6.10";
+export const APP_VERSION = "2.7.1";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,19 +12,19 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Missions that hit",
-    body: "Genre demos rebuilt hard — fat drums, solid bass on Synth B, color on A. No more ducked 808s.",
+    title: "Splash locked to the sting",
+    body: "Reveal, drop, and hit pulses now start with the audio — no more laggy wall-clock desync.",
   },
   {
-    title: "Sidechain that makes sense",
-    body: "Duck pumps Synth A only. Bass, 808s, and wobbles on B stay locked.",
+    title: "Dubstep that hits",
+    body: "Dry square-LFO wobble, space between punches. No more wet-fart mush.",
   },
   {
-    title: "Splash with bite",
-    body: "Centered boot still clean — HUD brackets, scanline, crosshair ticks, punch on the drop.",
+    title: "Fire Command faster",
+    body: "Idle mod timer sleeps, morph scrub skips React churn, note index for the sequencer, drum node cleanup.",
   },
   {
-    title: "Signal Path Theater",
-    body: "OSC → Filter → Drive → FX → Mix → Scope — live heat from your patch. Click to jump, FOC to solo.",
+    title: "Fire Command clearer",
+    body: "Signal-flow band order, Missions on the patch bay, Solo mode, less caption spam.",
   },
 ];

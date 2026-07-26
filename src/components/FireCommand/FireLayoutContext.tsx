@@ -7,6 +7,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -48,6 +49,16 @@ export function FireLayoutProvider({ children }: { children: ReactNode }) {
 
   const exitFocus = useCallback(() => {
     setFocusId(null);
+  }, []);
+
+  // Esc exits Focus / Solo mode from anywhere in Fire Command.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setFocusId((cur) => (cur ? null : cur));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const isFocused = useCallback(

@@ -46,19 +46,6 @@ function m(
 
 export const FIRE_BANDS: FireBandEntry[] = [
   {
-    id: "band.mix",
-    title: "Mix & Output",
-    short: "Mix",
-    color: FC_BAND.mix,
-    hint: "bus · morph · scope · performance",
-    modules: [
-      m("mixer", "Fire Mixer", "Mix", FC.mixer, "band.mix", "Mix & Output"),
-      m("morph", "Morph Pad", "Morph", FC.morph, "band.mix", "Mix & Output"),
-      m("output", "Output · Scope", "Scope", FC.scope, "band.mix", "Mix & Output"),
-      m("performance", "Performance", "Perf", FC.performance, "band.mix", "Mix & Output"),
-    ],
-  },
-  {
     id: "band.sources",
     title: "Sources",
     short: "Src",
@@ -78,7 +65,7 @@ export const FIRE_BANDS: FireBandEntry[] = [
     color: FC_BAND.tone,
     hint: "unison · filter · envelopes",
     modules: [
-      m("mixer.unison", "Mixer · Unison", "Uni", FC.unison, "band.tone", "Tone"),
+      m("mixer.unison", "Unison · Sub", "Uni", FC.unison, "band.tone", "Tone"),
       m("filter", "Filter", "Filt", FC.filter, "band.tone", "Tone"),
       m("env.amp", "Amp Envelope", "Amp", FC.envAmp, "band.tone", "Tone"),
       m("env.mod", "Mod Envelope", "Mod", FC.envMod, "band.tone", "Tone"),
@@ -116,14 +103,27 @@ export const FIRE_BANDS: FireBandEntry[] = [
     ],
   },
   {
+    id: "band.mix",
+    title: "Mix & Output",
+    short: "Mix",
+    color: FC_BAND.mix,
+    hint: "bus · morph · scope · performance",
+    modules: [
+      m("mixer", "Fire Mixer", "Mix", FC.mixer, "band.mix", "Mix & Output"),
+      m("morph", "Morph Pad", "Morph", FC.morph, "band.mix", "Mix & Output"),
+      m("output", "Output · Scope", "Scope", FC.scope, "band.mix", "Mix & Output"),
+      m("performance", "Live Controls", "Live", FC.performance, "band.mix", "Mix & Output"),
+    ],
+  },
+  {
     id: "band.perf",
-    title: "Performance Tools",
+    title: "Macros & Gate",
     short: "Perf",
     color: FC_BAND.perf,
     hint: "macros · trance gate",
     modules: [
-      m("macros", "Macros", "Macro", FC.macros, "band.perf", "Performance Tools"),
-      m("gate", "Trance Gate", "Gate", FC.gate, "band.perf", "Performance Tools"),
+      m("macros", "Macros", "Macro", FC.macros, "band.perf", "Macros & Gate"),
+      m("gate", "Trance Gate", "Gate", FC.gate, "band.perf", "Macros & Gate"),
     ],
   },
 ];

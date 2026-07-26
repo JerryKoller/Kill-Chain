@@ -1141,9 +1141,14 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     applyMorphPatch: (patch, commit) => {
+      // Drag path: engine only — avoid structuredClone + Zustand churn at 60fps.
+      if (!commit) {
+        getEngine().fireCommand.setPatch(patch);
+        return;
+      }
       set({ patch: structuredClone(patch), presetId: "custom" });
       getEngine().fireCommand.setPatch(get().patch);
-      if (commit) persist();
+      persist();
     },
 
     savePreset: (name) => {

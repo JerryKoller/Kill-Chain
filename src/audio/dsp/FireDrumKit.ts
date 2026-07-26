@@ -183,6 +183,15 @@ export class FireDrumKit {
     }
   }
 
+  /** Disconnect synth-hit nodes after they finish to cut GC pressure. */
+  private disposeOnEnd(last: AudioScheduledSourceNode, nodes: AudioNode[]): void {
+    last.onended = () => {
+      for (const n of nodes) {
+        try { n.disconnect(); } catch { /* ignore */ }
+      }
+    };
+  }
+
   // ── voices ──
 
   private kick(t: number, v: number): void {
@@ -217,6 +226,7 @@ export class FireDrumKit {
     osc.start(t); osc.stop(t + 0.65);
     sub.start(t); sub.stop(t + 0.55);
     click.start(t); click.stop(t + 0.04);
+    this.disposeOnEnd(osc, [osc, g, sub, sg, click, cg]);
   }
 
   private snare(t: number, v: number): void {
@@ -254,6 +264,7 @@ export class FireDrumKit {
     o1.start(t); o1.stop(t + 0.15);
     o2.start(t); o2.stop(t + 0.15);
     n.start(t); n.stop(t + 0.24);
+    this.disposeOnEnd(n, [body, bg, o1, o2, og, n, nf, ng]);
   }
 
   private clap(t: number, v: number): void {
@@ -277,6 +288,7 @@ export class FireDrumKit {
     g.gain.exponentialRampToValueAtTime(0.001, t + 3 * burst + 0.24);
     n.connect(f).connect(g).connect(this.output);
     n.start(t); n.stop(t + 0.32);
+    this.disposeOnEnd(n, [n, f, g]);
   }
 
   private hat(t: number, v: number, open: boolean): void {
@@ -298,6 +310,7 @@ export class FireDrumKit {
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     n.connect(hp).connect(pk).connect(g).connect(this.output);
     n.start(t); n.stop(t + dur + 0.03);
+    this.disposeOnEnd(n, [n, hp, pk, g]);
   }
 
   private tom(t: number, v: number): void {
@@ -321,6 +334,7 @@ export class FireDrumKit {
     n.connect(nf).connect(ng).connect(this.output);
     osc.start(t); osc.stop(t + 0.4);
     n.start(t); n.stop(t + 0.1);
+    this.disposeOnEnd(osc, [osc, g, n, nf, ng]);
   }
 
   private rim(t: number, v: number): void {
@@ -338,6 +352,7 @@ export class FireDrumKit {
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
     osc.connect(f).connect(g).connect(this.output);
     osc.start(t); osc.stop(t + 0.06);
+    this.disposeOnEnd(osc, [osc, f, g]);
   }
 
   private crash(t: number, v: number): void {
@@ -358,5 +373,6 @@ export class FireDrumKit {
     g.gain.exponentialRampToValueAtTime(0.001, t + 1.4);
     n.connect(hp).connect(shimmer).connect(g).connect(this.output);
     n.start(t); n.stop(t + 1.5);
+    this.disposeOnEnd(n, [n, hp, shimmer, g]);
   }
 }

@@ -55,7 +55,15 @@ interface Card {
   user: boolean;
 }
 
-export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function PresetBrowser({
+  open,
+  onClose,
+  initialFilter,
+}: {
+  open: boolean;
+  onClose: () => void;
+  initialFilter?: Filter;
+}) {
   const presetId = useFireCommandStore((s) => s.presetId);
   const userPresets = useFireCommandStore((s) => s.userPresets);
   const loadPreset = useFireCommandStore((s) => s.loadPreset);
@@ -75,12 +83,13 @@ export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () =>
 
   useEffect(() => {
     if (!open) return;
+    if (initialFilter) setFilter(initialFilter);
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     // Focus search so you can type immediately.
     const t = setTimeout(() => searchRef.current?.focus(), 80);
     return () => { window.removeEventListener("keydown", onKey); clearTimeout(t); };
-  }, [open, onClose]);
+  }, [open, onClose, initialFilter]);
 
   const cards = useMemo<Card[]>(() => {
     const factory: Card[] = FIRE_PRESETS.map((p) => ({
@@ -175,7 +184,7 @@ export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () =>
                 >🔥</div>
                 <div>
                   <div className="text-[9px] uppercase tracking-[0.4em]" style={{ color: "#ff9a6b" }}>Fire Command</div>
-                  <div className="text-lg font-bold tracking-wide text-white">THE ARMORY</div>
+                  <div className="text-lg font-bold tracking-wide text-white">Patch Library</div>
                 </div>
                 <div className="ml-2 text-[10px] font-mono text-white/35 tabular-nums">
                   {FIRE_PRESETS.length} factory · {userPresets.length} saved
@@ -377,7 +386,9 @@ export function PresetBrowser({ open, onClose }: { open: boolean; onClose: () =>
             </div>
 
             <div className="px-4 py-2 border-t border-white/6 text-[9px] uppercase tracking-[0.3em] text-white/30 text-center">
-              Click to deploy · Esc to close
+              {filter === "Missions"
+                ? "Click to deploy mission · Esc to close"
+                : "Click to load · Esc to close"}
             </div>
           </motion.div>
         </motion.div>

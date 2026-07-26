@@ -872,23 +872,51 @@ function refreshSongMap(get: () => FireSequencerState): void {
   songTotal = total;
 }
 
+/** Notes indexed by Math.floor(step) — WeakMap so edits that replace the
+ *  array invalidate automatically; avoids O(notes) scans every scheduler step. */
+const notesByStepCache = new WeakMap<RollNote[], Map<number, RollNote[]>>();
+
+function notesByStep(notes: RollNote[]): Map<number, RollNote[]> {
+  let m = notesByStepCache.get(notes);
+  if (m) return m;
+  m = new Map();
+  for (const n of notes) {
+    const k = Math.floor(n.step);
+    const arr = m.get(k);
+    if (arr) arr.push(n);
+    else m.set(k, [n]);
+  }
+  notesByStepCache.set(notes, m);
+  return m;
+}
+
 /** Pattern content the scheduler reads for one section (active = live mirror). */
 function contentFor(s: FireSequencerState, secId: string): {
   notes: RollNote[];
+  notesByStep: Map<number, RollNote[]>;
   drums: DrumPattern;
   laneSteps: (laneId: string) => number[] | undefined;
 } {
   if (secId === s.activeSectionId) {
     return {
       notes: s.notes,
+      notesByStep: notesByStep(s.notes),
       drums: s.drums,
       laneSteps: (laneId) => s.samples.find((l) => l.id === laneId)?.steps,
     };
   }
   const sec = s.sections.find((x) => x.id === secId);
-  if (!sec) return { notes: [], drums: emptyDrums(STEPS_PER_BAR), laneSteps: () => undefined };
+  if (!sec) {
+    return {
+      notes: [],
+      notesByStep: notesByStep([]),
+      drums: emptyDrums(STEPS_PER_BAR),
+      laneSteps: () => undefined,
+    };
+  }
   return {
     notes: sec.notes,
+    notesByStep: notesByStep(sec.notes),
     drums: sec.drums,
     laneSteps: (laneId) => sec.sampleSteps[laneId],
   };
@@ -1049,17 +1077,19 @@ function startScheduler(get: () => FireSequencerState): void {
         }
         if (s.synthEnabled || s.synthBEnabled) {
           // Notes may start on fractional steps; bucket by floor(step).
-          for (const n of content.notes) {
-            if (Math.floor(n.step) !== step) continue;
-            // Route by channel: A = the playable Fire Command synth,
-            // B = the second instrument voiced by its own preset.
-            const isB = n.ch === 1;
-            if (isB ? !s.synthBEnabled : !s.synthEnabled) continue;
-            const target = isB ? engine.fireCommandB : engine.fireCommand;
-            const offset = (n.step - step) * dur;
-            target.playNote(
-              n.midi, n.vel, whenSynth + offset, Math.max(0.03, n.len * dur * 0.98),
-            );
+          const bucket = content.notesByStep.get(step);
+          if (bucket) {
+            for (const n of bucket) {
+              // Route by channel: A = the playable Fire Command synth,
+              // B = the second instrument voiced by its own preset.
+              const isB = n.ch === 1;
+              if (isB ? !s.synthBEnabled : !s.synthEnabled) continue;
+              const target = isB ? engine.fireCommandB : engine.fireCommand;
+              const offset = (n.step - step) * dur;
+              target.playNote(
+                n.midi, n.vel, whenSynth + offset, Math.max(0.03, n.len * dur * 0.98),
+              );
+            }
           }
         }
         nextStep++;

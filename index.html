@@ -7,8 +7,9 @@
     <meta name="description" content="Kill-Chain — a tactical audio engine." />
     <style>
       /*
-        Boot splash — centered column, room to breathe, more personality.
-        Timing locked to splashSound.ts: black 900ms → reveal → DROP +2.85s → end 4.2s.
+        Boot splash — centered column. Reveal is owned by main.tsx so CSS
+        clocks start with audio t=0 (not a wall timer ahead of the sting).
+        Hit classes: hit-contact · hit-radar-l/r · hit-arming · hit-drop
       */
       :root {
         --b-fire: #ff6a3d;
@@ -32,7 +33,6 @@
       }
       #boot-splash.boot-hide { opacity: 0; pointer-events: none; }
 
-      /* Soft ember bloom behind stage */
       #boot-splash::before {
         content: "";
         position: absolute;
@@ -41,8 +41,11 @@
         pointer-events: none;
         animation: boot-bloom 3.2s ease-in-out infinite;
       }
+      #boot-splash.hit-drop::before {
+        animation: none;
+        background: radial-gradient(55% 42% at 50% 40%, rgba(255, 106, 61, 0.45), transparent 70%);
+      }
 
-      /* Fine scanline veil */
       #boot-splash::after {
         content: "";
         position: absolute;
@@ -59,7 +62,6 @@
         mix-blend-mode: multiply;
       }
 
-      /* Corner brackets — HUD frame, still symmetric */
       .boot-frame {
         position: absolute;
         inset: 28px;
@@ -73,14 +75,23 @@
         border-color: rgba(255, 106, 61, 0.45);
         border-style: solid;
         opacity: 0;
-        transition: opacity 0.6s ease 0.35s;
+        transition: opacity 0.6s ease 0.35s, box-shadow 0.15s ease, border-color 0.15s ease;
       }
-      .reveal ~ .boot-frame span,
       #boot-splash:has(.reveal) .boot-frame span { opacity: 1; }
       .boot-frame .tl { top: 0; left: 0; border-width: 2px 0 0 2px; }
       .boot-frame .tr { top: 0; right: 0; border-width: 2px 2px 0 0; }
       .boot-frame .bl { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
       .boot-frame .br { bottom: 0; right: 0; border-width: 0 2px 2px 0; }
+      #boot-splash.hit-radar-l .boot-frame .tl,
+      #boot-splash.hit-radar-l .boot-frame .bl {
+        border-color: var(--b-steel);
+        box-shadow: 0 0 18px rgba(155, 229, 100, 0.55);
+      }
+      #boot-splash.hit-radar-r .boot-frame .tr,
+      #boot-splash.hit-radar-r .boot-frame .br {
+        border-color: var(--b-ember);
+        box-shadow: 0 0 18px rgba(255, 176, 138, 0.55);
+      }
 
       .boot-stage {
         position: relative;
@@ -97,7 +108,6 @@
       }
       .boot-stage.reveal { opacity: 1; transform: none; }
 
-      /* Emblem — rings + crosshair ticks + core */
       .boot-emblem {
         position: relative;
         width: 168px;
@@ -137,6 +147,15 @@
         opacity: 0.55;
         animation: boot-spin 12s linear infinite;
       }
+      #boot-splash.hit-arming .boot-ticks {
+        opacity: 1;
+        animation: boot-spin 0.55s linear infinite;
+        filter: drop-shadow(0 0 6px rgba(255, 176, 138, 0.8));
+      }
+      #boot-splash.hit-arming .boot-ring {
+        animation-duration: 0.9s;
+        box-shadow: 0 0 48px rgba(255, 106, 61, 0.55);
+      }
       .boot-core {
         width: 18px;
         height: 18px;
@@ -147,11 +166,33 @@
           0 0 32px 8px rgba(255, 106, 61, 0.5);
         animation: boot-pulse 1.8s ease-in-out infinite;
       }
-      .reveal .boot-emblem {
-        animation: boot-punch 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) 2.85s 1;
+      #boot-splash.hit-contact .boot-core {
+        animation: none;
+        transform: scale(1.85);
+        box-shadow:
+          0 0 20px 4px rgba(255, 255, 255, 0.7),
+          0 0 48px 14px rgba(255, 106, 61, 0.75);
+      }
+      #boot-splash.hit-drop .boot-emblem {
+        animation: boot-punch 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) 1;
       }
 
-      /* Wordmark block */
+      /* Charge ring — grows during arming */
+      .boot-charge {
+        position: absolute;
+        inset: -6px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        border-top-color: rgba(255, 176, 138, 0.0);
+        opacity: 0;
+        transform: scale(0.72);
+        transition: none;
+      }
+      #boot-splash.hit-arming .boot-charge {
+        opacity: 1;
+        animation: boot-charge 0.8s linear forwards;
+      }
+
       .boot-wordmark {
         display: flex;
         flex-direction: column;
@@ -185,6 +226,9 @@
         background-clip: text;
         color: transparent;
         animation: boot-shimmer 4s ease-in-out infinite;
+      }
+      #boot-splash.hit-drop .boot-title {
+        filter: drop-shadow(0 0 18px rgba(255, 106, 61, 0.85));
       }
       .boot-title::before,
       .boot-title::after {
@@ -223,11 +267,10 @@
         text-shadow: 0 0 14px rgba(255, 106, 61, 0.55);
         opacity: 0;
       }
-      .reveal .boot-armed {
-        animation: boot-armed 0.35s cubic-bezier(0.1, 1.4, 0.3, 1) 2.85s forwards;
+      #boot-splash.hit-drop .boot-armed {
+        animation: boot-armed 0.35s cubic-bezier(0.1, 1.4, 0.3, 1) forwards;
       }
 
-      /* Progress */
       .boot-bar {
         position: relative;
         width: 100%;
@@ -235,27 +278,48 @@
         height: 2px;
         border-radius: 2px;
         background: rgba(255, 255, 255, 0.08);
-        overflow: hidden;
+        overflow: visible;
       }
-      .boot-bar::before,
       .boot-bar::after {
         content: "";
-        display: block;
-        height: 100%;
-        border-radius: 2px;
-      }
-      .boot-bar::after {
         position: absolute;
         inset: 0 auto 0 0;
+        height: 100%;
         width: 0%;
+        border-radius: 2px;
         background: linear-gradient(90deg, var(--b-steel), var(--b-fire));
         box-shadow: 0 0 12px rgba(255, 106, 61, 0.55);
       }
       .boot-stage.reveal .boot-bar::after {
         animation: boot-fill 4.2s cubic-bezier(0.4, 0.05, 0.2, 1) forwards;
       }
+      #boot-splash.hit-drop .boot-bar::after {
+        box-shadow: 0 0 22px rgba(255, 106, 61, 0.95);
+      }
 
-      /* Drop flash overlay */
+      /* Echo pips — pulse on radar hits */
+      .boot-pips {
+        display: flex;
+        gap: 8px;
+        opacity: 0;
+      }
+      .reveal .boot-pips { opacity: 1; transition: opacity 0.4s ease 0.3s; }
+      .boot-pips i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.15);
+        transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+      }
+      #boot-splash.hit-contact .boot-pips i:nth-child(1),
+      #boot-splash.hit-radar-l .boot-pips i:nth-child(2),
+      #boot-splash.hit-radar-r .boot-pips i:nth-child(3),
+      #boot-splash.hit-drop .boot-pips i:nth-child(4) {
+        background: var(--b-fire);
+        transform: scale(1.6);
+        box-shadow: 0 0 10px rgba(255, 106, 61, 0.8);
+      }
+
       .boot-flash {
         position: absolute;
         inset: 0;
@@ -264,8 +328,13 @@
         pointer-events: none;
         z-index: 2;
       }
-      #boot-splash:has(.reveal) .boot-flash {
-        animation: boot-flash 0.55s ease-out 2.85s 1;
+      #boot-splash.hit-contact .boot-flash {
+        background: radial-gradient(40% 35% at 50% 42%, rgba(255, 255, 255, 0.22), transparent 65%);
+        animation: boot-flash 0.28s ease-out 1;
+      }
+      #boot-splash.hit-drop .boot-flash {
+        background: radial-gradient(50% 45% at 50% 42%, rgba(255, 106, 61, 0.55), transparent 70%);
+        animation: boot-flash 0.55s ease-out 1;
       }
 
       @keyframes boot-spin { to { transform: rotate(360deg); } }
@@ -281,6 +350,10 @@
       @keyframes boot-bloom {
         0%, 100% { opacity: 0.85; transform: scale(1); }
         50% { opacity: 1; transform: scale(1.04); }
+      }
+      @keyframes boot-charge {
+        0% { transform: scale(0.72); border-top-color: rgba(255, 176, 138, 0.15); }
+        100% { transform: scale(1.08); border-top-color: rgba(255, 106, 61, 0.9); }
       }
       @keyframes boot-shimmer { to { background-position: 220% 0; } }
       @keyframes boot-fill { from { width: 0%; } to { width: 100%; } }
@@ -311,11 +384,12 @@
       @media (prefers-reduced-motion: reduce) {
         .boot-ring, .boot-ring-inner, .boot-ticks, .boot-core, .boot-title,
         .boot-title::before, .boot-title::after, .boot-flash, .boot-emblem,
-        #boot-splash::before {
+        .boot-charge, #boot-splash::before {
           animation: none !important;
         }
         .boot-armed, .boot-kicker { animation: none; }
-        .reveal .boot-armed, .reveal .boot-kicker { opacity: 1; }
+        .reveal .boot-armed, .reveal .boot-kicker,
+        #boot-splash.hit-drop .boot-armed { opacity: 1; }
         .boot-stage { transition: opacity 0.35s ease; transform: none; }
         .boot-stage.reveal .boot-bar::after { animation: boot-fill 1s linear forwards; }
       }
@@ -333,6 +407,7 @@
           <span class="boot-ring"></span>
           <span class="boot-ring-inner"></span>
           <span class="boot-ticks"></span>
+          <span class="boot-charge"></span>
           <span class="boot-core"></span>
         </div>
         <div class="boot-wordmark">
@@ -341,19 +416,15 @@
           <p class="boot-sub">Tactical Audio Engine</p>
           <p class="boot-armed">Systems Armed</p>
         </div>
+        <div class="boot-pips" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
         <div class="boot-bar" role="progressbar" aria-label="Boot progress"></div>
       </div>
     </div>
     <div id="root"></div>
     <script>
       (function () {
+        // Black lead-in only — reveal is gated by main.tsx on audio start.
         window.__bootStart = performance.now();
-        var BLACK_MS = 900;
-        var stage = document.getElementById("boot-stage");
-        window.setTimeout(function () {
-          if (stage) stage.classList.add("reveal");
-          window.__introStart = performance.now();
-        }, BLACK_MS);
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>

@@ -3,7 +3,7 @@
  * Organizational chrome: jump, focus, live heat from patch params. Display only.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, SIGNAL_PATH, type FireModuleId, type SignalNodeId } from "./fireModuleAtlas";
 import { useFireLayout } from "./FireLayoutContext";
@@ -52,7 +52,7 @@ function FocusHud() {
         }}
       >
         <div className="min-w-0">
-          <div className="text-[9px] font-black uppercase tracking-[0.2em] text-white/45">Focus Mode</div>
+          <div className="text-[9px] font-black uppercase tracking-[0.2em] text-white/45">Solo Mode</div>
           <div className="truncate text-[12px] font-semibold" style={{ color: mod.color }}>
             {mod.title}
             <span className="ml-2 text-[10px] font-normal text-white/40">{mod.bandTitle}</span>
@@ -73,6 +73,7 @@ function FocusHud() {
 export function FireCommandDeck() {
   const { focusId, focusActive, enterFocus, exitFocus, jump } = useFireLayout();
   const heat = useSignalHeat();
+  const [mapOpen, setMapOpen] = useState(false);
 
   const onNodeClick = (moduleId: FireModuleId) => {
     if (focusActive && focusId === moduleId) {
@@ -112,7 +113,7 @@ export function FireCommandDeck() {
               Signal Path
             </span>
             <span className="hidden sm:inline text-[9px] text-white/25 truncate">
-              click to jump · ◉ to focus
+              click to jump · Solo to isolate
             </span>
           </div>
           {focusActive && focusId && (
@@ -120,9 +121,9 @@ export function FireCommandDeck() {
               type="button"
               onClick={exitFocus}
               className="shrink-0 rounded-lg border border-[#ff6a3d]/40 bg-[#ff6a3d]/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#ffb08a] hover:bg-[#ff6a3d]/25 transition"
-              title="Exit focus mode — show all bands again"
+              title="Exit solo — show all bands (Esc)"
             >
-              ✕ Exit focus
+              ✕ Exit solo
             </button>
           )}
         </div>
@@ -175,10 +176,10 @@ export function FireCommandDeck() {
                         ? "border-white/40 bg-white/15 text-white"
                         : "border-white/10 bg-black/30 text-white/40 hover:text-white/70 hover:border-white/25"
                     }`}
-                    title={focused ? "Exit focus" : `Focus ${node.label} only`}
+                    title={focused ? "Exit solo" : `Solo ${node.label} only`}
                     aria-pressed={focused}
                   >
-                    {focused ? "◉ ON" : "◌ FOC"}
+                    {focused ? "◉ SOLO" : "◌ Solo"}
                   </button>
                 </div>
                 {i < SIGNAL_PATH.length - 1 && (
@@ -200,17 +201,23 @@ export function FireCommandDeck() {
         </div>
       </div>
 
-      {/* ── Command Map atlas ── */}
-      <div className="px-3 py-2.5">
-        <div className="mb-2 flex items-center gap-2">
+      {/* ── Command Map atlas (collapsed by default — Signal Path is primary) ── */}
+      <div className="px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setMapOpen((v) => !v)}
+          className="flex w-full items-center gap-2 rounded-lg border border-white/[0.06] bg-black/20 px-2.5 py-1.5 text-left hover:bg-white/[0.04] transition"
+        >
           <span className="text-[9px] font-black uppercase tracking-[0.22em] text-white/40">
-            Command Map
+            All modules
           </span>
-          <span className="hidden md:inline text-[9px] text-white/25">
-            every stage · click jump · FOC solos the bay
+          <span className="hidden md:inline text-[9px] text-white/25 flex-1 truncate">
+            every stage · jump · solo
           </span>
-        </div>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+          <span className="text-[10px] text-white/35">{mapOpen ? "▴" : "▾"}</span>
+        </button>
+        {mapOpen && (
+        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
           {FIRE_BANDS.map((band) => {
             const bandHasFocus = focusId
               ? band.modules.some((mod) => mod.id === focusId)
@@ -260,8 +267,8 @@ export function FireCommandDeck() {
                               ? "border-white/35 bg-white/15 text-white"
                               : "border-white/8 text-white/30 hover:text-white/60"
                           }`}
-                          title={focused ? "Exit focus" : `Focus ${mod.title}`}
-                          aria-label={`Focus ${mod.title}`}
+                          title={focused ? "Exit solo" : `Solo ${mod.title}`}
+                          aria-label={`Solo ${mod.title}`}
                           aria-pressed={focused}
                         >
                           ◉
@@ -274,6 +281,7 @@ export function FireCommandDeck() {
             );
           })}
         </div>
+        )}
       </div>
     </div>
     </div>

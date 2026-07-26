@@ -144,6 +144,7 @@ export function FireCommandView() {
   const bypass = useAudioStore((s) => s.bypass);
   const fxOn = !bypass;
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [browserFilter, setBrowserFilter] = useState<"All" | "Missions" | undefined>(undefined);
 
   const currentName =
     presetId === "custom"
@@ -275,18 +276,8 @@ export function FireCommandView() {
               className="text-[10px] font-black tracking-[0.18em] leading-none px-1.5 py-0.5 rounded"
               style={{ color: "#ffcf5c", border: "1px solid #ffcf5c44", background: "#ffcf5c12", textShadow: "0 0 10px #ffcf5c66" }}
             >MK IV</span>
-            <div className="hidden sm:block text-[9px] uppercase tracking-[0.3em] text-[#ff9a6b]/80">
-              Wavetable Weapons Platform
-            </div>
           </div>
           <div className="flex-1" />
-          <div className="hidden md:flex items-center gap-4 text-[9px] uppercase tracking-[0.22em] font-mono">
-            <div className="flex items-center gap-1.5 text-[#9be564]">
-              <span className="fire-status-dot" style={{ background: "#9be564" }} />
-              Systems Nominal
-            </div>
-            <div className="text-white/35">3 OSC · 12-SLOT MATRIX · 1000 PATCHES</div>
-          </div>
         </div>
       </div>
 
@@ -307,7 +298,7 @@ export function FireCommandView() {
                 aria-label="Previous preset"
               >◂</button>
               <button
-                onClick={() => setBrowserOpen(true)}
+                onClick={() => { setBrowserFilter(undefined); setBrowserOpen(true); }}
                 className="flex items-center gap-2 rounded-xl border border-white/12 bg-black/30 hover:bg-black/45 hover:border-white/25 px-2.5 py-1.5 transition min-w-0 flex-1"
                 title="Open the preset library"
               >
@@ -321,6 +312,12 @@ export function FireCommandView() {
                 title="Next preset"
                 aria-label="Next preset"
               >▸</button>
+              <button
+                onClick={() => { setBrowserFilter("Missions"); setBrowserOpen(true); }}
+                className="h-8 shrink-0 rounded-xl border px-2.5 text-[11px] font-semibold transition"
+                style={{ color: "#ffd166", borderColor: "#ffd16655", background: "#ffd16614" }}
+                title="Browse mission packs"
+              >Missions</button>
               <button
                 onClick={() => loadPreset("init")}
                 className="h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-2.5 text-[11px] text-white/75 transition"
@@ -348,10 +345,147 @@ export function FireCommandView() {
 
       {/* ── Category bands (v2.5.7) — collapsed chips, even open grids ── */}
 
+      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp">
+        <OscPanel group="a" chipHosted />
+        <OscPanel group="b" chipHosted />
+        <OscPanel group="c" chipHosted />
+        <Section
+          title="Spectral Warp"
+          color={FC.warp}
+          collapseKey="fire.sec.warp"
+          chipHosted
+          right={
+            <span className="text-[9px] text-dim normal-case tracking-normal">
+              reshapes harmonics of all three oscillators
+            </span>
+          }
+        >
+          <WarpStageViz />
+          <div className="flex items-center justify-evenly gap-2">
+            <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.warp} />
+            <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.warp} />
+            <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color={FC.warp} />
+          </div>
+        </Section>
+      </FireBand>
+
+      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · filter · envelopes">
+        <Section title="Unison · Sub" color={FC.unison} collapseKey="mixer.unison" chipHosted right={
+          <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
+        }>
+          <UnisonStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="subLevel" label="Sub" min={0} max={1} format={fmtPct} def={0.3} color={FC.unison} />
+            <FParamKnob paramKey="noiseLevel" label="Noise" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
+            <FParamKnob paramKey="noiseColor" label="Color" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.unison} />
+            <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={3} color={FC.unison} />
+            <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={14} color={FC.unison} />
+            <FParamKnob paramKey="unisonWidth" label="Width" min={0} max={1} format={fmtPct} def={0.5} color={FC.unison} />
+            <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} color={FC.unison} />
+            <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
+          </div>
+        </Section>
+        <Section title="Filter" color={FC.filter} collapseKey="filter" chipHosted right={
+          <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
+        }>
+          <FilterStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={46} color={FC.filter} />
+            <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={3} color={FC.filter} />
+            <FParamKnob paramKey="filterEnvAmount" label="Env Amt" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
+            <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} color={FC.filter} />
+            <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} color={FC.filter} />
+          </div>
+        </Section>
+        <Section title="Amp Envelope" color={FC.envAmp} collapseKey="env.amp" chipHosted right={<LpgToggle />}>
+          <AmpEnvStageViz />
+          <LpgAwareAmpRow />
+        </Section>
+        <Section title="Mod Envelope → Morph" color={FC.envMod} collapseKey="env.mod" chipHosted>
+          <ModEnvStageViz />
+          <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" color={FC.envMod} />
+        </Section>
+        <Section title="Filter Envelope" color={FC.envFilt} collapseKey="env.filt" chipHosted>
+          <FiltEnvStageViz />
+          <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" color={FC.envFilt} />
+        </Section>
+      </FireBand>
+
+      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · pitch · matrix · arp">
+        <LfoPanel idx={1} chipHosted />
+        <LfoPanel idx={2} chipHosted />
+        <Section title="FM · Ring" color={FC.fm} collapseKey="fm" chipHosted>
+          <FmRingStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
+            <FParamKnob paramKey="fmRatio" label="FM Ratio" min={0.5} max={12} curve="log" format={fmtRatio} def={2} color={FC.fm} />
+            <FParamKnob paramKey="fmBtoA" label="B→A FM" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
+            <FParamKnob paramKey="ringAmount" label="Ring" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
+            <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} color={FC.fm} />
+          </div>
+        </Section>
+        <Section title="Pitch · Glide" color={FC.pitch} collapseKey="pitch" chipHosted>
+          <PitchGlideStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
+            <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} color={GRN} />
+            <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0.06} color={FC.pitch} />
+          </div>
+        </Section>
+        <ModMatrixPanel chipHosted />
+        <ArpPanel arp={arp} setArp={setArp} chipHosted />
+      </FireBand>
+
+      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive through spectral">
+        <Section title="Drive · Punch" color={FC.drive} collapseKey="fx.drive" chipHosted right={
+          <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
+        }>
+          <DriveStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0.08} color={FC.drive} />
+            <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
+            <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={46} color={FC.drive} />
+            <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
+          </div>
+        </Section>
+        <Section title="Phaser" color={FC.phaser} collapseKey="fx.phaser" chipHosted>
+          <PhaserStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} color={FC.phaser} />
+            <FParamKnob paramKey="phaserDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.6} color={FC.phaser} />
+            <FParamKnob paramKey="phaserMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.phaser} />
+          </div>
+        </Section>
+        <Section title="Chorus" color={FC.chorus} collapseKey="fx.chorus" chipHosted>
+          <ChorusStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} color={FC.chorus} />
+            <FParamKnob paramKey="chorusDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.4} color={FC.chorus} />
+            <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0.25} color={FC.chorus} />
+          </div>
+        </Section>
+        <Section title="Delay (Ping-Pong)" color={FC.delay} collapseKey="fx.delay" chipHosted>
+          <DelayStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="delayTime" label="Time" min={0.01} max={1.5} curve="log" format={fmtSec} def={0.28} color={FC.delay} />
+            <FParamKnob paramKey="delayFeedback" label="Fbk" min={0} max={0.92} format={fmtPct} def={0.3} color={FC.delay} />
+            <FParamKnob paramKey="delayMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.delay} />
+          </div>
+        </Section>
+        <Section title="Reverb" color={FC.reverb} collapseKey="fx.reverb" chipHosted>
+          <ReverbStageViz />
+          <div className="flex items-center justify-evenly gap-1">
+            <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} color={FC.reverb} />
+            <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.reverb} />
+          </div>
+        </Section>
+        <SpectralPanel chipHosted />
+      </FireBand>
+
       <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="bus · morph · scope · performance">
         <MixerPanel chipHosted />
         <FireMorphPad chipHosted />
-        <Section title="Output · Scope" color={FC.scope} collapseKey="output" chipHosted right={<VoiceCount />}>
+        <Section title="Output · Scope" color={FC.scope} collapseKey="output" chipHosted defaultCollapsed right={<VoiceCount />}>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
             <div className="rounded-xl border border-[#ff6a3d]/22 bg-gradient-to-b from-[#ff6a3d]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,106,61,0.08)] lg:col-span-1">
               <WaveDisplay group="a" color={FIRE} />
@@ -370,11 +504,8 @@ export function FireCommandView() {
               <Scope />
             </div>
           </div>
-          <div className="mt-2 text-center text-[10px] text-dim">
-            Output bay — three wavetable stacks plus the living master trace.
-          </div>
         </Section>
-        <Section title="Performance" color={FIRE} collapseKey="performance" chipHosted>
+        <Section title="Live Controls" color={FIRE} collapseKey="performance" chipHosted>
           <PerformanceStageViz />
           <div className="flex flex-wrap items-center justify-evenly gap-2.5">
             <div className="flex items-center gap-1.5">
@@ -417,158 +548,7 @@ export function FireCommandView() {
         </Section>
       </FireBand>
 
-      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp">
-        <OscPanel group="a" chipHosted />
-        <OscPanel group="b" chipHosted />
-        <OscPanel group="c" chipHosted />
-        <Section
-          title="Spectral Warp"
-          color={FC.warp}
-          collapseKey="fire.sec.warp"
-          chipHosted
-          right={
-            <span className="text-[9px] text-dim normal-case tracking-normal">
-              reshapes harmonics of all three oscillators
-            </span>
-          }
-        >
-          <WarpStageViz />
-          <div className="flex items-center justify-evenly gap-2">
-            <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.warp} />
-            <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.warp} />
-            <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color={FC.warp} />
-          </div>
-          <div className="mt-2 text-center text-[10px] text-dim">
-            Harmonic forge — Stretch slides partials · Tilt tips bright/dark · Comb notches even harmonics.
-          </div>
-        </Section>
-      </FireBand>
-
-      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · filter · envelopes">
-        <Section title="Mixer · Unison" color={FC.unison} collapseKey="mixer.unison" chipHosted right={
-          <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
-        }>
-          <UnisonStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="subLevel" label="Sub" min={0} max={1} format={fmtPct} def={0.3} color={FC.unison} />
-            <FParamKnob paramKey="noiseLevel" label="Noise" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
-            <FParamKnob paramKey="noiseColor" label="Color" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.unison} />
-            <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={3} color={FC.unison} />
-            <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={14} color={FC.unison} />
-            <FParamKnob paramKey="unisonWidth" label="Width" min={0} max={1} format={fmtPct} def={0.5} color={FC.unison} />
-            <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} color={FC.unison} />
-            <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Voice fan — sub/noise rails below, detuned copies across the stereo field.</div>
-        </Section>
-        <Section title="Filter" color={FC.filter} collapseKey="filter" chipHosted right={
-          <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
-        }>
-          <FilterStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={46} color={FC.filter} />
-            <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={3} color={FC.filter} />
-            <FParamKnob paramKey="filterEnvAmount" label="Env Amt" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
-            <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} color={FC.filter} />
-            <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} color={FC.filter} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Frequency bay — response curve tracks type, cutoff, resonance and env push.</div>
-        </Section>
-        <Section title="Amp Envelope" color={FC.envAmp} collapseKey="env.amp" chipHosted right={<LpgToggle />}>
-          <AmpEnvStageViz />
-          <LpgAwareAmpRow />
-        </Section>
-        <Section title="Mod Envelope → Morph" color={FC.envMod} collapseKey="env.mod" chipHosted>
-          <ModEnvStageViz />
-          <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" color={FC.envMod} />
-          <div className="mt-1.5 text-center text-[10px] text-dim">Morph pulse — shapes wavetable travel over the note.</div>
-        </Section>
-        <Section title="Filter Envelope" color={FC.envFilt} collapseKey="env.filt" chipHosted>
-          <FiltEnvStageViz />
-          <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" color={FC.envFilt} />
-          <div className="mt-1.5 text-center text-[10px] text-dim">Cutoff sweep — opens and closes the filter over time.</div>
-        </Section>
-      </FireBand>
-
-      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · pitch · matrix · arp">
-        <LfoPanel idx={1} chipHosted />
-        <LfoPanel idx={2} chipHosted />
-        <Section title="FM · Ring" color={FC.fm} collapseKey="fm" chipHosted>
-          <FmRingStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
-            <FParamKnob paramKey="fmRatio" label="FM Ratio" min={0.5} max={12} curve="log" format={fmtRatio} def={2} color={FC.fm} />
-            <FParamKnob paramKey="fmBtoA" label="B→A FM" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
-            <FParamKnob paramKey="ringAmount" label="Ring" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
-            <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} color={FC.fm} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">FM lattice + ring beat — ratio spokes, sidebands, metallic chew.</div>
-        </Section>
-        <Section title="Pitch · Glide" color={FC.pitch} collapseKey="pitch" chipHosted>
-          <PitchGlideStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
-            <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} color={GRN} />
-            <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0.06} color={FC.pitch} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Pitch rail — envelope ramp left, portamento trail right (Mono).</div>
-        </Section>
-        <ModMatrixPanel chipHosted />
-        <ArpPanel arp={arp} setArp={setArp} chipHosted />
-      </FireBand>
-
-      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive through spectral">
-        <Section title="Drive · Punch" color={FC.drive} collapseKey="fx.drive" chipHosted right={
-          <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
-        }>
-          <DriveStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0.08} color={FC.drive} />
-            <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
-            <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={46} color={FC.drive} />
-            <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Magma forge — transfer curve left, living sine crushed right.</div>
-        </Section>
-        <Section title="Phaser" color={FC.phaser} collapseKey="fx.phaser" chipHosted>
-          <PhaserStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} color={FC.phaser} />
-            <FParamKnob paramKey="phaserDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.6} color={FC.phaser} />
-            <FParamKnob paramKey="phaserMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.phaser} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Sweep notches crawl the spectrum — mix brings them in.</div>
-        </Section>
-        <Section title="Chorus" color={FC.chorus} collapseKey="fx.chorus" chipHosted>
-          <ChorusStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} color={FC.chorus} />
-            <FParamKnob paramKey="chorusDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.4} color={FC.chorus} />
-            <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0.25} color={FC.chorus} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Ensemble shimmer — detuned voices breathe around the dry signal.</div>
-        </Section>
-        <Section title="Delay (Ping-Pong)" color={FC.delay} collapseKey="fx.delay" chipHosted>
-          <DelayStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="delayTime" label="Time" min={0.01} max={1.5} curve="log" format={fmtSec} def={0.28} color={FC.delay} />
-            <FParamKnob paramKey="delayFeedback" label="Fbk" min={0} max={0.92} format={fmtPct} def={0.3} color={FC.delay} />
-            <FParamKnob paramKey="delayMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.delay} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Ping-pong corridor — echoes bounce L↔R and decay with feedback.</div>
-        </Section>
-        <Section title="Reverb" color={FC.reverb} collapseKey="fx.reverb" chipHosted>
-          <ReverbStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} color={FC.reverb} />
-            <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.reverb} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Room bloom — impulse rings expand with Size, denser with Mix.</div>
-        </Section>
-        <SpectralPanel chipHosted />
-      </FireBand>
-
-      <FireBand title="Performance Tools" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate" defaultCollapsed>
+      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate" defaultCollapsed>
         <MacrosPanel chipHosted />
         <GatePanel chipHosted />
       </FireBand>
@@ -588,7 +568,11 @@ export function FireCommandView() {
         <Keyboard octave={octave} onMinimize={toggleKeyboard} />
       )}
 
-      <PresetBrowser open={browserOpen} onClose={() => setBrowserOpen(false)} />
+      <PresetBrowser
+        open={browserOpen}
+        onClose={() => { setBrowserOpen(false); setBrowserFilter(undefined); }}
+        initialFilter={browserFilter}
+      />
     </div>
     </FireLayoutProvider>
   );

@@ -595,14 +595,13 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
             <span className="text-white/50">Master</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
             {([...MIXER_PARTS, "master"] as MixerStripId[]).map((id) => (
               <Strip key={id} id={id} registerMeter={registerMeter} />
             ))}
-            <SidechainRack />
           </div>
-          <div className="mt-2.5 text-center text-[10px] text-dim">
-            Five equal buses + sidechain — meter bridge matches strip order · solid LEDs = live · dashed = fader trim.
+          <div className="mt-2.5">
+            <SidechainRack />
           </div>
         </>
       )}

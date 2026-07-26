@@ -30,6 +30,15 @@ export const SPLASH_SOUND_DURATION_S = 4.2;
 /** Where the drop lands (s after the sound starts) — visuals flash here. */
 export const SPLASH_DROP_AT_S = 2.85;
 
+/** Visual hit cues (ms after audio t=0) — keep in sync with build* timeline. */
+export const SPLASH_HIT_MS = {
+  contact: 0,
+  radarL: 850,
+  radarR: 1650,
+  arming: 2050,
+  drop: Math.round(SPLASH_DROP_AT_S * 1000),
+} as const;
+
 const SAMPLE_RATE = 44100;
 
 /** Deterministic PRNG (mulberry32) so the noise beds render identically. */
@@ -401,7 +410,7 @@ let playCtx: AudioContext | null = null;
  *  firing on a click minutes later would be jarring. */
 const GESTURE_RETRY_WINDOW_MS = 10_000;
 
-function ensurePlayCtx(): AudioContext | null {
+export function ensurePlayCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
   if (!playCtx) {
     try {
@@ -415,6 +424,17 @@ function ensurePlayCtx(): AudioContext | null {
     }
   }
   return playCtx;
+}
+
+/** Warm the play context + sink during the black lead-in so reveal≈audio t=0. */
+export async function prepareSplashPlayback(): Promise<void> {
+  await preloadSplashSound().catch(() => undefined);
+  const ctx = ensurePlayCtx();
+  if (!ctx) return;
+  await applySplashSink(ctx);
+  if (ctx.state === "suspended") {
+    try { await ctx.resume(); } catch { /* gesture path in playSplashSound */ }
+  }
 }
 
 /**
@@ -436,7 +456,12 @@ async function applySplashSink(ctx: AudioContext): Promise<void> {
   }
 }
 
-function startBuffer(ctx: AudioContext, buffer: AudioBuffer, volume: number): Promise<void> {
+function startBuffer(
+  ctx: AudioContext,
+  buffer: AudioBuffer,
+  volume: number,
+  onStart?: () => void,
+): Promise<void> {
   return new Promise((resolve) => {
     const src = ctx.createBufferSource();
     src.buffer = buffer;
@@ -448,6 +473,7 @@ function startBuffer(ctx: AudioContext, buffer: AudioBuffer, volume: number): Pr
       try { g.disconnect(); } catch { /* ignore */ }
       resolve();
     };
+    onStart?.();
     src.start();
   });
 }
@@ -455,16 +481,21 @@ function startBuffer(ctx: AudioContext, buffer: AudioBuffer, volume: number): Pr
 /**
  * Play the signature boot sound once. Resolves when playback finishes (or
  * immediately if audio is unavailable). `volume` is 0..1 linear gain on top
- * of the −2.5 dBFS master.
+ * of the −2.5 dBFS master. `onStart` fires the instant the buffer begins —
+ * use it to sync splash CSS to audio t=0.
  */
-export async function playSplashSound(volume = 1): Promise<void> {
+export async function playSplashSound(volume = 1, onStart?: () => void): Promise<void> {
   const ctx = ensurePlayCtx();
-  if (!ctx) return;
+  if (!ctx) {
+    onStart?.();
+    return;
+  }
 
   let buffer: AudioBuffer;
   try {
     buffer = await preloadSplashSound();
   } catch {
+    onStart?.();
     return;
   }
 
@@ -475,7 +506,7 @@ export async function playSplashSound(volume = 1): Promise<void> {
   }
 
   if (ctx.state === "running") {
-    await startBuffer(ctx, buffer, volume);
+    await startBuffer(ctx, buffer, volume, onStart);
     return;
   }
 
@@ -487,12 +518,13 @@ export async function playSplashSound(volume = 1): Promise<void> {
       window.removeEventListener("pointerdown", once);
       window.removeEventListener("keydown", once);
       if (performance.now() - armedAt > GESTURE_RETRY_WINDOW_MS) {
+        onStart?.();
         resolve();
         return;
       }
       void ctx.resume().then(
-        () => startBuffer(ctx, buffer, volume).then(resolve),
-        () => resolve(),
+        () => startBuffer(ctx, buffer, volume, onStart).then(resolve),
+        () => { onStart?.(); resolve(); },
       );
     };
     window.addEventListener("pointerdown", once, { once: true });

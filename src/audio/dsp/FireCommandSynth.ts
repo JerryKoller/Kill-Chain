@@ -1241,7 +1241,19 @@ export class FireCommandSynth {
     this.applyLfoParams(this.patch);
     this.applySpectral(this.patch);
 
+    this.startModTimer();
+  }
+
+  private startModTimer(): void {
+    if (this.modTimer) return;
+    this.idleFrames = 0;
     this.modTimer = setInterval(this.updateMod, 1000 / 60);
+  }
+
+  private stopModTimer(): void {
+    if (!this.modTimer) return;
+    clearInterval(this.modTimer);
+    this.modTimer = null;
   }
 
   setMaxVoices(n: number): void { this.maxVoices = Math.round(clamp(n, 2, 48)); }
@@ -1446,12 +1458,13 @@ export class FireCommandSynth {
 
   // ── control-rate modulation updater (matrix + morph + gate + drift) ──
   private updateMod = (): void => {
-    // Idle gate: this 60 Hz loop otherwise runs for the app's whole lifetime,
-    // even when the synth hasn't been touched. Keep ticking for ~5 s after the
-    // last voice dies (release/delay/reverb tails still need gate + bus mod),
-    // then go dormant until the next note.
+    // Idle gate: sleep the 60 Hz timer after ~5 s with no voices (tails need
+    // a few seconds). noteOn / playNote / setPatch restart it.
     if (this.voices.size === 0) {
-      if (++this.idleFrames > 300) return;
+      if (++this.idleFrames > 300) {
+        this.stopModTimer();
+        return;
+      }
     } else {
       this.idleFrames = 0;
     }
@@ -1631,6 +1644,7 @@ export class FireCommandSynth {
   // ── notes ──
   /** `when` (ctx clock) enables sample-accurate sequencing; omit for live play. */
   noteOn(midi: number, velocity = 0.9, when?: number): void {
+    this.startModTimer();
     const p = this.patch;
     const t = Math.max(this.ctx.currentTime, when ?? this.ctx.currentTime);
     if (p.mono) {
@@ -1681,6 +1695,7 @@ export class FireCommandSynth {
    * same pitch from a piano roll can't cancel each other.
    */
   playNote(midi: number, velocity: number, when: number, duration: number): void {
+    this.startModTimer();
     const p = this.patch;
     const cap = this.effectiveMaxVoices(p);
     while (this.voices.size >= cap) this.stealOldest();
@@ -1760,6 +1775,7 @@ export class FireCommandSynth {
 
   // ── patch ──
   setPatch(p: FirePatch): void {
+    this.startModTimer();
     // Merge over the defaults so patches persisted before newer fields were
     // added (fmBtoA, noiseColor, filterDrive, stereoWidth, velAmount…) load
     // with legacy-exact behavior instead of undefined params.

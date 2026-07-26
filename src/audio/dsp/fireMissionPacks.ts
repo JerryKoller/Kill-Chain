@@ -567,8 +567,8 @@ export const MISSION_PACKS: MissionPack[] = [
   {
     id: "dubstep-sortie",
     name: "Dubstep Sortie",
-    desc: "Halftime 140 — nasty wobble between kick-on-one and snare-on-three.",
-    tagline: "Halftime · wobble · snare on 3",
+    desc: "Halftime 140 — dry wobble chops between kick-on-one and snare-on-three.",
+    tagline: "Halftime · dry wobble · snare on 3",
     color: "#22d3ee",
     bpm: 140,
     payload: template({
@@ -577,7 +577,8 @@ export const MISSION_PACKS: MissionPack[] = [
       scaleId: "minor",
       presetA: "ms-dub-zap",
       presetB: "ms-dub-wobble",
-      // No duck — wobble needs full weight under the half-time kick
+      drumLevel: 1.15,
+      // No duck — wobble owns the low end; space between hits is the groove
       sections: [
         {
           name: "Wobble",
@@ -585,12 +586,16 @@ export const MISSION_PACKS: MissionPack[] = [
           drums: {
             kick:  "X---------------X---------------",
             snare: "--------X---------------X-------",
-            chat:  "x-------x-------x-------x-------",
+            chat:  "----x-------x-------x-------x---",
           },
           notes: [
-            [41, 0, 4, 1, 1], [41, 4, 4, 0.9, 1], [44, 8, 4, 0.95, 1], [41, 12, 4, 0.9, 1],
-            [39, 16, 4, 1, 1], [39, 20, 4, 0.9, 1], [36, 24, 8, 1, 1],
-            [65, 6, 0.5, 0.5], [72, 14, 0.5, 0.45],
+            // B: punchy 1-bar phrases with rests — classic half-time space
+            [41, 0, 3.5, 1, 1], [41, 4, 3.5, 0.95, 1],
+            [44, 8, 3.5, 1, 1], [41, 12, 3.5, 0.9, 1],
+            [39, 16, 3.5, 1, 1], [36, 20, 3.5, 0.95, 1],
+            [41, 24, 7, 1, 1],
+            // A: rare dry zaps on the snare
+            [72, 8, 0.35, 0.55], [77, 24, 0.4, 0.5],
           ],
         },
         {
@@ -599,13 +604,15 @@ export const MISSION_PACKS: MissionPack[] = [
           drums: {
             kick:  "X-------------X-X---------------",
             snare: "--------X---------------X-------",
-            chat:  "x---x---x---x---x---x---x---x---",
+            chat:  "----x---x---x-------x---x---x---",
             crash: "X-------------------------------",
           },
           notes: [
-            [41, 0, 4, 1, 1], [44, 4, 4, 0.95, 1], [41, 8, 4, 1, 1], [46, 12, 4, 0.95, 1],
-            [39, 16, 4, 1, 1], [41, 20, 4, 0.95, 1], [36, 24, 8, 1, 1],
-            [68, 2, 0.5, 0.5], [72, 10, 0.5, 0.5], [77, 26, 1, 0.5],
+            [41, 0, 3.5, 1, 1], [46, 4, 3.5, 1, 1],
+            [41, 8, 3.5, 1, 1], [44, 12, 3.5, 0.95, 1],
+            [39, 16, 3.5, 1, 1], [41, 20, 3.5, 0.95, 1],
+            [36, 24, 7.5, 1, 1],
+            [68, 8, 0.35, 0.55], [72, 16, 0.35, 0.5], [77, 28, 0.5, 0.55],
           ],
         },
       ],
