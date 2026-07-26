@@ -2,6 +2,21 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.2] — 2026-07-26 — Module Fill
+
+### Added
+- **Noise Bed · Sub Osc** (Sources) — first-class noise + sub with octave
+- **Pluck Gate** (Tone) — LPG elevated to its own strike module
+- **Width · Glue · Air** (Mix) — stereo M/S, bus compress, dual-shelf tone
+- **Harmony · Scale Lock · Chord Memory · Humanize · Scenes** (Perf) — playable performance bay with 8 snapshot slots
+- **Per-module On/Off** on All Modules — real bypass for every atlas entry
+- Unique stage visualizer for each new module
+
+### Changed
+- All module columns equalized at 7 (Src / Tone / Mod / FX / Mix / Perf)
+- Unison slimmed (sub/noise/stereo moved to their own homes)
+- Harmony moved out of Live Controls into Perf
+
 ## [3.0.1] — 2026-07-26 — Genesis Polish
 
 ### Changed
