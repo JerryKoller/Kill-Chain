@@ -6,7 +6,7 @@
  * come from the NEAREST corner. One undo snapshot per gesture.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useFireCommandStore, FIRE_PRESETS } from "@/state/fireCommandStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
@@ -36,6 +36,9 @@ const DEFAULT_CORNER_IDS: Record<Corner, string> = {
 
 const STORAGE_KEY = "killchain.firemorph.v1";
 const FIRE = "#ff6a3d";
+const PAD_SIZE = 240;
+
+type TrailParticle = { x: number; y: number; life: number; hue: number };
 
 interface PersistShape {
   cornerIds: Record<Corner, string>;
@@ -90,10 +93,16 @@ export function FireMorphPad() {
   const [open, setOpen] = useState(persisted.open);
   const [cornerIds, setCornerIds] = useState(persisted.cornerIds);
   const [pos, setPos] = useState({ x: 0.5, y: 0.5 });
+  const [isDragging, setIsDragging] = useState(false);
   const userPresets = useFireCommandStore((s) => s.userPresets);
   const padRef = useRef<HTMLDivElement>(null);
+  const trailCanvasRef = useRef<HTMLCanvasElement>(null);
   const draggingRef = useRef(false);
   const rafRef = useRef(0);
+  const trailRafRef = useRef(0);
+  const posRef = useRef(pos);
+  const trailRef = useRef<TrailParticle[]>([]);
+  posRef.current = pos;
 
   const patchFor = (id: string): FirePatch => {
     const factory = FIRE_PRESETS.find((p) => p.id === id);
@@ -125,6 +134,7 @@ export function FireMorphPad() {
   const onPointerDown = (e: React.PointerEvent) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     draggingRef.current = true;
+    setIsDragging(true);
     pushFireHistory();
     const p = posFromEvent(e);
     setPos(p);
@@ -145,6 +155,7 @@ export function FireMorphPad() {
   const onPointerUp = (e: React.PointerEvent) => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
+    setIsDragging(false);
     const p = posFromEvent(e);
     setPos(p);
     applyAt(p.x, p.y, true);
@@ -163,8 +174,88 @@ export function FireMorphPad() {
 
   const w = bilinear(pos.x, pos.y);
 
+  useEffect(() => {
+    if (!open) return;
+    const canvas = trailCanvasRef.current;
+    const pad = padRef.current;
+    if (!canvas || !pad) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const sync = () => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const cssW = pad.clientWidth;
+      const cssH = pad.clientHeight;
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = `${cssW}px`;
+      canvas.style.height = `${cssH}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(pad);
+
+    const drawTrail = () => {
+      trailRafRef.current = requestAnimationFrame(drawTrail);
+      const W = pad.clientWidth;
+      const H = pad.clientHeight;
+      ctx.clearRect(0, 0, W, H);
+
+      if (draggingRef.current) {
+        const { x, y } = posRef.current;
+        const px = x * W;
+        const py = y * H;
+        const wts = bilinear(x, y);
+        let domHue = 30;
+        let domW = 0;
+        for (const c of CORNERS) {
+          if (wts[c] > domW) { domW = wts[c]; domHue = c === "a" ? 18 : c === "b" ? 210 : c === "c" ? 145 : 275; }
+        }
+        trailRef.current.push({ x: px, y: py, life: 1, hue: domHue });
+        if (trailRef.current.length > 28) trailRef.current.shift();
+      }
+
+      for (let i = trailRef.current.length - 1; i >= 0; i--) {
+        const p = trailRef.current[i];
+        p.life -= 0.045;
+        if (p.life <= 0) { trailRef.current.splice(i, 1); continue; }
+        const a = p.life * 0.55;
+        const r = 2 + (1 - p.life) * 4;
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.2);
+        g.addColorStop(0, `hsla(${p.hue}, 80%, 72%, ${a})`);
+        g.addColorStop(1, `hsla(${p.hue}, 70%, 55%, 0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+
+    trailRafRef.current = requestAnimationFrame(drawTrail);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(trailRafRef.current);
+      trailRef.current = [];
+    };
+  }, [open]);
+
   return (
     <GlassPanel className="p-3">
+      <style>{`
+        @keyframes morph-breathe {
+          0%, 100% { opacity: 0.55; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.08); }
+        }
+        @keyframes morph-grid-pulse {
+          0%, 100% { opacity: 0.12; }
+          50% { opacity: 0.24; }
+        }
+        @keyframes morph-ripple {
+          0% { transform: translate(-50%, -50%) scale(0.85); opacity: 0.5; }
+          100% { transform: translate(-50%, -50%) scale(1.65); opacity: 0; }
+        }
+      `}</style>
       <div className="flex items-center gap-2">
         <button
           onClick={toggleOpen}
@@ -192,13 +283,11 @@ export function FireMorphPad() {
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            className="relative h-[240px] w-[240px] shrink-0 cursor-crosshair touch-none select-none overflow-hidden rounded-2xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_28px_rgba(0,0,0,0.35)]"
+            className="relative shrink-0 cursor-crosshair touch-none select-none overflow-hidden rounded-2xl border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_8px_28px_rgba(0,0,0,0.35)]"
             style={{
+              width: PAD_SIZE,
+              height: PAD_SIZE,
               background:
-                `radial-gradient(circle at 0% 0%, ${CORNER_META.a.color}38, transparent 55%),` +
-                `radial-gradient(circle at 100% 0%, ${CORNER_META.b.color}38, transparent 55%),` +
-                `radial-gradient(circle at 0% 100%, ${CORNER_META.c.color}38, transparent 55%),` +
-                `radial-gradient(circle at 100% 100%, ${CORNER_META.d.color}38, transparent 55%),` +
                 "linear-gradient(160deg, rgba(8,6,10,0.92), rgba(0,0,0,0.75))",
             }}
             role="slider"
@@ -208,14 +297,49 @@ export function FireMorphPad() {
             aria-valuemin={0}
             aria-valuemax={100}
           >
-            {/* Crosshair grid */}
-            <div className="pointer-events-none absolute inset-0 opacity-20"
+            {/* Breathing corner glows */}
+            {CORNERS.map((c) => (
+              <div
+                key={`glow-${c}`}
+                className="pointer-events-none absolute animate-[morph-breathe_4.2s_ease-in-out_infinite]"
+                style={{
+                  animationDelay: `${CORNERS.indexOf(c) * 0.65}s`,
+                  width: "62%",
+                  height: "62%",
+                  left: CORNER_META[c].x === 0 ? "-8%" : undefined,
+                  right: CORNER_META[c].x === 1 ? "-8%" : undefined,
+                  top: CORNER_META[c].y === 0 ? "-8%" : undefined,
+                  bottom: CORNER_META[c].y === 1 ? "-8%" : undefined,
+                  background: `radial-gradient(circle, ${CORNER_META[c].color}${Math.round(28 + w[c] * 40).toString(16).padStart(2, "0")}, transparent 68%)`,
+                  filter: "blur(2px)",
+                }}
+              />
+            ))}
+
+            {/* Pulsing grid */}
+            <div
+              className="pointer-events-none absolute inset-0 animate-[morph-grid-pulse_3.6s_ease-in-out_infinite] opacity-[0.18]"
               style={{
                 backgroundImage:
-                  "linear-gradient(rgba(255,255,255,0.12) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.12) 1px, transparent 1px)",
+                  "linear-gradient(rgba(255,255,255,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.14) 1px, transparent 1px)",
                 backgroundSize: "40px 40px",
               }}
             />
+            <div className="pointer-events-none absolute inset-0 opacity-25"
+              style={{
+                backgroundImage:
+                  "linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)",
+                backgroundSize: "20px 20px",
+              }}
+            />
+
+            {/* Particle trail overlay (display only) */}
+            <canvas
+              ref={trailCanvasRef}
+              className="pointer-events-none absolute inset-0 block h-full w-full"
+              aria-hidden
+            />
+
             {CORNERS.map((c) => (
               <span
                 key={c}
@@ -224,7 +348,7 @@ export function FireMorphPad() {
                   color: CORNER_META[c].color,
                   borderColor: `${CORNER_META[c].color}${Math.round(60 + w[c] * 140).toString(16).padStart(2, "0")}`,
                   background: `${CORNER_META[c].color}${Math.round(18 + w[c] * 50).toString(16).padStart(2, "0")}`,
-                  boxShadow: `0 0 ${8 + w[c] * 16}px ${CORNER_META[c].color}66`,
+                  boxShadow: `0 0 ${10 + w[c] * 20}px ${CORNER_META[c].color}77`,
                   left: CORNER_META[c].x === 0 ? 8 : undefined,
                   right: CORNER_META[c].x === 1 ? 8 : undefined,
                   top: CORNER_META[c].y === 0 ? 8 : undefined,
@@ -234,13 +358,30 @@ export function FireMorphPad() {
                 {CORNER_META[c].label}
               </span>
             ))}
+
+            {/* Puck ripple rings */}
+            {[0, 1, 2].map((ring) => (
+              <div
+                key={`ring-${ring}`}
+                className="pointer-events-none absolute rounded-full border border-white/25 animate-[morph-ripple_2.4s_ease-out_infinite]"
+                style={{
+                  left: `${pos.x * 100}%`,
+                  top: `${pos.y * 100}%`,
+                  width: 20 + ring * 14,
+                  height: 20 + ring * 14,
+                  animationDelay: `${ring * 0.55}s`,
+                  opacity: isDragging ? 0.55 - ring * 0.12 : 0.22 - ring * 0.05,
+                }}
+              />
+            ))}
+
             <div
               className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white"
               style={{
                 left: `${pos.x * 100}%`,
                 top: `${pos.y * 100}%`,
-                background: "rgba(255,255,255,0.3)",
-                boxShadow: "0 0 18px rgba(255,255,255,0.7), 0 0 36px rgba(255,106,61,0.35)",
+                background: "radial-gradient(circle at 35% 30%, rgba(255,255,255,0.55), rgba(255,255,255,0.22))",
+                boxShadow: "0 0 18px rgba(255,255,255,0.75), 0 0 36px rgba(255,106,61,0.4), inset 0 0 6px rgba(255,255,255,0.3)",
               }}
             />
           </div>

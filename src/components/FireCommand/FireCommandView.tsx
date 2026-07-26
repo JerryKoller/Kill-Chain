@@ -416,14 +416,13 @@ export function FireCommandView() {
       {/* Global control strip */}
       <Section title="Performance" color={FIRE} collapseKey="performance">
         <PerformanceStageViz />
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center justify-evenly gap-2.5">
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-widest text-dim">Octave</span>
             <Stepper onClick={() => shiftOctave(-1)}>−</Stepper>
             <div className="w-6 text-center font-mono text-sm" style={{ color: FIRE }}>{octave}</div>
             <Stepper onClick={() => shiftOctave(1)}>+</Stepper>
           </div>
-          <div className="h-7 w-px bg-white/10" />
           <Seg<"poly" | "mono">
             value={mono ? "mono" : "poly"}
             onChange={(v) => setParam("mono", v === "mono")}
@@ -437,7 +436,6 @@ export function FireCommandView() {
             }`}
             title="Run the synth through the program's EQ/FX chain, or play it raw."
           >{fxOn ? "● Kill-Chain FX: ON" : "FX: OFF (raw)"}</button>
-          <div className="flex-1" />
           <div className="flex items-center gap-1.5" title="Polyphony cap. Higher = richer chords but more CPU; lower this if audio crackles or drops out.">
             <span className="text-[10px] uppercase tracking-widest text-dim">Voices</span>
             <Seg<string>
@@ -483,7 +481,7 @@ export function FireCommandView() {
           <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color="#ffcf5c" />
         </div>
         <div className="mt-2 text-center text-[10px] text-dim">
-          Gold lattice — Stretch slides partials · Tilt tips bright/dark · Comb notches even harmonics.
+          Harmonic forge — Stretch slides partials · Tilt tips bright/dark · Comb notches even harmonics.
         </div>
       </Section>
 
@@ -493,30 +491,29 @@ export function FireCommandView() {
           <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
         }>
           <UnisonStageViz />
-          <KnobRow>
+          <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="subLevel" label="Sub" min={0} max={1} format={fmtPct} def={0.3} />
             <FParamKnob paramKey="noiseLevel" label="Noise" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="noiseColor" label="Color" min={-1} max={1} bipolar format={fmtBi} def={0} />
-            <div className="w-px h-12 bg-white/8 self-center mx-0.5" />
             <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={3} />
             <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={14} />
             <FParamKnob paramKey="unisonWidth" label="Width" min={0} max={1} format={fmtPct} def={0.5} />
             <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} />
             <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} />
-          </KnobRow>
+          </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Voice fan — sub/noise rails below, detuned copies across the stereo field.</div>
         </Section>
         <Section title="Filter" color={FIRE} collapseKey="filter" right={
           <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
         }>
           <FilterStageViz />
-          <KnobRow>
+          <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={46} />
             <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={3} />
             <FParamKnob paramKey="filterEnvAmount" label="Env Amt" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
             <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} />
             <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} />
-          </KnobRow>
+          </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Frequency bay — response curve tracks type, cutoff, resonance and env push.</div>
         </Section>
       </div>
@@ -527,13 +524,15 @@ export function FireCommandView() {
           <AmpEnvStageViz />
           <LpgAwareAmpRow />
         </Section>
-        <Section title="Mod Envelope → Morph" color={GRN} collapseKey="env.mod">
+        <Section title="Mod Envelope → Morph" color="#9be564" collapseKey="env.mod">
           <ModEnvStageViz />
-          <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
+          <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" color="#9be564" />
+          <div className="mt-1.5 text-center text-[10px] text-dim">Morph pulse — shapes wavetable travel over the note.</div>
         </Section>
-        <Section title="Filter Envelope" color={GRN} collapseKey="env.filt">
+        <Section title="Filter Envelope" color="#5ce0a0" collapseKey="env.filt">
           <FiltEnvStageViz />
-          <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" />
+          <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" color="#5ce0a0" />
+          <div className="mt-1.5 text-center text-[10px] text-dim">Cutoff sweep — opens and closes the filter over time.</div>
         </Section>
       </div>
 
@@ -543,23 +542,23 @@ export function FireCommandView() {
         <LfoPanel idx={2} />
         <Section title="FM · Ring" color={FIRE} collapseKey="fm">
           <FmRingStageViz />
-          <KnobRow>
+          <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="fmRatio" label="FM Ratio" min={0.5} max={12} curve="log" format={fmtRatio} def={2} />
             <FParamKnob paramKey="fmBtoA" label="B→A FM" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="ringAmount" label="Ring" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} />
-          </KnobRow>
-          <div className="mt-1 text-[10px] text-dim">FM lattice + ring beat — ratio spokes, sidebands, metallic chew.</div>
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">FM lattice + ring beat — ratio spokes, sidebands, metallic chew.</div>
         </Section>
         <Section title="Pitch · Glide" color={FIRE} collapseKey="pitch">
           <PitchGlideStageViz />
-          <KnobRow>
+          <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
             <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} color={GRN} />
             <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0.06} />
-          </KnobRow>
-          <div className="mt-1 text-[10px] text-dim">Pitch rail — envelope ramp left, portamento trail right (Mono).</div>
+          </div>
+          <div className="mt-1.5 text-center text-[10px] text-dim">Pitch rail — envelope ramp left, portamento trail right (Mono).</div>
         </Section>
       </div>
 
@@ -682,16 +681,34 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
+
+      // Depth plate
+      const bg = ctx.createLinearGradient(0, 0, w, h);
+      bg.addColorStop(0, `${color}22`);
+      bg.addColorStop(0.45, "rgba(4,4,8,0.85)");
+      bg.addColorStop(1, `${color}10`);
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+      // Perspective grid
+      ctx.strokeStyle = "rgba(255,255,255,0.04)";
+      for (let g = 0; g < 5; g++) {
+        const y = 12 + g * ((h - 28) / 4);
+        ctx.beginPath();
+        ctx.moveTo(8, y);
+        ctx.lineTo(w - 8, y);
+        ctx.stroke();
+      }
+
       const curFrame = pos * (FRAME_COUNT - 1);
       const padX = 14;
-      const skew = 26;
-      const topY = 16;
+      const skew = 28;
+      const topY = 14;
       const usableW = w - padX * 2 - skew;
-      const amp = h * 0.07;
+      const amp = h * 0.075;
       // back-to-front stack of frames
       for (let i = 0; i < FRAME_COUNT; i++) {
         const depth = i / (FRAME_COUNT - 1);
-        const baseY = topY + depth * (h - topY - 22);
+        const baseY = topY + depth * (h - topY - 24);
         const xoff = padX + (1 - depth) * skew;
         const near = 1 - Math.min(1, Math.abs(i - curFrame));
         ctx.beginPath();
@@ -702,36 +719,60 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
           if (x === 0) ctx.moveTo(px, py);
           else ctx.lineTo(px, py);
         }
-        ctx.strokeStyle = `rgba(255,255,255,${0.06 + depth * 0.06})`;
+        ctx.strokeStyle = `rgba(255,255,255,${0.05 + depth * 0.07})`;
         ctx.lineWidth = 1;
         ctx.stroke();
         if (near > 0.001) {
           ctx.strokeStyle = color;
-          ctx.globalAlpha = near * 0.9;
-          ctx.lineWidth = 1.5;
+          ctx.globalAlpha = near * 0.85;
+          ctx.lineWidth = 1.6;
+          ctx.shadowBlur = 4;
+          ctx.shadowColor = color;
           ctx.stroke();
+          ctx.shadowBlur = 0;
           ctx.globalAlpha = 1;
         }
       }
-      // current interpolated waveform, bold at front
+      // current interpolated waveform, bold at front with fill
       const lo = Math.floor(curFrame);
       const hi = Math.min(lo + 1, FRAME_COUNT - 1);
       const frac = curFrame - lo;
-      const frontY = h - 16;
+      const frontY = h - 14;
+      ctx.beginPath();
+      ctx.moveTo(padX, frontY);
+      for (let x = 0; x < N; x++) {
+        const v = cache[lo][x] * (1 - frac) + cache[hi][x] * frac;
+        const px = padX + (x / (N - 1)) * (w - padX * 2);
+        const py = frontY - v * (h * 0.14);
+        ctx.lineTo(px, py);
+      }
+      ctx.lineTo(w - padX, frontY);
+      ctx.closePath();
+      const fill = ctx.createLinearGradient(0, frontY - h * 0.2, 0, frontY);
+      fill.addColorStop(0, `${color}44`);
+      fill.addColorStop(1, `${color}00`);
+      ctx.fillStyle = fill;
+      ctx.fill();
+
       ctx.beginPath();
       for (let x = 0; x < N; x++) {
         const v = cache[lo][x] * (1 - frac) + cache[hi][x] * frac;
         const px = padX + (x / (N - 1)) * (w - padX * 2);
-        const py = frontY - v * (h * 0.12);
+        const py = frontY - v * (h * 0.14);
         if (x === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
       ctx.strokeStyle = color;
-      ctx.lineWidth = 2.2;
-      ctx.shadowBlur = 10;
+      ctx.lineWidth = 2.4;
+      ctx.shadowBlur = 14;
       ctx.shadowColor = color;
       ctx.stroke();
       ctx.shadowBlur = 0;
+
+      // Morph position marker
+      const mx = padX + pos * (w - padX * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillRect(mx - 1, 4, 2, 8);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
@@ -813,22 +854,32 @@ function Scope() {
       ctx.clearRect(0, 0, w, h);
 
       const bg = ctx.createLinearGradient(0, 0, w, h);
-      bg.addColorStop(0, "rgba(255,106,61,0.07)");
-      bg.addColorStop(0.5, "rgba(8,6,4,0.45)");
-      bg.addColorStop(1, "rgba(98,182,255,0.04)");
+      bg.addColorStop(0, "rgba(255,106,61,0.10)");
+      bg.addColorStop(0.45, "rgba(6,4,8,0.72)");
+      bg.addColorStop(1, "rgba(98,182,255,0.06)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, w, h);
 
-      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      // Depth grid
+      ctx.strokeStyle = "rgba(255,255,255,0.045)";
+      for (let i = 1; i < 4; i++) {
+        const y = (h / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
       ctx.beginPath();
-      ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2);
+      ctx.moveTo(0, h / 2);
+      ctx.lineTo(w, h / 2);
       ctx.stroke();
 
       if (!buf || buf.length !== analyser.fftSize) buf = new Uint8Array(analyser.fftSize);
       analyser.getByteTimeDomainData(buf);
       const N = buf.length;
 
-      // Fill under the trace
+      // Glow under-fill
       ctx.beginPath();
       ctx.moveTo(0, h / 2);
       for (let i = 0; i < N; i++) {
@@ -840,14 +891,28 @@ function Scope() {
       ctx.lineTo(w, h / 2);
       ctx.closePath();
       const fill = ctx.createLinearGradient(0, 0, 0, h);
-      fill.addColorStop(0, "rgba(255,106,61,0.22)");
+      fill.addColorStop(0, "rgba(255,106,61,0.28)");
+      fill.addColorStop(0.55, "rgba(255,106,61,0.08)");
       fill.addColorStop(1, "rgba(255,106,61,0)");
       ctx.fillStyle = fill;
       ctx.fill();
 
-      ctx.lineWidth = 2;
+      // Ghost trail (slightly attenuated copy)
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = "rgba(255,106,61,0.18)";
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const x = (i / (N - 1)) * w;
+        const v = (buf[i] - 128) / 128;
+        const y = h / 2 - v * (h / 2) * 0.88;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      ctx.lineWidth = 2.2;
       ctx.strokeStyle = FIRE;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 14;
       ctx.shadowColor = FIRE;
       ctx.beginPath();
       for (let i = 0; i < N; i++) {
@@ -859,6 +924,13 @@ function Scope() {
       }
       ctx.stroke();
       ctx.shadowBlur = 0;
+
+      // Edge vignette
+      const vig = ctx.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, w * 0.65);
+      vig.addColorStop(0, "rgba(0,0,0,0)");
+      vig.addColorStop(1, "rgba(0,0,0,0.35)");
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, w, h);
     };
     raf = requestAnimationFrame(draw);
     return () => {
@@ -1481,15 +1553,14 @@ function OscPanel({ group }: { group: "a" | "b" | "c" }) {
   return (
     <Section title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`} color={color} collapseKey={`osc.${group}`} right={<TableSelect paramKey={tableKey} />}>
       <OscStageViz group={group} color={color} />
-      <KnobRow>
+      <div className="flex items-center justify-evenly gap-1">
         <FParamKnob paramKey={posKey} label="Morph" min={0} max={1} format={fmtPct} def={group === "a" ? 0.66 : 0.4} size={46} />
         <FParamKnob paramKey={envKey} label="Env→WT" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
         <FParamKnob paramKey={lfoKey} label="LFO→WT" min={-1} max={1} bipolar format={fmtBi} def={0} color={ICE} />
-        <div className="w-px h-12 bg-white/8 self-center mx-0.5" />
         <FParamKnob paramKey={octKey} label="Octave" min={-2} max={2} integer bipolar format={fmtOct} def={defOct} />
         <FParamKnob paramKey={detKey} label="Detune" min={-50} max={50} integer bipolar format={fmtCents} def={0} />
         <FParamKnob paramKey={lvlKey} label="Level" min={0} max={1} format={fmtPct} def={defLevel} />
-      </KnobRow>
+      </div>
     </Section>
   );
 }
@@ -1502,7 +1573,7 @@ function LfoPanel({ idx }: { idx: 1 | 2 }) {
   return (
     <Section title={`LFO ${idx}`} color={ICE} collapseKey={`lfo.${idx}`} right={<FLfoWave paramKey={waveKey} />}>
       <LfoStageViz idx={idx} />
-      <div className="mb-2">
+      <div className="mb-2 flex justify-center">
         <FSeg<LfoDest>
           paramKey={destKey}
           color={ICE}
@@ -1515,11 +1586,12 @@ function LfoPanel({ idx }: { idx: 1 | 2 }) {
           ]}
         />
       </div>
-      <KnobRow>
+      <div className="flex items-center justify-evenly gap-1">
         <FParamKnob paramKey={rateKey} label="Rate" min={0.05} max={30} curve="log" format={fmtHzRate} def={idx === 1 ? 5 : 0.5} color={ICE} />
         <FParamKnob paramKey={depthKey} label="Depth" min={0} max={1} format={fmtPct} def={0} color={ICE} />
-      </KnobRow>
-      {idx === 1 && <div className="mt-1 text-[10px] text-dim">LFO 1 also feeds each osc's LFO→WT amount.</div>}
+      </div>
+      {idx === 1 && <div className="mt-1.5 text-center text-[10px] text-dim">LFO 1 also feeds each osc's LFO→WT amount.</div>}
+      {idx === 2 && <div className="mt-1.5 text-center text-[10px] text-dim">LFO 2 — secondary modulator, independent destination.</div>}
     </Section>
   );
 }
@@ -2544,25 +2616,28 @@ function LpgAwareAmpRow() {
   if (lpgOn) {
     return (
       <>
-        <KnobRow>
+        <div className="flex items-center justify-evenly gap-1">
           <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} color="#ffcf5c" size={46} />
           <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} color="#ffcf5c" size={46} />
           <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
-        </KnobRow>
-        <div className="mt-1 text-[10px] text-dim">
+        </div>
+        <div className="mt-1.5 text-center text-[10px] text-dim">
           Vactrol mode: every note is a struck pluck that rings out on its own. Color = how much the strike drives the filter.
         </div>
       </>
     );
   }
   return (
-    <KnobRow>
-      <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
-      <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
-    </KnobRow>
+    <>
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
+        <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
+        <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
+        <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
+        <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] text-dim">Amp mountain — loudness contour of every note.</div>
+    </>
   );
 }
 
@@ -2602,14 +2677,14 @@ function TableSelect({ paramKey }: { paramKey: keyof FirePatch }) {
   );
 }
 
-function AdsrRow({ a, d, s, r }: { a: NumericKey; d: NumericKey; s: NumericKey; r: NumericKey }) {
+function AdsrRow({ a, d, s, r, color = GRN }: { a: NumericKey; d: NumericKey; s: NumericKey; r: NumericKey; color?: string }) {
   return (
-    <KnobRow>
-      <FParamKnob paramKey={a} label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey={d} label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
-      <FParamKnob paramKey={s} label="S" min={0} max={1} format={fmtPct} color={GRN} />
-      <FParamKnob paramKey={r} label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
-    </KnobRow>
+    <div className="flex items-center justify-evenly gap-1">
+      <FParamKnob paramKey={a} label="A" min={0.001} max={3} curve="log" format={fmtSec} color={color} />
+      <FParamKnob paramKey={d} label="D" min={0.005} max={3} curve="log" format={fmtSec} color={color} />
+      <FParamKnob paramKey={s} label="S" min={0} max={1} format={fmtPct} color={color} />
+      <FParamKnob paramKey={r} label="R" min={0.005} max={4} curve="log" format={fmtSec} color={color} />
+    </div>
   );
 }
 
@@ -2649,7 +2724,7 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
 }
 
 function KnobRow({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-wrap gap-x-1.5 gap-y-1.5 justify-center sm:justify-start items-start">{children}</div>;
+  return <div className="flex flex-wrap items-center justify-evenly gap-1">{children}</div>;
 }
 
 function Stepper({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {

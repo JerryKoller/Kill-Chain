@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "2.5.5";
+export const APP_VERSION = "2.5.6";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -11,6 +11,10 @@ export const PRODUCT_DESCRIPTION =
 
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
+  {
+    title: "Symmetry + deeper Fire Command stages",
+    body: "Knob rows match Delay/Reverb even spacing. Fire Mixer gets a readable meter bridge. Morph Pad, Output, OSC, Spectral Warp (Harmonic Forge), Unison, Filter, Envelopes, LFOs, FM·Ring and Pitch·Glide all gain depth and individuality — display only.",
+  },
   {
     title: "Fire Command core stages + lit collapse",
     body: "Collapse chevrons are bigger and accent-lit. Fire Mixer is a proper console deck with signal-flow bay. Morph Pad, OSC A–C, Performance, Spectral Warp, Unison, Filter, Envelopes, LFOs, FM·Ring and Pitch·Glide each get their own stage personality — display only.",
@@ -26,9 +30,5 @@ export const WHATS_NEW: { title: string; body: string }[] = [
   {
     title: "Macros, Gate & Matrix — stage overhaul",
     body: "Three modules get their own personalities: amber Macro command cluster with radar + wiring readout, ice Trance Gate chop field with amplitude silhouette, and a green Mod Matrix signal bay with traveling cable packets. Function unchanged — look and feel leveled up.",
-  },
-  {
-    title: "Arp stage — visual overhaul",
-    body: "Hi-DPI contour stage with depth field, pitch-linked color shifting, targeting-reticle blooms on every hit, and a symmetrical control layout. Same arp engine — just sharper and more fun to watch.",
   },
 ];

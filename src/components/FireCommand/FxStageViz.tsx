@@ -726,18 +726,32 @@ export function SpectralStageViz() {
 }
 
 const GOLD = "#ffcf5c";
+const WARP_H = 145;
 
-/** Spectral Warp — gold harmonic lattice reshaped by Stretch / Tilt / Comb. */
+type HarmonicNode = { x: number; y: number; amp: number; n: number; even: boolean };
+
+function warpHarmonics(
+  n: number, N: number, S: number, T: number, C: number, breath: number,
+): { amp: number; posN: number } {
+  let amp = 1 / n;
+  amp *= Math.pow(n / 8, -T * 1.35);
+  if (n % 2 === 0) amp *= 1 - C * 0.96;
+  amp = Math.min(1, Math.max(0.015, amp)) * breath;
+  const posN = n * (1 + S * 0.72 * ((n - 1) / N));
+  return { amp, posN };
+}
+
+/** Spectral Warp — gold aurora harmonic forge reshaped by Stretch / Tilt / Comb. */
 export function WarpStageViz() {
   const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
   const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
   const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 400, h: 118 });
+  const sizeRef = useRef({ w: 400, h: WARP_H });
   const st = useRef({ stretch, tilt, comb });
   st.current = { stretch, tilt, comb };
-  useHiDpiCanvas(wrapRef, canvasRef, 118, sizeRef);
+  useHiDpiCanvas(wrapRef, canvasRef, WARP_H, sizeRef);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -746,6 +760,12 @@ export function WarpStageViz() {
     if (!ctx) return;
     let raf = 0;
     let last = 0;
+    const N = 28;
+    const sparks = Array.from({ length: 14 }, (_, i) => ({
+      phase: i / 14,
+      speed: 0.18 + (i % 5) * 0.04,
+      size: 1.2 + (i % 3) * 0.6,
+    }));
 
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
@@ -755,79 +775,174 @@ export function WarpStageViz() {
       const { stretch: S, tilt: T, comb: C } = st.current;
       ctx.clearRect(0, 0, W, H);
 
-      const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, "rgba(255,207,92,0.10)");
-      bg.addColorStop(0.5, "rgba(14,10,4,0.55)");
-      bg.addColorStop(1, "rgba(255,106,61,0.05)");
-      ctx.fillStyle = bg;
+      const sec = t / 1000;
+      const breath = 0.9 + 0.1 * Math.sin(t / 820);
+      const PAD = 16;
+      const top = 14;
+      const usableW = W - PAD * 2;
+      const usableH = H - 34;
+
+      // Gold aurora / nebula — reacts to Stretch, Tilt, Comb
+      const aurCx = W * (0.42 + S * 0.12 + Math.sin(sec * 0.35) * 0.04);
+      const aurCy = H * (0.38 + T * 0.08 + Math.cos(sec * 0.28) * 0.03);
+      const aurR = W * (0.42 + Math.abs(S) * 0.12 + C * 0.08);
+      const aur = ctx.createRadialGradient(aurCx, aurCy, 2, W * 0.5, H * 0.45, aurR);
+      aur.addColorStop(0, `rgba(255,220,130,${0.14 + Math.abs(T) * 0.08 + C * 0.06})`);
+      aur.addColorStop(0.35, `rgba(255,160,60,${0.07 + Math.abs(S) * 0.06})`);
+      aur.addColorStop(0.65, "rgba(18,10,4,0.62)");
+      aur.addColorStop(1, "rgba(0,0,0,0.45)");
+      ctx.fillStyle = aur;
       ctx.fillRect(0, 0, W, H);
 
-      // Soft harmonic guide lines
-      ctx.strokeStyle = "rgba(255,207,92,0.06)";
-      for (let i = 1; i <= 5; i++) {
-        const y = (H / 6) * i;
-        ctx.beginPath(); ctx.moveTo(8, y); ctx.lineTo(W - 8, y); ctx.stroke();
+      // Drifting nebula wisps
+      for (let w = 0; w < 3; w++) {
+        const wx = W * (0.2 + w * 0.28) + Math.sin(sec * (0.4 + w * 0.15) + w) * 22;
+        const wy = H * (0.55 + w * 0.08) + Math.cos(sec * (0.35 + w * 0.1)) * 12;
+        const wg = ctx.createRadialGradient(wx, wy, 0, wx, wy, 38 + w * 14);
+        wg.addColorStop(0, `rgba(255,207,92,${0.04 + C * 0.05})`);
+        wg.addColorStop(1, "rgba(255,207,92,0)");
+        ctx.fillStyle = wg;
+        ctx.fillRect(0, 0, W, H);
       }
 
-      const N = 32;
-      const PAD = 14;
-      const usableW = W - PAD * 2;
-      const usableH = H - 28;
-      const breath = 0.92 + 0.08 * Math.sin(t / 900);
+      // Harmonic guide lattice
+      ctx.strokeStyle = "rgba(255,207,92,0.045)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i <= 6; i++) {
+        const y = top + (usableH / 7) * i;
+        ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
+      }
+
+      const nodes: HarmonicNode[] = [];
+      for (let n = 1; n <= N; n++) {
+        const { amp, posN } = warpHarmonics(n, N, S, T, C, breath);
+        const x = PAD + ((posN - 1) / (N * 1.48)) * usableW;
+        if (x > W - PAD + 2) continue;
+        const barH = amp * usableH;
+        const y = top + usableH - barH;
+        nodes.push({ x, y, amp, n, even: n % 2 === 0 });
+      }
+
+      // Lattice ribbons — vertical + diagonal cross-links between tips
+      for (let i = 0; i < nodes.length - 1; i++) {
+        const a = nodes[i];
+        const b = nodes[i + 1];
+        const linkA = a.even ? 0.12 + (1 - C) * 0.18 : 0.22 + Math.abs(T) * 0.12;
+        ctx.strokeStyle = `rgba(255,207,92,${linkA * 0.35})`;
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        if (i % 3 === 0 && i + 2 < nodes.length) {
+          const c = nodes[i + 2];
+          ctx.strokeStyle = `rgba(255,180,80,${0.06 + Math.abs(S) * 0.08})`;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(c.x, c.y);
+          ctx.stroke();
+        }
+      }
 
       // Contour ribbon through tips
-      ctx.beginPath();
-      for (let n = 1; n <= N; n++) {
-        let amp = 1 / n;
-        amp *= Math.pow(n / 8, -T * 1.25);
-        if (n % 2 === 0) amp *= 1 - C * 0.9;
-        amp = Math.min(1, Math.max(0.02, amp)) * breath;
-        const posN = n * (1 + S * 0.65 * ((n - 1) / N));
-        const x = PAD + ((posN - 1) / (N * 1.55)) * usableW;
-        const y = 12 + (1 - amp) * usableH;
-        if (n === 1) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = `rgba(255,207,92,${0.35 + Math.abs(S) * 0.25})`;
-      ctx.lineWidth = 1.5;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = GOLD;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      for (let n = 1; n <= N; n++) {
-        let amp = 1 / n;
-        amp *= Math.pow(n / 8, -T * 1.25);
-        if (n % 2 === 0) amp *= 1 - C * 0.9;
-        amp = Math.min(1, Math.max(0.02, amp)) * breath;
-        const posN = n * (1 + S * 0.65 * ((n - 1) / N));
-        const x = PAD + ((posN - 1) / (N * 1.55)) * usableW;
-        if (x > W - PAD) continue;
-        const barH = amp * usableH;
-        const y = 12 + usableH - barH;
-        const even = n % 2 === 0;
-        const g = ctx.createLinearGradient(0, y, 0, y + barH);
-        g.addColorStop(0, even ? `rgba(255,180,80,${0.55})` : `rgba(255,220,120,${0.9})`);
-        g.addColorStop(1, "rgba(255,207,92,0.05)");
-        ctx.fillStyle = g;
-        const bw = Math.max(2.5, Math.min(7, usableW / (N * 1.2)));
-        ctx.fillRect(x - bw / 2, y, bw, barH);
-
-        // Tip glow
-        ctx.fillStyle = even && C > 0.2 ? `rgba(255,140,60,${0.4})` : GOLD;
+      if (nodes.length > 1) {
         ctx.beginPath();
-        ctx.arc(x, y, even ? 1.8 : 2.4, 0, Math.PI * 2);
-        ctx.fill();
+        nodes.forEach((nd, i) => {
+          if (i === 0) ctx.moveTo(nd.x, nd.y); else ctx.lineTo(nd.x, nd.y);
+        });
+        ctx.strokeStyle = `rgba(255,207,92,${0.28 + Math.abs(S) * 0.3 + C * 0.1})`;
+        ctx.lineWidth = 1.6;
+        ctx.shadowBlur = 10 + Math.abs(S) * 6;
+        ctx.shadowColor = GOLD;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
       }
 
+      // Harmonic bars + tip nodes
+      const tiltBright = Math.max(0, T);
+      const tiltDark = Math.max(0, -T);
+      for (const nd of nodes) {
+        const barH = nd.amp * usableH;
+        const y = top + usableH - barH;
+        const bw = Math.max(2.5, Math.min(8, usableW / (N * 1.05)));
+        const combDim = nd.even ? C : 0;
+        const tipLum = nd.even
+          ? 55 - tiltDark * 35 - combDim * 40
+          : 72 + tiltBright * 22 - combDim * 10;
+        const tipAlpha = nd.even ? 0.35 + (1 - combDim) * 0.45 : 0.65 + tiltBright * 0.3;
+
+        const g = ctx.createLinearGradient(0, y, 0, y + barH);
+        g.addColorStop(0, `hsla(42, 95%, ${tipLum}%, ${tipAlpha})`);
+        g.addColorStop(0.55, `hsla(38, 80%, ${tipLum - 12}%, ${tipAlpha * 0.55})`);
+        g.addColorStop(1, "rgba(255,207,92,0.03)");
+        ctx.fillStyle = g;
+        ctx.fillRect(nd.x - bw / 2, y, bw, barH);
+
+        // Comb notch on even harmonics
+        if (nd.even && C > 0.08) {
+          const notchY = y + barH * 0.35;
+          ctx.fillStyle = `rgba(8,4,2,${0.35 + C * 0.45})`;
+          ctx.fillRect(nd.x - bw / 2 - 0.5, notchY, bw + 1, 2 + C * 2);
+        }
+
+        // Tip node
+        const nodeR = nd.even ? 1.6 + (1 - combDim) * 1.2 : 2.2 + tiltBright * 1.4;
+        const nodeHue = 42 - tiltDark * 18 + tiltBright * 8;
+        ctx.fillStyle = `hsla(${nodeHue}, 90%, ${tipLum + 8}%, ${tipAlpha + 0.15})`;
+        ctx.shadowBlur = nd.even ? 3 + (1 - combDim) * 5 : 6 + tiltBright * 8;
+        ctx.shadowColor = GOLD;
+        ctx.beginPath();
+        ctx.arc(nd.x, y, nodeR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      // Orbiting spark particles along contour
+      if (nodes.length > 2) {
+        const contourLen = nodes.length - 1;
+        for (const sp of sparks) {
+          const u = (sp.phase + sec * sp.speed) % 1;
+          const idx = u * contourLen;
+          const i0 = Math.floor(idx);
+          const i1 = Math.min(i0 + 1, nodes.length - 1);
+          const f = idx - i0;
+          const a = nodes[i0];
+          const b = nodes[i1];
+          const sx = a.x + (b.x - a.x) * f;
+          const sy = a.y + (b.y - a.y) * f;
+          const orbit = 5 + Math.sin(sec * 3 + sp.phase * 12) * 3;
+          const ang = sec * 2.2 + sp.phase * Math.PI * 2;
+          const px = sx + Math.cos(ang) * orbit;
+          const py = sy + Math.sin(ang) * orbit * 0.45;
+          const sg = ctx.createRadialGradient(px, py, 0, px, py, sp.size * 3);
+          sg.addColorStop(0, `rgba(255,240,180,${0.75 + Math.abs(S) * 0.2})`);
+          sg.addColorStop(0.4, `rgba(255,207,92,${0.35})`);
+          sg.addColorStop(1, "rgba(255,207,92,0)");
+          ctx.fillStyle = sg;
+          ctx.beginPath();
+          ctx.arc(px, py, sp.size * 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Soft vignette
+      const vig = ctx.createRadialGradient(W * 0.5, H * 0.48, H * 0.08, W * 0.5, H * 0.5, W * 0.58);
+      vig.addColorStop(0, "rgba(0,0,0,0)");
+      vig.addColorStop(0.72, "rgba(0,0,0,0.12)");
+      vig.addColorStop(1, "rgba(0,0,0,0.52)");
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, W, H);
+
+      // Corner labels
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(255,207,92,0.5)";
+      ctx.fillStyle = "rgba(255,207,92,0.58)";
       ctx.textAlign = "left";
-      ctx.fillText("HARMONIC LATTICE", 10, H - 8);
+      ctx.fillText("HARMONIC FORGE", 10, H - 8);
       ctx.textAlign = "right";
       const bits = [
         Math.abs(S) > 0.02 ? (S > 0 ? "STRETCH+" : "STRETCH−") : null,
         Math.abs(T) > 0.02 ? (T > 0 ? "BRIGHT" : "DARK") : null,
-        C > 0.05 ? "COMB" : null,
+        C > 0.05 ? `COMB ${Math.round(C * 100)}%` : null,
       ].filter(Boolean);
       ctx.fillText(bits.length ? bits.join(" · ") : "NEUTRAL", W - 10, H - 8);
     };
@@ -837,7 +952,7 @@ export function WarpStageViz() {
   }, []);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.32)" height={118}>
+    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.32)" height={WARP_H}>
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );

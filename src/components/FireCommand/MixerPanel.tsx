@@ -35,8 +35,8 @@ const fmtDb = (level: number) =>
 
 type MeterEls = { fill: HTMLDivElement; peak: HTMLDivElement };
 
-/** Signal-flow summing bay — parts feed Master left→right. Display only. */
-function BusFlowViz({
+/** Meter bridge — five equal channel columns that mirror the strips below. */
+function MeterBridge({
   levels,
   live,
 }: {
@@ -49,7 +49,7 @@ function BusFlowViz({
   const liveRef = useRef(live);
   levelsRef.current = levels;
   liveRef.current = live;
-  const sizeRef = useRef({ w: 480, h: 72 });
+  const sizeRef = useRef({ w: 480, h: 88 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -61,7 +61,7 @@ function BusFlowViz({
     const sync = () => {
       const dpr = Math.min(2.5, window.devicePixelRatio || 1);
       const cssW = Math.max(280, Math.floor(wrap.clientWidth));
-      const cssH = 72;
+      const cssH = 88;
       sizeRef.current = { w: cssW, h: cssH };
       canvas.width = Math.floor(cssW * dpr);
       canvas.height = Math.floor(cssH * dpr);
@@ -75,78 +75,111 @@ function BusFlowViz({
 
     let raf = 0;
     let last = 0;
-    const parts: MixerStripId[] = [...MIXER_PARTS];
-    const smooth = new Map<MixerStripId, number>(
-      ([...parts, "master" as const] as MixerStripId[]).map((id) => [id, 0]),
-    );
+    const ids: MixerStripId[] = [...MIXER_PARTS, "master"];
+    const smooth = new Map<MixerStripId, number>(ids.map((id) => [id, 0] as const));
+    const peakHold = new Map<MixerStripId, number>(ids.map((id) => [id, 0] as const));
 
     const draw = (t: number) => {
       raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 33) return;
+      if (document.hidden || t - last < 28) return;
       last = t;
       const { w: W, h: H } = sizeRef.current;
       const lv = levelsRef.current;
       const liv = liveRef.current;
       ctx.clearRect(0, 0, W, H);
 
-      const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, "rgba(255,106,61,0.08)");
-      bg.addColorStop(0.5, "rgba(6,8,12,0.55)");
-      bg.addColorStop(1, "rgba(255,255,255,0.04)");
+      // Dark console plate
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, "rgba(18,14,12,0.95)");
+      bg.addColorStop(1, "rgba(6,6,8,0.98)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
-      const masterX = W - 70;
-      const masterY = H * 0.42;
-      const partY = H * 0.42;
-      const gap = (masterX - 90) / Math.max(1, parts.length - 1);
+      // Top rule
+      ctx.strokeStyle = "rgba(255,106,61,0.22)";
+      ctx.beginPath();
+      ctx.moveTo(8, 1);
+      ctx.lineTo(W - 8, 1);
+      ctx.stroke();
 
-      // Feed lines into master
-      parts.forEach((id, i) => {
+      const padX = 12;
+      const gap = 10;
+      const slotW = (W - padX * 2 - gap * (ids.length - 1)) / ids.length;
+      const meterTop = 14;
+      const meterBot = H - 18;
+      const meterH = meterBot - meterTop;
+      const segs = 16;
+
+      ids.forEach((id, i) => {
         const meta = STRIP_META[id];
-        const target = Math.max(lv[id] ?? 0, liv[id] ?? 0);
+        const fader = Math.max(0, Math.min(1.2, lv[id] ?? 0)) / 1.2;
+        const signal = Math.max(0, Math.min(1, liv[id] ?? 0));
+        const target = Math.max(fader * 0.35, signal);
         const prev = smooth.get(id) ?? 0;
-        const v = prev + (target - prev) * 0.22;
+        const v = prev + (target - prev) * 0.28;
         smooth.set(id, v);
-        const x = 36 + i * gap;
-        ctx.strokeStyle = `${meta.color}${Math.round(40 + v * 140).toString(16).padStart(2, "0")}`;
-        ctx.lineWidth = 1.2 + v * 1.6;
-        ctx.beginPath();
-        ctx.moveTo(x, partY + 10);
-        ctx.quadraticCurveTo((x + masterX) / 2, H * 0.78, masterX - 16, masterY + 4);
-        ctx.stroke();
+        const held = Math.max(v, (peakHold.get(id) ?? 0) * 0.97);
+        peakHold.set(id, held);
 
-        const barH = 10 + v * 22;
-        const g = ctx.createLinearGradient(0, partY - barH, 0, partY + 8);
-        g.addColorStop(0, meta.color);
-        g.addColorStop(1, `${meta.color}22`);
-        ctx.fillStyle = g;
-        ctx.fillRect(x - 10, partY - barH, 20, barH + 8);
-        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        const x = padX + i * (slotW + gap);
+        const isMaster = id === "master";
+
+        // Slot plate
+        ctx.fillStyle = isMaster ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.03)";
+        ctx.fillRect(x, meterTop - 4, slotW, meterH + 8);
+        ctx.strokeStyle = isMaster ? "rgba(255,255,255,0.18)" : `${meta.color}33`;
+        ctx.strokeRect(x + 0.5, meterTop - 3.5, slotW - 1, meterH + 7);
+
+        // Segmented LED meter
+        const barW = Math.min(22, slotW * 0.38);
+        const barX = x + (slotW - barW) / 2;
+        for (let s = 0; s < segs; s++) {
+          const thresh = (s + 1) / segs;
+          const y = meterBot - (s + 1) * (meterH / segs) + 1;
+          const segH = meterH / segs - 2;
+          const on = v >= thresh - 0.02;
+          let col = meta.color;
+          if (thresh > 0.85) col = "#ff5d5d";
+          else if (thresh > 0.7) col = "#ffcf5c";
+          ctx.fillStyle = on ? col : "rgba(255,255,255,0.06)";
+          if (on) {
+            ctx.shadowBlur = 6;
+            ctx.shadowColor = col;
+          }
+          ctx.fillRect(barX, y, barW, segH);
+          ctx.shadowBlur = 0;
+        }
+
+        // Peak tick
+        if (held > 0.02) {
+          const py = meterBot - held * meterH;
+          ctx.fillStyle = "rgba(255,255,255,0.9)";
+          ctx.fillRect(barX - 2, py - 1, barW + 4, 2);
+        }
+
+        // Fader-level ghost (thin line showing trim, not live)
+        const fy = meterBot - fader * meterH;
+        ctx.strokeStyle = `${meta.color}66`;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(barX - 4, fy);
+        ctx.lineTo(barX + barW + 4, fy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = meta.color;
         ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText(meta.short, x, H - 8);
+        ctx.fillText(meta.short, x + slotW / 2, H - 5);
       });
 
-      const mPrev = smooth.get("master") ?? 0;
-      const mTarget = Math.max(lv.master ?? 0, liv.master ?? 0);
-      const mV = mPrev + (mTarget - mPrev) * 0.22;
-      smooth.set("master", mV);
-      const mH = 14 + mV * 26;
-      ctx.fillStyle = `rgba(255,255,255,${0.15 + mV * 0.55})`;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = "rgba(255,255,255,0.4)";
-      ctx.fillRect(masterX - 14, masterY - mH, 28, mH + 10);
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText("MASTER", masterX, H - 8);
-
-      ctx.fillStyle = "rgba(255,106,61,0.45)";
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
       ctx.font = "600 8px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText("PARTS → SUM", 10, 12);
+      ctx.fillText("METER BRIDGE", 12, 11);
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(255,255,255,0.25)";
+      ctx.fillText("solid = live · dashed = fader", W - 12, 11);
     };
 
     raf = requestAnimationFrame(draw);
@@ -159,9 +192,10 @@ function BusFlowViz({
   return (
     <div
       ref={wrapRef}
-      className="relative mb-3 overflow-hidden rounded-xl border border-[#ff6a3d]/22 bg-black/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+      className="relative mb-3 overflow-hidden rounded-xl border border-white/12 bg-black/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+      title="Live meters for each bus — same order as the channel strips below"
     >
-      <canvas ref={canvasRef} className="block w-full" style={{ height: 72 }} aria-hidden />
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 88 }} aria-hidden />
     </div>
   );
 }
@@ -192,7 +226,7 @@ function Strip({
 
   return (
     <div
-      className={`flex min-w-[96px] flex-1 flex-col items-center gap-2 rounded-2xl border px-2.5 py-2.5 ${
+      className={`flex h-full min-w-0 flex-col items-center gap-2 rounded-2xl border px-2 py-2.5 ${
         isMaster
           ? "border-white/25 bg-gradient-to-b from-white/[0.07] to-white/[0.02]"
           : "border-white/10 bg-gradient-to-b from-white/[0.04] to-transparent"
@@ -359,7 +393,7 @@ function SidechainRack() {
 
   return (
     <div
-      className={`flex min-w-[200px] max-w-[240px] flex-col gap-2 rounded-2xl border px-3 py-2.5 transition ${
+      className={`flex h-full min-w-0 flex-col gap-2 rounded-2xl border px-3 py-2.5 transition ${
         duckEnabled
           ? "border-[#ff6a3d]/45 bg-gradient-to-b from-[#ff6a3d]/[0.1] to-transparent shadow-[0_0_20px_rgba(255,106,61,0.12)]"
           : "border-white/10 bg-white/[0.02]"
@@ -531,26 +565,24 @@ export function MixerPanel() {
 
       {!collapsed && (
         <>
-          <BusFlowViz levels={levels} live={liveRef.current} />
+          <MeterBridge levels={levels} live={liveRef.current} />
 
-          <div className="mb-2 flex items-center gap-2 text-[9px] uppercase tracking-[0.18em] text-white/30">
-            <span className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5">Inputs</span>
-            <span className="text-white/15">→</span>
-            <span className="rounded-md border border-white/15 bg-white/[0.05] px-2 py-0.5 text-white/50">Master bus</span>
-            <span className="text-white/15">→</span>
-            <span className="rounded-md border border-[#ff6a3d]/25 bg-[#ff6a3d]/10 px-2 py-0.5 text-[#ffbfa0]">Kill-Chain</span>
+          <div className="mb-2 grid grid-cols-5 gap-1 text-center text-[8px] uppercase tracking-[0.16em] text-white/30">
+            <span>Synth A</span>
+            <span>Synth B</span>
+            <span>Drums</span>
+            <span>Samples</span>
+            <span className="text-white/50">Master</span>
           </div>
 
-          <div className="flex flex-wrap items-stretch gap-2.5">
-            {([...MIXER_PARTS] as MixerStripId[]).map((id) => (
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+            {([...MIXER_PARTS, "master"] as MixerStripId[]).map((id) => (
               <Strip key={id} id={id} registerMeter={registerMeter} />
             ))}
-            <div className="hidden w-px self-stretch bg-white/10 sm:block" aria-hidden />
-            <Strip id="master" registerMeter={registerMeter} />
             <SidechainRack />
           </div>
           <div className="mt-2.5 text-center text-[10px] text-dim">
-            Console deck — A/B/Drums/Samples feed Master · meters are live RMS/peak · sidechain pumps A+B.
+            Five equal buses + sidechain — meter bridge matches strip order · solid LEDs = live · dashed = fader trim.
           </div>
         </>
       )}
