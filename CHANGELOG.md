@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.5.6] — 2026-07-26 — Symmetry + Stage Depth
+
+### Changed
+- **Symmetrical controls** — Fire Command knob rows use even Delay/Reverb-style spacing across Oscillators, Unison, Filter, Envelopes, LFOs, FM·Ring, Pitch, Warp, and Performance
+- **Fire Mixer meter bridge** — clear five-channel LED meters (A/B/Drums/Samples/Master) matching strip order; confusing flow viz removed
+- **Deeper stages** — Morph Pad trails/ripples, Output/OSC depth plates, Harmonic Forge Warp, richer Unison/Filter/Env/LFO/FM/Pitch personalities. Display only
+
 ## [2.5.5] — 2026-07-26 — Core Stages + Lit Collapse
 
 ### Changed
