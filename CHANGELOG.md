@@ -2,6 +2,12 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.0] — 2026-07-26 — Natural Selection + Drum Bay
+
+### Changed
+- **Natural Selection mutate** — evolution bay UI (helix, Mild→Wild pressure, Gen, rival A/B cards, Keep winner / Extinct). Breeding math unchanged
+- **Drum bay** — step grids stretch full width (no dead void); plated Drum Bay / Sample Deck; fixed tools rail. Layout only — sequencing unchanged
+
 ## [2.5.9] — 2026-07-26 — Piano Roll Fit + Sequencer Symmetry
 
 ### Changed
