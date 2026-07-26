@@ -2,6 +2,12 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.1] — 2026-07-26 — Armory Deploy + Patch Bar Symmetry
+
+### Changed
+- **Armory Deploy** — Randomize twin pod with tumbling dice, category Scope, spin-then-land, last-hit readout
+- **Patch bar** — balanced three-bay layout: Patch · Generative (Deploy + Natural Selection) · Studio. Layout only
+
 ## [2.6.0] — 2026-07-26 — Natural Selection + Drum Bay
 
 ### Changed
