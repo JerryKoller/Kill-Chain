@@ -2,6 +2,12 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.6.8] — 2026-07-26 — Mission Auth + Boot Splash
+
+### Changed
+- **Mission demos** — rewritten so each pack matches its genre (trap pocket, UK drill slides, warehouse techno 4/4, synthwave chords, beatless ambient, two-step neuro, acid 303, trance offbeat bass, halftime dubstep)
+- **Boot splash** — fire reticle + chain-link core, radar sweep, HUD readouts; same arming timing as the boot sting
+
 ## [2.6.7] — 2026-07-26 — Chrome Hover + Song Clarity + Keyboard
 
 ### Changed
