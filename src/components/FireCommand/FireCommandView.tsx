@@ -31,6 +31,7 @@ import {
 } from "./CoreStageViz";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
+import { FireBand, useFireBandRegister } from "./FireBand";
 import { PresetBrowser } from "./PresetBrowser";
 import { MixerPanel } from "./MixerPanel";
 import { ModPatchGrid } from "./ModPatchGrid";
@@ -378,116 +379,106 @@ export function FireCommandView() {
       {/* Pattern sequencer: piano roll + drum grid */}
       <SequencerPanel />
 
-      {/* ── Everything below the piano roll is collapsible (v2.5.4) ── */}
+      {/* ── Category bands (v2.5.7) — collapsed chips, even open grids ── */}
 
-      {/* Bus mixer + sidechain */}
-      <MixerPanel />
-
-      {/* Patch morph pad */}
-      <FireMorphPad />
-
-      {/* Output stage — wavetable stack + live scope */}
-      <Section title="Output · Scope" color={FIRE} collapseKey="output"
-        right={<VoiceCount />}
-      >
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
-          <div className="rounded-xl border border-[#ff6a3d]/22 bg-gradient-to-b from-[#ff6a3d]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,106,61,0.08)] lg:col-span-1">
-            <WaveDisplay group="a" color={FIRE} />
-          </div>
-          <div className="rounded-xl border border-[#ff9a6b]/22 bg-gradient-to-b from-[#ff9a6b]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,154,107,0.08)] lg:col-span-1">
-            <WaveDisplay group="b" color="#ff9a6b" />
-          </div>
-          <div className="rounded-xl border border-[#ffcf5c]/22 bg-gradient-to-b from-[#ffcf5c]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,207,92,0.08)] lg:col-span-1">
-            <WaveDisplay group="c" color="#ffcf5c" />
-          </div>
-          <div className="rounded-xl border border-[#ff6a3d]/28 bg-gradient-to-b from-[#ff6a3d]/[0.1] to-black/50 p-2 shadow-[0_0_22px_rgba(255,106,61,0.12)] lg:col-span-2">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-widest text-dim">Master Trace</span>
-              <span className="text-[9px] text-white/30">post-synth · pre Kill-Chain</span>
+      <FireBand title="Mix & Output" color={FIRE} bandKey="band.mix" hint="bus · morph · scope · performance">
+        <MixerPanel chipHosted />
+        <FireMorphPad chipHosted />
+        <Section title="Output · Scope" color={FIRE} collapseKey="output" chipHosted right={<VoiceCount />}>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
+            <div className="rounded-xl border border-[#ff6a3d]/22 bg-gradient-to-b from-[#ff6a3d]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,106,61,0.08)] lg:col-span-1">
+              <WaveDisplay group="a" color={FIRE} />
             </div>
-            <Scope />
+            <div className="rounded-xl border border-[#ff9a6b]/22 bg-gradient-to-b from-[#ff9a6b]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,154,107,0.08)] lg:col-span-1">
+              <WaveDisplay group="b" color="#ff9a6b" />
+            </div>
+            <div className="rounded-xl border border-[#ffcf5c]/22 bg-gradient-to-b from-[#ffcf5c]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,207,92,0.08)] lg:col-span-1">
+              <WaveDisplay group="c" color="#ffcf5c" />
+            </div>
+            <div className="rounded-xl border border-[#ff6a3d]/28 bg-gradient-to-b from-[#ff6a3d]/[0.1] to-black/50 p-2 shadow-[0_0_22px_rgba(255,106,61,0.12)] lg:col-span-2">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-widest text-dim">Master Trace</span>
+                <span className="text-[9px] text-white/30">post-synth · pre Kill-Chain</span>
+              </div>
+              <Scope />
+            </div>
           </div>
-        </div>
-        <div className="mt-2 text-center text-[10px] text-dim">
-          Output bay — three wavetable stacks plus the living master trace.
-        </div>
-      </Section>
-
-      {/* Global control strip */}
-      <Section title="Performance" color={FIRE} collapseKey="performance">
-        <PerformanceStageViz />
-        <div className="flex flex-wrap items-center justify-evenly gap-2.5">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] uppercase tracking-widest text-dim">Octave</span>
-            <Stepper onClick={() => shiftOctave(-1)}>−</Stepper>
-            <div className="w-6 text-center font-mono text-sm" style={{ color: FIRE }}>{octave}</div>
-            <Stepper onClick={() => shiftOctave(1)}>+</Stepper>
+          <div className="mt-2 text-center text-[10px] text-dim">
+            Output bay — three wavetable stacks plus the living master trace.
           </div>
-          <Seg<"poly" | "mono">
-            value={mono ? "mono" : "poly"}
-            onChange={(v) => setParam("mono", v === "mono")}
-            options={[{ id: "poly", label: "Poly" }, { id: "mono", label: "Mono" }]}
-          />
-          <HarmonyPicker />
-          <button
-            onClick={() => setRouteThroughFx(!fxOn)}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-              fxOn ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_18px_rgb(var(--c-cyan)/0.3)]" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-            }`}
-            title="Run the synth through the program's EQ/FX chain, or play it raw."
-          >{fxOn ? "● Kill-Chain FX: ON" : "FX: OFF (raw)"}</button>
-          <div className="flex items-center gap-1.5" title="Polyphony cap. Higher = richer chords but more CPU; lower this if audio crackles or drops out.">
-            <span className="text-[10px] uppercase tracking-widest text-dim">Voices</span>
-            <Seg<string>
-              value={String(maxVoices)}
-              onChange={(v) => setMaxVoices(Number(v))}
-              options={[{ id: "6", label: "6" }, { id: "8", label: "8" }, { id: "12", label: "12" }, { id: "16", label: "16" }, { id: "24", label: "24" }, { id: "32", label: "32" }]}
+        </Section>
+        <Section title="Performance" color={FIRE} collapseKey="performance" chipHosted>
+          <PerformanceStageViz />
+          <div className="flex flex-wrap items-center justify-evenly gap-2.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-widest text-dim">Octave</span>
+              <Stepper onClick={() => shiftOctave(-1)}>−</Stepper>
+              <div className="w-6 text-center font-mono text-sm" style={{ color: FIRE }}>{octave}</div>
+              <Stepper onClick={() => shiftOctave(1)}>+</Stepper>
+            </div>
+            <Seg<"poly" | "mono">
+              value={mono ? "mono" : "poly"}
+              onChange={(v) => setParam("mono", v === "mono")}
+              options={[{ id: "poly", label: "Poly" }, { id: "mono", label: "Mono" }]}
             />
+            <HarmonyPicker />
+            <button
+              onClick={() => setRouteThroughFx(!fxOn)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                fxOn ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_18px_rgb(var(--c-cyan)/0.3)]" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
+              }`}
+              title="Run the synth through the program's EQ/FX chain, or play it raw."
+            >{fxOn ? "● Kill-Chain FX: ON" : "FX: OFF (raw)"}</button>
+            <div className="flex items-center gap-1.5" title="Polyphony cap. Higher = richer chords but more CPU; lower this if audio crackles or drops out.">
+              <span className="text-[10px] uppercase tracking-widest text-dim">Voices</span>
+              <Seg<string>
+                value={String(maxVoices)}
+                onChange={(v) => setMaxVoices(Number(v))}
+                options={[{ id: "6", label: "6" }, { id: "8", label: "8" }, { id: "12", label: "12" }, { id: "16", label: "16" }, { id: "24", label: "24" }, { id: "32", label: "32" }]}
+              />
+            </div>
+            <FParamKnob paramKey="masterGain" label="Master" min={0} max={1.2} format={fmtPct} def={0.72} size={38} />
+            <button
+              onClick={() => {
+                useFireSequencerStore.getState().stop();
+                panic();
+              }}
+              className="rounded-lg border border-rose-400/40 bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 transition"
+              title="Stop the sequencer and silence every voice"
+            >✕ Cease Fire</button>
           </div>
-          <FParamKnob paramKey="masterGain" label="Master" min={0} max={1.2} format={fmtPct} def={0.72} size={38} />
-          <button
-            onClick={() => {
-              useFireSequencerStore.getState().stop();
-              panic();
-            }}
-            className="rounded-lg border border-rose-400/40 bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 transition"
-            title="Stop the sequencer and silence every voice"
-          >✕ Cease Fire</button>
-        </div>
-      </Section>
+        </Section>
+      </FireBand>
 
-      {/* OSC A / B / C */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
-        <OscPanel group="a" />
-        <OscPanel group="b" />
-        <OscPanel group="c" />
-      </div>
+      <FireBand title="Sources" color="#ff9a6b" bandKey="band.sources" hint="oscillators · spectral warp">
+        <OscPanel group="a" chipHosted />
+        <OscPanel group="b" chipHosted />
+        <OscPanel group="c" chipHosted />
+        <Section
+          title="Spectral Warp"
+          color="#ffcf5c"
+          collapseKey="fire.sec.warp"
+          chipHosted
+          right={
+            <span className="text-[9px] text-dim normal-case tracking-normal">
+              reshapes harmonics of all three oscillators
+            </span>
+          }
+        >
+          <WarpStageViz />
+          <div className="flex items-center justify-evenly gap-2">
+            <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
+            <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
+            <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color="#ffcf5c" />
+          </div>
+          <div className="mt-2 text-center text-[10px] text-dim">
+            Harmonic forge — Stretch slides partials · Tilt tips bright/dark · Comb notches even harmonics.
+          </div>
+        </Section>
+      </FireBand>
 
-      {/* Spectral warps — gold harmonic lattice */}
-      <Section
-        title="Spectral Warp"
-        color="#ffcf5c"
-        collapseKey="fire.sec.warp"
-        right={
-          <span className="text-[9px] text-dim normal-case tracking-normal">
-            reshapes harmonics of all three oscillators
-          </span>
-        }
-      >
-        <WarpStageViz />
-        <div className="flex items-center justify-evenly gap-2">
-          <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
-          <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
-          <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color="#ffcf5c" />
-        </div>
-        <div className="mt-2 text-center text-[10px] text-dim">
-          Harmonic forge — Stretch slides partials · Tilt tips bright/dark · Comb notches even harmonics.
-        </div>
-      </Section>
-
-      {/* Mixer/Unison + Filter */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-        <Section title="Mixer · Unison" color={FIRE} collapseKey="mixer.unison" right={
+      <FireBand title="Tone" color={FIRE} bandKey="band.tone" hint="unison · filter · envelopes">
+        <Section title="Mixer · Unison" color={FIRE} collapseKey="mixer.unison" chipHosted right={
           <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
         }>
           <UnisonStageViz />
@@ -503,7 +494,7 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Voice fan — sub/noise rails below, detuned copies across the stereo field.</div>
         </Section>
-        <Section title="Filter" color={FIRE} collapseKey="filter" right={
+        <Section title="Filter" color={FIRE} collapseKey="filter" chipHosted right={
           <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
         }>
           <FilterStageViz />
@@ -516,31 +507,26 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Frequency bay — response curve tracks type, cutoff, resonance and env push.</div>
         </Section>
-      </div>
-
-      {/* Envelopes */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-        <Section title="Amp Envelope" color={GRN} collapseKey="env.amp" right={<LpgToggle />}>
+        <Section title="Amp Envelope" color={GRN} collapseKey="env.amp" chipHosted right={<LpgToggle />}>
           <AmpEnvStageViz />
           <LpgAwareAmpRow />
         </Section>
-        <Section title="Mod Envelope → Morph" color="#9be564" collapseKey="env.mod">
+        <Section title="Mod Envelope → Morph" color="#9be564" collapseKey="env.mod" chipHosted>
           <ModEnvStageViz />
           <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" color="#9be564" />
           <div className="mt-1.5 text-center text-[10px] text-dim">Morph pulse — shapes wavetable travel over the note.</div>
         </Section>
-        <Section title="Filter Envelope" color="#5ce0a0" collapseKey="env.filt">
+        <Section title="Filter Envelope" color="#5ce0a0" collapseKey="env.filt" chipHosted>
           <FiltEnvStageViz />
           <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" color="#5ce0a0" />
           <div className="mt-1.5 text-center text-[10px] text-dim">Cutoff sweep — opens and closes the filter over time.</div>
         </Section>
-      </div>
+      </FireBand>
 
-      {/* LFOs + FM/Ring + Pitch/Glide */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
-        <LfoPanel idx={1} />
-        <LfoPanel idx={2} />
-        <Section title="FM · Ring" color={FIRE} collapseKey="fm">
+      <FireBand title="Modulation" color={ICE} bandKey="band.mod" hint="lfos · fm · pitch · matrix · arp">
+        <LfoPanel idx={1} chipHosted />
+        <LfoPanel idx={2} chipHosted />
+        <Section title="FM · Ring" color={FIRE} collapseKey="fm" chipHosted>
           <FmRingStageViz />
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} />
@@ -551,7 +537,7 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">FM lattice + ring beat — ratio spokes, sidebands, metallic chew.</div>
         </Section>
-        <Section title="Pitch · Glide" color={FIRE} collapseKey="pitch">
+        <Section title="Pitch · Glide" color={FIRE} collapseKey="pitch" chipHosted>
           <PitchGlideStageViz />
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
@@ -560,11 +546,12 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Pitch rail — envelope ramp left, portamento trail right (Mono).</div>
         </Section>
-      </div>
+        <ModMatrixPanel chipHosted />
+        <ArpPanel arp={arp} setArp={setArp} chipHosted />
+      </FireBand>
 
-      {/* FX stages — each with its own visual personality (v2.5.3) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
-        <Section title="Drive · Punch" color={FIRE} collapseKey="fx.drive" right={
+      <FireBand title="FX" color="#e070ff" bandKey="band.fx" hint="drive through spectral">
+        <Section title="Drive · Punch" color={FIRE} collapseKey="fx.drive" chipHosted right={
           <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
         }>
           <DriveStageViz />
@@ -576,7 +563,7 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Magma forge — transfer curve left, living sine crushed right.</div>
         </Section>
-        <Section title="Phaser" color="#e070ff" collapseKey="fx.phaser">
+        <Section title="Phaser" color="#e070ff" collapseKey="fx.phaser" chipHosted>
           <PhaserStageViz />
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} color="#e070ff" />
@@ -585,7 +572,7 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Sweep notches crawl the spectrum — mix brings them in.</div>
         </Section>
-        <Section title="Chorus" color="#5ce0c8" collapseKey="fx.chorus">
+        <Section title="Chorus" color="#5ce0c8" collapseKey="fx.chorus" chipHosted>
           <ChorusStageViz />
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} color="#5ce0c8" />
@@ -594,7 +581,7 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Ensemble shimmer — detuned voices breathe around the dry signal.</div>
         </Section>
-        <Section title="Delay (Ping-Pong)" color={ICE} collapseKey="fx.delay">
+        <Section title="Delay (Ping-Pong)" color={ICE} collapseKey="fx.delay" chipHosted>
           <DelayStageViz />
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="delayTime" label="Time" min={0.01} max={1.5} curve="log" format={fmtSec} def={0.28} color={ICE} />
@@ -603,7 +590,7 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Ping-pong corridor — echoes bounce L↔R and decay with feedback.</div>
         </Section>
-        <Section title="Reverb" color="#a8b4ff" collapseKey="fx.reverb">
+        <Section title="Reverb" color="#a8b4ff" collapseKey="fx.reverb" chipHosted>
           <ReverbStageViz />
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} color="#a8b4ff" />
@@ -611,16 +598,13 @@ export function FireCommandView() {
           </div>
           <div className="mt-1.5 text-center text-[10px] text-dim">Room bloom — impulse rings expand with Size, denser with Mix.</div>
         </Section>
-        <SpectralPanel />
-      </div>
+        <SpectralPanel chipHosted />
+      </FireBand>
 
-      {/* Less-used sections — collapsible, folded away by default */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-        <MacrosPanel />
-        <GatePanel />
-      </div>
-      <ModMatrixPanel />
-      <ArpPanel arp={arp} setArp={setArp} />
+      <FireBand title="Performance Tools" color="#ffb35c" bandKey="band.perf" hint="macros · trance gate" defaultCollapsed>
+        <MacrosPanel chipHosted />
+        <GatePanel chipHosted />
+      </FireBand>
 
       {/* Keyboard */}
       {keyboardMinimized ? (
@@ -1538,7 +1522,7 @@ function ArpModeGlyph({ mode, active }: { mode: ArpMode; active: boolean }) {
 
 // ════════════════════ osc panel ════════════════════
 
-function OscPanel({ group }: { group: "a" | "b" | "c" }) {
+function OscPanel({ group, chipHosted = false }: { group: "a" | "b" | "c"; chipHosted?: boolean }) {
   const cap = group.toUpperCase();
   const tableKey = `osc${cap}Table` as keyof FirePatch;
   const posKey = `osc${cap}Pos` as NumericKey;
@@ -1551,7 +1535,13 @@ function OscPanel({ group }: { group: "a" | "b" | "c" }) {
   const defOct = group === "c" ? -1 : 0;
   const color = group === "a" ? FIRE : group === "b" ? "#ff9a6b" : "#ffcf5c";
   return (
-    <Section title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`} color={color} collapseKey={`osc.${group}`} right={<TableSelect paramKey={tableKey} />}>
+    <Section
+      title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`}
+      color={color}
+      collapseKey={`osc.${group}`}
+      chipHosted={chipHosted}
+      right={<TableSelect paramKey={tableKey} />}
+    >
       <OscStageViz group={group} color={color} />
       <div className="flex items-center justify-evenly gap-1">
         <FParamKnob paramKey={posKey} label="Morph" min={0} max={1} format={fmtPct} def={group === "a" ? 0.66 : 0.4} size={46} />
@@ -1565,13 +1555,13 @@ function OscPanel({ group }: { group: "a" | "b" | "c" }) {
   );
 }
 
-function LfoPanel({ idx }: { idx: 1 | 2 }) {
+function LfoPanel({ idx, chipHosted = false }: { idx: 1 | 2; chipHosted?: boolean }) {
   const waveKey = `lfo${idx}Wave` as keyof FirePatch;
   const destKey = `lfo${idx}Dest` as keyof FirePatch;
   const rateKey = `lfo${idx}Rate` as NumericKey;
   const depthKey = `lfo${idx}Depth` as NumericKey;
   return (
-    <Section title={`LFO ${idx}`} color={ICE} collapseKey={`lfo.${idx}`} right={<FLfoWave paramKey={waveKey} />}>
+    <Section title={`LFO ${idx}`} color={ICE} collapseKey={`lfo.${idx}`} chipHosted={chipHosted} right={<FLfoWave paramKey={waveKey} />}>
       <LfoStageViz idx={idx} />
       <div className="mb-2 flex justify-center">
         <FSeg<LfoDest>
@@ -1777,12 +1767,12 @@ function MacroClusterViz() {
   );
 }
 
-function MacrosPanel() {
+function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const wired = (key: typeof MACRO_KEYS[number]) =>
     matrix.filter((r) => r.source === key && r.dest !== "none").map((r) => r.dest);
   return (
-    <Section title="Macros" color="#ffb35c" collapseKey="macros" defaultCollapsed>
+    <Section title="Macros" color="#ffb35c" collapseKey="macros" defaultCollapsed chipHosted={chipHosted}>
       <MacroClusterViz />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {MACRO_KEYS.map((key, i) => {
@@ -2009,7 +1999,7 @@ function GateChopViz({
   );
 }
 
-function GatePanel() {
+function GatePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const on = useFireCommandStore((s) => s.patch.gateOn);
   const pattern = useFireCommandStore((s) => s.patch.gatePattern);
   const steps = useFireCommandStore((s) => s.patch.gateSteps);
@@ -2031,7 +2021,7 @@ function GatePanel() {
     setPattern(pattern.map((_, i) => pattern[(i - dir + n) % n]));
   };
   return (
-    <Section title="Trance Gate" color={ICE} collapseKey="gate" defaultCollapsed right={
+    <Section title="Trance Gate" color={ICE} collapseKey="gate" defaultCollapsed chipHosted={chipHosted} right={
       <button
         onClick={() => setParam("gateOn", !on)}
         className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${on ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_14px_rgb(98_182_255/0.35)]" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
@@ -2114,7 +2104,7 @@ const MOD_DEST_OPTS: { id: ModDest; label: string }[] = [
 ];
 const SELECT_CLS = "bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-xs text-white/85 focus:outline-none focus:border-[#7cf6b0]/60 cursor-pointer";
 
-function ModMatrixPanel() {
+function ModMatrixPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const setModRoute = useFireCommandStore((s) => s.setModRoute);
   const [view, setView] = useState<"grid" | "list">(() =>
@@ -2130,6 +2120,7 @@ function ModMatrixPanel() {
       color={GRN}
       collapseKey="matrix"
       defaultCollapsed
+      chipHosted={chipHosted}
       right={
         <Seg<"grid" | "list">
           value={view}
@@ -2198,7 +2189,7 @@ function ModMatrixRows({
 
 // ════════════════════ arp panel ════════════════════
 
-function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSettings>) => void }) {
+function ArpPanel({ arp, setArp, chipHosted = false }: { arp: ArpSettings; setArp: (p: Partial<ArpSettings>) => void; chipHosted?: boolean }) {
   const modes: { id: ArpMode; label: string }[] = [
     { id: "up", label: "Up" }, { id: "down", label: "Dn" },
     { id: "updown", label: "Up/Dn" }, { id: "downup", label: "Dn/Up" },
@@ -2213,7 +2204,7 @@ function ArpPanel({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSe
         : "border-white/10 bg-white/[0.03] text-white/50 hover:border-white/20 hover:bg-white/[0.06] hover:text-white/80"
     }`;
   return (
-    <Section title="Arpeggiator" color={FIRE} collapseKey="arp" defaultCollapsed right={
+    <Section title="Arpeggiator" color={FIRE} collapseKey="arp" defaultCollapsed chipHosted={chipHosted} right={
       <button
         onClick={() => setArp({ hold: !arp.hold })}
         className={`rounded-lg border px-3 py-1 text-xs font-medium transition ${arp.hold ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_12px_rgb(34_211_238/0.25)]" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
@@ -2535,7 +2526,7 @@ function HarmonyPicker() {
  */
 const SPECTRAL_VIOLET = "#c98bff";
 
-function SpectralPanel() {
+function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const mode = useFireCommandStore((s) => s.patch.spectralMode);
   const setParam = useFireCommandStore((s) => s.setParam);
   const m = mode ?? "off";
@@ -2545,6 +2536,7 @@ function SpectralPanel() {
       title="Spectral"
       color={SPECTRAL_VIOLET}
       collapseKey="fx.spectral"
+      chipHosted={chipHosted}
       right={
         <Seg<SpectralMode>
           value={m}
@@ -2694,12 +2686,18 @@ function useCollapsed(key: string | undefined, def: boolean): [boolean, () => vo
   return useFireCollapsed(key, def);
 }
 
-function Section({ title, color = FIRE, right, children, className, collapseKey, defaultCollapsed = false }: {
+function Section({ title, color = FIRE, right, children, className, collapseKey, defaultCollapsed = false, chipHosted = false }: {
   title: string; color?: string; right?: React.ReactNode; children: React.ReactNode; className?: string;
   /** When set, the section header toggles fold state (persisted under this key). */
   collapseKey?: string; defaultCollapsed?: boolean;
+  /** When true inside a FireBand, collapsed sections disappear (chips show instead). */
+  chipHosted?: boolean;
 }) {
   const [collapsed, toggle] = useCollapsed(collapseKey, defaultCollapsed);
+  useFireBandRegister(collapseKey, title, color, collapsed, toggle, !!chipHosted && !!collapseKey);
+
+  if (chipHosted && collapseKey && collapsed) return null;
+
   return (
     <GlassPanel className={`p-2.5 ${className ?? ""}`}>
       <div className={`flex items-center justify-between gap-2 ${collapsed ? "" : "mb-2"}`}>

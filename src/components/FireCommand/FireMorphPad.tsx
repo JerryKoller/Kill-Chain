@@ -12,6 +12,8 @@ import { useFireCommandStore, FIRE_PRESETS } from "@/state/fireCommandStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { pushFireHistory } from "@/lib/fireHistory";
 import { CollapseToggle } from "./CollapseToggle";
+import { useFireCollapsed } from "./useFireCollapsed";
+import { useFireBandRegister } from "./FireBand";
 
 const CORNERS = ["a", "b", "c", "d"] as const;
 type Corner = (typeof CORNERS)[number];
@@ -88,9 +90,11 @@ function morphPatches(
   return out;
 }
 
-export function FireMorphPad() {
+export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const [persisted] = useState(loadPersist);
-  const [open, setOpen] = useState(persisted.open);
+  const [collapsed, toggle] = useFireCollapsed("morph", !persisted.open);
+  useFireBandRegister("morph", "Morph Pad", FIRE, collapsed, toggle, chipHosted);
+  const open = !collapsed;
   const [cornerIds, setCornerIds] = useState(persisted.cornerIds);
   const [pos, setPos] = useState({ x: 0.5, y: 0.5 });
   const [isDragging, setIsDragging] = useState(false);
@@ -164,12 +168,12 @@ export function FireMorphPad() {
   const setCorner = (c: Corner, id: string) => {
     const next = { ...cornerIds, [c]: id };
     setCornerIds(next);
-    savePersist({ cornerIds: next, open });
+    savePersist({ cornerIds: next, open: !collapsed });
   };
 
   const toggleOpen = () => {
-    setOpen(!open);
-    savePersist({ cornerIds, open: !open });
+    toggle();
+    savePersist({ cornerIds, open: collapsed }); // after toggle, open becomes current collapsed
   };
 
   const w = bilinear(pos.x, pos.y);
@@ -239,6 +243,8 @@ export function FireMorphPad() {
       trailRef.current = [];
     };
   }, [open]);
+
+  if (chipHosted && collapsed) return null;
 
   return (
     <GlassPanel className="p-3">

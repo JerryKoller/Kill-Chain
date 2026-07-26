@@ -16,6 +16,7 @@ import {
 } from "@/state/fireSequencerStore";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
+import { useFireBandRegister } from "./FireBand";
 
 const FIRE = "#ff6a3d";
 const ICE = "#62b6ff";
@@ -456,8 +457,9 @@ function SidechainRack() {
   );
 }
 
-export function MixerPanel() {
+export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const [collapsed, toggle] = useFireCollapsed("mixer", false);
+  useFireBandRegister("mixer", "Fire Mixer", FIRE, collapsed, toggle, chipHosted);
   const fireLimiterOn = useFireSequencerStore((s) => s.fireLimiterOn);
   const setFireLimiterOn = useFireSequencerStore((s) => s.setFireLimiterOn);
   const mixer = useFireSequencerStore((s) => s.mixer);
@@ -532,6 +534,8 @@ export function MixerPanel() {
       }
     };
   }, []);
+
+  if (chipHosted && collapsed) return null;
 
   return (
     <GlassPanel intense className="p-3">
