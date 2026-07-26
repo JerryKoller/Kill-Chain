@@ -724,3 +724,121 @@ export function SpectralStageViz() {
     </StageFrame>
   );
 }
+
+const GOLD = "#ffcf5c";
+
+/** Spectral Warp — gold harmonic lattice reshaped by Stretch / Tilt / Comb. */
+export function WarpStageViz() {
+  const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
+  const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
+  const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const sizeRef = useRef({ w: 400, h: 110 });
+  const st = useRef({ stretch, tilt, comb });
+  st.current = { stretch, tilt, comb };
+  useHiDpiCanvas(wrapRef, canvasRef, 110, sizeRef);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 22) return;
+      last = t;
+      const { w: W, h: H } = sizeRef.current;
+      const { stretch: S, tilt: T, comb: C } = st.current;
+      ctx.clearRect(0, 0, W, H);
+
+      const bg = ctx.createLinearGradient(0, 0, W, H);
+      bg.addColorStop(0, "rgba(255,207,92,0.10)");
+      bg.addColorStop(0.5, "rgba(14,10,4,0.55)");
+      bg.addColorStop(1, "rgba(255,106,61,0.05)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      // Soft harmonic guide lines
+      ctx.strokeStyle = "rgba(255,207,92,0.06)";
+      for (let i = 1; i <= 5; i++) {
+        const y = (H / 6) * i;
+        ctx.beginPath(); ctx.moveTo(8, y); ctx.lineTo(W - 8, y); ctx.stroke();
+      }
+
+      const N = 32;
+      const PAD = 14;
+      const usableW = W - PAD * 2;
+      const usableH = H - 28;
+      const breath = 0.92 + 0.08 * Math.sin(t / 900);
+
+      // Contour ribbon through tips
+      ctx.beginPath();
+      for (let n = 1; n <= N; n++) {
+        let amp = 1 / n;
+        amp *= Math.pow(n / 8, -T * 1.25);
+        if (n % 2 === 0) amp *= 1 - C * 0.9;
+        amp = Math.min(1, Math.max(0.02, amp)) * breath;
+        const posN = n * (1 + S * 0.65 * ((n - 1) / N));
+        const x = PAD + ((posN - 1) / (N * 1.55)) * usableW;
+        const y = 12 + (1 - amp) * usableH;
+        if (n === 1) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = `rgba(255,207,92,${0.35 + Math.abs(S) * 0.25})`;
+      ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = GOLD;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      for (let n = 1; n <= N; n++) {
+        let amp = 1 / n;
+        amp *= Math.pow(n / 8, -T * 1.25);
+        if (n % 2 === 0) amp *= 1 - C * 0.9;
+        amp = Math.min(1, Math.max(0.02, amp)) * breath;
+        const posN = n * (1 + S * 0.65 * ((n - 1) / N));
+        const x = PAD + ((posN - 1) / (N * 1.55)) * usableW;
+        if (x > W - PAD) continue;
+        const barH = amp * usableH;
+        const y = 12 + usableH - barH;
+        const even = n % 2 === 0;
+        const g = ctx.createLinearGradient(0, y, 0, y + barH);
+        g.addColorStop(0, even ? `rgba(255,180,80,${0.55})` : `rgba(255,220,120,${0.9})`);
+        g.addColorStop(1, "rgba(255,207,92,0.05)");
+        ctx.fillStyle = g;
+        const bw = Math.max(2.5, Math.min(7, usableW / (N * 1.2)));
+        ctx.fillRect(x - bw / 2, y, bw, barH);
+
+        // Tip glow
+        ctx.fillStyle = even && C > 0.2 ? `rgba(255,140,60,${0.4})` : GOLD;
+        ctx.beginPath();
+        ctx.arc(x, y, even ? 1.8 : 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(255,207,92,0.5)";
+      ctx.textAlign = "left";
+      ctx.fillText("HARMONIC LATTICE", 10, H - 8);
+      ctx.textAlign = "right";
+      const bits = [
+        Math.abs(S) > 0.02 ? (S > 0 ? "STRETCH+" : "STRETCH−") : null,
+        Math.abs(T) > 0.02 ? (T > 0 ? "BRIGHT" : "DARK") : null,
+        C > 0.05 ? "COMB" : null,
+      ].filter(Boolean);
+      ctx.fillText(bits.length ? bits.join(" · ") : "NEUTRAL", W - 10, H - 8);
+    };
+
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <StageFrame wrapRef={wrapRef} border="rgba(255,207,92,0.25)" height={110}>
+      <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
+    </StageFrame>
+  );
+}

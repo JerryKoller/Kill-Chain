@@ -16,7 +16,8 @@ import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
-import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz } from "./FxStageViz";
+import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz, WarpStageViz } from "./FxStageViz";
+import { useFireCollapsed } from "./useFireCollapsed";
 import { PresetBrowser } from "./PresetBrowser";
 import { MixerPanel } from "./MixerPanel";
 import { ModPatchGrid } from "./ModPatchGrid";
@@ -364,34 +365,43 @@ export function FireCommandView() {
       {/* Pattern sequencer: piano roll + drum grid */}
       <SequencerPanel />
 
-      {/* Bus mixer + sidechain (v1.6) */}
+      {/* ── Everything below the piano roll is collapsible (v2.5.4) ── */}
+
+      {/* Bus mixer + sidechain */}
       <MixerPanel />
 
-      {/* Patch morph pad (v1.6) */}
+      {/* Patch morph pad */}
       <FireMorphPad />
 
-      {/* HERO: wavetable displays + scope */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
-        <GlassPanel intense className="p-2 lg:col-span-1">
-          <WaveDisplay group="a" color={FIRE} />
-        </GlassPanel>
-        <GlassPanel intense className="p-2 lg:col-span-1">
-          <WaveDisplay group="b" color="#ff9a6b" />
-        </GlassPanel>
-        <GlassPanel intense className="p-2 lg:col-span-1">
-          <WaveDisplay group="c" color="#ffcf5c" />
-        </GlassPanel>
-        <GlassPanel intense className="p-2 lg:col-span-2">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[10px] uppercase tracking-widest text-dim">Output</span>
-            <VoiceCount />
+      {/* Output stage — wavetable stack + live scope */}
+      <Section title="Output · Scope" color={FIRE} collapseKey="output"
+        right={<VoiceCount />}
+      >
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+          <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2 lg:col-span-1">
+            <WaveDisplay group="a" color={FIRE} />
           </div>
-          <Scope />
-        </GlassPanel>
-      </div>
+          <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2 lg:col-span-1">
+            <WaveDisplay group="b" color="#ff9a6b" />
+          </div>
+          <div className="rounded-xl border border-white/[0.06] bg-black/30 p-2 lg:col-span-1">
+            <WaveDisplay group="c" color="#ffcf5c" />
+          </div>
+          <div className="rounded-xl border border-[#ff6a3d]/20 bg-black/40 p-2 lg:col-span-2">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-widest text-dim">Master Trace</span>
+              <span className="text-[9px] text-white/30">post-synth · pre Kill-Chain</span>
+            </div>
+            <Scope />
+          </div>
+        </div>
+        <div className="mt-2 text-center text-[10px] text-dim">
+          Output stage — three wavetable stacks plus the living master trace.
+        </div>
+      </Section>
 
       {/* Global control strip */}
-      <GlassPanel className="p-2">
+      <Section title="Performance" color={FIRE} collapseKey="performance">
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-widest text-dim">Octave</span>
@@ -432,7 +442,7 @@ export function FireCommandView() {
             title="Stop the sequencer and silence every voice"
           >✕ Cease Fire</button>
         </div>
-      </GlassPanel>
+      </Section>
 
       {/* OSC A / B / C */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
@@ -441,28 +451,31 @@ export function FireCommandView() {
         <OscPanel group="c" />
       </div>
 
-      {/* Spectral warps (v1.7): Razor-style harmonic reshaping of all 3 oscs */}
+      {/* Spectral warps — gold harmonic lattice */}
       <Section
         title="Spectral Warp"
         color="#ffcf5c"
         collapseKey="fire.sec.warp"
         right={
           <span className="text-[9px] text-dim normal-case tracking-normal">
-            reshapes the harmonics of all three wavetable oscillators
+            reshapes harmonics of all three oscillators
           </span>
         }
       >
-        <WarpViz />
-        <KnobRow>
+        <WarpStageViz />
+        <div className="flex items-center justify-evenly gap-2">
           <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
           <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color="#ffcf5c" />
           <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color="#ffcf5c" />
-        </KnobRow>
+        </div>
+        <div className="mt-2 text-center text-[10px] text-dim">
+          Gold lattice — Stretch slides partials, Tilt tips bright/dark, Comb notches even harmonics.
+        </div>
       </Section>
 
       {/* Mixer/Unison + Filter */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-        <Section title="Mixer · Unison" color={FIRE} right={
+        <Section title="Mixer · Unison" color={FIRE} collapseKey="mixer.unison" right={
           <FSeg<SubWave> paramKey="subWave" options={[{ id: "sine", label: "Sin" }, { id: "triangle", label: "Tri" }, { id: "square", label: "Sqr" }, { id: "sawtooth", label: "Saw" }]} />
         }>
           <KnobRow>
@@ -477,7 +490,7 @@ export function FireCommandView() {
             <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} />
           </KnobRow>
         </Section>
-        <Section title="Filter" color={FIRE} right={
+        <Section title="Filter" color={FIRE} collapseKey="filter" right={
           <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
         }>
           <FilterCurveViz />
@@ -493,14 +506,14 @@ export function FireCommandView() {
 
       {/* Envelopes */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-        <Section title="Amp Envelope" color={GRN} right={<LpgToggle />}>
+        <Section title="Amp Envelope" color={GRN} collapseKey="env.amp" right={<LpgToggle />}>
           <LpgAwareAmpRow />
         </Section>
-        <Section title="Mod Envelope → Morph" color={GRN}>
+        <Section title="Mod Envelope → Morph" color={GRN} collapseKey="env.mod">
           <EnvGraph a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
           <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" />
         </Section>
-        <Section title="Filter Envelope" color={GRN}>
+        <Section title="Filter Envelope" color={GRN} collapseKey="env.filt">
           <EnvGraph a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" />
           <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" />
         </Section>
@@ -510,7 +523,7 @@ export function FireCommandView() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
         <LfoPanel idx={1} />
         <LfoPanel idx={2} />
-        <Section title="FM · Ring" color={FIRE}>
+        <Section title="FM · Ring" color={FIRE} collapseKey="fm">
           <KnobRow>
             <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} />
             <FParamKnob paramKey="fmRatio" label="FM Ratio" min={0.5} max={12} curve="log" format={fmtRatio} def={2} />
@@ -519,7 +532,7 @@ export function FireCommandView() {
             <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} />
           </KnobRow>
         </Section>
-        <Section title="Pitch · Glide" color={FIRE}>
+        <Section title="Pitch · Glide" color={FIRE} collapseKey="pitch">
           <KnobRow>
             <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
             <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} color={GRN} />
@@ -715,16 +728,34 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
 
 function Scope() {
   const ref = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const canvas = ref.current;
-    if (!canvas) return;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     let raf = 0;
     let lastTick = 0;
     let idleCleared = false;
     let buf: Uint8Array<ArrayBuffer> | null = null;
-    const MIN_INTERVAL = 28; // ~36 fps — smooth trace without pegging a core
+    const size = { w: 520, h: 100 };
+
+    const sync = () => {
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      size.w = Math.max(200, Math.floor(wrap.clientWidth));
+      size.h = 100;
+      canvas.width = Math.floor(size.w * dpr);
+      canvas.height = Math.floor(size.h * dpr);
+      canvas.style.width = `${size.w}px`;
+      canvas.style.height = `${size.h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(wrap);
+
+    const MIN_INTERVAL = 22;
     const draw = (nowMs: number) => {
       raf = requestAnimationFrame(draw);
       if (document.hidden) return;
@@ -733,28 +764,69 @@ function Scope() {
       let analyser: AnalyserNode | null = null;
       let running = false;
       try { const e = getEngine(); analyser = e.analyserPost; running = e.ctx.state === "running"; } catch { analyser = null; }
-      const w = canvas.width;
-      const h = canvas.height;
-      // While the context is suspended (nothing playing) the trace is a flat
-      // line — clear it once and stop doing per-frame analyser reads + paints.
+      const w = size.w;
+      const h = size.h;
       if (!analyser || !running) {
-        if (!idleCleared) { ctx.clearRect(0, 0, w, h); idleCleared = true; }
+        if (!idleCleared) {
+          ctx.clearRect(0, 0, w, h);
+          const bg = ctx.createLinearGradient(0, 0, w, h);
+          bg.addColorStop(0, "rgba(255,106,61,0.04)");
+          bg.addColorStop(1, "rgba(0,0,0,0.3)");
+          ctx.fillStyle = bg;
+          ctx.fillRect(0, 0, w, h);
+          ctx.strokeStyle = "rgba(255,255,255,0.06)";
+          ctx.beginPath();
+          ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2);
+          ctx.stroke();
+          idleCleared = true;
+        }
         return;
       }
       idleCleared = false;
       ctx.clearRect(0, 0, w, h);
+
+      const bg = ctx.createLinearGradient(0, 0, w, h);
+      bg.addColorStop(0, "rgba(255,106,61,0.07)");
+      bg.addColorStop(0.5, "rgba(8,6,4,0.45)");
+      bg.addColorStop(1, "rgba(98,182,255,0.04)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.beginPath();
+      ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2);
+      ctx.stroke();
+
       if (!buf || buf.length !== analyser.fftSize) buf = new Uint8Array(analyser.fftSize);
       analyser.getByteTimeDomainData(buf);
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = FIRE;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = FIRE;
-      ctx.beginPath();
       const N = buf.length;
+
+      // Fill under the trace
+      ctx.beginPath();
+      ctx.moveTo(0, h / 2);
       for (let i = 0; i < N; i++) {
         const x = (i / (N - 1)) * w;
         const v = (buf[i] - 128) / 128;
-        const y = h / 2 - v * (h / 2) * 0.9;
+        const y = h / 2 - v * (h / 2) * 0.88;
+        ctx.lineTo(x, y);
+      }
+      ctx.lineTo(w, h / 2);
+      ctx.closePath();
+      const fill = ctx.createLinearGradient(0, 0, 0, h);
+      fill.addColorStop(0, "rgba(255,106,61,0.22)");
+      fill.addColorStop(1, "rgba(255,106,61,0)");
+      ctx.fillStyle = fill;
+      ctx.fill();
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = FIRE;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = FIRE;
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const x = (i / (N - 1)) * w;
+        const v = (buf[i] - 128) / 128;
+        const y = h / 2 - v * (h / 2) * 0.88;
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
@@ -762,9 +834,16 @@ function Scope() {
       ctx.shadowBlur = 0;
     };
     raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, []);
-  return <canvas ref={ref} width={520} height={88} className="w-full h-[88px] rounded-lg bg-black/40" />;
+  return (
+    <div ref={wrapRef} className="overflow-hidden rounded-lg border border-[#ff6a3d]/15 bg-black/40">
+      <canvas ref={ref} className="block w-full" style={{ height: 100 }} />
+    </div>
+  );
 }
 
 function VoiceCount() {
@@ -952,44 +1031,6 @@ function FilterCurveViz() {
       ))}
       <polyline points={pts.join(" ")} fill="none" stroke={FIRE} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 3px ${FIRE}88)` }} />
       <line x1={xOf(Math.max(fLo, Math.min(fHi, cutoff)))} y1={PAD} x2={xOf(Math.max(fLo, Math.min(fHi, cutoff)))} y2={H - PAD} stroke={`${FIRE}55`} strokeDasharray="2 3" />
-    </svg>
-  );
-}
-
-/** Spectral-warp harmonic bars — what Stretch/Tilt/Comb do to the partials. */
-function WarpViz() {
-  const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
-  const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
-  const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
-  const GOLD = "#ffcf5c";
-  const W = 220, H = 44, PAD = 3;
-  const N = 24;
-  const bars = [];
-  for (let n = 1; n <= N; n++) {
-    let h = 1 / n; // saw-ish spectrum
-    h *= Math.pow(n / 6, -tilt * 1.2); // tilt: brighten or darken
-    if (n % 2 === 0) h *= 1 - comb * 0.9; // comb: notch even partials
-    h = Math.min(1, Math.max(0.015, h));
-    // stretch: partials slide apart (up) or squash (down)
-    const posN = n * (1 + stretch * 0.6 * ((n - 1) / N));
-    const x = PAD + ((posN - 1) / (N * 1.6)) * (W - PAD * 2);
-    if (x > W - PAD) continue;
-    bars.push(
-      <rect
-        key={n}
-        x={x}
-        y={PAD + (1 - h) * (H - PAD * 2)}
-        width={3}
-        height={h * (H - PAD * 2)}
-        rx={1}
-        fill={n % 2 === 0 ? `${GOLD}88` : GOLD}
-        style={{ transition: "all 120ms ease" }}
-      />,
-    );
-  }
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
-      {bars}
     </svg>
   );
 }
@@ -1410,7 +1451,7 @@ function OscPanel({ group }: { group: "a" | "b" | "c" }) {
   const defLevel = group === "a" ? 0.75 : group === "b" ? 0.5 : 0;
   const defOct = group === "c" ? -1 : 0;
   return (
-    <Section title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`} color={FIRE} right={<TableSelect paramKey={tableKey} />}>
+    <Section title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`} color={FIRE} collapseKey={`osc.${group}`} right={<TableSelect paramKey={tableKey} />}>
       <KnobRow>
         <FParamKnob paramKey={posKey} label="Morph" min={0} max={1} format={fmtPct} def={group === "a" ? 0.66 : 0.4} size={46} />
         <FParamKnob paramKey={envKey} label="Env→WT" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
@@ -1430,7 +1471,7 @@ function LfoPanel({ idx }: { idx: 1 | 2 }) {
   const rateKey = `lfo${idx}Rate` as NumericKey;
   const depthKey = `lfo${idx}Depth` as NumericKey;
   return (
-    <Section title={`LFO ${idx}`} color={ICE} right={<FLfoWave paramKey={waveKey} />}>
+    <Section title={`LFO ${idx}`} color={ICE} collapseKey={`lfo.${idx}`} right={<FLfoWave paramKey={waveKey} />}>
       <LfoScope idx={idx} />
       <div className="mb-2">
         <FSeg<LfoDest>
@@ -2549,27 +2590,8 @@ function AdsrRow({ a, d, s, r }: { a: NumericKey; d: NumericKey; s: NumericKey; 
 
 // ════════════════════ primitives ════════════════════
 
-/**
- * Per-section fold state, persisted to localStorage so the layout the user
- * arranges survives reloads. Key-less callers get a plain never-collapsed
- * section (hook is still called unconditionally to satisfy hook rules).
- */
 function useCollapsed(key: string | undefined, def: boolean): [boolean, () => void] {
-  const storage = key ? `killchain.firecmd.fold.${key}` : null;
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (!storage) return false;
-    try {
-      const raw = window.localStorage.getItem(storage);
-      return raw === null ? def : raw === "1";
-    } catch { return def; }
-  });
-  const toggle = useCallback(() => {
-    setCollapsed((c) => {
-      if (storage) { try { window.localStorage.setItem(storage, c ? "0" : "1"); } catch { /* ignore */ } }
-      return !c;
-    });
-  }, [storage]);
-  return [collapsed, toggle];
+  return useFireCollapsed(key, def);
 }
 
 function Section({ title, color = FIRE, right, children, className, collapseKey, defaultCollapsed = false }: {
