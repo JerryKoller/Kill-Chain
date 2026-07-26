@@ -2,6 +2,22 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [2.7.1] — 2026-07-26 — Splash Sync · Missions Punch · Fire Perf/UX
+
+### Fixed
+- **Boot splash sync** — reveal and drop visuals gated on actual audio start (preload + sink during black lead-in); hit pulses for contact / radar / arming / drop
+- **Dubstep Sortie** — dry aggressive wobble (was resonance+fuzz+reverb mush); neuro growl dried out too
+
+### Performance
+- **Mod timer** — clears when idle ~5s; restarts on note/patch
+- **Morph pad** — live scrub updates engine only (no Zustand/structuredClone until release)
+- **Sequencer** — notes-by-step index (WeakMap) instead of scanning all notes every step
+- **Drum kit** — disconnect synth-hit nodes on end (less GC)
+- **Dev boot** — no longer eager-loads the ~1000-preset Fire Command bank
+
+### Changed
+- **Fire Command UX** — bands follow signal flow (Sources→…→Mix); slim header; Missions button; Patch Library; Solo labeling; Command Map collapsed by default; Esc exits solo; mixer strips + sidechain row; stripped decorative captions
+
 ## [2.6.10] — 2026-07-26 — Missions That Hit + Splash Bite
 
 ### Fixed
