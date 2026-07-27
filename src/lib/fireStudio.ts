@@ -18,12 +18,18 @@
  */
 
 import { getEngine, type FireMixPart } from "@/audio/AudioEngine";
-import { useFireCommandStore } from "@/state/fireCommandStore";
+import { FireCommandSynth } from "@/audio/dsp/FireCommandSynth";
+import { FireDrumKit, makeSafetyClipCurve, SAFETY_CLIP_RANGE, DRUM_LANES } from "@/audio/dsp/FireDrumKit";
+import { useFireCommandStore, slotsFromState } from "@/state/fireCommandStore";
 import {
   useFireSequencerStore,
   serializePattern,
   songTotalSteps,
   STEPS_PER_BAR,
+  scheduleFirePass,
+  peekSampleBuffer,
+  loadSampleBuffer,
+  MIXER_PARTS,
 } from "@/state/fireSequencerStore";
 
 const PROJECT_VERSION = 2;
@@ -225,24 +231,181 @@ async function recordOnePass(
 
 // ── Pattern / song export ───────────────────────────────────────────────────
 
+function copyBufferTo(ctx: BaseAudioContext, src: AudioBuffer): AudioBuffer {
+  const dst = ctx.createBuffer(src.numberOfChannels, src.length, src.sampleRate);
+  for (let c = 0; c < src.numberOfChannels; c++) {
+    dst.copyToChannel(src.getChannelData(c), c);
+  }
+  return dst;
+}
+
 /**
- * Record one pass (section or whole song, per play mode) and save it via
- * the OS dialog as WAV or MP3. Returns the saved path, or null.
+ * Dry Fire bounce on OfflineAudioContext (A/B/drums/samples + mixer → destination).
+ * Does not run the Kill-Chain mastering chain.
  */
-export async function exportPatternWav(
+async function offlineDryBounce(
   onProgress?: (p: ExportProgress) => void,
-  format: ExportFormat = "wav",
-): Promise<string | null> {
-  const files = window.playground?.files;
-  if (!files) return null;
+): Promise<{ left: Float32Array; right: Float32Array; sampleRate: number; totalSec: number; song: boolean }> {
+  const live = getEngine();
+  const sr = live.ctx.sampleRate || 48000;
+  const seq = useFireSequencerStore.getState();
+  const { totalSec, song } = passSeconds();
+
+  // Prefetch any sample paths so the offline kit can copy them.
+  const paths = new Set<string>();
+  for (const sl of seq.samples) if (sl.path) paths.add(sl.path);
+  for (const lane of DRUM_LANES) {
+    const hit = seq.drumSamples[lane.id];
+    if (hit?.path) paths.add(hit.path);
+  }
+  await Promise.all([...paths].map((p) => loadSampleBuffer(p)));
+
+  const frames = Math.max(1, Math.ceil(totalSec * sr));
+  const octx = new OfflineAudioContext(2, frames, sr);
+
+  const fireBus = octx.createGain();
+  const fireMasterGain = octx.createGain();
+  const fireLimiter = octx.createDynamicsCompressor();
+  fireLimiter.threshold.value = -3.0;
+  fireLimiter.knee.value = 0;
+  fireLimiter.ratio.value = 20;
+  fireLimiter.attack.value = 0.002;
+  fireLimiter.release.value = 0.08;
+  const fireBusPad = octx.createGain();
+  fireBusPad.gain.value = 1 / SAFETY_CLIP_RANGE;
+  const fireBusClip = octx.createWaveShaper();
+  fireBusClip.curve = makeSafetyClipCurve();
+  fireBusClip.oversample = "2x";
+  fireBus.connect(fireMasterGain);
+  fireMasterGain.connect(fireLimiter);
+  fireLimiter.connect(fireBusPad);
+  fireBusPad.connect(fireBusClip).connect(octx.destination);
+
+  const mkPart = () => {
+    const gain = octx.createGain();
+    const pan = octx.createStereoPanner();
+    gain.connect(pan);
+    return { gain, pan };
+  };
+  const parts = { a: mkPart(), b: mkPart(), drums: mkPart(), samples: mkPart() };
+  const fireDuck = octx.createGain();
+  parts.a.pan.connect(fireDuck);
+  fireDuck.connect(fireBus);
+  parts.b.pan.connect(fireBus);
+  parts.drums.pan.connect(fireBus);
+  parts.samples.pan.connect(fireBus);
+
+  const fireCommand = new FireCommandSynth(octx, parts.a.gain);
+  fireCommand.offlineSafe = true;
+  const fireCommandB = new FireCommandSynth(octx, parts.b.gain);
+  fireCommandB.offlineSafe = true;
+  const fireDrums = new FireDrumKit(octx, parts.drums.gain, parts.samples.gain);
+
+  const fire = useFireCommandStore.getState();
+  const { patchA, patchB } = slotsFromState(fire);
+  fireCommand.setPatch(patchA);
+  fireCommandB.setPatch(patchB);
+  fireCommand.setMaxVoices(fire.maxVoices);
+  fireCommandB.setMaxVoices(fire.maxVoices);
+
+  // Mixer levels (immediate — offline clock starts at 0).
+  const anySolo = MIXER_PARTS.some((p) => seq.mixer[p].solo);
+  for (const p of MIXER_PARTS) {
+    const m = seq.mixer[p];
+    const muted = m.mute || (anySolo && !m.solo);
+    parts[p].gain.gain.value = muted ? 0 : Math.max(0, Math.min(1.5, m.level));
+    parts[p].pan.pan.value = Math.max(-1, Math.min(1, m.pan));
+  }
+  fireMasterGain.gain.value = seq.mixer.master.mute
+    ? 0
+    : Math.max(0, Math.min(1.5, seq.mixer.master.level));
+  if (!seq.fireLimiterOn) {
+    // Bypass: wire master gain straight to pad (keep graph simple — zero the compressor by high threshold).
+    fireLimiter.threshold.value = 0;
+    fireLimiter.ratio.value = 1;
+  }
+  fireDrums.setLevel(seq.drumLevel);
+
+  // Copy drum overrides + sample-deck buffers into the offline kit.
+  for (const lane of DRUM_LANES) {
+    const hit = seq.drumSamples[lane.id];
+    if (!hit?.path) continue;
+    const src = peekSampleBuffer(hit.path);
+    if (src) fireDrums.setSample(lane.id, copyBufferTo(octx, src));
+  }
+  // Sample deck paths are looked up at schedule time via peekSampleBuffer on the
+  // live cache — copy into a path→offline buffer map used by a thin wrapper.
+  const offlineSampleByPath = new Map<string, AudioBuffer>();
+  for (const sl of seq.samples) {
+    if (!sl.path) continue;
+    const src = peekSampleBuffer(sl.path);
+    if (src) offlineSampleByPath.set(sl.path, copyBufferTo(octx, src));
+  }
+
+  const duck = (when: number, amount: number, releaseSec: number) => {
+    const g = fireDuck.gain;
+    const t = Math.max(0, when);
+    const dip = Math.max(0.02, 1 - Math.max(0, Math.min(1, amount)));
+    const gg = g as AudioParam & { cancelAndHoldAtTime?: (at: number) => void };
+    if (typeof gg.cancelAndHoldAtTime === "function") gg.cancelAndHoldAtTime(t);
+    else g.cancelScheduledValues(t);
+    g.setValueAtTime(dip, t);
+    g.linearRampToValueAtTime(1, t + Math.max(0.02, releaseSec));
+  };
+
+  onProgress?.({ stage: song ? "Offline bounce (song)…" : "Offline bounce…", fraction: 0.15 });
+
+  // Wrap drums so sample-deck playBuffer uses offline-copied buffers.
+  const drumsProxy = {
+    trigger: (lane: (typeof DRUM_LANES)[number]["id"], when: number, velocity?: number) =>
+      fireDrums.trigger(lane, when, velocity),
+    playBuffer: (
+      buffer: AudioBuffer,
+      when: number,
+      velocity?: number,
+      level?: number,
+      toSampleBus?: boolean,
+    ) => {
+      // Prefer offline copy when the live buffer was passed from the sequencer cache.
+      let buf = buffer;
+      for (const [path, offlineBuf] of offlineSampleByPath) {
+        const live = peekSampleBuffer(path);
+        if (live === buffer) { buf = offlineBuf; break; }
+      }
+      fireDrums.playBuffer(buf, when, velocity, level, toSampleBus);
+    },
+  };
+
+  scheduleFirePass(
+    seq,
+    {
+      fireCommand,
+      fireCommandB,
+      fireDrums: drumsProxy,
+      fireDuckTrigger: duck,
+    },
+    0.05,
+    1.6,
+  );
+
+  onProgress?.({ stage: "Rendering…", fraction: 0.45 });
+  const rendered = await octx.startRendering();
+  const left = rendered.getChannelData(0).slice();
+  const right = rendered.numberOfChannels > 1
+    ? rendered.getChannelData(1).slice()
+    : left.slice();
+  return { left, right, sampleRate: sr, totalSec, song };
+}
+
+async function realtimeDryCapture(
+  onProgress?: (p: ExportProgress) => void,
+): Promise<{ left: Float32Array; right: Float32Array; sampleRate: number; totalSec: number; song: boolean }> {
   const engine = getEngine();
   await engine.resume();
   const ctx = engine.ctx;
-
   const { totalSec, song } = passSeconds();
   let recording = false;
   const rec = attachRecorder(ctx, engine.fireTap, () => recording);
-
   try {
     await recordOnePass(
       totalSec,
@@ -253,30 +416,58 @@ export async function exportPatternWav(
   } finally {
     rec.detach();
   }
+  const { left, right } = joined(rec);
+  return { left, right, sampleRate: ctx.sampleRate, totalSec, song };
+}
+
+export type ExportMethod = "offline" | "realtime";
+
+/**
+ * Bounce one pass (section or whole song) and save via the OS dialog.
+ * Prefers OfflineAudioContext dry Fire bounce; falls back to real-time capture.
+ */
+export async function exportPatternWav(
+  onProgress?: (p: ExportProgress) => void,
+  format: ExportFormat = "wav",
+): Promise<{ path: string | null; method: ExportMethod } | null> {
+  const files = window.playground?.files;
+  if (!files) return null;
+
+  let method: ExportMethod = "offline";
+  let audio: Awaited<ReturnType<typeof offlineDryBounce>>;
+  try {
+    audio = await offlineDryBounce(onProgress);
+  } catch (err) {
+    console.warn("[fireStudio] offline bounce failed, falling back to realtime:", err);
+    method = "realtime";
+    onProgress?.({ stage: "Realtime fallback…", fraction: 0.05 });
+    audio = await realtimeDryCapture(onProgress);
+  }
+
+  const { left, right, sampleRate, totalSec, song } = audio;
+  if (left.length === 0) return { path: null, method };
+
+  const first = firstAudibleFrame(left, right, sampleRate);
+  const want = Math.min(left.length - first, Math.round(totalSec * sampleRate));
+  if (want < sampleRate * 0.2) return { path: null, method };
 
   onProgress?.({ stage: format === "mp3" ? "Encoding MP3…" : "Encoding WAV…", fraction: 0.9 });
-  const { left, right } = joined(rec);
-  if (left.length === 0) return null;
-
-  const first = firstAudibleFrame(left, right, ctx.sampleRate);
-  const want = Math.min(left.length - first, Math.round(totalSec * ctx.sampleRate));
-  if (want < ctx.sampleRate * 0.2) return null; // recorded silence
-
   const data = await encodeAs(
     format,
     left.subarray(first, first + want),
     right.subarray(first, first + want),
-    ctx.sampleRate,
+    sampleRate,
   );
   onProgress?.({ stage: "Saving…", fraction: 0.97 });
   const base = song ? "kill-chain-arrangement" : "kill-chain-pattern";
-  return files.save(
+  const path = await files.save(
     `${base}.${format}`,
     [format === "mp3"
       ? { name: "MP3 audio", extensions: ["mp3"] }
       : { name: "WAV audio", extensions: ["wav"] }],
     toBase64(data),
   );
+  return { path, method };
 }
 
 // ── Chain-aware stems export (v1.6) ─────────────────────────────────────────
@@ -372,12 +563,16 @@ export async function exportStems(
 export async function saveProject(): Promise<string | null> {
   const files = window.playground?.files;
   if (!files) return null;
+  const { slotsFromState } = await import("@/state/fireCommandStore");
   const fire = useFireCommandStore.getState();
+  const { patchA, patchB } = slotsFromState(fire);
   const project = {
     kind: "kill-chain-project",
     version: PROJECT_VERSION,
     savedAt: new Date().toISOString(),
-    patch: fire.patch,
+    patch: patchA,
+    patchB,
+    presetIdB: fire.presetIdB,
     arp: fire.arp,
     // Full arrangement: sections (with the live edits folded in), clips,
     // play mode, lanes, scale — everything the loader needs.
@@ -403,6 +598,8 @@ export async function openProject(): Promise<{ ok: boolean; error?: string }> {
     const data = JSON.parse(res.text) as {
       kind?: string;
       patch?: unknown;
+      patchB?: unknown;
+      presetIdB?: string;
       arp?: unknown;
       pattern?: unknown;
     };
@@ -410,6 +607,16 @@ export async function openProject(): Promise<{ ok: boolean; error?: string }> {
       return { ok: false, error: "Not a Kill-Chain project file." };
     }
     if (data.patch) useFireCommandStore.getState().importPatch(data.patch, data.arp);
+    if (data.patchB) {
+      useFireCommandStore.getState().importPatchB(data.patchB, data.presetIdB);
+    } else if (data.pattern && typeof data.pattern === "object") {
+      const pid = (data.pattern as { synthBPresetId?: string }).synthBPresetId;
+      if (typeof pid === "string") {
+        const { FIRE_PRESETS } = await import("@/state/fireCommandStore");
+        const preset = FIRE_PRESETS.find((p) => p.id === pid);
+        if (preset) useFireCommandStore.getState().importPatchB(preset.patch, pid);
+      }
+    }
     if (data.pattern) useFireSequencerStore.getState().importPattern(data.pattern);
     return { ok: true };
   } catch {
@@ -420,9 +627,12 @@ export async function openProject(): Promise<{ ok: boolean; error?: string }> {
 /** Load a project payload directly (mission packs / templates). */
 export function loadProjectData(data: {
   patch?: unknown;
+  patchB?: unknown;
+  presetIdB?: string;
   arp?: unknown;
   pattern?: unknown;
 }): void {
   if (data.patch) useFireCommandStore.getState().importPatch(data.patch, data.arp);
+  if (data.patchB) useFireCommandStore.getState().importPatchB(data.patchB, data.presetIdB);
   if (data.pattern) useFireSequencerStore.getState().importPattern(data.pattern);
 }

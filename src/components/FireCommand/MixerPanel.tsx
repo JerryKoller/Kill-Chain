@@ -27,7 +27,7 @@ const AMB = "#ffcf5c";
 
 const STRIP_META: Record<MixerStripId, { label: string; short: string; color: string; hint: string }> = {
   a: { label: "SYNTH A", short: "A", color: FIRE, hint: "Playable Fire Command synth" },
-  b: { label: "SYNTH B", short: "B", color: ICE, hint: "Second instrument (preset-voiced)" },
+  b: { label: "SYNTH B", short: "B", color: ICE, hint: "Second instrument (editable rack)" },
   drums: { label: "DRUMS", short: "DRM", color: GRN, hint: "Synthesized drum kit" },
   samples: { label: "SAMPLES", short: "SMP", color: AMB, hint: "Sample deck lanes" },
   master: { label: "MASTER", short: "MST", color: "#ffffff", hint: "Summed Fire output (pre Kill-Chain FX)" },

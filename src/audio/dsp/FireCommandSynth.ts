@@ -913,7 +913,9 @@ class Voice {
       // them, it just schedules cleanup once the vactrol has fully closed.
       const decay = clamp(p.lpgDecay ?? 0.4, 0.05, 2.5);
       const tail = (t - now) + decay * 4 + 0.15;
-      this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
+      if (!this.synth.offlineSafe) {
+        this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
+      }
       return;
     }
     const rel = Math.max(0.01, p.ampRelease);
@@ -934,7 +936,9 @@ class Voice {
     hold(this.filterEnv.offset);
     this.filterEnv.offset.setTargetAtTime(0, t, Math.max(0.01, p.filtRelease) / 4);
     const tail = (t - now) + rel * 4 + 0.15;
-    this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
+    if (!this.synth.offlineSafe) {
+      this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
+    }
   }
 
   /** Quick click-free fade then stop — used when stealing a voice. */
@@ -1116,6 +1120,7 @@ export class FireCommandSynth {
   readonly output: GainNode;
   readonly lfo1: LfoBank;
   readonly lfo2: LfoBank;
+  private readonly ctx: AudioContext;
 
   // bus
   private readonly voiceBus: GainNode;
@@ -1235,7 +1240,12 @@ export class FireCommandSynth {
   displayPosB = 0;
   displayPosC = 0;
 
-  constructor(private readonly ctx: AudioContext, dest: AudioNode) {
+  /** Skip wall-clock voice GC / mod interval — required for OfflineAudioContext bounce. */
+  offlineSafe = false;
+
+  constructor(ctxIn: BaseAudioContext, dest: AudioNode) {
+    const ctx = ctxIn as AudioContext;
+    this.ctx = ctx;
     this.patch = { ...DEFAULT_FIRE_PATCH };
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
 
@@ -1458,11 +1468,11 @@ export class FireCommandSynth {
     this.applyBusParams(this.patch);
     this.applyLfoParams(this.patch);
     this.applySpectral(this.patch);
-
-    this.startModTimer();
+    // Mod timer starts on first note (playNote / noteOn) — keeps OfflineAudioContext quiet.
   }
 
   private startModTimer(): void {
+    if (this.offlineSafe) return;
     if (this.modTimer) return;
     this.idleFrames = 0;
     this.modTimer = setInterval(this.updateMod, 1000 / 60);

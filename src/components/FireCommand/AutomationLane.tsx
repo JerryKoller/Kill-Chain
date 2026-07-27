@@ -43,9 +43,30 @@ export function AutomationLane() {
   const setPoint = useFireSequencerStore((s) => s.setAutomationPoint);
   const clearLane = useFireSequencerStore((s) => s.clearAutomationLane);
 
-  const [open, setOpen] = useState(false);
+  const lanesWithData = AUTO_PARAMS.filter((d) => automation[d.id]).length;
+  const [open, setOpen] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      if (window.localStorage.getItem("killchain.fire.autoOpen") === "1") return true;
+    } catch { /* ignore */ }
+    return false;
+  });
   const [param, setParam] = useState<AutoParamId>("cutoff");
   const [hover, setHover] = useState<string | null>(null);
+
+  // Open when any lane has data, or once on first Sequencer visit.
+  useEffect(() => {
+    if (lanesWithData > 0) {
+      setOpen(true);
+      return;
+    }
+    try {
+      if (window.localStorage.getItem("killchain.fire.autoOpen") !== "1") {
+        setOpen(true);
+        window.localStorage.setItem("killchain.fire.autoOpen", "1");
+      }
+    } catch { /* ignore */ }
+  }, [lanesWithData]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
@@ -55,7 +76,9 @@ export function AutomationLane() {
   const { cellW: stepW, gridW, gutter, fitMode } = useRollFit();
   const totalSteps = bars * STEPS_PER_BAR;
   const def = AUTO_PARAMS.find((d) => d.id === param)!;
-  const lanesWithData = AUTO_PARAMS.filter((d) => automation[d.id]).length;
+
+  // Collapsed Cutoff preview sparkline (normalized points).
+  const cutoffPreview = automation.cutoff ?? null;
 
   // ── draw ──
   useEffect(() => {
@@ -213,7 +236,7 @@ export function AutomationLane() {
         <button
           onClick={() => setOpen(!open)}
           className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.25em] text-dim hover:text-white/70 transition"
-          title="Automation: draw knob movement on the timeline — cutoff sweeps, morphs, FX sends. Per-section, plays back on Synth A."
+          title="Automation: draw knob movement on the timeline — cutoff sweeps, morphs, FX sends. Per-section, plays back on Synth A. Live engine only — restores to the patch on stop."
         >
           <span>{open ? "▾" : "▸"} Automation</span>
           {lanesWithData > 0 && (
@@ -222,6 +245,34 @@ export function AutomationLane() {
             </span>
           )}
         </button>
+        {!open && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="flex items-center gap-2 min-w-0 flex-1 text-left"
+            title="Open automation — draw cutoff motion"
+          >
+            <span className="text-[10px] text-white/40 normal-case tracking-normal shrink-0">
+              {cutoffPreview ? "Cutoff motion" : "draw motion"}
+            </span>
+            <svg
+              width="120"
+              height="14"
+              viewBox="0 0 120 14"
+              className="opacity-80"
+              aria-hidden
+            >
+              <path
+                d={cutoffSparkPath(cutoffPreview, totalSteps)}
+                fill="none"
+                stroke="rgba(255,140,60,0.85)"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
         {open && (
           <>
             <div className="w-px h-4 bg-white/10 mx-0.5" />
@@ -247,6 +298,9 @@ export function AutomationLane() {
               </button>
             ))}
             <span className="flex-1" />
+            <span className="text-[9px] text-white/30 normal-case tracking-normal" title="Automation drives the live engine; the patch restores on stop">
+              live → restores on stop
+            </span>
             {hover && <span className="text-[10px] font-mono text-white/45">{hover}</span>}
             {automation[param] && (
               <button
@@ -294,4 +348,22 @@ export function AutomationLane() {
       )}
     </div>
   );
+}
+
+function cutoffSparkPath(arr: (number | null)[] | null | undefined, totalSteps: number): string {
+  const w = 120;
+  const h = 14;
+  if (!arr || arr.length === 0) {
+    // Gentle invitation curve when empty
+    return `M 2 ${h * 0.65} Q ${w * 0.35} ${h * 0.2}, ${w * 0.55} ${h * 0.55} T ${w - 2} ${h * 0.4}`;
+  }
+  const pts: string[] = [];
+  const n = Math.max(totalSteps, arr.length);
+  for (let i = 0; i < n; i++) {
+    const v = autoValueAt(arr, i);
+    const y = v == null ? h * 0.5 : (1 - clamp(v, 0, 1)) * (h - 4) + 2;
+    const x = (i / Math.max(1, n - 1)) * (w - 4) + 2;
+    pts.push(`${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`);
+  }
+  return pts.join(" ");
 }

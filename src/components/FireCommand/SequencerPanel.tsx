@@ -178,11 +178,16 @@ export const SequencerPanel = memo(function SequencerPanel({
     }
     setExporting("arming…");
     try {
-      const path = await exportPatternWav(
+      const res = await exportPatternWav(
         (p) => setExporting(`${p.stage} ${Math.round(p.fraction * 100)}%`),
         exportFormat,
       );
-      toast(path ? `Exported → ${path.split(/[\\/]/).pop()}` : "Export cancelled");
+      if (!res?.path) {
+        toast(res ? "Export cancelled" : "Export unavailable");
+        return;
+      }
+      const how = res.method === "offline" ? "offline bounce" : "realtime capture";
+      toast(`Exported (${how}) → ${res.path.split(/[\\/]/).pop()}`);
     } catch {
       toast("Export failed");
     } finally {
@@ -534,7 +539,11 @@ export const SequencerPanel = memo(function SequencerPanel({
                         ? { background: "rgba(255,255,255,0.1)", color: ch === 0 ? FIRE : ICE }
                         : { color: "rgba(255,255,255,0.4)" }
                     }
-                    title={ch === 0 ? "Draw Synth A (orange)" : "Draw Synth B (blue)"}
+                    title={
+                      ch === 0
+                        ? "Draw Synth A (orange) — also focuses the Synth rack on A"
+                        : "Draw Synth B (blue) — also focuses the Synth rack on B"
+                    }
                   >
                     Draw {ch === 0 ? "A" : "B"}
                   </button>
@@ -544,7 +553,7 @@ export const SequencerPanel = memo(function SequencerPanel({
                 value={synthBPresetId}
                 onChange={(e) => setSynthBPresetId(e.target.value)}
                 className="max-w-[160px] h-8 rounded-lg border border-white/12 bg-black/40 px-2 text-[11px] text-white/85 outline-none focus:border-[#62b6ff]/60"
-                title="Synth B voice preset"
+                title="Load a factory preset into Synth B (editable in the Synth rack when Edit B is on)"
                 style={{ color: synthBEnabled ? ICE : undefined }}
               >
                 {presetGroups.map((g) => (
@@ -560,17 +569,38 @@ export const SequencerPanel = memo(function SequencerPanel({
         </div>
 
         <div className="flex items-center justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={() => void doSaveProject()}
+            className="h-8 px-3 rounded-lg text-[11px] font-semibold border border-white/10 text-white/70 hover:text-white hover:border-white/25 transition"
+            title="Save project (.kcproj)"
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={() => void doExportWav()}
+            disabled={!!exporting}
+            className={`h-8 px-3 rounded-lg text-[11px] font-semibold border transition disabled:opacity-50 ${
+              exporting
+                ? "border-cyan/50 bg-cyan/10 text-cyan"
+                : "border-cyan/35 bg-cyan/10 text-cyan hover:border-cyan/55"
+            }`}
+            title={playMode === "arrangement" ? "Export arrangement (dry Fire bounce)" : "Export pattern (dry Fire bounce)"}
+          >
+            {exporting ?? (playMode === "arrangement" ? "Export song" : "Export")}
+          </button>
           <div className="relative">
             <button
               onClick={() => setFileMenuOpen((v) => !v)}
               className={`h-8 px-3 rounded-lg text-[11px] font-semibold border transition ${
-                fileMenuOpen || exporting
+                fileMenuOpen
                   ? "border-cyan/50 bg-cyan/10 text-cyan"
                   : "border-white/10 text-white/55 hover:text-white/85 hover:border-white/25"
               }`}
-              title="Open, save, export"
+              title="Open project, format, stems"
             >
-              {exporting ?? "File ▾"}
+              File ▾
             </button>
             {fileMenuOpen && (
               <>
@@ -585,10 +615,6 @@ export const SequencerPanel = memo(function SequencerPanel({
                     onClick={() => { setFileMenuOpen(false); void doOpenProject(); }}
                     className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-white/70 hover:bg-white/8 hover:text-white transition"
                   >Open project…</button>
-                  <button
-                    onClick={() => { setFileMenuOpen(false); void doSaveProject(); }}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-white/70 hover:bg-white/8 hover:text-white transition"
-                  >Save project…</button>
                   <div className="h-px bg-white/8 my-0.5" />
                   <div className="flex items-center gap-1 px-2 py-1">
                     <span className="text-[9px] uppercase tracking-wider text-white/35">Format</span>
@@ -601,11 +627,6 @@ export const SequencerPanel = memo(function SequencerPanel({
                       <option value="mp3">MP3</option>
                     </select>
                   </div>
-                  <button
-                    onClick={() => { setFileMenuOpen(false); void doExportWav(); }}
-                    disabled={!!exporting}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-cyan/90 hover:bg-cyan/10 transition disabled:opacity-40"
-                  >{playMode === "arrangement" ? "Export arrangement…" : "Export…"}</button>
                   <button
                     onClick={() => { setFileMenuOpen(false); void doExportStems(); }}
                     disabled={!!exporting}

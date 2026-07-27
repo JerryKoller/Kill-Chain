@@ -136,6 +136,9 @@ function StudioBay() {
 
 export function FireCommandView() {
   const presetId = useFireCommandStore((s) => s.presetId);
+  const presetIdB = useFireCommandStore((s) => s.presetIdB);
+  const editTarget = useFireCommandStore((s) => s.editTarget);
+  const setEditTarget = useFireCommandStore((s) => s.setEditTarget);
   const octave = useFireCommandStore((s) => s.octave);
   const mono = useFireCommandStore((s) => s.patch.mono);
   const arp = useFireCommandStore((s) => s.arp);
@@ -170,12 +173,13 @@ export function FireCommandView() {
     scrollFireCommandTop("smooth");
   }, [setSynthBandRaw]);
 
+  const activePresetId = editTarget === "b" ? presetIdB : presetId;
   const currentName =
-    presetId === "custom"
-      ? "Custom"
-      : FIRE_PRESETS.find((p) => p.id === presetId)?.name ??
-        userPresets.find((p) => p.id === presetId)?.name ??
-        "Custom";
+    activePresetId === "custom"
+      ? (editTarget === "b" ? "Custom B" : "Custom")
+      : FIRE_PRESETS.find((p) => p.id === activePresetId)?.name ??
+        userPresets.find((p) => p.id === activePresetId)?.name ??
+        (editTarget === "b" ? "Synth B" : "Custom");
 
   // Prev/Next patch cycling — walks factory bank then user presets, wrapping
   // at the ends. From "Custom" it re-enters the bank at the start.
@@ -184,14 +188,17 @@ export function FireCommandView() {
       const s = useFireCommandStore.getState();
       const ids = [...FIRE_PRESETS.map((p) => p.id), ...s.userPresets.map((p) => p.id)];
       if (ids.length === 0) return;
-      const cur = ids.indexOf(s.presetId);
+      const curId = s.editTarget === "b" ? s.presetIdB : s.presetId;
+      const cur = ids.indexOf(curId);
       const next = cur === -1
         ? (dir === 1 ? 0 : ids.length - 1)
         : (cur + dir + ids.length) % ids.length;
       s.loadPreset(ids[next]);
       const all = [...FIRE_PRESETS, ...s.userPresets];
-      const p = all[next];
-      useUIStore.getState().toast(`♪ ${p.name}${"category" in p ? ` · ${(p as { category?: string }).category ?? ""}` : ""}`);
+      const p = all.find((x) => x.id === ids[next]) ?? all[next];
+      useUIStore.getState().toast(
+        `♪ ${p.name}${s.editTarget === "b" ? " → B" : ""}${"category" in p ? ` · ${(p as { category?: string }).category ?? ""}` : ""}`,
+      );
     },
     [],
   );
@@ -320,7 +327,30 @@ export function FireCommandView() {
           <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px]">
             <div className="flex items-center gap-2">
               <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Patch</span>
-              <span className="text-[9px] text-white/25 truncate">browse · characters · init</span>
+              <div className="inline-flex rounded-md border border-white/12 bg-black/30 p-0.5">
+                {(["a", "b"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setEditTarget(t)}
+                    className="px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] rounded transition"
+                    style={
+                      editTarget === t
+                        ? {
+                            background: t === "b" ? "rgba(98,182,255,0.22)" : "rgba(255,106,61,0.22)",
+                            color: t === "b" ? "#b8dcff" : "#ffbfa0",
+                          }
+                        : { color: "rgba(255,255,255,0.35)" }
+                    }
+                    title={t === "a" ? "Edit Synth A in the rack" : "Edit Synth B in the rack"}
+                  >
+                    Edit {t.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[9px] text-white/25 truncate">
+                {editTarget === "b" ? "rack edits B · arp stays on A" : "browse · characters · init"}
+              </span>
             </div>
             <div className="flex items-center gap-1.5 min-w-0">
               <button

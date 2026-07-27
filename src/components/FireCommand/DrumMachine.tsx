@@ -108,6 +108,40 @@ export function DrumMachine() {
           <div className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-200/80">Drum Bay</div>
           <div className="text-[9px] text-white/35 mt-0.5">{bars} bar{bars === 1 ? "" : "s"} · {totalSteps} steps · paint the grid</div>
         </div>
+        <div className="flex flex-wrap items-center gap-1">
+          {([
+            ["house", "House"],
+            ["trap", "Trap"],
+            ["break", "Break"],
+            ["clear", "Clear"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => {
+                useFireSequencerStore.getState().applyDrumGroove(id);
+                useUIStore.getState().toast(
+                  id === "clear" ? "Drum grid cleared" : `${label} groove loaded`,
+                );
+              }}
+              className="px-2 py-1 rounded-lg border border-white/10 bg-white/[0.03] text-[9px] font-bold uppercase tracking-wider text-white/55 hover:text-amber-200 hover:border-amber-400/40 transition"
+              title={id === "clear" ? "Clear all drum steps" : `Load a ${label} pattern (keeps your samples)`}
+            >
+              {label}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => {
+              useFireSequencerStore.getState().clearDrumKitSamples();
+              useUIStore.getState().toast("Synth Kit — lane samples cleared. Rack your own in Sample Deck.");
+            }}
+            className="px-2 py-1 rounded-lg border border-amber-400/35 bg-amber-400/10 text-[9px] font-bold uppercase tracking-wider text-amber-200/90 hover:bg-amber-400/20 transition"
+            title="Clear drum-lane sample overrides — back to the built-in Synth Kit"
+          >
+            Synth Kit
+          </button>
+        </div>
         <div className="flex-1" />
         <button
           onClick={() => {
@@ -237,8 +271,10 @@ function SampleDeck({ totalSteps }: { totalSteps: number }) {
         </button>
       </div>
       {samples.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-3 py-3 text-[10px] text-white/35 italic">
-          Rack risers, vocal chops, FX — they paint on the same full-width step grid.
+        <div className="rounded-xl border border-dashed border-fuchsia-400/30 bg-fuchsia-500/[0.06] px-3 py-3 text-[10px] text-fuchsia-100/70 leading-relaxed">
+          <span className="font-semibold text-fuchsia-200">Sample Deck is empty.</span>{" "}
+          Rack risers, vocal chops, or one-shots — they paint on the same full-width step grid.
+          Prefer synth hits on the drum lanes? Use <span className="text-amber-200/90">Synth Kit</span> above, then 📁 on a lane for your own.
         </div>
       ) : (
         <div className="space-y-1">
@@ -432,12 +468,12 @@ const DrumRow = memo(function DrumRow({
           onClick={() => (isSample ? onResetSample(laneId) : onPickSample(laneId))}
           className={`w-6 h-6 grid place-items-center rounded-md border text-[10px] transition ${
             isSample
-              ? "border-fuchsia-400/50 bg-fuchsia-500/10 text-fuchsia-300 hover:text-white"
+              ? "border-fuchsia-400/70 bg-fuchsia-500/20 text-fuchsia-200 shadow-[0_0_10px_rgb(232_121_249/0.35)] hover:text-white"
               : "border-white/10 bg-white/[0.03] text-white/60 hover:text-fuchsia-300 hover:border-fuchsia-400/40"
           }`}
-          title={isSample ? "Revert to the synthesized hit" : "Load your own kick/snare/hat for this lane"}
+          title={isSample ? "Your sample is loaded — click to revert to Synth Kit hit" : "Load your own kick/snare/hat for this lane"}
         >
-          {isSample ? "↺" : "📁"}
+          📁
         </button>
         <button
           onClick={() => onClear(laneId)}

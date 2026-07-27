@@ -26,9 +26,10 @@
 import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
 import { DRUM_LANES, type DrumLane } from "@/audio/dsp/FireDrumKit";
-import { DEFAULT_FIRE_PATCH, makeModMatrix } from "@/audio/dsp/FireCommandSynth";
+import { DEFAULT_FIRE_PATCH, makeModMatrix, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { audioUrlForPath } from "@/state/libraryStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
+import { useFireCommandStore, slotsFromState } from "@/state/fireCommandStore";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -102,6 +103,9 @@ export interface Section {
   sampleSteps: Record<string, number[]>;
   /** Automation lanes (v1.7): param id → per-step points. */
   automation: AutomationMap;
+  /** Optional Synth A/B patch snapshots for this pattern (song timbre recall). */
+  patchA?: FirePatch;
+  patchB?: FirePatch;
 }
 
 export const MAX_SECTIONS = 16;
@@ -504,6 +508,45 @@ function starterDrums(totalSteps: number): DrumPattern {
   return d;
 }
 
+/** Named pattern-only grooves for the Drum Bay (overwrites steps, not samples). */
+export type DrumGrooveId = "house" | "trap" | "break" | "clear";
+
+export function buildDrumGroove(id: DrumGrooveId, totalSteps: number): DrumPattern {
+  if (id === "clear") return emptyDrums(totalSteps);
+  if (id === "house") {
+    const d = emptyDrums(totalSteps);
+    for (let s = 0; s < totalSteps; s += 4) d.steps.kick[s] = 1; // four-on-the-floor
+    for (let s = 4; s < totalSteps; s += 8) d.steps.clap[s] = 0.9;
+    for (let s = 0; s < totalSteps; s += 2) d.steps.chat[s] = s % 4 === 2 ? 0.55 : 0.85;
+    for (let s = 6; s < totalSteps; s += 8) d.steps.ohat[s] = 0.65;
+    return d;
+  }
+  if (id === "trap") {
+    const d = emptyDrums(totalSteps);
+    for (let s = 0; s < totalSteps; s += 8) d.steps.kick[s] = 1;
+    for (let s = 6; s < totalSteps; s += 16) d.steps.kick[s] = 0.85;
+    for (let s = 4; s < totalSteps; s += 8) d.steps.snare[s] = 1;
+    // Rolling hats
+    for (let s = 0; s < totalSteps; s++) {
+      d.steps.chat[s] = s % 2 === 0 ? 0.7 : 0.35;
+    }
+    for (let s = 14; s < totalSteps; s += 16) d.steps.ohat[s] = 0.6;
+    return d;
+  }
+  // break — Amen-ish skeleton
+  const d = emptyDrums(totalSteps);
+  const kickHits = [0, 6, 10];
+  const snareHits = [4, 12];
+  for (let bar = 0; bar < Math.ceil(totalSteps / 16); bar++) {
+    const o = bar * 16;
+    for (const h of kickHits) if (o + h < totalSteps) d.steps.kick[o + h] = 1;
+    for (const h of snareHits) if (o + h < totalSteps) d.steps.snare[o + h] = 1;
+  }
+  for (let s = 0; s < totalSteps; s += 2) d.steps.chat[s] = 0.75;
+  for (let s = 2; s < totalSteps; s += 8) d.steps.ohat[s] = 0.5;
+  return d;
+}
+
 function starterNotes(): RollNote[] {
   // A simple minor arp figure (A minor) across one bar to invite editing.
   const seq: [number, number, number][] = [
@@ -523,23 +566,24 @@ function starterNotes(): RollNote[] {
  */
 export const DEFAULT_SYNTH_B_PRESET = "hyperspace";
 
-// Full factory bank stays a dynamic import (boot chunk).
-let applySeq = 0;
-
-function setSynthBPatch(raw: typeof DEFAULT_FIRE_PATCH): void {
-  const patch = { ...DEFAULT_FIRE_PATCH, ...raw };
-  patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-  getEngine().fireCommandB.setPatch(patch);
+/** Push the committed Synth B patch from fireCommandStore into the engine. */
+export function syncSynthBEngine(): void {
+  void import("@/state/fireCommandStore").then(({ useFireCommandStore, slotsFromState }) => {
+    const fire = useFireCommandStore.getState();
+    const { patchB } = slotsFromState(fire);
+    const patch = { ...DEFAULT_FIRE_PATCH, ...patchB };
+    patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+    getEngine().fireCommandB.setPatch(patch);
+  });
 }
 
+/** Load a factory preset into Synth B (editable patch, not voice-only). */
 function applySynthBPreset(presetId: string): void {
-  const token = ++applySeq;
-  void import("@/state/fireCommandStore").then(({ FIRE_PRESETS }) => {
-    if (token !== applySeq) return;
+  void import("@/state/fireCommandStore").then(({ useFireCommandStore, FIRE_PRESETS }) => {
     const preset = FIRE_PRESETS.find((p) => p.id === presetId)
       ?? FIRE_PRESETS.find((p) => p.id === DEFAULT_SYNTH_B_PRESET);
     if (!preset) return;
-    setSynthBPatch(preset.patch);
+    useFireCommandStore.getState().importPatchB(preset.patch, preset.id);
   });
 }
 
@@ -729,6 +773,71 @@ function sanitizeDrumSamples(
   return out;
 }
 
+function clonePatchSnap(raw: unknown): FirePatch | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const patch = { ...DEFAULT_FIRE_PATCH, ...(raw as Partial<FirePatch>) };
+  patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+  if ((raw as Partial<FirePatch>).moduleEnable) {
+    patch.moduleEnable = { ...((raw as Partial<FirePatch>).moduleEnable as Record<string, boolean>) };
+  }
+  return patch;
+}
+
+/** Read live A/B patches from the synth store. */
+function liveFireSlots(): { patchA: FirePatch; patchB: FirePatch } {
+  return slotsFromState(useFireCommandStore.getState());
+}
+
+/** Push section snapshots into the synth store + both engines. */
+function restoreSectionPatches(sec: Section): void {
+  if (!sec.patchA && !sec.patchB) return;
+  const fire = useFireCommandStore.getState();
+  if (sec.patchA) {
+    const patch = clonePatchSnap(sec.patchA)!;
+    if (fire.editTarget === "a") {
+      useFireCommandStore.setState({ patch, patchA: patch });
+    } else {
+      useFireCommandStore.setState({ patchA: patch });
+    }
+    getEngine().fireCommand.setPatch(patch);
+  }
+  if (sec.patchB) {
+    const patch = clonePatchSnap(sec.patchB)!;
+    if (fire.editTarget === "b") {
+      useFireCommandStore.setState({ patch, patchB: patch });
+    } else {
+      useFireCommandStore.setState({ patchB: patch });
+    }
+    getEngine().fireCommandB.setPatch(patch);
+  }
+}
+
+/** Stamp current live patches onto a section (always, per plan). */
+function withLivePatchSnapshots(sec: Section): Section {
+  try {
+    const { patchA, patchB } = liveFireSlots();
+    return {
+      ...sec,
+      patchA: structuredClone(patchA),
+      patchB: structuredClone(patchB),
+    };
+  } catch {
+    return sec;
+  }
+}
+
+/** Last section whose sound was applied during arrangement play. */
+let lastArrSoundSec: string | null = null;
+
+function maybeRestoreArrSound(sectionId: string | null): void {
+  if (!sectionId || sectionId === lastArrSoundSec) return;
+  lastArrSoundSec = sectionId;
+  const s = useFireSequencerStore.getState();
+  const synced = sectionsWithActive(s).find((x) => x.id === sectionId)
+    ?? s.sections.find((x) => x.id === sectionId);
+  if (synced) restoreSectionPatches(synced);
+}
+
 function sanitizeSection(raw: unknown, fallbackName: string): Section | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<Section>;
@@ -753,6 +862,8 @@ function sanitizeSection(raw: unknown, fallbackName: string): Section | null {
     drums: sanitizeDrums(r.drums, total),
     sampleSteps,
     automation: sanitizeAutomation(r.automation, total),
+    patchA: clonePatchSnap(r.patchA),
+    patchB: clonePatchSnap(r.patchB),
   };
 }
 
@@ -1100,6 +1211,7 @@ function contentFor(s: FireSequencerState, secId: string): {
 function stopScheduler(): void {
   startToken++;
   if (timer) { clearInterval(timer); timer = null; }
+  lastArrSoundSec = null;
 }
 
 // ── automation playback (v1.7) ──
@@ -1124,6 +1236,7 @@ function applyAutomationTick(s: FireSequencerState, now: number): void {
     // Prefer the active pattern's automation when layered; else first clip.
     const slot = slots.find((m) => m.sectionId === s.activeSectionId) ?? slots[0];
     if (!slot) return; // gap — silence, leave knobs alone this tick
+    maybeRestoreArrSound(slot.sectionId);
     pos = g - slot.start;
     auto = slot.sectionId === s.activeSectionId
       ? s.automation
@@ -1162,7 +1275,7 @@ function restoreAutomationBaseline(): void {
 /** Fire drums + samples + synth for one pattern at a local step. */
 function schedulePatternAtStep(
   s: FireSequencerState,
-  engine: ReturnType<typeof getEngine>,
+  engine: FireScheduleEngine,
   content: ReturnType<typeof contentFor>,
   step: number,
   whenSynth: number,
@@ -1212,6 +1325,85 @@ function schedulePatternAtStep(
       }
     }
   }
+}
+
+/** Engine surface used by the live scheduler and offline dry bounce. */
+export type FireScheduleEngine = {
+  fireCommand: { playNote: (midi: number, velocity: number, when: number, duration: number) => void; getPatch: () => { moduleEnable?: Record<string, boolean>; humanizeOn?: boolean; humanizeTiming?: number; humanizeVelocity?: number }; setPatch: (p: FirePatch) => void };
+  fireCommandB: { playNote: (midi: number, velocity: number, when: number, duration: number) => void; setPatch: (p: FirePatch) => void };
+  fireDrums: {
+    trigger: (lane: import("@/audio/dsp/FireDrumKit").DrumLane, when: number, velocity?: number) => void;
+    playBuffer: (buffer: AudioBuffer, when: number, velocity?: number, level?: number, toSampleBus?: boolean) => void;
+  };
+  fireDuckTrigger: (when: number, amount: number, releaseSec: number) => void;
+};
+
+/**
+ * Schedule one full pattern or arrangement pass onto a Fire engine graph
+ * (live or OfflineAudioContext). Returns duration including release tail.
+ */
+export function scheduleFirePass(
+  s: FireSequencerState,
+  engine: FireScheduleEngine,
+  t0 = 0.05,
+  tailSec = 1.6,
+): { durationSec: number } {
+  const dur = stepDur(s.bpm);
+  const song = s.playMode === "arrangement";
+  const { map, total } = song
+    ? computeSongMap(s)
+    : { map: [] as SongSlot[], total: s.bars * STEPS_PER_BAR };
+  let lastSoundSec: string | null = null;
+  const applySound = (sectionId: string) => {
+    if (sectionId === lastSoundSec) return;
+    lastSoundSec = sectionId;
+    const sec = sectionsWithActive(s).find((x) => x.id === sectionId)
+      ?? s.sections.find((x) => x.id === sectionId);
+    if (!sec) return;
+    if (sec.patchA) {
+      const patch = clonePatchSnap(sec.patchA);
+      if (patch) engine.fireCommand.setPatch(patch);
+    }
+    if (sec.patchB) {
+      const patch = clonePatchSnap(sec.patchB);
+      if (patch) engine.fireCommandB.setPatch(patch);
+    }
+  };
+
+  for (let globalStep = 0; globalStep < total; globalStep++) {
+    const base = t0 + globalStep * dur;
+    if (song) {
+      const slots = map.filter(
+        (m) =>
+          globalStep >= m.start
+          && globalStep < m.start + m.len
+          && trackIsAudible(s.playlistTracks, m.track),
+      );
+      if (slots.length === 0) continue;
+      const primary = slots.find((m) => m.sectionId === s.activeSectionId) ?? slots[0];
+      applySound(primary.sectionId);
+      for (const slot of slots) {
+        const step = globalStep - slot.start;
+        const content = contentFor(s, slot.sectionId);
+        const halfDur = dur * 0.5;
+        const odd = step % 2 === 1;
+        const whenSynth = base + (odd ? s.swing * halfDur : 0);
+        const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
+        const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
+        schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur);
+      }
+    } else {
+      const step = globalStep;
+      const content = contentFor(s, s.activeSectionId);
+      const halfDur = dur * 0.5;
+      const odd = step % 2 === 1;
+      const whenSynth = base + (odd ? s.swing * halfDur : 0);
+      const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
+      const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
+      schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur);
+    }
+  }
+  return { durationSec: t0 + total * dur + tailSec };
 }
 
 function startScheduler(get: () => FireSequencerState): void {
@@ -1272,6 +1464,8 @@ function startScheduler(get: () => FireSequencerState): void {
         if (song) {
           const slots = slotsCovering(globalStep, s.playlistTracks);
           if (slots.length === 0) { nextStep++; continue; } // gap / muted = silence
+          const primary = slots.find((m) => m.sectionId === s.activeSectionId) ?? slots[0];
+          maybeRestoreArrSound(primary.sectionId);
           for (const slot of slots) {
             const step = globalStep - slot.start;
             const content = contentFor(s, slot.sectionId);
@@ -1463,6 +1657,10 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   toggleDrumStep: (lane: DrumLane, step: number) => void;
   setDrumStep: (lane: DrumLane, step: number, vel: number) => void;
   clearDrums: () => void;
+  /** Pattern-only groove presets (House / Trap / Break / Clear). */
+  applyDrumGroove: (id: DrumGrooveId) => void;
+  /** Clear all drum-lane sample overrides → back to Synth Kit. */
+  clearDrumKitSamples: () => void;
   /** Euclidean fill: `pulses` hits per bar, evenly spread. */
   euclidLane: (lane: DrumLane, pulses: number) => void;
   randomLane: (lane: DrumLane, density: number) => void;
@@ -1579,7 +1777,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const anyB = s.notes.some((n) => n.ch === 1)
         || s.sections.some((sec) => sec.id !== s.activeSectionId && sec.notes.some((n) => n.ch === 1));
       if (s.synthBEnabled && anyB) {
-        applySynthBPreset(s.synthBPresetId);
+        syncSynthBEngine();
       }
       // Persisted mixer/limiter state must be live before the first note.
       applyMixerToEngine(s);
@@ -1640,7 +1838,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       pushFireHistory();
       set({ synthBEnabled: on });
       if (on) {
-        applySynthBPreset(get().synthBPresetId);
+        syncSynthBEngine();
       } else {
         getEngine().peekFireCommandB()?.allNotesOff();
         // Drawing into a disarmed channel would be silent and confusing.
@@ -1652,7 +1850,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     setSynthBPresetId: (id) => {
       pushFireHistory("synthBPreset");
       set({ synthBPresetId: id });
-      if (get().synthBEnabled) applySynthBPreset(id);
+      applySynthBPreset(id);
       persist();
     },
 
@@ -1660,6 +1858,10 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       set({ activeChannel: ch });
       // Arm the channel you're about to draw into.
       if (ch === 1 && !get().synthBEnabled) get().setSynthBEnabled(true);
+      // Keep Synth rack edit target in sync with Draw A/B.
+      void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
+        useFireCommandStore.getState().setEditTarget(ch === 1 ? "b" : "a");
+      });
       persist();
     },
 
@@ -1667,8 +1869,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const engine = getEngine();
       void engine.resume();
       if (ch === 1) {
-        // Make sure B is voiced even before the first playback.
-        if (!engine.peekFireCommandB()) applySynthBPreset(get().synthBPresetId);
+        if (!engine.peekFireCommandB()) syncSynthBEngine();
         engine.fireCommandB.playNote(midi, vel, engine.ctx.currentTime, 0.18);
       } else {
         engine.fireCommand.playNote(midi, vel, engine.ctx.currentTime, 0.18);
@@ -1965,6 +2166,21 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
+    applyDrumGroove: (id) => {
+      pushFireHistory();
+      const total = get().bars * STEPS_PER_BAR;
+      set({ drums: buildDrumGroove(id, total) });
+      persist();
+    },
+
+    clearDrumKitSamples: () => {
+      pushFireHistory();
+      const eng = getEngine().fireDrums;
+      for (const lane of DRUM_LANES) eng.setSample(lane.id, null);
+      set({ drumSamples: {} });
+      persist();
+    },
+
     euclidLane: (lane, pulses) => {
       pushFireHistory(`euclid:${lane}`);
       const s = get();
@@ -2115,11 +2331,16 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     setActiveSection: (id) => {
       const s = get();
       if (id === s.activeSectionId) return;
-      const sections = sectionsWithActive(s);
+      // Snapshot live A/B into the leaving section, then restore target if it has snaps.
+      const sections = sectionsWithActive(s).map((sec) =>
+        sec.id === s.activeSectionId ? withLivePatchSnapshots(sec) : sec,
+      );
       const target = sections.find((x) => x.id === id);
       if (!target) return;
       const m = mirrorOf(target, s.samples);
       set({ sections, activeSectionId: id, ...m });
+      restoreSectionPatches(target);
+      lastArrSoundSec = id;
       if (s.playing && s.playMode === "pattern") startScheduler(get);
       refreshSongMap(get);
       persist();
@@ -2167,6 +2388,8 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         drums: structuredClone(src.drums),
         sampleSteps: structuredClone(src.sampleSteps),
         automation: structuredClone(src.automation),
+        patchA: src.patchA ? structuredClone(src.patchA) : undefined,
+        patchB: src.patchB ? structuredClone(src.patchB) : undefined,
       };
       const m = mirrorOf(sec, s.samples);
       set({
@@ -2575,7 +2798,7 @@ registerFireHistoryProvider("fireSequencer", {
       if (!ns.drumSamples[lane.id]) engine.fireDrums.setSample(lane.id, null);
     }
     void ns.hydrateSamples();
-    if (ns.synthBEnabled) applySynthBPreset(ns.synthBPresetId);
+    if (ns.synthBEnabled) syncSynthBEngine();
     applyMixerToEngine(ns);
     if (wasPlaying) startScheduler(useFireSequencerStore.getState);
     schedulePersist(useFireSequencerStore.getState);

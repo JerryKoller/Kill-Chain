@@ -73,8 +73,8 @@ export class FireDrumKit {
   private readonly ctx: AudioContext;
   private noiseBuf: AudioBuffer | null = null;
 
-  constructor(ctx: AudioContext, dest: AudioNode, sampleDest?: AudioNode) {
-    this.ctx = ctx;
+  constructor(ctx: BaseAudioContext, dest: AudioNode, sampleDest?: AudioNode) {
+    this.ctx = ctx as AudioContext;
     this.output = ctx.createGain();
     this.output.gain.value = 0.9 * DRUM_TRIM;
     /**

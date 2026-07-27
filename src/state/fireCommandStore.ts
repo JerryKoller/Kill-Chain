@@ -509,10 +509,31 @@ const STORAGE_KEY = "killchain.firecommand.v5";
 // writes everything back under STORAGE_KEY.
 const LEGACY_STORAGE_KEY = "pulsefire.firecommand.v5";
 
+export type EditTarget = "a" | "b";
+
+function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
+  const patch = { ...DEFAULT_FIRE_PATCH, ...(raw ?? {}) };
+  patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+  if (raw && raw.moduleEnable) patch.moduleEnable = { ...raw.moduleEnable };
+  return patch;
+}
+
+function defaultPatchB(): FirePatch {
+  const preset = FIRE_PRESETS.find((p) => p.id === "hyperspace") ?? FIRE_PRESETS[0];
+  return normalizePatch(preset?.patch ?? {});
+}
+
 interface PersistShape {
+  /** Active edit surface — always mirrors the voice named by `editTarget`. */
   patch: FirePatch;
+  /** Committed Synth A patch (kept in sync while editing A). */
+  patchA: FirePatch;
+  /** Committed Synth B patch (kept in sync while editing B). */
+  patchB: FirePatch;
   octave: number;
   presetId: string;
+  presetIdB: string;
+  editTarget: EditTarget;
   routeThroughFx: boolean;
   arp: ArpSettings;
   keyboardMinimized: boolean;
@@ -527,10 +548,16 @@ interface PersistShape {
 }
 
 function defaults(): PersistShape {
+  const patchA = normalizePatch({});
+  const patchB = defaultPatchB();
   return {
-    patch: { ...DEFAULT_FIRE_PATCH },
+    patch: structuredClone(patchA),
+    patchA,
+    patchB,
     octave: 4,
     presetId: "init",
+    presetIdB: "hyperspace",
+    editTarget: "a",
     routeThroughFx: true,
     arp: { ...DEFAULT_ARP },
     keyboardMinimized: false,
@@ -547,14 +574,19 @@ function load(): PersistShape {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return defaults();
-    const parsed = JSON.parse(raw) as Partial<PersistShape>;
+    const parsed = JSON.parse(raw) as Partial<PersistShape> & { patch?: Partial<FirePatch> };
     const d = defaults();
-    const patch = { ...d.patch, ...(parsed.patch ?? {}) };
-    patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+    const patchA = normalizePatch(parsed.patchA ?? parsed.patch ?? {});
+    const patchB = normalizePatch(parsed.patchB ?? d.patchB);
+    const editTarget: EditTarget = parsed.editTarget === "b" ? "b" : "a";
     return {
-      patch,
+      patch: structuredClone(editTarget === "b" ? patchB : patchA),
+      patchA,
+      patchB,
       octave: typeof parsed.octave === "number" ? parsed.octave : d.octave,
       presetId: parsed.presetId ?? d.presetId,
+      presetIdB: typeof parsed.presetIdB === "string" ? parsed.presetIdB : d.presetIdB,
+      editTarget,
       routeThroughFx: typeof parsed.routeThroughFx === "boolean" ? parsed.routeThroughFx : d.routeThroughFx,
       arp: { ...d.arp, ...(parsed.arp ?? {}) },
       keyboardMinimized: typeof parsed.keyboardMinimized === "boolean" ? parsed.keyboardMinimized : d.keyboardMinimized,
@@ -571,15 +603,33 @@ function load(): PersistShape {
   }
 }
 
+/** Resolve committed A/B from state (active `patch` wins for the current target). */
+export function slotsFromState(s: {
+  editTarget: EditTarget;
+  patch: FirePatch;
+  patchA: FirePatch;
+  patchB: FirePatch;
+}): { patchA: FirePatch; patchB: FirePatch } {
+  if (s.editTarget === "b") {
+    return { patchA: s.patchA, patchB: s.patch };
+  }
+  return { patchA: s.patch, patchB: s.patchB };
+}
+
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePersist(state: FireCommandState): void {
   if (typeof window === "undefined") return;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
+    const { patchA, patchB } = slotsFromState(state);
     const data: PersistShape = {
-      patch: state.patch,
+      patch: patchA,
+      patchA,
+      patchB,
       octave: state.octave,
       presetId: state.presetId,
+      presetIdB: state.presetIdB,
+      editTarget: state.editTarget,
       routeThroughFx: state.routeThroughFx,
       arp: state.arp,
       keyboardMinimized: state.keyboardMinimized,
@@ -608,10 +658,13 @@ export interface FireCommandState extends PersistShape {
   /** Pending natural-selection round (null when not selecting). */
   mutation: MutationRound | null;
 
+  setEditTarget: (t: EditTarget) => void;
   setParam: <K extends keyof FirePatch>(key: K, value: FirePatch[K]) => void;
   setModRoute: (index: number, partial: Partial<ModRoute>) => void;
   setGateStep: (index: number, on: boolean) => void;
   loadPreset: (id: string) => void;
+  /** Push a full patch into Synth B (factory load / project restore). */
+  importPatchB: (patch: unknown, presetId?: string) => void;
   randomize: () => void;
   /**
    * Natural selection: breed TWO offspring of the current patch (strength =
@@ -626,7 +679,7 @@ export interface FireCommandState extends PersistShape {
   commitMutation: () => void;
   /** Abandon the round and restore the parent patch. */
   discardMutation: () => void;
-  /** Replace patch + arp from a project file. */
+  /** Replace patch + arp from a project file (Synth A). */
   importPatch: (patch: unknown, arp?: unknown) => void;
   /** Deploy a random preset from the factory bank. Returns what it picked. */
   randomPreset: () => FirePreset;
@@ -708,6 +761,23 @@ export const SCENE_SLOTS = 8;
 export const useFireCommandStore = create<FireCommandState>((set, get) => {
   const persist = () => schedulePersist(get());
 
+  /** Commit active `patch` into committed A/B slots (active target wins). */
+  const commitActive = (activePatch?: FirePatch): { patchA: FirePatch; patchB: FirePatch } => {
+    const s = get();
+    const patch = activePatch ?? s.patch;
+    if (s.editTarget === "b") {
+      return { patchA: s.patchA, patchB: patch };
+    }
+    return { patchA: patch, patchB: s.patchB };
+  };
+
+  const engineFor = (t: EditTarget) => {
+    const engine = getEngine();
+    return t === "b" ? engine.fireCommandB : engine.fireCommand;
+  };
+
+  const activeEngine = () => engineFor(get().editTarget);
+
   return {
     ...load(),
     heldNotes: [],
@@ -716,13 +786,36 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     arpStepIndex: -1,
     mutation: null,
 
+    setEditTarget: (t) => {
+      const s = get();
+      if (s.editTarget === t) return;
+      const committed = commitActive();
+      const nextPatch = structuredClone(t === "b" ? committed.patchB : committed.patchA);
+      set({
+        editTarget: t,
+        patch: nextPatch,
+        patchA: committed.patchA,
+        patchB: committed.patchB,
+      });
+      engineFor(t).setPatch(nextPatch);
+      persist();
+    },
+
     setParam: (key, value) => {
-      // Knob drags stream setParam per mousemove — coalesce by param name.
       pushFireHistory(`param:${String(key)}`);
-      const patch = { ...get().patch, [key]: value };
-      // Hand-editing adopts the audible sound and ends any selection round.
-      set({ patch, presetId: "custom", mutation: null, mutateLineage: 0 });
-      getEngine().fireCommand.set(key, value);
+      const s = get();
+      const patch = { ...s.patch, [key]: value };
+      const { patchA, patchB } = commitActive(patch);
+      set({
+        patch,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
+        mutation: null,
+        mutateLineage: 0,
+      });
+      activeEngine().set(key, value);
       persist();
     },
 
@@ -742,22 +835,37 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const src = factory ?? user;
       if (!src) return;
       pushFireHistory();
-      // Merge over defaults: user presets saved before newer patch fields
-      // existed (fmBtoA, noiseColor, filterDrive, stereoWidth, velAmount…)
-      // load with legacy-exact behavior.
       const patch = { ...DEFAULT_FIRE_PATCH, ...src.patch };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-      // FIXED: Always reset moduleEnable to the preset's own setting (or empty
-      // = all modules on). Previously this preserved the current moduleEnable,
-      // causing modules disabled on one preset to stay disabled on all
-      // subsequent preset loads — the "sticky sound" bug.
       patch.moduleEnable = src.patch.moduleEnable
         ? { ...src.patch.moduleEnable }
         : {};
+      const s = get();
+      if (s.editTarget === "b") {
+        set({
+          patch,
+          patchB: patch,
+          presetIdB: id,
+        });
+        getEngine().fireCommandB.setPatch(patch);
+        persist();
+        return;
+      }
       const arp: ArpSettings = src.arp
         ? { ...DEFAULT_ARP, ...src.arp }
         : { ...DEFAULT_ARP, enabled: false };
-      set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, arpStepIndex: -1, heldNotes: [], mutation: null, mutateLineage: 0 });
+      set({
+        patch,
+        patchA: patch,
+        presetId: id,
+        arp,
+        arpOrder: [],
+        arpCurrent: null,
+        arpStepIndex: -1,
+        heldNotes: [],
+        mutation: null,
+        mutateLineage: 0,
+      });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
@@ -766,20 +874,39 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       persist();
     },
 
+    importPatchB: (rawPatch, presetId) => {
+      pushFireHistory();
+      const patch = normalizePatch(rawPatch as Partial<FirePatch>);
+      const presetIdB = presetId ?? "custom";
+      const s = get();
+      const partial: Partial<FireCommandState> = { patchB: patch, presetIdB };
+      if (s.editTarget === "b") partial.patch = patch;
+      set(partial);
+      getEngine().fireCommandB.setPatch(patch);
+      persist();
+    },
+
     randomize: () => {
       pushFireHistory();
+      const s = get();
       const patch = randomPatch();
-      set({ patch, presetId: "custom", mutation: null, mutateLineage: 0 });
-      getEngine().fireCommand.setPatch(patch);
+      const { patchA, patchB } = commitActive(patch);
+      set({
+        patch,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
+        mutation: s.editTarget === "a" ? null : s.mutation,
+        mutateLineage: s.editTarget === "a" ? 0 : s.mutateLineage,
+      });
+      activeEngine().setPatch(patch);
       persist();
     },
 
     mutate: () => {
       pushFireHistory();
       const s = get();
-      // Breeding from an open round evolves from what's currently audible —
-      // the parent of the next generation is the offspring you're hearing.
-      // After Keep Winner, mutateLineage remembers the last kept gen.
       const parent = s.patch;
       const generation = s.mutation
         ? s.mutation.generation + 1
@@ -788,12 +915,17 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
           : 1;
       const a = mutatePatch(parent, s.mutateAmount);
       const b = mutatePatch(parent, s.mutateAmount);
+      const next = structuredClone(a);
+      const { patchA, patchB } = commitActive(next);
       set({
         mutation: { base: structuredClone(parent), a, b, listening: "a", generation },
-        patch: structuredClone(a),
-        presetId: "custom",
+        patch: next,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
       });
-      getEngine().fireCommand.setPatch(get().patch);
+      activeEngine().setPatch(get().patch);
       persist();
     },
 
@@ -803,40 +935,58 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     auditionMutation: (which) => {
-      const m = get().mutation;
+      const s = get();
+      const m = s.mutation;
       if (!m || m.listening === which) return;
       const next = which === "a" ? m.a : m.b;
+      const cloned = structuredClone(next);
+      const { patchA, patchB } = commitActive(cloned);
       set({
         mutation: { ...m, listening: which },
-        patch: structuredClone(next),
-        presetId: "custom",
+        patch: cloned,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
       });
-      getEngine().fireCommand.setPatch(get().patch);
+      activeEngine().setPatch(get().patch);
       persist();
     },
 
     commitMutation: () => {
       const m = get().mutation;
       if (!m) return;
-      // Patch already holds the audible offspring — close the round and
-      // remember the generation so the next breed continues the lineage.
       set({ mutation: null, mutateLineage: m.generation });
       persist();
     },
 
     discardMutation: () => {
-      const m = get().mutation;
+      const s = get();
+      const m = s.mutation;
       if (!m) return;
-      set({ mutation: null, mutateLineage: 0, patch: structuredClone(m.base), presetId: "custom" });
-      getEngine().fireCommand.setPatch(get().patch);
+      const restored = structuredClone(m.base);
+      const { patchA, patchB } = commitActive(restored);
+      set({
+        mutation: null,
+        mutateLineage: 0,
+        patch: restored,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
+      });
+      activeEngine().setPatch(get().patch);
       persist();
     },
 
     importPatch: (rawPatch, rawArp) => {
+      if (get().editTarget === "b") {
+        get().importPatchB(rawPatch);
+        return;
+      }
       pushFireHistory();
       const patch = { ...DEFAULT_FIRE_PATCH, ...(rawPatch as Partial<FirePatch>) };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-      // Same contract as loadPreset: never inherit prior module bypasses / arp.
       patch.moduleEnable = (rawPatch as Partial<FirePatch>)?.moduleEnable
         ? { ...((rawPatch as Partial<FirePatch>).moduleEnable as Record<string, boolean>) }
         : {};
@@ -844,7 +994,18 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
         : { ...DEFAULT_ARP, enabled: false };
       stopArpScheduler();
-      set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1, mutation: null, mutateLineage: 0 });
+      set({
+        patch,
+        patchA: patch,
+        presetId: "custom",
+        arp,
+        heldNotes: [],
+        arpOrder: [],
+        arpCurrent: null,
+        arpStepIndex: -1,
+        mutation: null,
+        mutateLineage: 0,
+      });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
@@ -853,9 +1014,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     randomPreset: () => {
-      // Never repeat the current pick and skip the neutral Init patch —
-      // "Randomize" should always land on an actual voice.
-      const cur = get().presetId;
+      const s = get();
+      const cur = s.editTarget === "b" ? s.presetIdB : s.presetId;
       const pool = FIRE_PRESETS.filter((p) => p.id !== cur && p.id !== "init");
       const preset = pool[Math.floor(Math.random() * pool.length)] ?? FIRE_PRESETS[0];
       get().loadPreset(preset.id);
@@ -863,13 +1023,21 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     applyMorphPatch: (patch, commit) => {
-      // Drag path: engine only — avoid structuredClone + Zustand churn at 60fps.
       if (!commit) {
-        getEngine().fireCommand.setPatch(patch);
+        activeEngine().setPatch(patch);
         return;
       }
-      set({ patch: structuredClone(patch), presetId: "custom" });
-      getEngine().fireCommand.setPatch(get().patch);
+      const s = get();
+      const cloned = structuredClone(patch);
+      const { patchA, patchB } = commitActive(cloned);
+      set({
+        patch: cloned,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
+      });
+      activeEngine().setPatch(cloned);
       persist();
     },
 
@@ -877,12 +1045,24 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory();
       const patch = { ...DEFAULT_FIRE_PATCH, ...rawPatch };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      const s = get();
+      if (s.editTarget === "b") {
+        set({
+          patch,
+          patchB: patch,
+          presetIdB: "custom",
+        });
+        getEngine().fireCommandB.setPatch(patch);
+        persist();
+        return;
+      }
       const arp: ArpSettings = rawArp
         ? { ...DEFAULT_ARP, ...rawArp }
         : { ...DEFAULT_ARP, enabled: false };
       stopArpScheduler();
       set({
         patch,
+        patchA: patch,
         arp,
         presetId: "custom",
         heldNotes: [],
@@ -939,7 +1119,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory("maxVoices");
       const v = Math.round(clamp(n, 4, 48));
       set({ maxVoices: v });
-      getEngine().fireCommand.setMaxVoices(v);
+      const engine = getEngine();
+      engine.fireCommand.setMaxVoices(v);
+      engine.fireCommandB.setMaxVoices(v);
       persist();
     },
 
@@ -963,14 +1145,12 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       void engine.resume();
       const modOn = (id: string) => s.patch.moduleEnable?.[id] !== false;
 
-      // Scale Lock — snap live notes to the sequencer scale.
       let playMidi = midi;
       if (modOn("scale") && s.patch.scaleLock) {
         const seq = useFireSequencerStore.getState();
         playMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
       }
 
-      // Humanize velocity on live input.
       let playVel = velocity;
       if (modOn("human") && s.patch.humanizeOn) {
         const j = (s.patch.humanizeVelocity ?? 0.2) * 0.35;
@@ -979,7 +1159,6 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
       engine.fireCommand.noteOn(playMidi, playVel);
 
-      // Harmony companions (module + mode).
       const mode = s.patch.harmonyMode ?? "off";
       if (modOn("harmony") && mode !== "off" && !harmonyHeld.has(midi)) {
         const comps = harmonyCompanions(playMidi, mode).filter((c) => c <= 127);
@@ -988,7 +1167,6 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         harmonyHeld.set(midi, comps);
       }
 
-      // Chord Memory — fire stored intervals from the played root.
       if (modOn("chord") && s.patch.chordMemoryOn && !chordHeld.has(midi)) {
         const ivs = s.patch.chordIntervals ?? [0, 4, 7];
         const extras = ivs
@@ -1013,7 +1191,6 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         return;
       }
       const engine = getEngine();
-      // Scale-locked note-off: release the snapped pitch if it differs.
       let offMidi = midi;
       if (s.patch.moduleEnable?.["scale"] !== false && s.patch.scaleLock) {
         const seq = useFireSequencerStore.getState();
@@ -1035,6 +1212,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     panic: () => {
+      const s = get();
+      if (s.editTarget === "b") {
+        getEngine().fireCommandB.allNotesOff();
+        return;
+      }
       stopArpScheduler();
       harmonyHeld.clear();
       chordHeld.clear();
@@ -1062,7 +1244,6 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory("arp");
       const prev = get().arp;
       const arp: ArpSettings = { ...prev, ...patch };
-      // Turning hold off drops latched notes that aren't physically held.
       let arpOrder = get().arpOrder;
       if (prev.hold && !arp.hold) {
         const held = get().heldNotes;
@@ -1087,23 +1268,33 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     sync: () => {
       const s = get();
       const engine = getEngine();
+      const { patchA, patchB } = slotsFromState(s);
       engine.fireCommand.setMaxVoices(s.maxVoices);
-      engine.fireCommand.setPatch(s.patch);
+      engine.fireCommandB.setMaxVoices(s.maxVoices);
+      engine.fireCommand.setPatch(patchA);
+      engine.fireCommandB.setPatch(patchB);
       useAudioStore.getState().setBypass(!s.routeThroughFx);
       if (s.arp.enabled) startArpScheduler(get, set);
     },
 
     setModuleEnable: (moduleId, on) => {
       pushFireHistory(`module:${moduleId}`);
-      const moduleEnable = { ...(get().patch.moduleEnable ?? {}), [moduleId]: on };
-      const patch = { ...get().patch, moduleEnable };
-      set({ patch, presetId: "custom" });
-      getEngine().fireCommand.set("moduleEnable", moduleEnable);
-      // Arp module off must park the scheduler so notes fall through to live play.
-      if (moduleId === "arp" && !on) {
+      const s = get();
+      const moduleEnable = { ...(s.patch.moduleEnable ?? {}), [moduleId]: on };
+      const patch = { ...s.patch, moduleEnable };
+      const { patchA, patchB } = commitActive(patch);
+      set({
+        patch,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
+      });
+      activeEngine().set("moduleEnable", moduleEnable);
+      if (s.editTarget === "a" && moduleId === "arp" && !on) {
         stopArpScheduler();
         set({ arpCurrent: null, arpStepIndex: -1 });
-      } else if (moduleId === "arp" && on && get().arp.enabled && arpTimer === null) {
+      } else if (s.editTarget === "a" && moduleId === "arp" && on && get().arp.enabled && arpTimer === null) {
         startArpScheduler(get, set);
       }
       persist();
@@ -1112,7 +1303,6 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     captureScene: (slot) => {
       const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
       const scenes = [...get().scenes];
-      // Include moduleEnable so scene recall restores which modules were armed.
       scenes[i] = { ...get().patch, moduleEnable: { ...(get().patch.moduleEnable ?? {}) } };
       set({ scenes });
       persist();
@@ -1123,15 +1313,24 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const snap = get().scenes[i];
       if (!snap) return;
       pushFireHistory(`scene:${i}`);
+      const s = get();
       const patch = {
         ...DEFAULT_FIRE_PATCH,
-        ...get().patch,
+        ...s.patch,
         ...snap,
-        moduleEnable: { ...(snap.moduleEnable ?? get().patch.moduleEnable ?? {}) },
+        moduleEnable: { ...(snap.moduleEnable ?? s.patch.moduleEnable ?? {}) },
       };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-      set({ patch, presetId: "custom", mutation: null });
-      getEngine().fireCommand.setPatch(patch);
+      const { patchA, patchB } = commitActive(patch);
+      set({
+        patch,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
+        mutation: s.editTarget === "a" ? null : s.mutation,
+      });
+      activeEngine().setPatch(patch);
       persist();
     },
 
@@ -1154,33 +1353,51 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
   };
 });
 
-// ── undo/redo provider (v1.6) ──
-// The synth's undoable slice: patch, arp, presets. Live performance state
-// (held notes, octave, FX routing) is deliberately excluded.
 registerFireHistoryProvider("fireCommand", {
   capture: () => {
     const s = useFireCommandStore.getState();
+    const { patchA, patchB } = slotsFromState(s);
     return {
-      patch: s.patch,
+      patch: patchA,
+      patchA,
+      patchB,
       arp: s.arp,
       presetId: s.presetId,
+      presetIdB: s.presetIdB,
+      editTarget: s.editTarget,
       userPresets: s.userPresets,
       maxVoices: s.maxVoices,
     };
   },
   restore: (snap) => {
+    const raw = snap as Partial<PersistShape>;
+    const patchA = normalizePatch(raw.patchA ?? raw.patch);
+    const patchB = normalizePatch(raw.patchB ?? defaultPatchB());
+    const editTarget: EditTarget = raw.editTarget === "b" ? "b" : "a";
+    const patch = structuredClone(editTarget === "b" ? patchB : patchA);
     stopArpScheduler();
     useFireCommandStore.setState({
-      ...(snap as Partial<FireCommandState>),
+      patch,
+      patchA,
+      patchB,
+      arp: raw.arp ? { ...DEFAULT_ARP, ...raw.arp } : { ...DEFAULT_ARP },
+      presetId: raw.presetId ?? "init",
+      presetIdB: typeof raw.presetIdB === "string" ? raw.presetIdB : "hyperspace",
+      editTarget,
+      userPresets: Array.isArray(raw.userPresets) ? raw.userPresets : [],
+      maxVoices: typeof raw.maxVoices === "number" ? raw.maxVoices : 12,
       arpOrder: [],
       arpCurrent: null,
       arpStepIndex: -1,
     });
     const s = useFireCommandStore.getState();
-    const fc = getEngine().fireCommand;
-    fc.allNotesOff();
-    fc.setPatch(s.patch);
-    fc.setMaxVoices(s.maxVoices);
+    const engine = getEngine();
+    engine.fireCommand.allNotesOff();
+    engine.fireCommandB.allNotesOff();
+    engine.fireCommand.setPatch(patchA);
+    engine.fireCommandB.setPatch(patchB);
+    engine.fireCommand.setMaxVoices(s.maxVoices);
+    engine.fireCommandB.setMaxVoices(s.maxVoices);
     if (s.arp.enabled) {
       startArpScheduler(
         useFireCommandStore.getState,
