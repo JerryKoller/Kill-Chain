@@ -2,6 +2,16 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.12] — 2026-07-27 — Multi-Lane Arrangement
+
+### Added
+- **10 playlist tracks** — layer patterns on separate lanes; same-time clips on different tracks play together
+- Per-track **mute / solo / color**; clip color, duplicate, bar nudge, and edge trim
+- Timeline **zoom**, ruler **scrub** (seek while stopped or playing)
+
+### Fixed
+- Piano-roll **right-click erase** hit target and context-menu stealing the gesture
+
 ## [3.0.11] — 2026-07-27 — Sequencer Arrangement UX
 
 ### Changed
