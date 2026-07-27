@@ -113,6 +113,8 @@ export function FireBand({
   defaultCollapsed = false,
   hint,
   children,
+  /** When false (band tab mode), skip fold chrome — the tab already selected the category. */
+  foldable = true,
 }: {
   title: string;
   color: string;
@@ -120,8 +122,9 @@ export function FireBand({
   defaultCollapsed?: boolean;
   hint?: string;
   children: ReactNode;
+  foldable?: boolean;
 }) {
-  const [bandCollapsed, toggleBand] = useFireCollapsed(bandKey, defaultCollapsed);
+  const [bandCollapsed, toggleBand] = useFireCollapsed(bandKey, foldable ? defaultCollapsed : false);
   const [mods, setMods] = useState<Record<string, BandModuleMeta>>({});
   const { focusId, focusActive } = useFireLayout();
 
@@ -132,13 +135,11 @@ export function FireBand({
   );
   const holdsFocus = !!(focusId && bandModuleIds.has(focusId));
 
-  // Focus mode: hide bands that don't own the focused module
   const hiddenByFocus = focusActive && !holdsFocus;
 
-  // Keep the owning band expanded while focused
   useEffect(() => {
-    if (holdsFocus) ensureExpanded(bandKey);
-  }, [holdsFocus, bandKey]);
+    if (holdsFocus || !foldable) ensureExpanded(bandKey);
+  }, [holdsFocus, bandKey, foldable]);
 
   const register = useCallback((meta: BandModuleMeta) => {
     setMods((prev) => {
@@ -173,8 +174,7 @@ export function FireBand({
 
   if (hiddenByFocus) return null;
 
-  // In focus mode, force the band body open even if user had it folded
-  const showBody = holdsFocus || !bandCollapsed;
+  const showBody = !foldable || holdsFocus || !bandCollapsed;
 
   return (
     <BandContext.Provider value={ctx}>
@@ -184,34 +184,60 @@ export function FireBand({
         data-fire-band={bandKey as FireBandId}
       >
         <div className={`flex items-center justify-between gap-2 ${showBody ? "mb-2" : ""}`}>
-          <button
-            type="button"
-            onClick={toggleBand}
-            aria-expanded={showBody}
-            className="flex items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-            title={showBody ? `Collapse ${title}` : `Expand ${title}`}
-          >
-            <CollapseToggle collapsed={!showBody} color={color} />
-            <span
-              className="text-[12px] font-semibold uppercase tracking-[0.22em]"
-              style={{ color }}
+          {foldable ? (
+            <button
+              type="button"
+              onClick={toggleBand}
+              aria-expanded={showBody}
+              className="flex items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+              title={showBody ? `Collapse ${title}` : `Expand ${title}`}
             >
-              {title}
-            </span>
-            {hint && (
-              <span className="hidden sm:inline text-[9px] normal-case tracking-normal text-white/30">
-                · {hint}
-              </span>
-            )}
-            {holdsFocus && (
+              <CollapseToggle collapsed={!showBody} color={color} />
               <span
-                className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
-                style={{ borderColor: `${color}66`, color, background: `${color}18` }}
+                className="text-[12px] font-semibold uppercase tracking-[0.22em]"
+                style={{ color }}
               >
-                Focus
+                {title}
               </span>
-            )}
-          </button>
+              {hint && (
+                <span className="hidden sm:inline text-[9px] normal-case tracking-normal text-white/30">
+                  · {hint}
+                </span>
+              )}
+              {holdsFocus && (
+                <span
+                  className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                  style={{ borderColor: `${color}66`, color, background: `${color}18` }}
+                >
+                  Focus
+                </span>
+              )}
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className="h-2 w-2 rounded-full shrink-0"
+                style={{ background: color, boxShadow: `0 0 10px ${color}` }}
+                aria-hidden
+              />
+              <span className="text-[12px] font-black uppercase tracking-[0.2em]" style={{ color }}>
+                {title}
+              </span>
+              {hint && (
+                <span className="hidden sm:inline text-[9px] normal-case tracking-normal text-white/30 truncate">
+                  · {hint}
+                </span>
+              )}
+              {holdsFocus && (
+                <span
+                  className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                  style={{ borderColor: `${color}66`, color, background: `${color}18` }}
+                >
+                  Focus
+                </span>
+              )}
+            </div>
+          )}
           {showBody && list.length > 0 && (
             <span className="text-[9px] font-mono text-white/30">
               {openCount}/{list.length} open

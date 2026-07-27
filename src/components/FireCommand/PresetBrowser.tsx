@@ -12,13 +12,10 @@ import {
   type PresetCategory,
 } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
-import { MISSION_PACKS } from "@/audio/dsp/fireMissionPacks";
-import { loadProjectData } from "@/lib/fireStudio";
 
 const FIRE = "#ff6a3d";
 
 const CAT_COLOR: Record<string, string> = {
-  Missions: "#ffd166",
   Bass: "#ff5c2e",
   Lead: "#ffb648",
   Pluck: "#ffd166",
@@ -36,7 +33,6 @@ const CAT_COLOR: Record<string, string> = {
 /** Text marks only — no emoji. */
 const CAT_MARK: Record<string, string> = {
   All: "ALL",
-  Missions: "MSN",
   Bass: "BAS",
   Lead: "LED",
   Pluck: "PLK",
@@ -51,7 +47,7 @@ const CAT_MARK: Record<string, string> = {
   User: "USR",
 };
 
-type Filter = "All" | "Missions" | PresetCategory | "User";
+type Filter = "All" | PresetCategory | "User";
 
 interface Card {
   id: string;
@@ -109,7 +105,6 @@ export function PresetBrowser({
   const counts = useMemo(() => {
     const m = new Map<Filter, number>();
     m.set("All", cards.length);
-    m.set("Missions", MISSION_PACKS.length);
     for (const c of cards) m.set(c.category, (m.get(c.category) ?? 0) + 1);
     return m;
   }, [cards]);
@@ -137,18 +132,7 @@ export function PresetBrowser({
     toast(`Saved · ${useFireCommandStore.getState().userPresets.find((p) => p.id === id)?.name ?? "patch"}`);
   };
 
-  const rail: Filter[] = ["All", "Missions", ...PRESET_CATEGORIES, "User"];
-
-  const missionItems = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return MISSION_PACKS;
-    return MISSION_PACKS.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q)
-        || p.desc.toLowerCase().includes(q)
-        || p.tagline.toLowerCase().includes(q),
-    );
-  }, [query]);
+  const rail: Filter[] = ["All", ...PRESET_CATEGORIES, "User"];
 
   return (
     <AnimatePresence>
@@ -206,7 +190,7 @@ export function PresetBrowser({
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={filter === "Missions" ? "Search missions…" : `Search ${counts.get(filter) ?? 0} patches…`}
+                placeholder={`Search ${counts.get(filter) ?? 0} patches…`}
                 className="flex-1 min-w-0 rounded-lg border border-white/12 bg-black/45 px-3 py-2 text-sm text-white placeholder:text-white/30 outline-none focus:border-[#ff6a3d]/55"
               />
               <div className="flex items-center gap-1.5 shrink-0">
@@ -262,156 +246,121 @@ export function PresetBrowser({
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-5">
-                {filter === "Missions" ? (
-                  <div>
-                    <div className="mb-3 text-[11px] text-white/40 leading-relaxed max-w-2xl">
-                      Missions load a full production (patches, drums, notes, chain) and replace the current session. Undo restores your work.
-                    </div>
-                    {missionItems.length === 0 && (
-                      <div className="text-center text-sm text-white/35 py-12">No missions match.</div>
+                {groups.length === 0 && (
+                  <div className="text-center text-sm text-white/35 py-12">No patches match.</div>
+                )}
+                {groups.map(({ cat, items }) => (
+                  <div key={String(cat)}>
+                    {filter === "All" && (
+                      <div
+                        className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em]"
+                        style={{ color: CAT_COLOR[cat] ?? "#fff" }}
+                      >
+                        <span className="opacity-70">{CAT_MARK[cat]}</span>
+                        <span>{cat}</span>
+                        <span className="h-px flex-1 bg-white/[0.06]" />
+                        <span className="font-mono text-white/30 normal-case tracking-normal">{items.length}</span>
+                      </div>
                     )}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {missionItems.map((pack) => (
-                        <button
-                          key={pack.id}
-                          type="button"
-                          onClick={() => {
-                            loadProjectData(pack.payload());
-                            toast(`${pack.name} deployed — hit play`);
-                            onClose();
-                          }}
-                          className="text-left rounded-xl border border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/18 px-3.5 py-3 transition group"
-                          style={{ borderLeftWidth: 3, borderLeftColor: pack.color }}
-                        >
-                          <div className="flex items-baseline justify-between gap-2">
-                            <div className="font-semibold text-white group-hover:text-[#ffd9c9]">{pack.name}</div>
-                            <div className="text-[9px] font-mono text-white/30">{pack.bpm} BPM</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                      {items.map((c) => {
+                        const active = presetId === c.id;
+                        const color = CAT_COLOR[c.category] ?? FIRE;
+                        return (
+                          <div
+                            key={c.id}
+                            className={`group relative rounded-lg border px-3 py-2.5 transition cursor-pointer ${
+                              active
+                                ? "border-white/25 bg-white/[0.07]"
+                                : "border-white/[0.06] bg-black/25 hover:border-white/14 hover:bg-white/[0.04]"
+                            }`}
+                            style={active ? { boxShadow: `inset 3px 0 0 ${color}` } : undefined}
+                            onClick={() => {
+                              loadPreset(c.id);
+                              toast(c.name);
+                            }}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className={`text-[13px] font-semibold truncate ${active ? "text-white" : "text-white/90"}`}>
+                                  {c.name}
+                                </div>
+                                <div className="text-[10px] text-white/35 truncate mt-0.5">{c.desc}</div>
+                              </div>
+                              {c.user && (
+                                <div className="flex items-center gap-0.5 shrink-0 opacity-70 group-hover:opacity-100">
+                                  <button
+                                    type="button"
+                                    className="w-6 h-6 rounded text-[10px] text-white/50 hover:text-white hover:bg-white/10"
+                                    title="Rename"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setRenamingId(c.id);
+                                      setRenameText(c.name);
+                                    }}
+                                  >✎</button>
+                                  <button
+                                    type="button"
+                                    className="w-6 h-6 rounded text-[10px] text-white/50 hover:text-red-300 hover:bg-red-500/15"
+                                    title="Delete"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setConfirmDeleteId(c.id);
+                                    }}
+                                  >✕</button>
+                                </div>
+                              )}
+                            </div>
+                            {renamingId === c.id && (
+                              <div className="mt-2 flex gap-1" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  autoFocus
+                                  value={renameText}
+                                  onChange={(e) => setRenameText(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      renameUserPreset(c.id, renameText);
+                                      setRenamingId(null);
+                                    }
+                                    if (e.key === "Escape") setRenamingId(null);
+                                  }}
+                                  className="rounded border border-white/15 bg-black/50 px-2 py-1 text-xs text-white outline-none flex-1"
+                                />
+                                <button
+                                  type="button"
+                                  className="px-2 text-[10px] font-bold text-[#ffb08a]"
+                                  onClick={() => {
+                                    renameUserPreset(c.id, renameText);
+                                    setRenamingId(null);
+                                  }}
+                                >OK</button>
+                              </div>
+                            )}
+                            {confirmDeleteId === c.id && (
+                              <div className="mt-2 flex items-center gap-2 text-[10px]" onClick={(e) => e.stopPropagation()}>
+                                <span className="text-white/50">Delete?</span>
+                                <button
+                                  type="button"
+                                  className="text-red-300 font-bold"
+                                  onClick={() => {
+                                    deleteUserPreset(c.id);
+                                    setConfirmDeleteId(null);
+                                  }}
+                                >Yes</button>
+                                <button type="button" className="text-white/40" onClick={() => setConfirmDeleteId(null)}>No</button>
+                              </div>
+                            )}
                           </div>
-                          <div className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: pack.color }}>{pack.tagline}</div>
-                          <div className="text-[11px] text-white/40 mt-1.5 line-clamp-2">{pack.desc}</div>
-                        </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
-                ) : (
-                  <>
-                    {groups.length === 0 && (
-                      <div className="text-center text-sm text-white/35 py-12">No patches match.</div>
-                    )}
-                    {groups.map(({ cat, items }) => (
-                      <div key={String(cat)}>
-                        {filter === "All" && (
-                          <div
-                            className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em]"
-                            style={{ color: CAT_COLOR[cat] ?? "#fff" }}
-                          >
-                            <span className="opacity-70">{CAT_MARK[cat]}</span>
-                            <span>{cat}</span>
-                            <span className="h-px flex-1 bg-white/[0.06]" />
-                            <span className="font-mono text-white/30 normal-case tracking-normal">{items.length}</span>
-                          </div>
-                        )}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
-                          {items.map((c) => {
-                            const active = presetId === c.id;
-                            const color = CAT_COLOR[c.category] ?? FIRE;
-                            return (
-                              <div
-                                key={c.id}
-                                className={`group relative rounded-lg border px-3 py-2.5 transition cursor-pointer ${
-                                  active
-                                    ? "border-white/25 bg-white/[0.07]"
-                                    : "border-white/[0.06] bg-black/25 hover:border-white/14 hover:bg-white/[0.04]"
-                                }`}
-                                style={active ? { boxShadow: `inset 3px 0 0 ${color}` } : undefined}
-                                onClick={() => {
-                                  loadPreset(c.id);
-                                  toast(c.name);
-                                }}
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <div className={`text-[13px] font-semibold truncate ${active ? "text-white" : "text-white/90"}`}>
-                                      {c.name}
-                                    </div>
-                                    <div className="text-[10px] text-white/35 truncate mt-0.5">{c.desc}</div>
-                                  </div>
-                                  {c.user && (
-                                    <div className="flex items-center gap-0.5 shrink-0 opacity-70 group-hover:opacity-100">
-                                      <button
-                                        type="button"
-                                        className="w-6 h-6 rounded text-[10px] text-white/50 hover:text-white hover:bg-white/10"
-                                        title="Rename"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setRenamingId(c.id);
-                                          setRenameText(c.name);
-                                        }}
-                                      >✎</button>
-                                      <button
-                                        type="button"
-                                        className="w-6 h-6 rounded text-[10px] text-white/50 hover:text-red-300 hover:bg-red-500/15"
-                                        title="Delete"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setConfirmDeleteId(c.id);
-                                        }}
-                                      >✕</button>
-                                    </div>
-                                  )}
-                                </div>
-                                {renamingId === c.id && (
-                                  <div className="mt-2 flex gap-1" onClick={(e) => e.stopPropagation()}>
-                                    <input
-                                      autoFocus
-                                      value={renameText}
-                                      onChange={(e) => setRenameText(e.target.value)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter") {
-                                          renameUserPreset(c.id, renameText);
-                                          setRenamingId(null);
-                                        }
-                                        if (e.key === "Escape") setRenamingId(null);
-                                      }}
-                                      className="flex-1 rounded border border-white/15 bg-black/50 px-2 py-1 text-xs text-white outline-none"
-                                    />
-                                    <button
-                                      type="button"
-                                      className="px-2 text-[10px] font-bold text-[#ffb08a]"
-                                      onClick={() => {
-                                        renameUserPreset(c.id, renameText);
-                                        setRenamingId(null);
-                                      }}
-                                    >OK</button>
-                                  </div>
-                                )}
-                                {confirmDeleteId === c.id && (
-                                  <div className="mt-2 flex items-center gap-2 text-[10px]" onClick={(e) => e.stopPropagation()}>
-                                    <span className="text-white/50">Delete?</span>
-                                    <button
-                                      type="button"
-                                      className="text-red-300 font-bold"
-                                      onClick={() => {
-                                        deleteUserPreset(c.id);
-                                        setConfirmDeleteId(null);
-                                      }}
-                                    >Yes</button>
-                                    <button type="button" className="text-white/40" onClick={() => setConfirmDeleteId(null)}>No</button>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                )}
+                ))}
               </div>
             </div>
 
             <div className="px-5 py-2 border-t border-white/[0.06] text-[10px] text-white/30 flex justify-between">
-              <span>{filter === "Missions" ? "Click a mission to deploy · Esc closes" : "Click a patch to load · Esc closes"}</span>
+              <span>Click a patch to load · Esc closes</span>
               <span className="font-mono tabular-nums text-white/25">{filtered.length} shown</span>
             </div>
           </motion.div>

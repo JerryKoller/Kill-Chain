@@ -20,7 +20,6 @@ import {
 } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
-import { MISSION_SHOWCASE_PRESETS } from "@/audio/dsp/fireMissionPresets";
 
 /**
  * fireCommandStore — single source of truth for the "Fire Command" synth.
@@ -241,10 +240,9 @@ const FLAGSHIP_PRESETS: FirePreset[] = [
   },
 ];
 
-/** Factory bank: Init + capability missions + curated 20×11 library (no character mirrors). */
+/** Factory bank: Init + curated library (no character mirrors). */
 export const FIRE_PRESETS: FirePreset[] = [
   ...FLAGSHIP_PRESETS,
-  ...MISSION_SHOWCASE_PRESETS,
   ...GENERATED_PRESETS,
 ];
 
