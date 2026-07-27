@@ -282,13 +282,18 @@ export function PianoRoll() {
     };
   };
 
-  const hitNote = (x: number, y: number): { note: RollNote; zone: "body" | "edge" } | null => {
+  const hitNote = (x: number, y: number, fat = false): { note: RollNote; zone: "body" | "edge" } | null => {
+    const padY = fat ? 3 : 0;
+    const padX = fat ? 2 : 0;
     for (let i = notes.length - 1; i >= 0; i--) {
       const n = notes[i];
       const nx = GUTTER + n.step * CELL_W;
       const ny = (MIDI_TOP - n.midi) * ROW_H;
       const nw = Math.max(5, n.len * CELL_W);
-      if (x >= nx && x <= nx + nw && y >= ny && y <= ny + ROW_H) {
+      if (
+        x >= nx - padX && x <= nx + nw + padX
+        && y >= ny - padY && y <= ny + ROW_H + padY
+      ) {
         return { note: n, zone: x > nx + nw - 7 ? "edge" : "body" };
       }
     }
@@ -303,14 +308,21 @@ export function PianoRoll() {
   const onPointerDown = (e: React.PointerEvent) => {
     // Right button = the ERASER: delete on contact, keep deleting while held.
     if (e.button === 2) {
+      e.preventDefault();
+      e.stopPropagation();
       const { x, y } = posFromEvent(e);
       if (x < GUTTER) return;
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      } else {
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      }
       dragRef.current = {
         mode: "erase", noteId: null, startX: x, startY: y,
         orig: null, groupOrig: null, moved: false,
       };
-      const hit = hitNote(x, y);
+      const hit = hitNote(x, y, true);
       if (hit) {
         if (selectedIds.has(hit.note.id) && selectedIds.size > 1) {
           removeNotes([...selectedIds]);
@@ -408,7 +420,7 @@ export function PianoRoll() {
     if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
 
     if (d.mode === "erase") {
-      const hit = x >= GUTTER ? hitNote(x, y) : null;
+      const hit = x >= GUTTER ? hitNote(x, y, true) : null;
       if (hit) removeNote(hit.note.id);
       canvas.style.cursor = "not-allowed";
       return;
@@ -594,7 +606,10 @@ export function PianoRoll() {
 
   // Deletion happens in the pointer handlers (eraser drag) — just keep the
   // browser menu out of the way.
-  const onContextMenu = (e: React.MouseEvent) => e.preventDefault();
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
   // Keyboard: delete / duplicate / transpose / nudge / escape.
   useEffect(() => {

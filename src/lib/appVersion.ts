@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.11";
+export const APP_VERSION = "3.0.12";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,15 +12,15 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Clearer arrangement",
-    body: "Add to end replaces the confusing Place button. Empty timeline shows what to do; click a bar or drag a pattern chip onto the grid.",
+    title: "10-track playlist",
+    body: "Layer patterns on up to 10 arrangement tracks. Mute/solo per track; overlapping clips on different lanes play together.",
   },
   {
-    title: "Playlist track chrome",
-    body: "Fixed track label, denser bar grid, and richer clips with start bar and length — plus Editing badge so the open pattern is obvious.",
+    title: "Arrangement tools",
+    body: "Zoom the timeline, scrub the playhead from the ruler, nudge/dup clips, trim length, and set clip or track colors.",
   },
   {
-    title: "Arrangement playlist",
-    body: "FL-style pattern bank + timeline from 3.0.10 — gaps are silence; Loop pattern or Play arrangement.",
+    title: "Piano-roll erase",
+    body: "Right-click erase is more reliable — fatter hit target and the context menu no longer steals the gesture.",
   },
 ];

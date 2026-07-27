@@ -106,15 +106,35 @@ export interface Section {
 
 export const MAX_SECTIONS = 16;
 export const MAX_CLIPS = 64;
+export const MAX_PLAYLIST_TRACKS = 10;
 /** Soft ceiling for arrangement UI scroll (bars). */
 export const MAX_ARRANGEMENT_BARS = 128;
 export type PlayMode = "pattern" | "arrangement";
+
+export const PLAYLIST_TRACK_COLORS = [
+  "#ff6a3d", "#62b6ff", "#9be564", "#c98bff", "#ffd166",
+  "#ff7bac", "#7ce8d5", "#ffb648", "#a78bfa", "#34d399",
+];
+
+/** One playlist row (mute / solo / color / name). */
+export interface PlaylistTrack {
+  name: string;
+  mute: boolean;
+  solo: boolean;
+  color: string;
+}
 
 /** One placed pattern block on the arrangement timeline (absolute 16ths). */
 export interface ArrangementClip {
   id: string;
   patternId: string;
   startStep: number;
+  /** Playlist row 0..MAX_PLAYLIST_TRACKS-1 */
+  track: number;
+  /** Trimmed audible length in steps; omit = full pattern length. */
+  lengthSteps?: number;
+  /** Optional clip color override (else track / pattern color). */
+  color?: string;
 }
 
 let clipSeq = 0;
@@ -124,8 +144,42 @@ function snapToBar(step: number): number {
   return Math.max(0, Math.round(step / STEPS_PER_BAR) * STEPS_PER_BAR);
 }
 
+function snapToStep(step: number): number {
+  return Math.max(0, Math.round(step));
+}
+
 function sectionLenSteps(sec: { bars: number }): number {
   return Math.max(1, sec.bars) * STEPS_PER_BAR;
+}
+
+function clipAudibleLen(clip: ArrangementClip, sec: { bars: number }): number {
+  const full = sectionLenSteps(sec);
+  if (clip.lengthSteps == null) return full;
+  return clamp(Math.round(clip.lengthSteps), 1, full);
+}
+
+function defaultPlaylistTracks(): PlaylistTrack[] {
+  return Array.from({ length: MAX_PLAYLIST_TRACKS }, (_, i) => ({
+    name: i === 0 ? "Track 1" : `Track ${i + 1}`,
+    mute: false,
+    solo: false,
+    color: PLAYLIST_TRACK_COLORS[i % PLAYLIST_TRACK_COLORS.length],
+  }));
+}
+
+function sanitizePlaylistTracks(raw: unknown): PlaylistTrack[] {
+  const base = defaultPlaylistTracks();
+  if (!Array.isArray(raw)) return base;
+  return base.map((d, i) => {
+    const t = raw[i] as Partial<PlaylistTrack> | undefined;
+    if (!t || typeof t !== "object") return d;
+    return {
+      name: typeof t.name === "string" && t.name.trim() ? t.name.trim().slice(0, 18) : d.name,
+      mute: t.mute === true,
+      solo: t.solo === true,
+      color: typeof t.color === "string" && t.color ? t.color : d.color,
+    };
+  });
 }
 
 function migratePlayMode(raw: unknown): PlayMode {
@@ -133,7 +187,7 @@ function migratePlayMode(raw: unknown): PlayMode {
   return "pattern";
 }
 
-/** Expand a legacy song-order chain into absolute-time clips. */
+/** Expand a legacy song-order chain into absolute-time clips on track 0. */
 function chainToArrangement(chain: string[], sections: Section[]): ArrangementClip[] {
   const byId = new Map(sections.map((s) => [s.id, s]));
   let pos = 0;
@@ -141,7 +195,7 @@ function chainToArrangement(chain: string[], sections: Section[]): ArrangementCl
   for (const id of chain) {
     const sec = byId.get(id);
     if (!sec) continue;
-    out.push({ id: clipId(), patternId: id, startStep: pos });
+    out.push({ id: clipId(), patternId: id, startStep: pos, track: 0 });
     pos += sectionLenSteps(sec);
     if (out.length >= MAX_CLIPS) break;
   }
@@ -157,12 +211,21 @@ function sanitizeArrangement(raw: unknown, sections: Section[]): ArrangementClip
     if (!c || typeof c !== "object") continue;
     const patternId = String((c as ArrangementClip).patternId ?? "");
     if (!ids.has(patternId)) continue;
+    const sec = byId.get(patternId)!;
+    const full = sectionLenSteps(sec);
     const startStep = snapToBar(Number((c as ArrangementClip).startStep) || 0);
-    const maxStep = (MAX_ARRANGEMENT_BARS - (byId.get(patternId)?.bars ?? 1)) * STEPS_PER_BAR;
+    const maxStep = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
+    const track = clamp(Math.round(Number((c as ArrangementClip).track) || 0), 0, MAX_PLAYLIST_TRACKS - 1);
+    const rawLen = (c as ArrangementClip).lengthSteps;
+    const lengthSteps = rawLen == null ? undefined : clamp(Math.round(Number(rawLen)), 1, full);
+    const color = typeof (c as ArrangementClip).color === "string" ? (c as ArrangementClip).color : undefined;
     out.push({
       id: String((c as ArrangementClip).id ?? clipId()),
       patternId,
       startStep: clamp(startStep, 0, Math.max(0, maxStep)),
+      track,
+      lengthSteps,
+      color,
     });
     if (out.length >= MAX_CLIPS) break;
   }
@@ -514,6 +577,8 @@ interface PersistShape {
   sections: Section[];
   activeSectionId: string;
   arrangement: ArrangementClip[];
+  /** Playlist rows (mute / solo / color / name) — clips live on `track`. */
+  playlistTracks: PlaylistTrack[];
   playMode: PlayMode;
   /** Mixer (v1.6): per-part strips + Fire master limiter switch. */
   mixer: Record<MixerStripId, MixerStrip>;
@@ -577,7 +642,8 @@ function defaults(): PersistShape {
     samples: [],
     sections: [sec],
     activeSectionId: sec.id,
-    arrangement: [{ id: clipId(), patternId: sec.id, startStep: 0 }],
+    arrangement: [{ id: clipId(), patternId: sec.id, startStep: 0, track: 0 }],
+    playlistTracks: defaultPlaylistTracks(),
     playMode: "pattern",
     mixer: defaultMixer(),
     fireLimiterOn: true,
@@ -758,10 +824,10 @@ function load(): PersistShape & ActiveMirror {
           .slice(0, MAX_CLIPS);
         arrangement = chainToArrangement(chain, sections);
       } else {
-        arrangement = [{ id: clipId(), patternId: sections[0].id, startStep: 0 }];
+        arrangement = [{ id: clipId(), patternId: sections[0].id, startStep: 0, track: 0 }];
       }
       if (arrangement.length === 0) {
-        arrangement = [{ id: clipId(), patternId: sections[0].id, startStep: 0 }];
+        arrangement = [{ id: clipId(), patternId: sections[0].id, startStep: 0, track: 0 }];
       }
     } else {
       // ── v1 migration: the single persisted pattern becomes section "A". ──
@@ -780,7 +846,7 @@ function load(): PersistShape & ActiveMirror {
       };
       sections = [sec];
       activeSectionId = sec.id;
-      arrangement = [{ id: clipId(), patternId: sec.id, startStep: 0 }];
+      arrangement = [{ id: clipId(), patternId: sec.id, startStep: 0, track: 0 }];
     }
 
     const anySection = sections[0];
@@ -806,6 +872,7 @@ function load(): PersistShape & ActiveMirror {
       sections,
       activeSectionId,
       arrangement,
+      playlistTracks: sanitizePlaylistTracks((p as { playlistTracks?: unknown }).playlistTracks),
       playMode: migratePlayMode(p.playMode),
       mixer: sanitizeMixer(p.mixer),
       fireLimiterOn: p.fireLimiterOn !== false,
@@ -860,6 +927,7 @@ function persistShapeOf(s: FireSequencerState): PersistShape {
     sections: sectionsWithActive(s),
     activeSectionId: s.activeSectionId,
     arrangement: s.arrangement,
+    playlistTracks: s.playlistTracks,
     playMode: s.playMode,
     mixer: s.mixer,
     fireLimiterOn: s.fireLimiterOn,
@@ -901,12 +969,37 @@ let nextStep = 0;
 let startToken = 0;
 
 // Arrangement-mode clip map (rebuilt on start + whenever the arrangement changes).
-interface SongSlot { clipId: string; sectionId: string; start: number; len: number }
+interface SongSlot {
+  clipId: string;
+  sectionId: string;
+  start: number;
+  len: number;
+  track: number;
+}
 let songMap: SongSlot[] = [];
 let songTotal = 0;
+/** Cue / scrub position when arrangement is stopped (absolute 16ths). */
+let arrangementCueStep = 0;
 
 function stepDur(bpm: number): number {
   return 60 / bpm / 4; // one 16th
+}
+
+function trackIsAudible(tracks: PlaylistTrack[], track: number): boolean {
+  const anySolo = tracks.some((t) => t.solo);
+  const t = tracks[track] ?? tracks[0];
+  if (!t) return true;
+  if (anySolo) return t.solo;
+  return !t.mute;
+}
+
+function slotsCovering(globalStep: number, tracks: PlaylistTrack[]): SongSlot[] {
+  return songMap.filter(
+    (m) =>
+      globalStep >= m.start
+      && globalStep < m.start + m.len
+      && trackIsAudible(tracks, m.track),
+  );
 }
 
 /** Absolute clip layout. Empty arrangement → loop the active pattern once. */
@@ -915,14 +1008,14 @@ function computeSongMap(s: FireSequencerState): { map: SongSlot[]; total: number
   const byId = new Map(secs.map((x) => [x.id, x]));
   const clips = [...s.arrangement]
     .filter((c) => byId.has(c.patternId))
-    .sort((a, b) => a.startStep - b.startStep || a.id.localeCompare(b.id));
+    .sort((a, b) => a.startStep - b.startStep || a.track - b.track || a.id.localeCompare(b.id));
 
   if (clips.length === 0) {
     const active = byId.get(s.activeSectionId) ?? secs[0];
     const len = active ? sectionLenSteps(active) : STEPS_PER_BAR;
     return {
       map: active
-        ? [{ clipId: "_active", sectionId: active.id, start: 0, len }]
+        ? [{ clipId: "_active", sectionId: active.id, start: 0, len, track: 0 }]
         : [],
       total: Math.max(len, 1),
     };
@@ -932,8 +1025,14 @@ function computeSongMap(s: FireSequencerState): { map: SongSlot[]; total: number
   let end = 0;
   for (const c of clips) {
     const sec = byId.get(c.patternId)!;
-    const len = sectionLenSteps(sec);
-    map.push({ clipId: c.id, sectionId: c.patternId, start: c.startStep, len });
+    const len = clipAudibleLen(c, sec);
+    map.push({
+      clipId: c.id,
+      sectionId: c.patternId,
+      start: c.startStep,
+      len,
+      track: clamp(c.track ?? 0, 0, MAX_PLAYLIST_TRACKS - 1),
+    });
     end = Math.max(end, c.startStep + len);
   }
   return { map, total: Math.max(end, 1) };
@@ -1021,7 +1120,9 @@ function applyAutomationTick(s: FireSequencerState, now: number): void {
   let auto: AutomationMap = s.automation;
   let pos = g;
   if (song) {
-    const slot = songMap.find((m) => g >= m.start && g < m.start + m.len);
+    const slots = slotsCovering(g, s.playlistTracks);
+    // Prefer the active pattern's automation when layered; else first clip.
+    const slot = slots.find((m) => m.sectionId === s.activeSectionId) ?? slots[0];
     if (!slot) return; // gap — silence, leave knobs alone this tick
     pos = g - slot.start;
     auto = slot.sectionId === s.activeSectionId
@@ -1058,6 +1159,61 @@ function restoreAutomationBaseline(): void {
   });
 }
 
+/** Fire drums + samples + synth for one pattern at a local step. */
+function schedulePatternAtStep(
+  s: FireSequencerState,
+  engine: ReturnType<typeof getEngine>,
+  content: ReturnType<typeof contentFor>,
+  step: number,
+  whenSynth: number,
+  whenDrums: number,
+  whenSamples: number,
+  dur: number,
+): void {
+  if (s.drumsEnabled) {
+    for (const lane of DRUM_LANES) {
+      const v = content.drums.steps[lane.id]?.[step] ?? 0;
+      if (v > 0) {
+        engine.fireDrums.trigger(lane.id, whenDrums, v);
+        if (s.duckEnabled && lane.id === s.duckSource) {
+          engine.fireDuckTrigger(whenDrums, s.duckAmount * v, s.duckReleaseMs / 1000);
+        }
+      }
+    }
+  }
+  for (const sl of s.samples) {
+    const v = content.laneSteps(sl.id)?.[step] ?? 0;
+    if (v <= 0) continue;
+    const buf = sampleBuffers.get(sl.path);
+    if (buf) engine.fireDrums.playBuffer(buf, whenSamples, v, sl.level, true);
+    else void loadSampleBuffer(sl.path);
+  }
+  if (s.synthEnabled || s.synthBEnabled) {
+    const bucket = content.notesByStep.get(step);
+    if (bucket) {
+      for (const n of bucket) {
+        const isB = n.ch === 1;
+        if (isB ? !s.synthBEnabled : !s.synthEnabled) continue;
+        const target = isB ? engine.fireCommandB : engine.fireCommand;
+        const offset = (n.step - step) * dur;
+        const fp = engine.fireCommand.getPatch();
+        const humanOn = fp.moduleEnable?.["human"] !== false && fp.humanizeOn;
+        let when = whenSynth + offset;
+        let vel = n.vel;
+        if (humanOn) {
+          const tj = (fp.humanizeTiming ?? 0.25) * dur * 0.35;
+          const vj = (fp.humanizeVelocity ?? 0.2) * 0.4;
+          when += (Math.random() * 2 - 1) * tj;
+          vel = Math.max(0.05, Math.min(1, n.vel * (1 + (Math.random() * 2 - 1) * vj)));
+        }
+        target.playNote(
+          n.midi, vel, when, Math.max(0.03, n.len * dur * 0.98),
+        );
+      }
+    }
+  }
+}
+
 function startScheduler(get: () => FireSequencerState): void {
   stopScheduler();
   const engine = getEngine();
@@ -1088,8 +1244,11 @@ function startScheduler(get: () => FireSequencerState): void {
   // context is genuinely running, so step 0 lands on a live, advancing clock.
   const begin = () => {
     if (token !== startToken || !get().playing) return; // superseded/stopped
-    loopStartTime = ctx.currentTime + 0.08;
-    nextStep = 0;
+    const cue = get().playMode === "arrangement"
+      ? clamp(Math.floor(arrangementCueStep), 0, Math.max(0, songTotal - 1))
+      : 0;
+    loopStartTime = ctx.currentTime + 0.08 - cue * stepDur(get().bpm);
+    nextStep = cue;
 
     const tick = () => {
       const s = get();
@@ -1104,81 +1263,36 @@ function startScheduler(get: () => FireSequencerState): void {
       while (loopStartTime + nextStep * dur < horizon) {
         const globalStep = nextStep % total;
 
-        // Resolve (section, local step) — trivial in pattern mode.
-        let step = globalStep;
-        let content = contentFor(s, s.activeSectionId);
-        if (song) {
-          const slot = songMap.find(
-            (m) => globalStep >= m.start && globalStep < m.start + m.len,
-          );
-          if (!slot) { nextStep++; continue; } // arrangement gap = silence
-          step = globalStep - slot.start;
-          content = contentFor(s, slot.sectionId);
-        }
-
-        // Per-group swing (v1.6): drums, melody and the sample deck can each
-        // sit on their own groove. Linked = everything follows the main knob.
         const base = loopStartTime + nextStep * dur;
-        const halfDur = dur * 0.5;
-        const odd = step % 2 === 1;
-        const whenSynth = base + (odd ? s.swing * halfDur : 0);
-        const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
-        const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
-
         // A step already well in the past (main thread stalled / background
         // throttling) is skipped rather than clamped to "now" — otherwise a
         // long stall fires the whole backlog as one machine-gun burst.
         if (base < now - 0.03) { nextStep++; continue; }
 
-        if (s.drumsEnabled) {
-          for (const lane of DRUM_LANES) {
-            const v = content.drums.steps[lane.id]?.[step] ?? 0;
-            if (v > 0) {
-              engine.fireDrums.trigger(lane.id, whenDrums, v);
-              // Sidechain: the source lane dips the synth path in lockstep.
-              if (s.duckEnabled && lane.id === s.duckSource) {
-                engine.fireDuckTrigger(whenDrums, s.duckAmount * v, s.duckReleaseMs / 1000);
-              }
-            }
+        if (song) {
+          const slots = slotsCovering(globalStep, s.playlistTracks);
+          if (slots.length === 0) { nextStep++; continue; } // gap / muted = silence
+          for (const slot of slots) {
+            const step = globalStep - slot.start;
+            const content = contentFor(s, slot.sectionId);
+            const halfDur = dur * 0.5;
+            const odd = step % 2 === 1;
+            const whenSynth = base + (odd ? s.swing * halfDur : 0);
+            const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
+            const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
+            schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur);
           }
+        } else {
+          const step = globalStep;
+          const content = contentFor(s, s.activeSectionId);
+          const halfDur = dur * 0.5;
+          const odd = step % 2 === 1;
+          const whenSynth = base + (odd ? s.swing * halfDur : 0);
+          const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
+          const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
+          schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur);
         }
-        // Sample deck lanes (fire regardless of the drum arm — they're their
-        // own instrument rows).
-        for (const sl of s.samples) {
-          const v = content.laneSteps(sl.id)?.[step] ?? 0;
-          if (v <= 0) continue;
-          const buf = sampleBuffers.get(sl.path);
-          if (buf) engine.fireDrums.playBuffer(buf, whenSamples, v, sl.level, true);
-          else void loadSampleBuffer(sl.path); // hydrate for the next pass
-        }
-        if (s.synthEnabled || s.synthBEnabled) {
-          // Notes may start on fractional steps; bucket by floor(step).
-          const bucket = content.notesByStep.get(step);
-          if (bucket) {
-            for (const n of bucket) {
-              // Route by channel: A = the playable Fire Command synth,
-              // B = the second instrument voiced by its own preset.
-              const isB = n.ch === 1;
-              if (isB ? !s.synthBEnabled : !s.synthEnabled) continue;
-              const target = isB ? engine.fireCommandB : engine.fireCommand;
-              const offset = (n.step - step) * dur;
-              // Humanize from the live synth patch (A path drives Perf humanize).
-              const fp = engine.fireCommand.getPatch();
-              const humanOn = fp.moduleEnable?.["human"] !== false && fp.humanizeOn;
-              let when = whenSynth + offset;
-              let vel = n.vel;
-              if (humanOn) {
-                const tj = (fp.humanizeTiming ?? 0.25) * dur * 0.35;
-                const vj = (fp.humanizeVelocity ?? 0.2) * 0.4;
-                when += (Math.random() * 2 - 1) * tj;
-                vel = Math.max(0.05, Math.min(1, n.vel * (1 + (Math.random() * 2 - 1) * vj)));
-              }
-              target.playNote(
-                n.midi, vel, when, Math.max(0.03, n.len * dur * 0.98),
-              );
-            }
-          }
-        }
+
         nextStep++;
         // Keep loopStartTime anchored so long sessions don't lose float precision.
         if (nextStep >= total * 4) {
@@ -1225,8 +1339,9 @@ export function getPlayheadStep(bpm: number, bars: number): number {
     const t = (ctx.currentTime - loopStartTime) / dur;
     if (t < 0) return 0;
     const g = t % songTotal;
-    const slot = songMap.find((m) => g >= m.start && g < m.start + m.len);
-    if (!slot || slot.sectionId !== s.activeSectionId) return -1;
+    const slots = slotsCovering(g, s.playlistTracks);
+    const slot = slots.find((m) => m.sectionId === s.activeSectionId);
+    if (!slot) return -1;
     return g - slot.start;
   }
   const total = bars * STEPS_PER_BAR;
@@ -1243,12 +1358,11 @@ export function getPlayingSectionId(): string | null {
   const ctx = getEngine().ctx;
   const t = (ctx.currentTime - loopStartTime) / stepDur(s.bpm);
   if (t < 0) {
-    const first = songMap[0];
+    const first = slotsCovering(0, s.playlistTracks)[0] ?? songMap[0];
     return first && first.start === 0 ? first.sectionId : null;
   }
   const g = t % songTotal;
-  const slot = songMap.find((m) => g >= m.start && g < m.start + m.len);
-  return slot?.sectionId ?? null;
+  return slotsCovering(g, s.playlistTracks)[0]?.sectionId ?? null;
 }
 
 /** Total steps of one full arrangement pass — used by the exporter. */
@@ -1258,20 +1372,26 @@ export function songTotalSteps(s: FireSequencerState): number {
 
 /** Which arrangement clip is sounding right now. null = gap / n/a. */
 export function getPlayingClipId(): string | null {
+  const ids = getPlayingClipIds();
+  return ids[0] ?? null;
+}
+
+/** All audible arrangement clips under the playhead (multi-lane layering). */
+export function getPlayingClipIds(): string[] {
   const s = useFireSequencerStore.getState();
-  if (!s.playing || s.playMode !== "arrangement" || songTotal <= 0) return null;
+  if (!s.playing || s.playMode !== "arrangement" || songTotal <= 0) return [];
   const t = (getEngine().ctx.currentTime - loopStartTime) / stepDur(s.bpm);
-  if (t < 0) return songMap[0]?.start === 0 ? songMap[0].clipId : null;
-  const g = t % songTotal;
-  return songMap.find((m) => g >= m.start && g < m.start + m.len)?.clipId ?? null;
+  const g = t < 0 ? 0 : t % songTotal;
+  return slotsCovering(g, s.playlistTracks).map((m) => m.clipId);
 }
 
 /** Absolute arrangement playhead in 16th steps (for the timeline scrubber). */
 export function getArrangementPlayheadStep(): number {
   const s = useFireSequencerStore.getState();
-  if (!s.playing || s.playMode !== "arrangement" || songTotal <= 0) return 0;
+  if (s.playMode !== "arrangement") return 0;
+  if (!s.playing || songTotal <= 0) return arrangementCueStep;
   const t = (getEngine().ctx.currentTime - loopStartTime) / stepDur(s.bpm);
-  if (t < 0) return 0;
+  if (t < 0) return arrangementCueStep;
   return t % songTotal;
 }
 
@@ -1369,11 +1489,20 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   duplicateSection: () => string | null;
   renameSection: (id: string, name: string) => void;
   removeSection: (id: string) => void;
-  /** Place a pattern clip on the arrangement at startStep (snapped to bar). */
-  placeClip: (patternId: string, startStep: number) => string | null;
+  /** Place a pattern clip (snapped to bar). Overlap only blocked on the same track. */
+  placeClip: (patternId: string, startStep: number, track?: number) => string | null;
   removeClip: (clipId: string) => void;
-  /** Move a clip; snaps to bar and avoids overlaps by shifting to next free slot. */
-  moveClip: (clipId: string, startStep: number) => void;
+  /** Move a clip; optional track change. Same-track overlaps park after last free end. */
+  moveClip: (clipId: string, startStep: number, track?: number) => void;
+  duplicateClip: (clipId: string) => string | null;
+  /** Nudge clip start by whole bars (negative = earlier). */
+  nudgeClip: (clipId: string, barsDelta: number) => void;
+  /** Trim audible length in steps (1..pattern length). Pass null to restore full. */
+  trimClip: (clipId: string, lengthSteps: number | null) => void;
+  setClipColor: (clipId: string, color: string | null) => void;
+  setPlaylistTrack: (index: number, partial: Partial<PlaylistTrack>) => void;
+  /** Scrub arrangement playhead (snapped to bar). Works while stopped or playing. */
+  seekArrangement: (absoluteStep: number) => void;
   setPlayMode: (mode: PlayMode) => void;
 
   // ── mixer + sidechain (v1.6) ──
@@ -1461,6 +1590,11 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     },
 
     stop: () => {
+      const s = get();
+      if (s.playing && s.playMode === "arrangement" && songTotal > 0) {
+        const t = (getEngine().ctx.currentTime - loopStartTime) / stepDur(s.bpm);
+        if (t >= 0) arrangementCueStep = Math.floor(t % songTotal);
+      }
       set({ playing: false });
       stopScheduler();
       pendingRec.clear();
@@ -2076,7 +2210,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
-    placeClip: (patternId, startStep) => {
+    placeClip: (patternId, startStep, track = 0) => {
       const s = get();
       if (s.arrangement.length >= MAX_CLIPS) return null;
       const secs = sectionsWithActive(s);
@@ -2084,14 +2218,16 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       if (!sec) return null;
       pushFireHistory();
       const len = sectionLenSteps(sec);
+      const tr = clamp(Math.round(track), 0, MAX_PLAYLIST_TRACKS - 1);
       let start = snapToBar(startStep);
       const maxStart = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
       start = clamp(start, 0, Math.max(0, maxStart));
 
       const occupied = s.arrangement
+        .filter((c) => (c.track ?? 0) === tr)
         .map((c) => {
           const p = secs.find((x) => x.id === c.patternId);
-          return p ? { start: c.startStep, len: sectionLenSteps(p) } : null;
+          return p ? { start: c.startStep, len: clipAudibleLen(c, p) } : null;
         })
         .filter((x): x is { start: number; len: number } => !!x);
 
@@ -2099,14 +2235,15 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         occupied.some((o) => st < o.start + o.len && o.start < st + len);
 
       if (overlaps(start)) {
-        // Park after the last clip end (still snapped).
         const end = occupied.reduce((m, o) => Math.max(m, o.start + o.len), 0);
         start = snapToBar(end);
         if (start > maxStart || overlaps(start)) return null;
       }
 
       const id = clipId();
-      set({ arrangement: [...s.arrangement, { id, patternId, startStep: start }] });
+      set({
+        arrangement: [...s.arrangement, { id, patternId, startStep: start, track: tr }],
+      });
       refreshSongMap(get);
       persist();
       return id;
@@ -2121,7 +2258,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
-    moveClip: (id, startStep) => {
+    moveClip: (id, startStep, track) => {
       const s = get();
       const clip = s.arrangement.find((c) => c.id === id);
       if (!clip) return;
@@ -2129,16 +2266,21 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const sec = secs.find((x) => x.id === clip.patternId);
       if (!sec) return;
       pushFireHistory();
-      const len = sectionLenSteps(sec);
+      const len = clipAudibleLen(clip, sec);
+      const tr = clamp(
+        Math.round(track == null ? (clip.track ?? 0) : track),
+        0,
+        MAX_PLAYLIST_TRACKS - 1,
+      );
       let start = snapToBar(startStep);
       const maxStart = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
       start = clamp(start, 0, Math.max(0, maxStart));
 
       const occupied = s.arrangement
-        .filter((c) => c.id !== id)
+        .filter((c) => c.id !== id && (c.track ?? 0) === tr)
         .map((c) => {
           const p = secs.find((x) => x.id === c.patternId);
-          return p ? { start: c.startStep, len: sectionLenSteps(p) } : null;
+          return p ? { start: c.startStep, len: clipAudibleLen(c, p) } : null;
         })
         .filter((x): x is { start: number; len: number } => !!x);
 
@@ -2153,11 +2295,124 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
       set({
         arrangement: s.arrangement.map((c) =>
-          c.id === id ? { ...c, startStep: start } : c,
+          c.id === id ? { ...c, startStep: start, track: tr } : c,
         ),
       });
       refreshSongMap(get);
       persist();
+    },
+
+    duplicateClip: (id) => {
+      const s = get();
+      const clip = s.arrangement.find((c) => c.id === id);
+      if (!clip || s.arrangement.length >= MAX_CLIPS) return null;
+      const secs = sectionsWithActive(s);
+      const sec = secs.find((x) => x.id === clip.patternId);
+      if (!sec) return null;
+      const len = clipAudibleLen(clip, sec);
+      const newId = get().placeClip(clip.patternId, clip.startStep + len, clip.track ?? 0);
+      if (!newId) return null;
+      if (clip.lengthSteps != null || clip.color) {
+        set({
+          arrangement: get().arrangement.map((c) =>
+            c.id === newId
+              ? {
+                  ...c,
+                  lengthSteps: clip.lengthSteps,
+                  color: clip.color,
+                }
+              : c,
+          ),
+        });
+        refreshSongMap(get);
+        persist();
+      }
+      return newId;
+    },
+
+    nudgeClip: (id, barsDelta) => {
+      const s = get();
+      const clip = s.arrangement.find((c) => c.id === id);
+      if (!clip || !Number.isFinite(barsDelta) || barsDelta === 0) return;
+      get().moveClip(id, clip.startStep + Math.round(barsDelta) * STEPS_PER_BAR, clip.track);
+    },
+
+    trimClip: (id, lengthSteps) => {
+      const s = get();
+      const clip = s.arrangement.find((c) => c.id === id);
+      if (!clip) return;
+      const secs = sectionsWithActive(s);
+      const sec = secs.find((x) => x.id === clip.patternId);
+      if (!sec) return;
+      pushFireHistory();
+      const full = sectionLenSteps(sec);
+      const nextLen = lengthSteps == null
+        ? undefined
+        : clamp(snapToStep(lengthSteps), 1, full);
+      set({
+        arrangement: s.arrangement.map((c) =>
+          c.id === id
+            ? { ...c, lengthSteps: nextLen === full ? undefined : nextLen }
+            : c,
+        ),
+      });
+      refreshSongMap(get);
+      persist();
+    },
+
+    setClipColor: (id, color) => {
+      const s = get();
+      if (!s.arrangement.some((c) => c.id === id)) return;
+      pushFireHistory();
+      set({
+        arrangement: s.arrangement.map((c) =>
+          c.id === id
+            ? { ...c, color: color && color.trim() ? color.trim() : undefined }
+            : c,
+        ),
+      });
+      persist();
+    },
+
+    setPlaylistTrack: (index, partial) => {
+      const i = clamp(Math.round(index), 0, MAX_PLAYLIST_TRACKS - 1);
+      const s = get();
+      pushFireHistory(`playlist:${i}`);
+      const next = [...(s.playlistTracks.length === MAX_PLAYLIST_TRACKS
+        ? s.playlistTracks
+        : sanitizePlaylistTracks(s.playlistTracks))];
+      const t = next[i];
+      next[i] = {
+        name: typeof partial.name === "string" && partial.name.trim()
+          ? partial.name.trim().slice(0, 18)
+          : t.name,
+        mute: partial.mute ?? t.mute,
+        solo: partial.solo ?? t.solo,
+        color: typeof partial.color === "string" && partial.color ? partial.color : t.color,
+      };
+      set({ playlistTracks: next });
+      // Mute/solo changes affect live layering without restarting.
+      refreshSongMap(get);
+      persist();
+    },
+
+    seekArrangement: (absoluteStep) => {
+      const s = get();
+      if (s.playMode !== "arrangement") return;
+      const { map, total } = computeSongMap(s);
+      songMap = map;
+      songTotal = total;
+      const step = clamp(snapToBar(absoluteStep), 0, Math.max(0, total - STEPS_PER_BAR));
+      arrangementCueStep = step;
+      if (!s.playing) return;
+      const ctx = getEngine().ctx;
+      const dur = stepDur(s.bpm);
+      // Re-anchor so the live playhead jumps without stopping transport.
+      loopStartTime = ctx.currentTime - step * dur;
+      nextStep = step;
+      const engine = getEngine();
+      engine.fireCommand.allNotesOff();
+      engine.peekFireCommandB()?.allNotesOff();
     },
 
     setPlayMode: (mode) => {
@@ -2302,6 +2557,7 @@ registerFireHistoryProvider("fireSequencer", {
       sections: sectionsWithActive(s),
       activeSectionId: s.activeSectionId,
       arrangement: s.arrangement,
+      playlistTracks: s.playlistTracks,
       playMode: s.playMode,
       mixer: s.mixer,
       fireLimiterOn: s.fireLimiterOn,
@@ -2313,7 +2569,11 @@ registerFireHistoryProvider("fireSequencer", {
   },
   restore: (snap) => {
     const wasPlaying = useFireSequencerStore.getState().playing;
-    useFireSequencerStore.setState(snap as Partial<FireSequencerState>);
+    const raw = snap as Partial<FireSequencerState> & { playlistTracks?: unknown };
+    useFireSequencerStore.setState({
+      ...raw,
+      playlistTracks: sanitizePlaylistTracks(raw.playlistTracks),
+    } as Partial<FireSequencerState>);
     const ns = useFireSequencerStore.getState();
     const engine = getEngine();
     engine.fireDrums.setLevel(ns.drumLevel);
