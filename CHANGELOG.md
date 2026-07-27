@@ -2,6 +2,16 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.10] — 2026-07-27 — Arrangement Playlist
+
+### Added
+- **FL-style arrangement** — pattern bank + horizontal timeline of pattern clips (absolute bar positions; gaps = silence). Loop pattern or play the full arrangement
+- **Expand all / Collapse all** on each Synth band header for module chips
+- **Blank New pattern** (plus separate Duplicate); new patterns no longer auto-place on the timeline
+
+### Removed
+- Song Order chain strip (`chain: string[]`) — migrated to arrangement clips on load
+
 ## [3.0.9] — 2026-07-27 — Fire Command Cohesion
 
 ### Removed

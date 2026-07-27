@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.0.9-c41e3a?style=flat-square" alt="Version 3.0.9" />
+  <img src="https://img.shields.io/badge/version-3.0.10-c41e3a?style=flat-square" alt="Version 3.0.10" />
   <img src="https://img.shields.io/badge/platform-Windows%2064--bit-1e2430?style=flat-square" alt="Windows 64-bit" />
   <img src="https://img.shields.io/badge/license-Proprietary-8b95a8?style=flat-square" alt="Proprietary license" />
 </p>
@@ -26,16 +26,16 @@
 
 ## Download
 
-**[⬇ Download Kill-Chain-Setup-3.0.9.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.9.exe)**
+**[⬇ Download Kill-Chain-Setup-3.0.10.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.10.exe)**
 
 | | |
 |---|---|
-| **Version** | 3.0.9 |
-| **File** | `Kill-Chain-Setup-3.0.9.exe` |
+| **Version** | 3.0.10 |
+| **File** | `Kill-Chain-Setup-3.0.10.exe` |
 | **Size** | ~77 MB |
 | **Platform** | Windows 10/11 (64-bit) |
 
-<sub>Previous releases: [3.0.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.8.exe) · [3.0.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.4.exe) · [3.0.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.3.exe) · [3.0.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.2.exe) · [3.0.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.1.exe) · [3.0.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.0.exe) · [2.6.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.1.exe) · [2.6.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.0.exe) · [2.5.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.9.exe) · [2.5.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.8.exe) · [2.5.7](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.7.exe) · [2.5.6](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.6.exe) · [2.5.5](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.5.exe) · [2.5.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.4.exe) · [2.5.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.3.exe) · [2.5.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.2.exe) · [2.5.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.1.exe) · [2.5.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.0.exe) · [2.4.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.1.exe) · [2.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.0.exe) · [1.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-1.4.0.exe)</sub>
+<sub>Previous releases: [3.0.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.9.exe) · [3.0.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.8.exe) · [3.0.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.4.exe) · [3.0.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.3.exe) · [3.0.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.2.exe) · [3.0.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.1.exe) · [3.0.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.0.exe) · [2.6.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.1.exe) · [2.6.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.0.exe) · [2.5.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.9.exe) · [2.5.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.8.exe) · [2.5.7](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.7.exe) · [2.5.6](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.6.exe) · [2.5.5](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.5.exe) · [2.5.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.4.exe) · [2.5.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.3.exe) · [2.5.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.2.exe) · [2.5.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.1.exe) · [2.5.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.0.exe) · [2.4.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.1.exe) · [2.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.0.exe) · [1.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-1.4.0.exe)</sub>
 
 You can also use the [download page](https://jerrykoller.github.io/Kill-Chain/) if GitHub Pages is enabled on this repo.
 
