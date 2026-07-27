@@ -3,7 +3,7 @@
  * Layout only — writes the same localStorage keys as useFireCollapsed.
  */
 
-import { FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
+import { FIRE_BANDS, FIRE_MODULE_BY_ID, type FireBandId, type FireModuleId } from "./fireModuleAtlas";
 import { writeFireWorkspace } from "./useFireWorkspace";
 import { writeFireSynthBand } from "./useFireSynthBand";
 
@@ -24,6 +24,15 @@ export function writeFold(key: string, collapsed: boolean): void {
 
 export function ensureExpanded(key: string): void {
   writeFold(key, false);
+}
+
+/** Expand or collapse every module chip in a Synth band (atlas ids). */
+export function setBandModulesFolded(bandKey: FireBandId | string, collapsed: boolean): void {
+  const band = FIRE_BANDS.find((b) => b.id === bandKey);
+  if (!band) return;
+  for (const mod of band.modules) {
+    writeFold(mod.id, collapsed);
+  }
 }
 
 /** Scroll the main app pane (not window) so Fire Command can reach y=0 and modules. */

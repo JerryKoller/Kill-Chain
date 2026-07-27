@@ -1,20 +1,20 @@
 /**
  * fireStudio — Fire Command's export + project I/O.
  *
- * AUDIO EXPORT (WAV or MP3 320): records ONE full pass (section loop or the
- * whole song chain, plus a release tail) from the engine's clean synth+drums
+ * AUDIO EXPORT (WAV or MP3 320): records ONE full pass (pattern loop or the
+ * arrangement playlist, plus a release tail) from the engine's clean synth+drums
  * tap — no player audio, no chain FX — then encodes and hands it to the OS
  * save dialog.
  *
- * STEMS EXPORT (v1.6, chain-aware): the same single real-time pass captured
+ * STEMS EXPORT (v1.6, arrangement-aware): the same single real-time pass captured
  * from SIX taps at once — four dry part stems (Synth A, Synth B, drums,
  * sample deck), the dry Fire master, and the THROUGH-CHAIN master (what the
  * full Kill-Chain engine makes of it). All six land in one folder, sample-
  * aligned, ready for a DAW A/B.
  *
  * PROJECTS (.kcproj v2): the synth patch + arp + the whole arrangement
- * (sections, chain, play mode, sample lanes with their file paths) as JSON.
- * v1 files still open — the store migrates them to a one-section song.
+ * (sections, arrangement clips, play mode, sample lanes with their file paths) as JSON.
+ * v1 files still open — the store migrates them to a one-pattern arrangement.
  */
 
 import { getEngine, type FireMixPart } from "@/audio/AudioEngine";
@@ -191,7 +191,7 @@ function firstAudibleFrame(left: Float32Array, right: Float32Array, sampleRate: 
 function passSeconds(): { totalSec: number; song: boolean } {
   const seq = useFireSequencerStore.getState();
   const stepSec = 60 / seq.bpm / 4;
-  const song = seq.playMode === "song";
+  const song = seq.playMode === "arrangement";
   const steps = song ? songTotalSteps(seq) : seq.bars * STEPS_PER_BAR;
   return { totalSec: steps * stepSec + 1.6, song };
 }
@@ -246,7 +246,7 @@ export async function exportPatternWav(
   try {
     await recordOnePass(
       totalSec,
-      song ? "Recording song…" : "Recording pattern…",
+      song ? "Recording arrangement…" : "Recording pattern…",
       (on) => { recording = on; },
       onProgress,
     );
@@ -269,7 +269,7 @@ export async function exportPatternWav(
     ctx.sampleRate,
   );
   onProgress?.({ stage: "Saving…", fraction: 0.97 });
-  const base = song ? "kill-chain-song" : "kill-chain-pattern";
+  const base = song ? "kill-chain-arrangement" : "kill-chain-pattern";
   return files.save(
     `${base}.${format}`,
     [format === "mp3"
@@ -328,7 +328,7 @@ export async function exportStems(
   try {
     await recordOnePass(
       totalSec,
-      song ? "Recording song stems…" : "Recording stems…",
+      song ? "Recording arrangement stems…" : "Recording stems…",
       (on) => { recording = on; },
       onProgress,
     );
@@ -379,7 +379,7 @@ export async function saveProject(): Promise<string | null> {
     savedAt: new Date().toISOString(),
     patch: fire.patch,
     arp: fire.arp,
-    // Full arrangement: sections (with the live edits folded in), chain,
+    // Full arrangement: sections (with the live edits folded in), clips,
     // play mode, lanes, scale — everything the loader needs.
     pattern: serializePattern(),
   };

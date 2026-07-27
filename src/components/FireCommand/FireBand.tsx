@@ -23,7 +23,7 @@ import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
 import { FIRE_BANDS, type FireBandId } from "./fireModuleAtlas";
-import { ensureExpanded } from "./fireNavigate";
+import { ensureExpanded, setBandModulesFolded } from "./fireNavigate";
 import { useFireLayout } from "./FireLayoutContext";
 import { FireBandLabel } from "./FireSegTabs";
 
@@ -234,9 +234,31 @@ export function FireBand({
             </div>
           )}
           {showBody && list.length > 0 && (
-            <span className="text-[9px] font-mono text-white/30">
-              {openCount}/{list.length} open
-            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {!foldable && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setBandModulesFolded(bandKey, false)}
+                    className="rounded-md border border-white/12 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/55 hover:bg-white/[0.08] hover:text-white/80 transition"
+                    title="Expand all modules in this band"
+                  >
+                    Expand all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBandModulesFolded(bandKey, true)}
+                    className="rounded-md border border-white/12 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/55 hover:bg-white/[0.08] hover:text-white/80 transition"
+                    title="Collapse all modules to chips"
+                  >
+                    Collapse all
+                  </button>
+                </>
+              )}
+              <span className="text-[9px] font-mono text-white/30">
+                {openCount}/{list.length} open
+              </span>
+            </div>
           )}
         </div>
 

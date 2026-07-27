@@ -7,12 +7,12 @@ import { FireSegTabs } from "./FireSegTabs";
 
 const ITEMS = [
   { id: "synth" as const, label: "Synth", color: "#ffbfa0", title: "Synth — oscillators, filter, FX, keyboard" },
-  { id: "sequencer" as const, label: "Sequencer", color: "#b8dcff", title: "Sequencer — patterns, song order, piano roll, drums" },
+  { id: "sequencer" as const, label: "Sequencer", color: "#b8dcff", title: "Sequencer — patterns, arrangement, piano roll, drums" },
 ];
 
 const HINT: Record<FireWorkspace, { hint: string; detail: string }> = {
   synth: { hint: "Build the sound", detail: "Patch · modules · on-screen keys" },
-  sequencer: { hint: "Build the beat & melody", detail: "Patterns · song · piano · drums" },
+  sequencer: { hint: "Build the beat & melody", detail: "Patterns · arrangement · piano · drums" },
 };
 
 export function FireWorkspaceTabs({
