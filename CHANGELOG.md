@@ -2,6 +2,16 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.6] — 2026-07-27 — Fire Band Tabs · Named Presets
+
+### Added
+- **Synth band tabs** — under Synth: **Home** (Signal Path hub) plus **Src · Tone · Mod · FX · Mix · Perf**, each mounting only that category (same idea as Sequencer as its own workspace)
+- Signal Path / All Modules jumps open the matching band tab before scrolling
+
+### Changed
+- **Every factory preset** now has a unique, sound-descriptive name (no more “Lead 0” / “Pad 3”); patches re-authored so names match the tone
+- Mission showcases renamed for sound: Choir Wall Width, Cross-FM Forge, Frozen Lattice, Gate Chop Pulse, Cassette Age Bus
+
 ## [3.0.5] — 2026-07-26 — Curated Preset Library
 
 ### Changed
