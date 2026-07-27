@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.12";
+export const APP_VERSION = "3.0.13";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,15 +12,15 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "10-track playlist",
-    body: "Layer patterns on up to 10 arrangement tracks. Mute/solo per track; overlapping clips on different lanes play together.",
+    title: "FL-style piano roll",
+    body: "Draw / Select / Erase tools, paint-drag notes, brush length chips, and left+right edge resize — closer to FL mouse editing.",
   },
   {
-    title: "Arrangement tools",
-    body: "Zoom the timeline, scrub the playhead from the ruler, nudge/dup clips, trim length, and set clip or track colors.",
+    title: "Fluid arrangement editing",
+    body: "Pointer-drag clips with a live ghost, no silent overlap parking, Shift+click to place, Del/arrows on clips, rename tracks.",
   },
   {
-    title: "Piano-roll erase",
-    body: "Right-click erase is more reliable — fatter hit target and the context menu no longer steals the gesture.",
+    title: "Clearer pattern workflow",
+    body: "New + place, Duplicate pattern vs Double len, rename pencil, transport shows Pattern/Arrangement, Editing badge cycles patterns.",
   },
 ];

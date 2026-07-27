@@ -1685,7 +1685,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     },
 
     addNote: (note) => {
-      pushFireHistory();
+      pushFireHistory("addNote");
       const id = noteId();
       const total = get().bars * STEPS_PER_BAR;
       const n: RollNote = {
@@ -2234,11 +2234,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const overlaps = (st: number) =>
         occupied.some((o) => st < o.start + o.len && o.start < st + len);
 
-      if (overlaps(start)) {
-        const end = occupied.reduce((m, o) => Math.max(m, o.start + o.len), 0);
-        start = snapToBar(end);
-        if (start > maxStart || overlaps(start)) return null;
-      }
+      if (overlaps(start)) return null;
 
       const id = clipId();
       set({
@@ -2287,11 +2283,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const overlaps = (st: number) =>
         occupied.some((o) => st < o.start + o.len && o.start < st + len);
 
-      if (overlaps(start)) {
-        const end = occupied.reduce((m, o) => Math.max(m, o.start + o.len), 0);
-        start = snapToBar(end);
-        if (start > maxStart || overlaps(start)) return;
-      }
+      if (overlaps(start)) return;
 
       set({
         arrangement: s.arrangement.map((c) =>

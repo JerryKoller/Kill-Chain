@@ -36,7 +36,6 @@ const LANE_H = 36;
 const TRACK_LABEL_W = 108;
 
 const PATTERN_DND = "application/x-fire-pattern";
-const CLIP_DND = "application/x-fire-clip";
 
 export function ArrangementPlaylist() {
   const sections = useFireSequencerStore((s) => s.sections);
@@ -64,12 +63,20 @@ export function ArrangementPlaylist() {
 
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renamingTrack, setRenamingTrack] = useState<number | null>(null);
+  const [trackRenameValue, setTrackRenameValue] = useState("");
   const [playingPattern, setPlayingPattern] = useState<string | null>(null);
   const [playingClips, setPlayingClips] = useState<Set<string>>(() => new Set());
   const [playheadStep, setPlayheadStep] = useState(0);
   const [selectedClip, setSelectedClip] = useState<string | null>(null);
-  const [dropHover, setDropHover] = useState<{ bar: number; track: number } | null>(null);
+  const [dropHover, setDropHover] = useState<{ bar: number; track: number; bars: number } | null>(null);
   const [pxPerBar, setPxPerBar] = useState(PX_PER_BAR_DEFAULT);
+  const [clipGhost, setClipGhost] = useState<{
+    id: string; bar: number; track: number; bars: number; color: string;
+  } | null>(null);
+  const dragClipRef = useRef<{
+    id: string; bars: number; color: string; pointerId: number;
+  } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -178,7 +185,11 @@ export function ArrangementPlaylist() {
     }
   };
 
-  const placeAt = (bar: number, track: number) => {
+  const placeAt = (bar: number, track: number, force = false) => {
+    if (!force && selectedClip) {
+      setSelectedClip(null);
+      return;
+    }
     if (arrangement.length >= MAX_CLIPS) {
       toast(`Max ${MAX_CLIPS} clips`);
       return;
@@ -198,12 +209,6 @@ export function ArrangementPlaylist() {
     const { bar, track } = posFromClient(e.clientX, e.clientY);
     const startStep = bar * STEPS_PER_BAR;
 
-    const clipMove = e.dataTransfer.getData(CLIP_DND);
-    if (clipMove) {
-      moveClip(clipMove, startStep, track);
-      setSelectedClip(clipMove);
-      return;
-    }
     const patternId = e.dataTransfer.getData(PATTERN_DND);
     if (patternId) {
       if (arrangement.length >= MAX_CLIPS) {
@@ -215,6 +220,95 @@ export function ArrangementPlaylist() {
       else setSelectedClip(id);
     }
   };
+
+  const beginClipDrag = (
+    e: React.PointerEvent,
+    clip: ArrangementClip,
+    color: string,
+    bars: number,
+  ) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const pointerId = e.pointerId;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let dragging = false;
+    dragClipRef.current = { id: clip.id, bars, color, pointerId };
+    setSelectedClip(clip.id);
+    setActiveSection(clip.patternId);
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      if (!dragging) {
+        if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < 5) return;
+        dragging = true;
+      }
+      const pos = posFromClient(ev.clientX, ev.clientY);
+      setClipGhost({ id: clip.id, bar: pos.bar, track: pos.track, bars, color });
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      dragClipRef.current = null;
+      setClipGhost(null);
+      if (!dragging) return; // click-only — keep selection
+      const pos = posFromClient(ev.clientX, ev.clientY);
+      const before = useFireSequencerStore.getState().arrangement.find((c) => c.id === clip.id);
+      moveClip(clip.id, pos.bar * STEPS_PER_BAR, pos.track);
+      const after = useFireSequencerStore.getState().arrangement.find((c) => c.id === clip.id);
+      if (
+        before
+        && after
+        && before.startStep === after.startStep
+        && (before.track ?? 0) === (after.track ?? 0)
+        && (pos.bar * STEPS_PER_BAR !== before.startStep || pos.track !== (before.track ?? 0))
+      ) {
+        toast("Can't place there — track occupied");
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
+
+  // Keyboard: Del / arrows nudge selected clip.
+  useEffect(() => {
+    if (!selectedClip) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        removeClip(selectedClip);
+        setSelectedClip(null);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        nudgeClip(selectedClip, e.shiftKey ? -4 : -1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        nudgeClip(selectedClip, e.shiftKey ? 4 : 1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const clip = useFireSequencerStore.getState().arrangement.find((c) => c.id === selectedClip);
+        if (clip) moveClip(clip.id, clip.startStep, Math.max(0, (clip.track ?? 0) - 1));
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const clip = useFireSequencerStore.getState().arrangement.find((c) => c.id === selectedClip);
+        if (clip) moveClip(clip.id, clip.startStep, Math.min(MAX_PLAYLIST_TRACKS - 1, (clip.track ?? 0) + 1));
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        const id = duplicateClip(selectedClip);
+        if (id) setSelectedClip(id);
+        else toast(`Max ${MAX_CLIPS} clips or no free space`);
+      } else if (e.key === "Escape") {
+        setSelectedClip(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedClip, removeClip, nudgeClip, moveClip, duplicateClip, toast]);
 
   const seekFromRuler = (clientX: number) => {
     const { bar } = posFromClient(clientX, 0);
@@ -262,7 +356,7 @@ export function ArrangementPlaylist() {
                   }}
                   onClick={() => setActiveSection(sec.id)}
                   onDoubleClick={() => { setRenaming(sec.id); setRenameValue(sec.name); }}
-                  className={`h-8 px-2.5 rounded-l-lg ${sections.length > 1 ? "" : "rounded-r-lg"} text-[11px] font-bold border transition cursor-grab active:cursor-grabbing ${
+                  className={`h-8 px-2.5 rounded-l-lg text-[11px] font-bold border transition cursor-grab active:cursor-grabbing ${
                     active ? "" : "border-white/10 bg-white/[0.03] text-white/55 hover:bg-white/[0.08]"
                   }`}
                   style={{
@@ -271,7 +365,7 @@ export function ArrangementPlaylist() {
                       : undefined),
                     ...(sounding ? { boxShadow: `0 0 12px ${color}80` } : undefined),
                   }}
-                  title={`Edit “${sec.name}” below · drag onto arrangement · double-click rename`}
+                  title={`Edit “${sec.name}” below · drag onto arrangement · double-click or ✎ to rename`}
                 >
                   <span
                     className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle"
@@ -280,6 +374,13 @@ export function ArrangementPlaylist() {
                   {sec.name}
                   <span className="ml-1.5 font-mono font-normal opacity-45 text-[10px]">{sec.bars}b</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => { setRenaming(sec.id); setRenameValue(sec.name); }}
+                  className="h-8 px-1 text-[10px] border border-l-0 text-white/25 hover:text-white/70 hover:bg-white/[0.06] transition"
+                  style={active ? { borderColor: `${color}b0` } : { borderColor: "rgba(255,255,255,0.1)" }}
+                  title={`Rename “${sec.name}”`}
+                >✎</button>
                 {sections.length > 1 && (
                   <button
                     type="button"
@@ -306,13 +407,31 @@ export function ArrangementPlaylist() {
           <button
             type="button"
             onClick={() => {
+              const id = addSection();
+              if (!id) {
+                toast(`Max ${MAX_SECTIONS} patterns`);
+                return;
+              }
+              const clipId = placeClip(id, arrangementEndStep, 0);
+              if (clipId) setSelectedClip(clipId);
+              toast(clipId
+                ? "New pattern created and added to the arrangement"
+                : "Blank pattern ready — timeline was full on Track 1");
+            }}
+            disabled={sections.length >= MAX_SECTIONS || arrangement.length >= MAX_CLIPS}
+            className="h-8 px-2.5 rounded-lg text-[11px] border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 text-[#ffbfa0] hover:bg-[#ff6a3d]/18 disabled:opacity-30 transition"
+            title="Create a blank pattern and place it at the end of the arrangement"
+          >＋ New + place</button>
+          <button
+            type="button"
+            onClick={() => {
               const id = duplicateSection();
               if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
             }}
             disabled={sections.length >= MAX_SECTIONS}
             className="h-8 px-2.5 rounded-lg text-[11px] border border-white/12 bg-white/[0.03] text-white/50 hover:text-white/80 disabled:opacity-30 transition"
-            title="Copy the pattern you're editing"
-          >Duplicate</button>
+            title="Duplicate the pattern you're editing (bank only — not a timeline clip)"
+          >Duplicate pattern</button>
         </div>
 
         <div className="inline-flex rounded-lg border border-white/12 bg-black/30 p-0.5 shrink-0">
@@ -360,7 +479,7 @@ export function ArrangementPlaylist() {
               </span>
             </div>
             <div className="text-[9px] text-white/30 mt-0.5">
-              Click ruler to scrub · drop onto any track · mute/solo per lane
+              Click empty cell to place · click again to deselect · Shift+click forces place · drag clips · Del / ←→
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -474,9 +593,37 @@ export function ArrangementPlaylist() {
                   className="w-1.5 h-1.5 rounded-full shrink-0"
                   style={{ background: tr.color }}
                 />
-                <span className="flex-1 min-w-0 text-[10px] font-semibold text-white/70 truncate" title={tr.name}>
-                  {tr.name}
-                </span>
+                {renamingTrack === i ? (
+                  <input
+                    autoFocus
+                    value={trackRenameValue}
+                    onChange={(e) => setTrackRenameValue(e.target.value)}
+                    onBlur={() => {
+                      setPlaylistTrack(i, { name: trackRenameValue });
+                      setRenamingTrack(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        setPlaylistTrack(i, { name: trackRenameValue });
+                        setRenamingTrack(null);
+                      }
+                      if (e.key === "Escape") setRenamingTrack(null);
+                    }}
+                    className="flex-1 min-w-0 h-5 rounded border border-white/20 bg-black/50 px-1 text-[10px] text-white outline-none"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="flex-1 min-w-0 text-left text-[10px] font-semibold text-white/70 truncate"
+                    title={`${tr.name} — double-click to rename`}
+                    onDoubleClick={() => {
+                      setRenamingTrack(i);
+                      setTrackRenameValue(tr.name);
+                    }}
+                  >
+                    {tr.name}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setPlaylistTrack(i, { mute: !tr.mute, solo: tr.mute ? tr.solo : false })}
@@ -510,8 +657,9 @@ export function ArrangementPlaylist() {
             style={{ maxHeight: RULER_H + playlistH }}
             onDragOver={(e) => {
               e.preventDefault();
-              e.dataTransfer.dropEffect = e.dataTransfer.types.includes(CLIP_DND) ? "move" : "copy";
-              setDropHover(posFromClient(e.clientX, e.clientY));
+              e.dataTransfer.dropEffect = "copy";
+              const { bar, track } = posFromClient(e.clientX, e.clientY);
+              setDropHover({ bar, track, bars: activeBars });
             }}
             onDragLeave={() => setDropHover(null)}
             onDrop={onTimelineDrop}
@@ -580,8 +728,12 @@ export function ArrangementPlaylist() {
                           borderColor: b % 4 === 0 ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.04)",
                           background: b % 4 === 0 ? "rgba(255,255,255,0.02)" : "transparent",
                         }}
-                        title={`Place “${activeName}” · T${track + 1} · bar ${b + 1}`}
-                        onClick={() => placeAt(b, track)}
+                        title={
+                          selectedClip
+                            ? `Click to deselect (Shift+click places “${activeName}”)`
+                            : `Place “${activeName}” · T${track + 1} · bar ${b + 1}`
+                        }
+                        onClick={(e) => placeAt(b, track, e.shiftKey)}
                       />
                     ))}
                   </div>
@@ -605,10 +757,24 @@ export function ArrangementPlaylist() {
                     style={{
                       left: dropHover.bar * pxPerBar + 1,
                       top: dropHover.track * LANE_H + 2,
-                      width: Math.max(pxPerBar * activeBars - 2, pxPerBar - 2),
+                      width: Math.max(pxPerBar * dropHover.bars - 2, pxPerBar - 2),
                       height: LANE_H - 4,
                       background: `${activeColor}33`,
                       border: `1px dashed ${activeColor}`,
+                    }}
+                  />
+                )}
+
+                {clipGhost && (
+                  <div
+                    className="absolute pointer-events-none z-25 rounded-md border border-dashed opacity-80"
+                    style={{
+                      left: clipGhost.bar * pxPerBar + 2,
+                      top: clipGhost.track * LANE_H + 3,
+                      width: Math.max(pxPerBar * 0.55, clipGhost.bars * pxPerBar - 3),
+                      height: LANE_H - 6,
+                      borderColor: clipGhost.color,
+                      background: `${clipGhost.color}44`,
                     }}
                   />
                 )}
@@ -619,6 +785,7 @@ export function ArrangementPlaylist() {
                   const color = clip.color ?? trColor;
                   const lenSteps = clipLenSteps(clip);
                   const bars = lenSteps / STEPS_PER_BAR;
+                  const dragging = clipGhost?.id === clip.id;
                   return (
                     <TimelineClip
                       key={clip.id}
@@ -630,6 +797,7 @@ export function ArrangementPlaylist() {
                       pxPerBar={pxPerBar}
                       sounding={playingClips.has(clip.id)}
                       selected={selectedClip === clip.id}
+                      hidden={dragging}
                       onSelect={() => {
                         setSelectedClip(clip.id);
                         setActiveSection(clip.patternId);
@@ -639,6 +807,7 @@ export function ArrangementPlaylist() {
                         if (selectedClip === clip.id) setSelectedClip(null);
                       }}
                       onTrim={(steps) => trimClip(clip.id, steps)}
+                      onDragStart={(e) => beginClipDrag(e, clip, color, bars)}
                     />
                   );
                 })}
@@ -675,9 +844,11 @@ function TimelineClip({
   pxPerBar,
   sounding,
   selected,
+  hidden,
   onSelect,
   onRemove,
   onTrim,
+  onDragStart,
 }: {
   clip: ArrangementClip;
   name: string;
@@ -687,9 +858,11 @@ function TimelineClip({
   pxPerBar: number;
   sounding: boolean;
   selected: boolean;
+  hidden?: boolean;
   onSelect: () => void;
   onRemove: () => void;
   onTrim: (lengthSteps: number) => void;
+  onDragStart: (e: React.PointerEvent) => void;
 }) {
   const track = clampTrack(clip.track ?? 0);
   const left = (clip.startStep / STEPS_PER_BAR) * pxPerBar;
@@ -699,19 +872,19 @@ function TimelineClip({
 
   return (
     <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData(CLIP_DND, clip.id);
-        e.dataTransfer.effectAllowed = "move";
-        e.stopPropagation();
+      onPointerDown={(e) => {
+        // Don't start move when grabbing the trim handle or remove button.
+        const t = e.target as HTMLElement;
+        if (t.dataset.trim || t.closest("button")) return;
+        onDragStart(e);
       }}
       onClick={(e) => {
         e.stopPropagation();
         onSelect();
       }}
-      className={`group absolute rounded-md border cursor-grab active:cursor-grabbing select-none overflow-hidden transition z-[15] ${
+      className={`group absolute rounded-md border cursor-grab active:cursor-grabbing select-none overflow-hidden transition z-[15] touch-none ${
         selected ? "ring-2 ring-white/55" : ""
-      }`}
+      } ${hidden ? "opacity-30" : ""}`}
       style={{
         left: left + 2,
         top,
@@ -723,9 +896,9 @@ function TimelineClip({
           ? `0 0 12px ${color}66, inset 0 1px 0 rgba(255,255,255,0.12)`
           : "inset 0 1px 0 rgba(255,255,255,0.08)",
       }}
-      title={`“${name}” · T${track + 1} · bars ${startBar}–${startBar + Math.max(1, Math.ceil(bars)) - 1} — drag to move · edge to trim`}
+      title={`“${name}” · T${track + 1} · bars ${startBar}–${startBar + Math.max(1, Math.ceil(bars)) - 1} — drag to move · edge to trim · Del to remove`}
     >
-      <div className="h-full flex flex-col justify-center px-2 min-w-0 pr-4">
+      <div className="h-full flex flex-col justify-center px-2 min-w-0 pr-4 pointer-events-none">
         <div
           className="text-[10px] font-bold truncate leading-tight"
           style={{ color: sounding ? "#fff" : color }}
@@ -742,10 +915,10 @@ function TimelineClip({
         className="absolute top-0.5 right-0.5 hidden group-hover:flex items-center justify-center w-4 h-4 text-[9px] rounded bg-black/70 text-white/70 hover:text-rose-300"
         title="Remove this clip"
       >✕</button>
-      {/* Trim handle — right edge */}
       <div
+        data-trim="1"
         className="absolute top-0 bottom-0 right-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/25"
-        title="Drag to trim length"
+        title="Drag to trim length (snaps to bars)"
         onPointerDown={(e) => {
           e.stopPropagation();
           e.preventDefault();
@@ -758,12 +931,11 @@ function TimelineClip({
             const dx = ev.clientX - startX;
             const dSteps = Math.round((dx / pxPerBar) * STEPS_PER_BAR);
             const next = Math.max(STEPS_PER_BAR, Math.min(maxLen, startLen + dSteps));
-            // Snap trim to whole bars for stability
             const snapped = Math.max(STEPS_PER_BAR, Math.round(next / STEPS_PER_BAR) * STEPS_PER_BAR);
             onTrim(snapped);
           };
           const onUp = () => {
-            el.releasePointerCapture(e.pointerId);
+            try { el.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
           };

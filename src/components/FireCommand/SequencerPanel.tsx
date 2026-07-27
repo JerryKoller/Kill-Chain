@@ -152,6 +152,7 @@ export const SequencerPanel = memo(function SequencerPanel({
   const setRecordQuantize = useFireSequencerStore((s) => s.setRecordQuantize);
   const sections = useFireSequencerStore((s) => s.sections);
   const activeSectionId = useFireSequencerStore((s) => s.activeSectionId);
+  const setActiveSection = useFireSequencerStore((s) => s.setActiveSection);
 
   const [tab, setTab] = useState<Tab>("roll");
   const [confirmClear, setConfirmClear] = useState(false);
@@ -311,10 +312,20 @@ export const SequencerPanel = memo(function SequencerPanel({
                 ? "border-[#ff6a3d] bg-[#ff6a3d]/25 text-[#ffd9c9] shadow-[0_0_22px_rgb(255_106_61/0.4)]"
                 : "border-[#ff6a3d]/50 bg-[#ff6a3d]/10 text-[#ffbfa0] hover:bg-[#ff6a3d]/20"
             }`}
-            title="Play / stop the pattern (sequencer)"
+            title={
+              playMode === "arrangement"
+                ? "Play / stop the arrangement timeline"
+                : "Play / stop the pattern open in the editor"
+            }
           >
             {playing ? "■ HOLD FIRE" : "▶ OPEN FIRE"}
           </button>
+          <span
+            className="hidden sm:inline text-[9px] font-bold uppercase tracking-[0.14em] px-2 py-1 rounded-md border border-white/10 text-white/40"
+            title="Transport play mode — switch above the timeline"
+          >
+            {playMode === "arrangement" ? "Arrangement" : "Pattern"}
+          </span>
 
           <button
             onClick={() => setRecording(!recording)}
@@ -377,10 +388,10 @@ export const SequencerPanel = memo(function SequencerPanel({
               if (!ok) return;
             }}
             disabled={bars * 2 > MAX_BARS}
-            className="h-8 px-2 rounded-lg text-xs font-mono border border-white/10 bg-white/[0.03] text-white/55 hover:bg-white/[0.08] hover:text-cyan disabled:opacity-30 transition"
-            title="Duplicate the pattern: double the bars and repeat everything — then vary the second half"
+            className="h-8 px-2 rounded-lg text-[10px] font-semibold border border-white/10 bg-white/[0.03] text-white/55 hover:bg-white/[0.08] hover:text-cyan disabled:opacity-30 transition"
+            title="Double this pattern's length and repeat its contents (then vary the second half)"
           >
-            ⧉ ×2
+            Double len
           </button>
         </div>
 
@@ -462,15 +473,25 @@ export const SequencerPanel = memo(function SequencerPanel({
             const sec = sections[idx];
             const color = SECTION_COLORS[idx % SECTION_COLORS.length];
             return (
-              <span
-                className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[11px] font-bold max-w-[10rem]"
+              <button
+                type="button"
+                onClick={() => {
+                  if (sections.length < 2) return;
+                  const next = sections[(idx + 1) % sections.length];
+                  if (next) setActiveSection(next.id);
+                }}
+                className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[11px] font-bold max-w-[10rem] transition hover:brightness-125"
                 style={{ borderColor: `${color}66`, background: `${color}12`, color }}
-                title="Piano roll and drums edit this pattern"
+                title={
+                  sections.length > 1
+                    ? "Click to cycle the pattern open in the editors"
+                    : "Piano roll and drums edit this pattern"
+                }
               >
                 <span className="text-[8px] uppercase tracking-[0.16em] opacity-60 shrink-0">Editing</span>
                 <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
                 <span className="truncate">{sec?.name ?? "?"}</span>
-              </span>
+              </button>
             );
           })()}
           <div className="inline-flex rounded-lg border border-white/10 bg-black/30 p-0.5">

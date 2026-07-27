@@ -2,24 +2,17 @@
  * PianoRoll — FL-Studio-style editable piano roll for the Fire Command
  * sequencer, rendered on a single canvas for performance.
  *
- * Interactions:
- *   · click empty space        → add note (length = last drawn length)
- *   · drag note body           → move (pitch + time; moves the whole
- *                                selection when the note is selected)
- *   · drag note's right edge   → resize
- *   · right-click + drag       → ERASER — hold and sweep over notes
- *   · Shift+vertical drag      → velocity (note brightness shows velocity)
- *   · Ctrl+drag empty space    → marquee multi-select
- *   · Ctrl+wheel / ± buttons   → horizontal zoom
- *   · Ctrl+D                   → duplicate selection right after itself
- *   · ↑/↓ (Shift = octave)     → transpose selection (walks the scale)
- *   · ←/→                      → nudge selection in time
- *   · click the piano gutter   → audition that pitch
- *   · drag the bottom edge     → resize the roll itself
+ * Tools (toolbar):
+ *   · Draw   — LMB paints notes (drag across cells); note body moves; edges resize
+ *   · Select — LMB marquee / move; empty click deselects (never creates notes)
+ *   · Erase  — LMB sweeps delete (RMB always erases in any tool)
  *
- * SCALE ENGINE: pick a key + scale in the toolbar — in-scale rows glow, and
- * with Snap on every added/dragged note lands on the nearest scale tone.
- * You cannot draw a wrong note.
+ * Also:
+ *   · left OR right edge drag  → resize
+ *   · Shift+vertical drag      → velocity
+ *   · Ctrl+wheel / ± buttons   → horizontal zoom
+ *   · Ctrl+D / ↑↓ / ←→ / Del   → duplicate / transpose / nudge / delete
+ *   · brush length chips       → length of newly painted notes
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -52,7 +45,9 @@ const BLACK = new Set([1, 3, 6, 8, 10]);
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-type DragMode = "move" | "resize" | "velocity" | "marquee" | "erase";
+type Tool = "draw" | "select" | "erase";
+type DragMode = "move" | "resize" | "resizeL" | "velocity" | "marquee" | "erase" | "paint";
+type HitZone = "body" | "left" | "right";
 
 interface DragSession {
   mode: DragMode;
@@ -63,7 +58,12 @@ interface DragSession {
   /** Original positions of every selected note for group moves. */
   groupOrig: Map<string, RollNote> | null;
   moved: boolean;
+  /** Cells already painted this stroke (`step:midi`). */
+  painted?: Set<string>;
 }
+
+const EDGE_PX = 10;
+const BRUSH_LENS = [0.5, 1, 2, 4] as const;
 
 export function PianoRoll() {
   const notes = useFireSequencerStore((s) => s.notes);
@@ -93,6 +93,8 @@ export function PianoRoll() {
   const marqueeRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragSession | null>(null);
   const lastLenRef = useRef(2);
+  const [brushLen, setBrushLen] = useState(2);
+  const [tool, setTool] = useState<Tool>("draw");
   // Velocity lane (v1.7): a discoverable strip under the roll.
   const velCanvasRef = useRef<HTMLCanvasElement>(null);
   const velScrollRef = useRef<HTMLDivElement>(null);
@@ -108,6 +110,11 @@ export function PianoRoll() {
 
   const totalSteps = bars * STEPS_PER_BAR;
   const gridH = ROWS * ROW_H;
+
+  const setBrush = (len: number) => {
+    lastLenRef.current = len;
+    setBrushLen(len);
+  };
 
   const snapPitch = useCallback(
     (midi: number) => (scaleSnap ? snapMidiToScale(midi, scaleRoot, scaleId) : midi),
@@ -206,9 +213,10 @@ export function PianoRoll() {
         ctx.stroke();
         ctx.shadowBlur = 0;
       }
-      // resize grip
+      // resize grips (left + right)
       ctx.fillStyle = "rgba(255,255,255,0.35)";
       ctx.fillRect(x + w - 3, y + 2, 2, h - 4);
+      if (sel && w > 14) ctx.fillRect(x + 1, y + 2, 2, h - 4);
     }
 
     // Piano gutter (drawn last, sits above notes when scrolling horizontally)
@@ -282,9 +290,10 @@ export function PianoRoll() {
     };
   };
 
-  const hitNote = (x: number, y: number, fat = false): { note: RollNote; zone: "body" | "edge" } | null => {
-    const padY = fat ? 3 : 0;
-    const padX = fat ? 2 : 0;
+  const hitNote = (x: number, y: number, fat = false): { note: RollNote; zone: HitZone } | null => {
+    const padY = fat ? 4 : 0;
+    const padX = fat ? 3 : 0;
+    const edge = Math.max(EDGE_PX, CELL_W * 0.35);
     for (let i = notes.length - 1; i >= 0; i--) {
       const n = notes[i];
       const nx = GUTTER + n.step * CELL_W;
@@ -294,10 +303,47 @@ export function PianoRoll() {
         x >= nx - padX && x <= nx + nw + padX
         && y >= ny - padY && y <= ny + ROW_H + padY
       ) {
-        return { note: n, zone: x > nx + nw - 7 ? "edge" : "body" };
+        let zone: HitZone = "body";
+        if (nw > edge * 2) {
+          if (x <= nx + edge) zone = "left";
+          else if (x >= nx + nw - edge) zone = "right";
+        } else if (x >= nx + nw - Math.max(5, edge * 0.6)) {
+          zone = "right";
+        }
+        return { note: n, zone };
       }
     }
     return null;
+  };
+
+  const paintCell = (step: number, midi: number, painted: Set<string>) => {
+    const snapped = Math.floor(step);
+    const pitch = snapPitch(midi);
+    if (snapped < 0 || snapped >= totalSteps) return;
+    if (pitch < MIDI_BOT || pitch > MIDI_TOP) return;
+    const key = `${snapped}:${pitch}`;
+    if (painted.has(key)) return;
+    const liveNotes = useFireSequencerStore.getState().notes;
+    const exists = liveNotes.some(
+      (n) => n.midi === pitch && snapped >= Math.floor(n.step) && snapped < n.step + n.len,
+    );
+    if (exists) {
+      painted.add(key);
+      return;
+    }
+    painted.add(key);
+    const id = addNote({
+      step: snapped,
+      midi: pitch,
+      len: lastLenRef.current,
+      vel: 0.85,
+      ch: activeChannel,
+    });
+    setSelectedIds(new Set([id]));
+    if (pitch !== lastAudMidiRef.current) {
+      lastAudMidiRef.current = pitch;
+      auditionNote(pitch, 0.85, activeChannel);
+    }
   };
 
   const audition = (midi: number, vel = 0.85, ch = activeChannel) => {
@@ -306,8 +352,9 @@ export function PianoRoll() {
 
   // ── pointer interactions ──
   const onPointerDown = (e: React.PointerEvent) => {
-    // Right button = the ERASER: delete on contact, keep deleting while held.
-    if (e.button === 2) {
+    // Right button OR erase tool = the ERASER.
+    const erasing = e.button === 2 || (e.button === 0 && tool === "erase");
+    if (erasing) {
       e.preventDefault();
       e.stopPropagation();
       const { x, y } = posFromEvent(e);
@@ -333,6 +380,8 @@ export function PianoRoll() {
       }
       return;
     }
+    if (e.button !== 0) return;
+
     const { x, y, step, midi } = posFromEvent(e);
 
     if (x < GUTTER) { audition(midi); return; }
@@ -341,12 +390,13 @@ export function PianoRoll() {
     const hit = hitNote(x, y);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
-    // Ctrl+drag on empty space: marquee multi-select.
-    if (!hit && (e.ctrlKey || e.metaKey)) {
+    // Select tool OR Ctrl/Cmd: marquee on empty.
+    if (!hit && (tool === "select" || e.ctrlKey || e.metaKey)) {
       dragRef.current = {
         mode: "marquee", noteId: null, startX: x, startY: y,
         orig: null, groupOrig: null, moved: false,
       };
+      if (!(e.ctrlKey || e.metaKey)) setSelectedIds(new Set());
       return;
     }
 
@@ -354,14 +404,13 @@ export function PianoRoll() {
       const inSelection = selectedIds.has(hit.note.id);
       let sel: ReadonlySet<string>;
       if (e.ctrlKey || e.metaKey) {
-        // Toggle membership.
         const next = new Set(selectedIds);
         if (inSelection) next.delete(hit.note.id);
         else next.add(hit.note.id);
         sel = next;
         setSelectedIds(next);
       } else if (inSelection) {
-        sel = selectedIds; // keep the group — this drag moves all of it
+        sel = selectedIds;
       } else {
         sel = new Set([hit.note.id]);
         setSelectedIds(sel);
@@ -370,28 +419,40 @@ export function PianoRoll() {
         sel.size > 1 && sel.has(hit.note.id)
           ? new Map(notes.filter((n) => sel.has(n.id)).map((n) => [n.id, { ...n }]))
           : null;
+      const mode: DragMode = e.shiftKey
+        ? "velocity"
+        : hit.zone === "right"
+          ? "resize"
+          : hit.zone === "left"
+            ? "resizeL"
+            : "move";
       dragRef.current = {
-        mode: e.shiftKey ? "velocity" : hit.zone === "edge" ? "resize" : "move",
+        mode,
         noteId: hit.note.id,
         startX: x, startY: y,
         orig: { ...hit.note },
         groupOrig,
         moved: false,
       };
-    } else {
-      const snapped = Math.floor(step);
-      const pitch = snapPitch(midi);
-      const id = addNote({ step: snapped, midi: pitch, len: lastLenRef.current, vel: 0.85, ch: activeChannel });
-      setSelectedIds(new Set([id]));
-      audition(pitch);
+    } else if (tool === "draw") {
+      const painted = new Set<string>();
+      paintCell(step, midi, painted);
       dragRef.current = {
-        mode: "resize",
-        noteId: id,
+        mode: "paint",
+        noteId: null,
         startX: x, startY: y,
-        orig: { id, step: snapped, midi: pitch, len: lastLenRef.current, vel: 0.85, ch: activeChannel },
+        orig: null,
         groupOrig: null,
         moved: false,
+        painted,
       };
+    } else {
+      // Select tool empty click — deselect (confirm on pointer up if no drag).
+      dragRef.current = {
+        mode: "marquee", noteId: null, startX: x, startY: y,
+        orig: null, groupOrig: null, moved: false,
+      };
+      setSelectedIds(new Set());
     }
   };
 
@@ -401,20 +462,23 @@ export function PianoRoll() {
     if (!canvas) return;
 
     if (!d) {
-      // cursor affordances
       const { x, y } = posFromEvent(e);
+      if (tool === "erase") {
+        canvas.style.cursor = x < GUTTER ? "pointer" : "not-allowed";
+        return;
+      }
       const hit = x >= GUTTER ? hitNote(x, y) : null;
       canvas.style.cursor = x < GUTTER
         ? "pointer"
         : hit
-          ? (hit.zone === "edge" ? "ew-resize" : "grab")
-          : e.ctrlKey || e.metaKey
+          ? (hit.zone === "left" || hit.zone === "right" ? "ew-resize" : "grab")
+          : tool === "select" || e.ctrlKey || e.metaKey
             ? "crosshair"
             : "cell";
       return;
     }
 
-    const { x, y } = posFromEvent(e);
+    const { x, y, step, midi } = posFromEvent(e);
     const dx = x - d.startX;
     const dy = y - d.startY;
     if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
@@ -423,6 +487,12 @@ export function PianoRoll() {
       const hit = x >= GUTTER ? hitNote(x, y, true) : null;
       if (hit) removeNote(hit.note.id);
       canvas.style.cursor = "not-allowed";
+      return;
+    }
+
+    if (d.mode === "paint") {
+      paintCell(step, midi, d.painted ?? new Set());
+      canvas.style.cursor = "cell";
       return;
     }
 
@@ -436,7 +506,6 @@ export function PianoRoll() {
         el.style.width = `${Math.abs(dx)}px`;
         el.style.height = `${Math.abs(dy)}px`;
       }
-      // Live-select covered notes.
       const x0 = Math.min(d.startX, x);
       const x1 = Math.max(d.startX, x);
       const y0 = Math.min(d.startY, y);
@@ -456,7 +525,6 @@ export function PianoRoll() {
       const dSteps = Math.round(dx / CELL_W);
       const dSemis = -Math.round(dy / ROW_H);
       if (d.groupOrig) {
-        // Group move: every selected note shifts by the same delta.
         const entries = [...d.groupOrig.values()].map((o) => ({
           id: o.id,
           step: Math.max(0, o.step + dSteps),
@@ -466,7 +534,6 @@ export function PianoRoll() {
       } else {
         const newMidi = clamp(snapPitch(d.orig.midi + dSemis), MIDI_BOT, MIDI_TOP);
         updateNote(d.noteId!, { step: Math.max(0, d.orig.step + dSteps), midi: newMidi });
-        // Hear the pitch as you drag (fires once per row crossed).
         if (newMidi !== d.orig.midi && newMidi !== lastAudMidiRef.current) {
           lastAudMidiRef.current = newMidi;
           audition(newMidi, d.orig.vel, d.orig.ch);
@@ -475,9 +542,15 @@ export function PianoRoll() {
     } else if (d.mode === "resize" && d.orig) {
       const endStep = (x - GUTTER) / CELL_W;
       const rawLen = endStep - d.orig.step;
-      const len = Math.max(0.25, Math.round(rawLen * 2) / 2); // snap to half-steps
+      const len = Math.max(0.25, Math.round(rawLen * 2) / 2);
       updateNote(d.noteId!, { len });
-      lastLenRef.current = len;
+      setBrush(len);
+    } else if (d.mode === "resizeL" && d.orig) {
+      const startStep = Math.max(0, Math.round(((x - GUTTER) / CELL_W) * 2) / 2);
+      const end = d.orig.step + d.orig.len;
+      const len = Math.max(0.25, Math.round((end - startStep) * 2) / 2);
+      updateNote(d.noteId!, { step: end - len, len });
+      setBrush(len);
     } else if (d.orig) {
       const vel = clamp(d.orig.vel - dy / 120, 0.05, 1);
       updateNote(d.noteId!, { vel });
@@ -492,11 +565,11 @@ export function PianoRoll() {
     if (d.mode === "marquee") {
       const el = marqueeRef.current;
       if (el) el.style.opacity = "0";
+      // Empty click with no drag → already cleared on down.
       return;
     }
     lastAudMidiRef.current = null;
     if (d.mode === "move" && d.moved && d.noteId && d.groupOrig) {
-      // Group drags stay silent during the move — confirm the landing pitch.
       const n = useFireSequencerStore.getState().notes.find((nn) => nn.id === d.noteId);
       if (n && d.orig && n.midi !== d.orig.midi) audition(n.midi, n.vel, n.ch);
     }
@@ -658,8 +731,55 @@ export function PianoRoll() {
       {/* ── Scale + tools bar ── */}
       <div
         className="mb-2 flex items-center gap-2 flex-wrap rounded-xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2"
-        title="Click draw · drag move · edge resize · right-drag erase · Shift+drag velocity · Ctrl+wheel zoom · orange=A · blue=B"
+        title="Draw paints notes · Select marquee/moves · Erase deletes · edges resize · Shift+drag velocity · Ctrl+wheel zoom"
       >
+        <div className="inline-flex rounded-lg border border-white/12 bg-black/30 p-0.5">
+          {([
+            ["draw", "Draw"],
+            ["select", "Select"],
+            ["erase", "Erase"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTool(id)}
+              className="px-2.5 py-1.5 text-[10px] font-bold rounded-md transition"
+              style={
+                tool === id
+                  ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0" }
+                  : { color: "rgba(255,255,255,0.4)" }
+              }
+              title={
+                id === "draw"
+                  ? "Paint notes — click or drag across the grid"
+                  : id === "select"
+                    ? "Select / move — drag empty to marquee, click empty to deselect"
+                    : "Erase — left-drag deletes (right-drag always erases)"
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/30 p-0.5">
+          <span className="px-1.5 text-[9px] uppercase tracking-[0.12em] text-white/35">Len</span>
+          {BRUSH_LENS.map((len) => (
+            <button
+              key={len}
+              type="button"
+              onClick={() => setBrush(len)}
+              className="min-w-[28px] h-7 px-1.5 rounded-md text-[10px] font-mono transition"
+              style={
+                brushLen === len
+                  ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0" }
+                  : { color: "rgba(255,255,255,0.45)" }
+              }
+              title={`Brush length ${len} step${len === 1 ? "" : "s"}`}
+            >
+              {len}
+            </button>
+          ))}
+        </div>
         <span className="uppercase tracking-[0.18em] text-white/40 text-[9px] font-semibold">Key</span>
         <select
           value={scaleRoot}
@@ -747,7 +867,7 @@ export function PianoRoll() {
         </button>
         {selectedIds.size > 0 && (
           <span className="text-[10px] text-cyan/80">
-            {selectedIds.size} sel · Ctrl+D · ↑↓ · ←→
+            {selectedIds.size} sel · Del · Ctrl+D · ↑↓ · ←→ · Shift+drag vel
           </span>
         )}
         <span className="flex-1" />
@@ -803,7 +923,7 @@ export function PianoRoll() {
             onPointerCancel={onPointerUp}
             onContextMenu={onContextMenu}
             className="block touch-none select-none"
-            aria-label="Piano roll — click to add notes, drag to move, Ctrl+drag to multi-select, right-click-drag to erase"
+            aria-label="Piano roll — Draw paints, Select moves/marquees, Erase deletes, edges resize"
           />
           <div
             ref={playheadRef}
