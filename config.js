@@ -1,4 +1,4 @@
-// Local dev: leave as "./Kill-Chain-Setup-3.0.4.exe"
+// Local dev: leave as "./Kill-Chain-Setup-3.0.5.exe"
 // GitHub Releases example:
-//   "https://github.com/YOUR_USER/kill-chain/releases/download/v3.0.4/Kill-Chain-Setup-3.0.4.exe"
-window.DOWNLOAD_URL = "./Kill-Chain-Setup-3.0.4.exe";
+//   "https://github.com/YOUR_USER/kill-chain/releases/download/v3.0.5/Kill-Chain-Setup-3.0.5.exe"
+window.DOWNLOAD_URL = "./Kill-Chain-Setup-3.0.5.exe";

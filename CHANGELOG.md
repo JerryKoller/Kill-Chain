@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.5] — 2026-07-26 — Curated Preset Library
+
+### Changed
+- **Factory bank rebuilt** — removed ~1000 near-duplicate generated patches; each category now has **20 hand-authored, sonically distinct** presets (Bass · Lead · Pluck · Pad · Keys · Arp · FX · Atmos · Vintage · Chip · FM)
+- **Missions** — deleted genre showcases; **5 capability demos**: Unison Width, Cross-FM Forge, Spectral Freeze, Gate · Matrix Pulse, Vintage Age Bus
+- Character-linked duplicates no longer clutter the library (Characters browser unchanged)
+
 ## [3.0.4] — 2026-07-26 — Synth · Sequencer Workspaces
 
 ### Added
