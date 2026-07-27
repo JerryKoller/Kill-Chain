@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.9";
+export const APP_VERSION = "3.0.10";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,15 +12,15 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Fire Command — cleaner layout",
-    body: "Synth and Sequencer share one tab chrome. Band tabs (Home · Src · Tone · Mod · FX · Mix · Perf) replace folding category shells, and the patch bar is a balanced three-bay strip.",
+    title: "Arrangement playlist",
+    body: "Song Order is gone. Drag patterns onto a horizontal timeline, leave gaps for silence, and play the full arrangement — FL Playlist-style.",
   },
   {
-    title: "Missions retired",
-    body: "Capability Missions are gone from Fire Command for now. Browse the curated patch library, Characters, and Init instead.",
+    title: "Expand all · Collapse all",
+    body: "Each Synth band header can open or chip-collapse every module in one click.",
   },
   {
-    title: "Preset identity",
-    body: "Neutral Init, hard module resets on load, and quieter note starts so presets keep their own voice.",
+    title: "Blank patterns",
+    body: "New creates an empty pattern; Duplicate copies the one you're editing. Patterns no longer auto-join the arrangement.",
   },
 ];
