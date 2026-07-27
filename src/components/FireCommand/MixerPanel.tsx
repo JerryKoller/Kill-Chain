@@ -407,36 +407,129 @@ function SidechainRack() {
       const W = sizeRef.current.w;
       const H = sizeRef.current.h;
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = duckEnabled ? "rgba(255,106,61,0.1)" : "rgba(255,255,255,0.03)";
+      
+      // Bus theater backdrop — gradient stage with depth
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+      if (duckEnabled) {
+        bgGrad.addColorStop(0, "rgba(255,106,61,0.14)");
+        bgGrad.addColorStop(0.5, "rgba(20,10,8,0.85)");
+        bgGrad.addColorStop(1, "rgba(255,106,61,0.08)");
+      } else {
+        bgGrad.addColorStop(0, "rgba(255,255,255,0.04)");
+        bgGrad.addColorStop(0.5, "rgba(8,8,10,0.9)");
+        bgGrad.addColorStop(1, "rgba(255,255,255,0.02)");
+      }
+      ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, W, H);
-      // Grid
-      ctx.strokeStyle = "rgba(255,255,255,0.06)";
-      ctx.beginPath();
-      ctx.moveTo(0, H * 0.55);
-      ctx.lineTo(W, H * 0.55);
-      ctx.stroke();
+      
+      // Theater grid lines — stage depth markers
+      ctx.strokeStyle = duckEnabled ? "rgba(255,106,61,0.1)" : "rgba(255,255,255,0.04)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i <= 3; i++) {
+        const y = (H / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
+        ctx.stroke();
+      }
+      
+      // Center rail — ducking reference line
       const mid = H * 0.55;
-      const rel = Math.max(0.15, Math.min(1.2, duckReleaseMs / 400));
+      ctx.strokeStyle = duckEnabled ? "rgba(255,106,61,0.25)" : "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
+      ctx.moveTo(0, mid);
+      ctx.lineTo(W, mid);
+      ctx.stroke();
+      
+      const rel = Math.max(0.15, Math.min(1.2, duckReleaseMs / 400));
+      const breathe = duckEnabled ? 0.95 + 0.05 * Math.sin(t / 1200) : 1;
+      
+      // Ghost trail curves — previous waveform echoes
+      if (duckEnabled) {
+        for (let ghost = 0; ghost < 2; ghost++) {
+          ctx.beginPath();
+          const ghostPhase = ghost * 0.15;
+          for (let x = 0; x <= W; x++) {
+            const u = x / Math.max(1, W);
+            const pulse = Math.max(0, 1 - ((u * 2.6 + (t / 850) * (0.4 + duckAmount) - ghostPhase) % 1) * (1.2 + duckAmount * 0.9) / rel);
+            const y = mid - pulse * (H * 0.38) * (0.3 + duckAmount * 0.7) * breathe;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = `rgba(255,106,61,${0.15 - ghost * 0.08})`;
+          ctx.lineWidth = 2 - ghost * 0.5;
+          ctx.stroke();
+        }
+      }
+      
+      // Main ducking curve — primary performance wave
+      ctx.beginPath();
+      const curvePoints: [number, number][] = [];
       for (let x = 0; x <= W; x++) {
         const u = x / Math.max(1, W);
         const pulse = duckEnabled
           ? Math.max(0, 1 - ((u * 2.6 + (t / 850) * (0.4 + duckAmount)) % 1) * (1.2 + duckAmount * 0.9) / rel)
           : 0.12;
-        const y = mid - pulse * (H * 0.38) * (0.3 + duckAmount * 0.7);
+        const y = mid - pulse * (H * 0.38) * (0.3 + duckAmount * 0.7) * breathe;
+        curvePoints.push([x, y]);
         if (x === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
+      
+      // Outer glow stroke
       ctx.strokeStyle = duckEnabled ? FIRE : "rgba(255,255,255,0.18)";
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = duckEnabled ? 3.5 : 1.8;
+      ctx.shadowBlur = duckEnabled ? 12 : 0;
+      ctx.shadowColor = duckEnabled ? FIRE : "transparent";
       ctx.stroke();
-      // Fill under curve
+      ctx.shadowBlur = 0;
+      
+      // Inner bright core
       if (duckEnabled) {
+        ctx.beginPath();
+        curvePoints.forEach(([x, y], i) => {
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = "rgba(255,200,180,0.9)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+      
+      // Theatrical fill under curve — stage lighting effect
+      if (duckEnabled) {
+        ctx.beginPath();
+        curvePoints.forEach(([x, y], i) => {
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
         ctx.lineTo(W, mid);
         ctx.lineTo(0, mid);
         ctx.closePath();
-        ctx.fillStyle = "rgba(255,106,61,0.12)";
+        const fillGrad = ctx.createLinearGradient(0, 0, 0, mid);
+        fillGrad.addColorStop(0, "rgba(255,106,61,0.22)");
+        fillGrad.addColorStop(1, "rgba(255,106,61,0.05)");
+        ctx.fillStyle = fillGrad;
         ctx.fill();
+      }
+      
+      // Energy particles at peak points
+      if (duckEnabled) {
+        for (let i = 0; i < curvePoints.length; i += Math.floor(W / 12)) {
+          const [px, py] = curvePoints[i];
+          const intensity = 1 - (py / mid);
+          if (intensity > 0.4) {
+            const particleGrad = ctx.createRadialGradient(px, py, 0, px, py, 4 + intensity * 3);
+            particleGrad.addColorStop(0, "rgba(255,220,200,0.9)");
+            particleGrad.addColorStop(0.5, "rgba(255,106,61,0.5)");
+            particleGrad.addColorStop(1, "rgba(255,106,61,0)");
+            ctx.fillStyle = particleGrad;
+            ctx.beginPath();
+            ctx.arc(px, py, 4 + intensity * 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
       }
     };
     raf = requestAnimationFrame(draw);

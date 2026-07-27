@@ -8,6 +8,7 @@ import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, SIGNAL_PATH, type FireModuleId, type SignalNodeId } from "./fireModuleAtlas";
 import { useFireLayout } from "./FireLayoutContext";
+import { scrollFireCommandTop } from "./fireNavigate";
 
 function clamp01(v: number) {
   return Math.max(0, Math.min(1, v));
@@ -75,13 +76,23 @@ function FocusHud() {
             <span className="ml-2 text-[10px] font-normal text-white/40">{mod.bandTitle}</span>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={exitFocus}
-          className="shrink-0 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/90 hover:bg-white/15 transition"
-        >
-          Show all
-        </button>
+        <div className="flex shrink-0 gap-1.5">
+          <button
+            type="button"
+            onClick={() => scrollFireCommandTop()}
+            className="rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/90 hover:bg-white/15 transition"
+            title="Scroll to top"
+          >
+            Top
+          </button>
+          <button
+            type="button"
+            onClick={exitFocus}
+            className="rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/90 hover:bg-white/15 transition"
+          >
+            Show all
+          </button>
+        </div>
       </div>
     </div>
   );

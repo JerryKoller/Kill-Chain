@@ -444,21 +444,49 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
         ctx.fillRect(0, 0, W, H);
       }
 
-      // Cross-blend filaments from puck to corners
+      // Dimensional cross-blend filaments — energized connection beams
       const px = x * W;
       const py = y * H;
       for (const c of CORNERS) {
         const meta = CORNER_META[c];
-        const alpha = weights[c] * 0.45;
+        const alpha = weights[c] * 0.5;
         if (alpha < 0.04) continue;
-        ctx.strokeStyle = `hsla(${meta.hue}, 90%, 70%, ${alpha})`;
-        ctx.lineWidth = 1 + weights[c] * 2.5;
+        
+        // Outer glow beam
+        ctx.strokeStyle = `hsla(${meta.hue}, 90%, 65%, ${alpha * 0.35})`;
+        ctx.lineWidth = 2.5 + weights[c] * 5;
         ctx.beginPath();
         ctx.moveTo(px, py);
-        const mx = (px + meta.x * W) / 2 + Math.sin(t / 900 + meta.hue) * 8 * weights[c];
-        const my = (py + meta.y * H) / 2 + Math.cos(t / 1100 + meta.hue) * 8 * weights[c];
+        const mx = (px + meta.x * W) / 2 + Math.sin(t / 900 + meta.hue) * 10 * weights[c];
+        const my = (py + meta.y * H) / 2 + Math.cos(t / 1100 + meta.hue) * 10 * weights[c];
         ctx.quadraticCurveTo(mx, my, meta.x * W, meta.y * H);
         ctx.stroke();
+        
+        // Core energy beam
+        ctx.strokeStyle = `hsla(${meta.hue}, 95%, 75%, ${alpha * 0.75})`;
+        ctx.lineWidth = 1 + weights[c] * 2.8;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.quadraticCurveTo(mx, my, meta.x * W, meta.y * H);
+        ctx.stroke();
+        
+        // Energy pulses along the beam
+        if (weights[c] > 0.15) {
+          const pulseCount = Math.ceil(weights[c] * 3);
+          for (let p = 0; p < pulseCount; p++) {
+            const u = ((t / 1200) + p * 0.33 + c.charCodeAt(0) * 0.1) % 1;
+            const pu = 1 - u;
+            const bx = pu * pu * pu * px + 3 * pu * pu * u * mx + 3 * pu * u * u * mx + u * u * u * (meta.x * W);
+            const by = pu * pu * pu * py + 3 * pu * pu * u * my + 3 * pu * u * u * my + u * u * u * (meta.y * H);
+            const pg = ctx.createRadialGradient(bx, by, 0, bx, by, 4 + weights[c] * 3);
+            pg.addColorStop(0, `hsla(${meta.hue}, 100%, 85%, ${weights[c] * 0.9})`);
+            pg.addColorStop(1, `hsla(${meta.hue}, 90%, 70%, 0)`);
+            ctx.fillStyle = pg;
+            ctx.beginPath();
+            ctx.arc(bx, by, 4 + weights[c] * 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
       }
 
       // Soft vignette so corners stay readable
@@ -518,18 +546,31 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
         if (trailRef.current.length > 36) trailRef.current.shift();
       }
 
+      // Enhanced ghost trail rendering with depth and energy
       for (let i = trailRef.current.length - 1; i >= 0; i--) {
         const p = trailRef.current[i];
         p.life -= 0.038;
         if (p.life <= 0) { trailRef.current.splice(i, 1); continue; }
-        const a = p.life * 0.6;
-        const r = 2.5 + (1 - p.life) * 5;
-        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.4);
-        g.addColorStop(0, `hsla(${p.hue}, 85%, 72%, ${a})`);
-        g.addColorStop(1, `hsla(${p.hue}, 70%, 55%, 0)`);
-        ctx.fillStyle = g;
+        const a = p.life * 0.75;
+        const r = 3 + (1 - p.life) * 7;
+        
+        // Outer glow halo
+        const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3);
+        halo.addColorStop(0, `hsla(${p.hue}, 90%, 75%, ${a * 0.5})`);
+        halo.addColorStop(0.5, `hsla(${p.hue}, 85%, 65%, ${a * 0.2})`);
+        halo.addColorStop(1, `hsla(${p.hue}, 70%, 55%, 0)`);
+        ctx.fillStyle = halo;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, r * 2.4, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Core bright particle
+        const core = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 0.8);
+        core.addColorStop(0, `hsla(${p.hue}, 100%, 85%, ${a * 0.9})`);
+        core.addColorStop(1, `hsla(${p.hue}, 90%, 72%, ${a * 0.3})`);
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 0.8, 0, Math.PI * 2);
         ctx.fill();
       }
     };
@@ -553,12 +594,20 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
           50% { opacity: 1; transform: scale(1.08); }
         }
         @keyframes morph-grid-pulse {
-          0%, 100% { opacity: 0.12; }
-          50% { opacity: 0.24; }
+          0%, 100% { opacity: 0.15; }
+          50% { opacity: 0.32; }
+        }
+        @keyframes morph-grid-breathe {
+          0%, 100% { opacity: 0.22; transform: scale(1); }
+          50% { opacity: 0.35; transform: scale(1.02); }
         }
         @keyframes morph-ripple {
-          0% { transform: translate(-50%, -50%) scale(0.85); opacity: 0.5; }
-          100% { transform: translate(-50%, -50%) scale(1.65); opacity: 0; }
+          0% { transform: translate(-50%, -50%) scale(0.85); opacity: 0.65; }
+          100% { transform: translate(-50%, -50%) scale(1.85); opacity: 0; }
+        }
+        @keyframes corner-glow-pulse {
+          0%, 100% { filter: brightness(1); }
+          50% { filter: brightness(1.4); }
         }
       `}</style>
       <div className="flex items-center gap-2">
@@ -606,19 +655,20 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
               aria-hidden
             />
 
-            {/* Pulsing grid */}
+            {/* Dimensional breathing grid — dual-layer with phase offset */}
             <div
-              className="pointer-events-none absolute inset-0 animate-[morph-grid-pulse_3.6s_ease-in-out_infinite] opacity-[0.16]"
+              className="pointer-events-none absolute inset-0 animate-[morph-grid-pulse_3.6s_ease-in-out_infinite]"
               style={{
                 backgroundImage:
-                  "linear-gradient(rgba(255,255,255,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.14) 1px, transparent 1px)",
+                  "linear-gradient(rgba(255,255,255,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.18) 1px, transparent 1px)",
                 backgroundSize: "40px 40px",
               }}
             />
-            <div className="pointer-events-none absolute inset-0 opacity-20"
+            <div
+              className="pointer-events-none absolute inset-0 animate-[morph-grid-breathe_4.8s_ease-in-out_infinite]"
               style={{
                 backgroundImage:
-                  "linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)",
+                  "linear-gradient(rgba(255,255,255,0.09) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.09) 1px, transparent 1px)",
                 backgroundSize: "20px 20px",
               }}
             />
@@ -632,12 +682,13 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
             {CORNERS.map((c) => (
               <span
                 key={c}
-                className="absolute flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-bold pointer-events-none"
+                className="absolute flex h-7 w-7 items-center justify-center rounded-full border-2 text-[11px] font-bold pointer-events-none transition-all duration-200"
                 style={{
                   color: CORNER_META[c].color,
-                  borderColor: `${CORNER_META[c].color}${Math.round(60 + w[c] * 140).toString(16).padStart(2, "0")}`,
-                  background: `${CORNER_META[c].color}${Math.round(18 + w[c] * 50).toString(16).padStart(2, "0")}`,
-                  boxShadow: `0 0 ${10 + w[c] * 20}px ${CORNER_META[c].color}77`,
+                  borderColor: `${CORNER_META[c].color}${Math.round(70 + w[c] * 150).toString(16).padStart(2, "0")}`,
+                  background: `radial-gradient(circle at 35% 30%, ${CORNER_META[c].color}${Math.round(35 + w[c] * 70).toString(16).padStart(2, "0")}, ${CORNER_META[c].color}${Math.round(12 + w[c] * 35).toString(16).padStart(2, "0")})`,
+                  boxShadow: `0 0 ${12 + w[c] * 28}px ${CORNER_META[c].color}88, inset 0 0 ${6 + w[c] * 12}px ${CORNER_META[c].color}44`,
+                  animation: w[c] > 0.3 ? "corner-glow-pulse 1.8s ease-in-out infinite" : "none",
                   left: CORNER_META[c].x === 0 ? 8 : undefined,
                   right: CORNER_META[c].x === 1 ? 8 : undefined,
                   top: CORNER_META[c].y === 0 ? 8 : undefined,

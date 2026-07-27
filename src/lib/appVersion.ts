@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.2";
+export const APP_VERSION = "3.0.3";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,19 +12,19 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "All Modules filled",
-    body: "SRC · TONE · MIX · PERF now match MOD/FX at 7 each — Noise, Sub, Pluck, Width, Glue, Air, Harmony, Scale, Chord, Human, Scenes.",
+    title: "Stage visualizers elevated",
+    body: "Every Fire Command module now has its own visual philosophy — FM Rack cables, grain storms, tectonic sub, iris pluck, VU glue, constellation scenes, and richer Core/FX stages.",
   },
   {
-    title: "Per-module On/Off",
-    body: "Every entry in All Modules has a real bypass toggle — not just jump/solo.",
+    title: "Window chrome & scroll",
+    body: "Min/max/close stay reachable (no drag overlap). Fire Command can scroll to the absolute top; Focus HUD and header include a Top jump.",
   },
   {
-    title: "Unique stage identities",
-    body: "Each new module ships its own visualizer personality — grain, sub sine, strike bloom, M/S fan, GR meter, air shelves, and more.",
+    title: "Module On/Off honesty",
+    body: "Matrix, macros, morph, vector, arp, pitch, and more fully honor All Modules bypass — including scenes that capture enable state.",
   },
   {
-    title: "Playable Perf bay",
-    body: "Scale Lock, Chord Memory, Humanize, and 8 Scene slots for live capture/recall.",
+    title: "Arp + performance path",
+    body: "Arpeggiator ticks respect Scale Lock and Humanize velocity; Arp module Off parks the scheduler so live notes play through.",
   },
 ];

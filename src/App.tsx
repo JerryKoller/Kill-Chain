@@ -201,7 +201,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden" style={{ zoom: uiScale }}>
         <Sidebar />
         <main className="flex-1 overflow-hidden flex flex-col">
-          <div className="flex-1 overflow-auto px-4 pb-2 noise relative">
+          <div className="flex-1 overflow-auto px-4 pb-2 noise relative scroll-pt-0 overscroll-y-contain">
             <AnimatePresence mode="wait">
               <motion.div
                 key={view}

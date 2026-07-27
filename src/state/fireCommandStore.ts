@@ -146,7 +146,8 @@ function startArpScheduler(
   stopArpScheduler();
   const tick = () => {
     const s = get();
-    if (!s.arp.enabled) {
+    const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+    if (!s.arp.enabled || !arpModuleOn) {
       arpTimer = null;
       return;
     }
@@ -173,25 +174,36 @@ function startArpScheduler(
     } else {
       idx = arpStep % seq.length;
     }
-    const midi = seq[idx];
+    let midi = seq[idx];
     void getEngine().resume();
     // Accent pattern: accented steps hit full force, the rest sit back by
     // up to 35% depending on the accent amount.
     const every = Math.max(0, Math.round(s.arp.accentEvery));
     const accented = s.arp.accent > 0 && every > 0 && arpStep % every === 0;
-    const vel = accented ? 1 : 0.9 - s.arp.accent * 0.35;
+    let vel = accented ? 1 : 0.9 - s.arp.accent * 0.35;
+    // Honor Scale Lock + Humanize on arp ticks (same rules as live noteOn).
+    const modOn = (id: string) => s.patch.moduleEnable?.[id] !== false;
+    if (modOn("scale") && s.patch.scaleLock) {
+      const seqStore = useFireSequencerStore.getState();
+      midi = snapMidiToScale(midi, seqStore.scaleRoot, seqStore.scaleId);
+    }
+    if (modOn("human") && s.patch.humanizeOn) {
+      const j = (s.patch.humanizeVelocity ?? 0.2) * 0.35;
+      vel = clamp(vel * (1 + (Math.random() * 2 - 1) * j), 0.05, 1);
+    }
     fc.noteOn(midi, vel);
     // arpStepIndex is display-only — surfaces the sounding step for the viz.
     set({ arpCurrent: midi, arpStepIndex: idx });
     const gateMs = Math.max(20, s.arp.gate * stepSec * 1000 - 8);
-    setTimeout(() => fc.noteOff(midi), gateMs);
+    const offMidi = midi;
+    setTimeout(() => fc.noteOff(offMidi), gateMs);
     // Ratchet: probabilistic double-hit in the back half of the step.
     if (s.arp.ratchet > 0 && Math.random() < s.arp.ratchet) {
       const half = stepSec * 500;
       setTimeout(() => {
         if (!get().arp.enabled) return;
-        fc.noteOn(midi, Math.min(1, vel * 0.85));
-        setTimeout(() => fc.noteOff(midi), Math.max(15, gateMs * 0.4));
+        fc.noteOn(offMidi, Math.min(1, vel * 0.85));
+        setTimeout(() => fc.noteOff(offMidi), Math.max(15, gateMs * 0.4));
       }, half);
     }
     arpStep++;
@@ -1118,6 +1130,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       // load with legacy-exact behavior.
       const patch = { ...DEFAULT_FIRE_PATCH, ...src.patch };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      // Preserve module on/off when factory/user presets lack moduleEnable.
+      if (!src.patch.moduleEnable || Object.keys(src.patch.moduleEnable).length === 0) {
+        patch.moduleEnable = { ...(get().patch.moduleEnable ?? {}) };
+      }
       const arp: ArpSettings = src.arp
         ? { ...DEFAULT_ARP, ...src.arp }
         : { ...get().arp, enabled: false };
@@ -1309,7 +1325,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         void import("@/lib/sourceArbiter").then(({ claimSource }) => claimSource("fire"));
       }
       useFireSequencerStore.getState().recordNoteOn(midi, velocity);
-      if (s.arp.enabled) {
+      const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+      if (s.arp.enabled && arpModuleOn) {
         const freshLatch = s.arp.hold && s.heldNotes.length === 0;
         const arpOrder = freshLatch ? [] : [...s.arpOrder];
         if (!arpOrder.includes(midi)) arpOrder.push(midi);
@@ -1364,7 +1381,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     noteOff: (midi) => {
       const s = get();
       useFireSequencerStore.getState().recordNoteOff(midi);
-      if (s.arp.enabled) {
+      const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+      if (s.arp.enabled && arpModuleOn) {
         const heldNotes = s.heldNotes.filter((n) => n !== midi);
         const arpOrder = s.arp.hold ? s.arpOrder : s.arpOrder.filter((n) => n !== midi);
         set({ heldNotes, arpOrder });
@@ -1457,14 +1475,21 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const patch = { ...get().patch, moduleEnable };
       set({ patch, presetId: "custom" });
       getEngine().fireCommand.set("moduleEnable", moduleEnable);
+      // Arp module off must park the scheduler so notes fall through to live play.
+      if (moduleId === "arp" && !on) {
+        stopArpScheduler();
+        set({ arpCurrent: null, arpStepIndex: -1 });
+      } else if (moduleId === "arp" && on && get().arp.enabled && arpTimer === null) {
+        startArpScheduler(get, set);
+      }
       persist();
     },
 
     captureScene: (slot) => {
       const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
       const scenes = [...get().scenes];
-      const { moduleEnable: _me, ...rest } = get().patch;
-      scenes[i] = { ...rest };
+      // Include moduleEnable so scene recall restores which modules were armed.
+      scenes[i] = { ...get().patch, moduleEnable: { ...(get().patch.moduleEnable ?? {}) } };
       set({ scenes });
       persist();
     },
@@ -1474,7 +1499,12 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const snap = get().scenes[i];
       if (!snap) return;
       pushFireHistory(`scene:${i}`);
-      const patch = { ...DEFAULT_FIRE_PATCH, ...get().patch, ...snap, moduleEnable: get().patch.moduleEnable ?? {} };
+      const patch = {
+        ...DEFAULT_FIRE_PATCH,
+        ...get().patch,
+        ...snap,
+        moduleEnable: { ...(snap.moduleEnable ?? get().patch.moduleEnable ?? {}) },
+      };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
       set({ patch, presetId: "custom", mutation: null });
       getEngine().fireCommand.setPatch(patch);

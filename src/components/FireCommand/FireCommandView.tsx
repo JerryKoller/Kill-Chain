@@ -32,7 +32,7 @@ import {
 } from "./CoreStageViz";
 import {
   NoiseStageViz, SubStageViz, PluckStageViz, WidthStageViz, GlueStageViz, AirStageViz,
-  HarmonyStageViz, ScaleStageViz, ChordStageViz, HumanStageViz, ScenesStageViz,
+  HarmonyStageViz, ScaleStageViz, ChordStageViz, HumanStageViz, ScenesStageViz, FmRackStageViz,
 } from "./ModuleStageViz";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
@@ -47,7 +47,7 @@ import { MutateCluster } from "./MutateCluster";
 import { RandomizeCluster } from "./RandomizeCluster";
 import { FireLayoutProvider, useFireLayout } from "./FireLayoutContext";
 import { FireCommandDeck } from "./FireCommandDeck";
-import { ensureExpanded } from "./fireNavigate";
+import { ensureExpanded, scrollFireCommandTop } from "./fireNavigate";
 import { FC, FC_BAND } from "./fireColors";
 
 const FIRE = FC.fire; // mix / destination coral
@@ -253,7 +253,7 @@ export function FireCommandView() {
 
   return (
     <FireLayoutProvider>
-    <div className="space-y-2 pb-6">
+    <div className="space-y-2 pb-6" data-fire-root>
       {/* MK IV command-deck header — targeting-reticle mark, no mascot */}
       <div className="fire-header relative overflow-hidden rounded-2xl border border-[#ff6a3d]/25 px-4 py-2.5">
         {/* hazard chevrons along the bottom edge */}
@@ -284,6 +284,14 @@ export function FireCommandView() {
             >MK IV</span>
           </div>
           <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => scrollFireCommandTop()}
+            className="rounded-lg border border-white/15 bg-white/[0.06] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-white/70 hover:bg-white/10 hover:text-white transition"
+            title="Scroll to top of Fire Command"
+          >
+            Top
+          </button>
         </div>
       </div>
 
@@ -530,6 +538,7 @@ export function FireCommandView() {
             />
           }
         >
+          <FmRackStageViz />
           <div className="flex items-center justify-evenly gap-1 flex-wrap mb-2">
             <FParamKnob paramKey="fmAlg" label="Alg" min={0} max={7} integer format={fmtInt} def={0} color={FC.fmRack} />
             <FParamKnob paramKey="fmFeedback" label="Fbk" min={0} max={1} format={fmtPct} def={0} color={FC.fmRack} />
@@ -562,7 +571,7 @@ export function FireCommandView() {
       </FireBand>
 
       <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive · vintage age · spectral">
-        <Section title="Drive · Punch" color={FC.drive} collapseKey="fx.drive" chipHosted right={
+        <Section title="Drive" color={FC.drive} collapseKey="fx.drive" chipHosted right={
           <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
         }>
           <DriveStageViz />
@@ -570,7 +579,6 @@ export function FireCommandView() {
             <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0.08} color={FC.drive} />
             <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
             <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={46} color={FC.drive} />
-            <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
           </div>
         </Section>
         <Section
@@ -1857,6 +1865,10 @@ function MacroRingMeter({ value, color }: { value: number; color: string }) {
  * Macros personality — four equal command cards (not a cramped radar).
  * Each card: ring meter + dest chips. Fills the bay; text never clips.
  */
+/**
+ * Macros personality — four command cards with animated canvas energy background.
+ * Each card: ring meter + dest chips. Subtle energy trails react to macro values.
+ */
 function MacroClusterViz() {
   const m1 = useFireCommandStore((s) => s.patch.macro1);
   const m2 = useFireCommandStore((s) => s.patch.macro2);
@@ -1864,62 +1876,188 @@ function MacroClusterViz() {
   const m4 = useFireCommandStore((s) => s.patch.macro4);
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
   const values = [m1, m2, m3, m4];
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const st = useRef({ values });
+  st.current = { values };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let raf = 0;
+    let last = 0;
+    const particles: Array<{ x: number; y: number; vx: number; vy: number; life: number; macro: number }> = [];
+
+    const syncSize = () => {
+      const wrap = wrapRef.current;
+      if (!wrap) return;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
+      const cssH = Math.max(1, Math.floor(wrap.clientHeight) || 1);
+      canvas.width = Math.floor(cssW * dpr);
+      canvas.height = Math.floor(cssH * dpr);
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    syncSize();
+    const ro = new ResizeObserver(syncSize);
+    if (wrapRef.current) ro.observe(wrapRef.current);
+
+    const draw = (t: number) => {
+      raf = requestAnimationFrame(draw);
+      if (document.hidden || t - last < 28) return;
+      last = t;
+      const W = canvas.width / (Math.min(2, window.devicePixelRatio || 1));
+      const H = canvas.height / (Math.min(2, window.devicePixelRatio || 1));
+      const { values: vals } = st.current;
+      ctx.clearRect(0, 0, W, H);
+
+      const activeEnergy = Math.max(...vals);
+
+      for (let m = 0; m < 4; m++) {
+        const val = vals[m];
+        if (val < 0.08) continue;
+        
+        const color = MACRO_COLORS[m];
+        const rgb = color === FC.macros ? [255,140,100] : 
+                    color === FC.drive ? [255,106,61] : 
+                    color === FC.oscC ? [255,207,92] : 
+                    [98,182,255];
+        
+        const cx = (W / 4) * m + W / 8;
+        const cy = H * 0.5;
+        
+        const pulseGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 40 + val * 30);
+        pulseGrad.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${0.08 * val})`);
+        pulseGrad.addColorStop(0.6, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${0.04 * val})`);
+        pulseGrad.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = pulseGrad;
+        ctx.fillRect(0, 0, W, H);
+        
+        if (Math.random() < 0.08 * val) {
+          const angle = Math.random() * Math.PI * 2;
+          particles.push({
+            x: cx + Math.cos(angle) * 8,
+            y: cy + Math.sin(angle) * 8,
+            vx: Math.cos(angle) * (0.3 + val * 0.7),
+            vy: Math.sin(angle) * (0.3 + val * 0.7),
+            life: 1,
+            macro: m
+          });
+        }
+      }
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= 0.015;
+        if (p.life <= 0) {
+          particles.splice(i, 1);
+          continue;
+        }
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vx *= 0.98;
+        p.vy *= 0.98;
+        
+        const color = MACRO_COLORS[p.macro];
+        const rgb = color === FC.macros ? [255,140,100] : 
+                    color === FC.drive ? [255,106,61] : 
+                    color === FC.oscC ? [255,207,92] : 
+                    [98,182,255];
+        
+        const alpha = p.life * 0.4;
+        const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 3);
+        pg.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`);
+        pg.addColorStop(0.6, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha * 0.5})`);
+        pg.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = pg;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (activeEnergy > 0.1) {
+        const flowCount = Math.floor(3 + activeEnergy * 8);
+        for (let f = 0; f < flowCount; f++) {
+          const fx = ((f * 47 + t * 0.02) % W);
+          const fy = H * 0.5 + Math.sin(fx * 0.03 + t * 0.003 + f) * (H * 0.3);
+          ctx.fillStyle = `rgba(200,220,255,${0.04 * activeEnergy})`;
+          ctx.fillRect(fx, fy, 1.5, 1.5);
+        }
+      }
+    };
+
+    raf = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, []);
 
   return (
-    <div className="mb-3 grid grid-cols-2 lg:grid-cols-4 gap-2 min-w-0">
-      {MACRO_KEYS.map((key, i) => {
-        const routes = matrix.filter((r) => r.source === key && r.dest !== "none");
-        const color = MACRO_COLORS[i];
-        return (
-          <div
-            key={key}
-            className="relative min-w-0 overflow-hidden rounded-xl border bg-gradient-to-b from-black/50 to-black/30 px-2.5 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-            style={{ borderColor: `${color}44` }}
-          >
+    <div ref={wrapRef} className="relative mb-3 min-h-[140px]">
+      <canvas
+        ref={canvasRef}
+        className="pointer-events-none absolute inset-0 block h-full w-full"
+        aria-hidden
+      />
+      <div className="relative grid grid-cols-2 lg:grid-cols-4 gap-2 min-w-0">
+        {MACRO_KEYS.map((key, i) => {
+          const routes = matrix.filter((r) => r.source === key && r.dest !== "none");
+          const color = MACRO_COLORS[i];
+          return (
             <div
-              className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full blur-2xl opacity-40"
-              style={{ background: color }}
-            />
-            <div className="relative flex items-center justify-between gap-1 mb-1.5">
-              <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color }}>
-                Macro {i + 1}
-              </span>
-              <span className="text-[9px] font-mono text-white/35">{Math.round(values[i] * 100)}%</span>
-            </div>
-            <MacroRingMeter value={values[i]} color={color} />
-            <div className="mt-2 min-h-[32px]">
-              {routes.length === 0 ? (
-                <div className="rounded-md border border-dashed border-white/10 px-1.5 py-1 text-center text-[9px] text-white/30">
-                  unpatched
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-1 justify-center">
-                  {routes.slice(0, 3).map((r) => (
-                    <span
-                      key={`${r.source}-${r.dest}`}
-                      className="max-w-full truncate rounded-md border px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wider"
-                      style={{ borderColor: `${color}55`, color, background: `${color}18` }}
-                      title={r.dest}
-                    >
-                      {r.dest}
-                    </span>
-                  ))}
-                  {routes.length > 3 && (
-                    <span className="text-[8px] text-white/35">+{routes.length - 3}</span>
-                  )}
-                </div>
-              )}
-            </div>
-            {/* Level rail */}
-            <div className="mt-2 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+              key={key}
+              className="relative min-w-0 overflow-hidden rounded-xl border bg-gradient-to-b from-black/50 to-black/30 px-2.5 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+              style={{ borderColor: `${color}44` }}
+            >
               <div
-                className="h-full rounded-full transition-[width] duration-75"
-                style={{ width: `${Math.round(values[i] * 100)}%`, background: color, boxShadow: `0 0 8px ${color}` }}
+                className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full blur-2xl opacity-40"
+                style={{ background: color }}
               />
+              <div className="relative flex items-center justify-between gap-1 mb-1.5">
+                <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color }}>
+                  Macro {i + 1}
+                </span>
+                <span className="text-[9px] font-mono text-white/35">{Math.round(values[i] * 100)}%</span>
+              </div>
+              <MacroRingMeter value={values[i]} color={color} />
+              <div className="mt-2 min-h-[32px]">
+                {routes.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-white/10 px-1.5 py-1 text-center text-[9px] text-white/30">
+                    unpatched
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1 justify-center">
+                    {routes.slice(0, 3).map((r) => (
+                      <span
+                        key={`${r.source}-${r.dest}`}
+                        className="max-w-full truncate rounded-md border px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wider"
+                        style={{ borderColor: `${color}55`, color, background: `${color}18` }}
+                        title={r.dest}
+                      >
+                        {r.dest}
+                      </span>
+                    ))}
+                    {routes.length > 3 && (
+                      <span className="text-[8px] text-white/35">+{routes.length - 3}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="mt-2 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-[width] duration-75"
+                  style={{ width: `${Math.round(values[i] * 100)}%`, background: color, boxShadow: `0 0 8px ${color}` }}
+                />
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1979,7 +2117,7 @@ const GATE_PRESETS: { name: string; steps: number[] }[] = [
   { name: "Long-Short", steps: [1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0] },
 ];
 
-/** Trance Gate personality: ice chop field — shutter silhouette with playhead beam. */
+/** Trance Gate personality: ice shutter field — enhanced silhouette with playhead bloom, particles, and frequency bars. */
 function GateChopViz({
   pattern, steps, on, playStep, depth, smooth,
 }: {
@@ -1994,6 +2132,7 @@ function GateChopViz({
   const wrapRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef({ pattern, steps, on, playStep, depth, smooth });
   stateRef.current = { pattern, steps, on, playStep, depth, smooth };
+  const particlesRef = useRef<{ x: number; y: number; vx: number; vy: number; life: number }[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2027,12 +2166,13 @@ function GateChopViz({
       const { w: W, h: H } = size;
       ctx.clearRect(0, 0, W, H);
 
-      // Ice depth field
-      const hueShift = 195 + Math.sin(t / 3500) * 12;
+      // Ice depth field with breathing hue
+      const hueShift = 195 + Math.sin(t / 3500) * 15;
+      const breathe = 0.9 + 0.1 * Math.sin(t / 700);
       const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, `hsla(${hueShift}, 70%, 45%, 0.10)`);
-      bg.addColorStop(0.5, "rgba(4,10,18,0.55)");
-      bg.addColorStop(1, `hsla(${hueShift + 20}, 60%, 40%, 0.06)`);
+      bg.addColorStop(0, `hsla(${hueShift}, 75%, 48%, ${(0.12 + (s.on ? 0.08 : 0)) * breathe})`);
+      bg.addColorStop(0.5, "rgba(4,12,20,0.6)");
+      bg.addColorStop(1, `hsla(${hueShift + 25}, 65%, 42%, ${(0.08 + (s.on ? 0.04 : 0))})`);
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, H);
 
@@ -2043,7 +2183,7 @@ function GateChopViz({
       const floor = H - 10;
       const ceil = 14;
       const ampH = floor - ceil;
-      const closed = 1 - s.depth; // how far down closed steps go
+      const closed = 1 - s.depth;
 
       // Softened step heights (smooth blurs edges)
       const heights: number[] = [];
@@ -2067,24 +2207,38 @@ function GateChopViz({
         for (let i = 0; i < n; i++) heights[i] = soft[i];
       }
 
-      // Fill silhouette
-      ctx.beginPath();
-      ctx.moveTo(padX, floor);
-      for (let i = 0; i < n; i++) {
-        const x0 = padX + i * stepW;
-        const y = floor - heights[i] * ampH;
-        ctx.lineTo(x0, y);
-        ctx.lineTo(x0 + stepW, y);
+      // Frequency bars (horizontal layers behind shutters)
+      if (s.on) {
+        for (let layer = 0; layer < 5; layer++) {
+          const layerY = ceil + layer * ((ampH - 10) / 4);
+          const layerH = 2;
+          const sweep = ((t / 400 + layer * 0.2) % 1);
+          ctx.fillStyle = `hsla(${hueShift}, 70%, 60%, ${0.08 * breathe})`;
+          ctx.fillRect(padX, layerY, usable * sweep, layerH);
+        }
       }
-      ctx.lineTo(padX + usable, floor);
-      ctx.closePath();
-      const fill = ctx.createLinearGradient(0, ceil, 0, floor);
-      fill.addColorStop(0, `hsla(${hueShift}, 80%, 65%, ${s.on ? 0.35 : 0.12})`);
-      fill.addColorStop(1, `hsla(${hueShift}, 70%, 40%, 0.02)`);
-      ctx.fillStyle = fill;
-      ctx.fill();
 
-      // Top contour
+      // Multi-layer silhouette fill with depth
+      for (let layer = 2; layer >= 0; layer--) {
+        ctx.beginPath();
+        ctx.moveTo(padX, floor);
+        for (let i = 0; i < n; i++) {
+          const x0 = padX + i * stepW;
+          const y = floor - heights[i] * ampH * (1 - layer * 0.05);
+          ctx.lineTo(x0, y);
+          ctx.lineTo(x0 + stepW, y);
+        }
+        ctx.lineTo(padX + usable, floor);
+        ctx.closePath();
+        const fill = ctx.createLinearGradient(0, ceil, 0, floor);
+        fill.addColorStop(0, `hsla(${hueShift}, 80%, 65%, ${(s.on ? 0.45 : 0.15) * breathe * (1 - layer * 0.15)})`);
+        fill.addColorStop(0.6, `hsla(${hueShift}, 70%, 50%, ${(s.on ? 0.15 : 0.05) * (1 - layer * 0.1)})`);
+        fill.addColorStop(1, `hsla(${hueShift}, 65%, 40%, 0.02)`);
+        ctx.fillStyle = fill;
+        ctx.fill();
+      }
+
+      // Top contour with enhanced glow
       ctx.beginPath();
       for (let i = 0; i < n; i++) {
         const x0 = padX + i * stepW;
@@ -2093,47 +2247,109 @@ function GateChopViz({
         ctx.lineTo(x0, y);
         ctx.lineTo(x0 + stepW, y);
       }
-      ctx.strokeStyle = s.on ? `hsla(${hueShift}, 90%, 70%, 0.85)` : `hsla(${hueShift}, 60%, 60%, 0.35)`;
-      ctx.lineWidth = 2;
-      ctx.shadowBlur = s.on ? 10 : 0;
-      ctx.shadowColor = ICE;
+      ctx.strokeStyle = s.on ? `hsla(${hueShift}, 95%, 75%, ${0.9 * breathe})` : `hsla(${hueShift}, 60%, 60%, 0.4)`;
+      ctx.lineWidth = 2.5;
+      ctx.shadowBlur = s.on ? 12 + breathe * 4 : 0;
+      ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Step ticks
+      // Step ticks with emphasis on beats
       for (let i = 0; i <= n; i++) {
         const x = padX + i * stepW;
-        ctx.strokeStyle = i % 4 === 0 ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)";
+        const isBeat = i % 4 === 0;
+        ctx.strokeStyle = isBeat ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)";
+        ctx.lineWidth = isBeat ? 1.5 : 1;
         ctx.beginPath();
         ctx.moveTo(x, ceil - 2);
         ctx.lineTo(x, floor + 2);
         ctx.stroke();
       }
 
-      // Playhead beam
+      // Ice particles (when active)
+      if (s.on) {
+        const particles = particlesRef.current;
+        if (Math.random() < 0.3) {
+          particles.push({
+            x: padX + Math.random() * usable,
+            y: ceil + Math.random() * ampH,
+            vx: (Math.random() - 0.5) * 0.5,
+            vy: -0.3 - Math.random() * 0.6,
+            life: 1,
+          });
+        }
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const pt = particles[i];
+          pt.x += pt.vx;
+          pt.y += pt.vy;
+          pt.life -= 0.012;
+          if (pt.life <= 0) {
+            particles.splice(i, 1);
+            continue;
+          }
+          ctx.fillStyle = `hsla(${hueShift}, 80%, 85%, ${pt.life * 0.5})`;
+          ctx.shadowBlur = 3;
+          ctx.shadowColor = `hsl(${hueShift}, 70%, 70%)`;
+          ctx.fillRect(pt.x, pt.y, 2, 2);
+        }
+        ctx.shadowBlur = 0;
+      }
+
+      // Playhead beam with bloom
       if (s.on && s.playStep >= 0 && s.playStep < n) {
         const x = padX + s.playStep * stepW + stepW / 2;
+        
+        // Vertical beam gradient
         const beam = ctx.createLinearGradient(x, 0, x, H);
-        beam.addColorStop(0, "rgba(200,240,255,0)");
-        beam.addColorStop(0.4, "rgba(150,230,255,0.5)");
+        beam.addColorStop(0, "rgba(220,245,255,0)");
+        beam.addColorStop(0.35, `rgba(180,235,255,${0.6 * breathe})`);
+        beam.addColorStop(0.65, `rgba(120,210,255,${0.5 * breathe})`);
         beam.addColorStop(1, "rgba(98,182,255,0)");
         ctx.fillStyle = beam;
-        ctx.fillRect(x - 2, 0, 4, H);
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
+        ctx.fillRect(x - 3, 0, 6, H);
+        ctx.shadowBlur = 0;
 
-        // Pulse ring at crest
+        // Radial bloom at crest
         const y = floor - heights[s.playStep] * ampH;
-        const pulse = 0.5 + 0.5 * Math.sin(t / 80);
-        ctx.strokeStyle = `rgba(200,240,255,${0.55 * pulse})`;
-        ctx.lineWidth = 1.5;
+        const pulse = 0.6 + 0.4 * Math.sin(t / 70);
+        const bloom = ctx.createRadialGradient(x, y, 0, x, y, 18 + pulse * 10);
+        bloom.addColorStop(0, `hsla(${hueShift}, 90%, 85%, ${0.75 * pulse})`);
+        bloom.addColorStop(0.5, `hsla(${hueShift}, 80%, 70%, ${0.35 * pulse})`);
+        bloom.addColorStop(1, "rgba(98,182,255,0)");
+        ctx.fillStyle = bloom;
+        ctx.fillRect(x - 28, y - 28, 56, 56);
+
+        // Pulse rings
+        for (let ring = 0; ring < 2; ring++) {
+          const ringPhase = (t / 120 + ring * 0.5) % 1;
+          const ringR = 6 + ringPhase * (12 + pulse * 8);
+          const ringAlpha = (0.6 - ringPhase * 0.5) * pulse;
+          ctx.strokeStyle = `rgba(220,245,255,${ringAlpha})`;
+          ctx.lineWidth = 2 - ringPhase;
+          ctx.shadowBlur = 6;
+          ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
+          ctx.beginPath();
+          ctx.arc(x, y, ringR, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+
+        // Core gem
+        ctx.fillStyle = "#fff";
+        ctx.shadowBlur = 14;
+        ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
         ctx.beginPath();
-        ctx.arc(x, y, 5 + pulse * 4, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
       }
 
       ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillStyle = "rgba(150,210,255,0.4)";
-      ctx.fillText(s.on ? "CHOP LIVE" : "STANDBY", 12, H - 8);
+      ctx.fillStyle = s.on ? `hsla(${hueShift}, 80%, 75%, 0.75)` : "rgba(150,210,255,0.4)";
+      ctx.fillText(s.on ? "ICE SHUTTER LIVE" : "STANDBY", 12, H - 8);
       ctx.textAlign = "right";
       ctx.fillText(`${n} STEPS`, W - 12, H - 8);
     };
@@ -3010,18 +3226,13 @@ function BoolToggle({
 /** Amp panel body: knobs only — stage viz lives above in the Section. */
 function LpgAwareAmpRow() {
   const lpgOn = useFireCommandStore((s) => s.patch.lpgOn);
-  if (lpgOn) {
+  const pluckOn = useFireCommandStore((s) => s.patch.moduleEnable?.["pluck"] !== false);
+  // LPG knobs live on Pluck Gate; Amp only parks when Pluck is actively striking.
+  if (lpgOn && pluckOn) {
     return (
-      <>
-        <div className="flex items-center justify-evenly gap-1">
-          <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} color="#ffcf5c" size={46} />
-          <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} color="#ffcf5c" size={46} />
-          <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
-        </div>
-        <div className="mt-1.5 text-center text-[10px] text-dim">
-          Vactrol mode: every note is a struck pluck that rings out on its own. Color = how much the strike drives the filter.
-        </div>
-      </>
+      <div className="mt-1.5 text-center text-[10px] text-dim">
+        Pluck Gate is on — amp ADSR is parked. Edit Decay / Color under Pluck.
+      </div>
     );
   }
   return (

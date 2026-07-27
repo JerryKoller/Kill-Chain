@@ -144,26 +144,40 @@ function SignalFlowViz() {
         const cpx = (leftX + rightX) / 2;
         const bend = 28 + mag * 36;
 
+        // Elevated cable energy — outer energy field
         ctx.beginPath();
         ctx.moveTo(leftX, y1);
         ctx.bezierCurveTo(cpx - bend, y1, cpx + bend, y2, rightX, y2);
         ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.1 + mag * 0.2;
-        ctx.lineWidth = 4 + mag * 4;
+        ctx.globalAlpha = 0.15 + mag * 0.28;
+        ctx.lineWidth = 6 + mag * 6;
         ctx.stroke();
         ctx.globalAlpha = 1;
 
+        // Mid-layer glow
         ctx.beginPath();
         ctx.moveTo(leftX, y1);
         ctx.bezierCurveTo(cpx - bend, y1, cpx + bend, y2, rightX, y2);
         ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.35 + mag * 0.55;
-        ctx.lineWidth = 1.4 + mag * 2.2;
+        ctx.globalAlpha = 0.4 + mag * 0.5;
+        ctx.lineWidth = 2.5 + mag * 3.5;
         ctx.stroke();
         ctx.globalAlpha = 1;
 
-        for (let p = 0; p < 2; p++) {
-          const u = ((t / (1200 - mag * 400)) + i * 0.11 + p * 0.5) % 1;
+        // Core bright cable
+        ctx.beginPath();
+        ctx.moveTo(leftX, y1);
+        ctx.bezierCurveTo(cpx - bend, y1, cpx + bend, y2, rightX, y2);
+        ctx.strokeStyle = mag > 0.5 ? "#fff" : color;
+        ctx.globalAlpha = 0.5 + mag * 0.45;
+        ctx.lineWidth = 1 + mag * 2;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        // Enhanced energy packets with trailing wake
+        const packetCount = mag > 0.6 ? 3 : 2;
+        for (let p = 0; p < packetCount; p++) {
+          const u = ((t / (1100 - mag * 350)) + i * 0.11 + p * (1 / packetCount)) % 1;
           const mt = 1 - u;
           const px =
             mt * mt * mt * leftX +
@@ -175,22 +189,54 @@ function SignalFlowViz() {
             3 * mt * mt * u * y1 +
             3 * mt * u * u * y2 +
             u * u * u * y2;
-          const rg = ctx.createRadialGradient(px, py, 0, px, py, 6);
+          
+          // Packet wake trail
+          const wakeGrad = ctx.createRadialGradient(px, py, 0, px, py, 10 + mag * 6);
+          wakeGrad.addColorStop(0, `${color}88`);
+          wakeGrad.addColorStop(0.5, `${color}33`);
+          wakeGrad.addColorStop(1, `${color}00`);
+          ctx.fillStyle = wakeGrad;
+          ctx.beginPath();
+          ctx.arc(px, py, 10 + mag * 6, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Core packet
+          const rg = ctx.createRadialGradient(px, py, 0, px, py, 4 + mag * 3);
           rg.addColorStop(0, "#fff");
-          rg.addColorStop(0.35, color);
+          rg.addColorStop(0.4, color);
           rg.addColorStop(1, `${color}00`);
           ctx.fillStyle = rg;
           ctx.beginPath();
-          ctx.arc(px, py, 5.5, 0, Math.PI * 2);
+          ctx.arc(px, py, 4 + mag * 3, 0, Math.PI * 2);
           ctx.fill();
         }
 
+        // Enhanced junction nodes with pulsing energy
+        const junctionPulse = 0.9 + 0.1 * Math.sin(t / 600 + i * 0.5);
         ctx.fillStyle = color;
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 10 + mag * 8;
         ctx.shadowColor = color;
-        ctx.beginPath(); ctx.arc(leftX, y1, 3.2, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(rightX, y2, 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(leftX, y1, 3.5 + mag * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(rightX, y2, 3.5 + mag * 1.5, 0, Math.PI * 2);
+        ctx.fill();
         ctx.shadowBlur = 0;
+
+        // Outer junction glow rings
+        if (mag > 0.3) {
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = (mag - 0.3) * 0.6 * junctionPulse;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(leftX, y1, 6 + mag * 2, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(rightX, y2, 6 + mag * 2, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
 
         if (W > 420 && i < 6) {
           ctx.font = "600 7px ui-sans-serif, system-ui, sans-serif";

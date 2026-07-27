@@ -8,6 +8,9 @@ import { FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
 export const FIRE_FOLD_EVENT = "killchain.firecmd.fold";
 export const foldStorageKey = (key: string) => `killchain.firecmd.fold.${key}`;
 
+/** Sticky FocusHud + deck chrome — keep jumped modules below the sticky bar. */
+export const FIRE_SCROLL_MARGIN_TOP = 72;
+
 export function writeFold(key: string, collapsed: boolean): void {
   try {
     window.localStorage.setItem(foldStorageKey(key), collapsed ? "1" : "0");
@@ -21,15 +24,60 @@ export function ensureExpanded(key: string): void {
   writeFold(key, false);
 }
 
+/** Scroll the main app pane (not window) so Fire Command can reach y=0 and modules. */
+function scrollParentOf(el: HTMLElement): HTMLElement | null {
+  let p: HTMLElement | null = el.parentElement;
+  while (p) {
+    const style = getComputedStyle(p);
+    const oy = style.overflowY;
+    if (oy === "auto" || oy === "scroll" || oy === "overlay") return p;
+    p = p.parentElement;
+  }
+  return null;
+}
+
 export function scrollToModule(moduleId: FireModuleId, behavior: ScrollBehavior = "smooth"): void {
   const safe = typeof CSS !== "undefined" && typeof CSS.escape === "function"
     ? CSS.escape(moduleId)
     : moduleId.replace(/"/g, '\\"');
   const el = document.querySelector(`[data-fire-module="${safe}"]`);
-  if (el instanceof HTMLElement) {
+  if (!(el instanceof HTMLElement)) return;
+
+  el.style.scrollMarginTop = `${FIRE_SCROLL_MARGIN_TOP}px`;
+  const pane = scrollParentOf(el);
+  if (pane) {
+    const paneRect = pane.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const nextTop = pane.scrollTop + (elRect.top - paneRect.top) - FIRE_SCROLL_MARGIN_TOP;
+    pane.scrollTo({ top: Math.max(0, nextTop), behavior });
+  } else {
     el.scrollIntoView({ behavior, block: "start" });
-    el.classList.add("fire-module-flash");
-    window.setTimeout(() => el.classList.remove("fire-module-flash"), 900);
+  }
+  el.classList.add("fire-module-flash");
+  window.setTimeout(() => el.classList.remove("fire-module-flash"), 900);
+}
+
+/** Scroll Fire Command content pane to the absolute top (deck / header). */
+export function scrollFireCommandTop(behavior: ScrollBehavior = "smooth"): void {
+  const root = document.querySelector("[data-fire-root]");
+  if (!(root instanceof HTMLElement)) return;
+  // Prefer the nearest overflow scroll ancestor; fall back to main app pane.
+  let pane = scrollParentOf(root);
+  if (!pane) {
+    const mainPane = document.querySelector("main .overflow-auto, main [class*='overflow-auto']");
+    if (mainPane instanceof HTMLElement) pane = mainPane;
+  }
+  if (pane) {
+    pane.scrollTo({ top: 0, behavior });
+    // Some Electron builds ignore smooth to exact 0 when sticky children exist —
+    // force a second snap after layout.
+    if (behavior === "smooth") {
+      window.setTimeout(() => { if (pane && pane.scrollTop > 0 && pane.scrollTop < 8) pane.scrollTop = 0; }, 320);
+    } else {
+      pane.scrollTop = 0;
+    }
+  } else {
+    root.scrollIntoView({ behavior, block: "start" });
   }
 }
 
@@ -39,10 +87,9 @@ export function jumpToModule(moduleId: FireModuleId): void {
   if (!entry) return;
   ensureExpanded(entry.bandKey);
   ensureExpanded(moduleId);
-  // Band children remount after expand — give React a couple frames + a beat.
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
-      window.setTimeout(() => scrollToModule(moduleId), 48);
+      window.setTimeout(() => scrollToModule(moduleId), 64);
     });
   });
 }

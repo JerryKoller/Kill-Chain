@@ -1,9 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { SystemMonitor } from "@/components/Layout/SystemMonitor";
 import { useAudioStore } from "@/state/audioStore";
 import { APP_VERSION } from "@/lib/appVersion";
 
-/** Hover-reveal min / max / close — hidden until the cursor enters the corner. */
+/** Electron titlebar drag regions — not in standard CSS typings. */
+type AppRegionStyle = CSSProperties & { WebkitAppRegion?: "drag" | "no-drag" };
+const noDrag: AppRegionStyle = { WebkitAppRegion: "no-drag" };
+const drag: AppRegionStyle = { WebkitAppRegion: "drag" };
+
+/**
+ * Always-visible window controls in a permanent no-drag hit zone.
+ * Grid layout keeps SystemMonitor from overlaying min/max/close.
+ */
 function WindowChrome() {
   const [maximized, setMaximized] = useState(false);
   const api = typeof window !== "undefined" ? window.playground?.window : undefined;
@@ -16,15 +24,14 @@ function WindowChrome() {
   if (!api?.minimize) return null;
 
   const btn =
-    "h-9 w-11 flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors";
+    "h-9 w-11 flex items-center justify-center text-white/55 hover:text-white hover:bg-white/10 transition-colors";
 
   return (
     <div
-      className="titlebar-no-drag absolute right-0 top-0 z-[80] flex h-9 items-center opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100"
+      className="titlebar-no-drag relative z-[90] flex h-9 shrink-0 items-center border-l border-white/[0.06] bg-[#07070c]"
       title="Window controls"
+      style={noDrag}
     >
-      {/* Invisible widen so the corner is easy to find before fade-in */}
-      <div className="pointer-events-none absolute inset-y-0 -left-8 w-8" aria-hidden />
       <button
         type="button"
         className={btn}
@@ -74,17 +81,14 @@ function WindowChrome() {
 }
 
 export function TitleBar() {
-  // The kill-chain status light: red on standby/bypass, green when the DSP
-  // chain is ENGAGED (transport's ENGAGED/BYPASSED state).
   const engaged = useAudioStore((s) => !s.bypass);
 
   return (
-    <div className="titlebar-drag h-9 px-4 flex items-center justify-between text-xs text-dim relative">
-      <div className="flex items-center gap-3">
-        {/* CSS-only status dot (see .kc-status-* in globals.css) — pulses red
-            on standby, green when the chain is engaged. The ring + burst
-            children mount fresh on each engage, replaying their one-shot
-            animations; disengage fades back to red via the dot's transition. */}
+    <div
+      className="titlebar-drag relative grid h-9 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center pl-4 text-xs text-dim"
+      style={drag}
+    >
+      <div className="flex min-w-0 items-center gap-3 justify-self-start">
         <div
           className={`kc-status-dot ${engaged ? "kc-status-dot--engaged" : ""}`}
           title={engaged ? "Kill-chain ENGAGED" : "Kill-chain on standby"}
@@ -100,19 +104,18 @@ export function TitleBar() {
           Kill-Chain
         </span>
         <span className="module-tag">MIL-SPEC</span>
+        <span className="hidden sm:inline text-[10px] tracking-widest uppercase text-white/35">
+          {`v${APP_VERSION}`}
+        </span>
       </div>
 
-      {/* Always-on resource monitor — centred. The translate transform makes
-          this wrapper a stacking context, so it needs its own z-index. */}
-      <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 z-[70]">
+      <div className="titlebar-no-drag justify-self-center px-2" style={noDrag}>
         <SystemMonitor />
       </div>
 
-      <div className="flex items-center gap-2 text-[10px] tracking-widest uppercase text-white/40 pr-2">
-        <span>{`v${APP_VERSION} · Kill-Chain`}</span>
+      <div className="flex items-center justify-self-end">
+        <WindowChrome />
       </div>
-
-      <WindowChrome />
     </div>
   );
 }

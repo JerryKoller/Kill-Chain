@@ -730,17 +730,23 @@ class Voice {
   }
 
   applyUnisonSpread(p: FirePatch): void {
+    const unisonOn = p.moduleEnable?.["mixer.unison"] !== false;
+    const count = unisonOn ? this.unisonCount : 1;
     const spread = unisonSpread(this.unisonCount);
     const t = this.ctx.currentTime;
+    const detune = unisonOn ? p.unisonDetune : 0;
+    const width = unisonOn ? p.unisonWidth : 0;
     for (let i = 0; i < this.unisonCount; i++) {
-      const pan = spread[i] * p.unisonWidth;
+      const pan = (count <= 1 ? 0 : spread[i]) * width;
       this.groupA.pans[i].pan.setTargetAtTime(pan, t, 0.02);
       this.groupB.pans[i].pan.setTargetAtTime(pan, t, 0.02);
-      this.groupA.osc[i].detune.setValueAtTime(this.detuneFor(p, "a", i), t);
-      this.groupB.osc[i].detune.setValueAtTime(this.detuneFor(p, "b", i), t);
+      const baseA = p.oscADetune + (unisonOn ? spread[i] * detune : 0);
+      const baseB = p.oscBDetune + (unisonOn ? spread[i] * detune : 0);
+      this.groupA.osc[i].detune.setValueAtTime(baseA, t);
+      this.groupB.osc[i].detune.setValueAtTime(baseB, t);
       if (this.groupC) {
         this.groupC.pans[i].pan.setTargetAtTime(pan, t, 0.02);
-        this.groupC.osc[i].detune.setValueAtTime(this.detuneFor(p, "c", i), t);
+        this.groupC.osc[i].detune.setValueAtTime(p.oscCDetune + (unisonOn ? spread[i] * detune : 0), t);
       }
     }
   }
@@ -751,9 +757,12 @@ class Voice {
     const fB = this.baseFreq * Math.pow(2, p.oscBOctave);
     const fC = this.baseFreq * Math.pow(2, p.oscCOctave);
     // Acid slide: legato glide stretches when slideOn.
-    const glideSec = (p.slideOn && p.mono && !immediate)
-      ? Math.max(p.glide, 0.14) * 2.2
-      : p.glide;
+    const pitchOn = p.moduleEnable?.["pitch"] !== false;
+    const chipSlide = p.slideOn && p.moduleEnable?.["chip"] !== false;
+    const glideBase = (pitchOn || chipSlide) ? p.glide : 0;
+    const glideSec = (chipSlide && p.mono && !immediate)
+      ? Math.max(glideBase, 0.14) * 2.2
+      : glideBase;
     const setFreq = (osc: OscillatorNode, f: number) => {
       if (immediate || glideSec <= 0) osc.frequency.setValueAtTime(f, t);
       else osc.frequency.setTargetAtTime(f, t, Math.max(0.005, glideSec / 3));
@@ -767,7 +776,15 @@ class Voice {
 
   applyFm(p: FirePatch): void {
     const t = this.ctx.currentTime;
-    if ((p.fmEngine ?? "classic") === "ops4") {
+    const fmOn = p.moduleEnable?.["fm"] !== false;
+    const rackOn = p.moduleEnable?.["fm.rack"] !== false;
+    if (!fmOn && !rackOn) {
+      this.fmGain.gain.setValueAtTime(0, t);
+      this.xmodGain.gain.setTargetAtTime(0, t, 0.02);
+      return;
+    }
+    // BUG FIX: FM Rack (ops4) only applies when BOTH fm module AND fm.rack module are on.
+    if ((p.fmEngine ?? "classic") === "ops4" && fmOn && rackOn) {
       // 4-op rack: op1 is carrier (audible via fmGain into all osc freqs as
       // a brightener); ops 2–4 stack as modulators with algorithm-ish ratios.
       const fb = clamp(p.fmFeedback ?? 0, 0, 1);
@@ -785,6 +802,13 @@ class Voice {
       this.fmGain.gain.setValueAtTime((0.15 + l1 * 0.85) * modIdx * this.baseFreq * (4 + fb * 4), t);
       const xm = (p.fmBtoA ?? 0.15 + fb * 0.5) * this.baseFreq * 4 / this.unisonCount;
       this.xmodGain.gain.setTargetAtTime(xm, t, 0.02);
+      return;
+    }
+    if (!fmOn) {
+      this.fmGain.gain.setValueAtTime(0, t);
+      const chipOn = p.moduleEnable?.["chip"] !== false;
+      const syncBoost = chipOn && p.hardSync ? Math.max(p.fmBtoA ?? 0, 0.88) : 0;
+      this.xmodGain.gain.setTargetAtTime(syncBoost * this.baseFreq * 10 / this.unisonCount, t, 0.02);
       return;
     }
     const fmAmt = p.hardSync ? Math.max(p.fmAmount, 0.22) : p.fmAmount;
@@ -869,7 +893,8 @@ class Voice {
     }
 
     this.pitchEnv.offset.cancelScheduledValues(t);
-    if (p.pitchEnvAmount !== 0) {
+    const pitchOn = p.moduleEnable?.["pitch"] !== false;
+    if (pitchOn && p.pitchEnvAmount !== 0) {
       this.pitchEnv.offset.setValueAtTime(p.pitchEnvAmount * 100, t);
       this.pitchEnv.offset.linearRampToValueAtTime(0, t + Math.max(0.01, p.pitchEnvTime));
     } else {
@@ -996,7 +1021,7 @@ class Voice {
   }
   setFilterLive(p: FirePatch): void {
     const t = this.ctx.currentTime;
-    if (p.pathFilter === false) {
+    if (p.pathFilter === false || p.moduleEnable?.["filter"] === false) {
       this.filter.type = "lowpass";
       this.filter.Q.setTargetAtTime(0.0001, t, 0.02);
       this.filter.frequency.setTargetAtTime(20000, t, 0.03);
@@ -1041,9 +1066,12 @@ class Voice {
     if (m.aReso) this.filter.Q.setTargetAtTime(clamp(p.filterResonance + m.reso * 18, 0.0001, 30), t, 0.03);
     if (m.aFm) this.fmGain.gain.setTargetAtTime(Math.max(0, (p.fmAmount + m.fm) * this.baseFreq * 6), t, 0.02);
     if (m.aLvl) {
-      this.groupA.level.gain.setTargetAtTime(clamp(p.oscALevel + m.lvlA, 0, 1.5) * this.uNorm, t, 0.03);
-      this.groupB.level.gain.setTargetAtTime(clamp(p.oscBLevel + m.lvlB, 0, 1.5) * this.uNorm, t, 0.03);
-      if (this.groupC) this.groupC.level.gain.setTargetAtTime(clamp(p.oscCLevel + m.lvlC, 0, 1.5) * this.uNorm, t, 0.03);
+      const oscAOn = p.moduleEnable?.["osc.a"] !== false;
+      const oscBOn = p.moduleEnable?.["osc.b"] !== false;
+      const oscCOn = p.moduleEnable?.["osc.c"] !== false;
+      this.groupA.level.gain.setTargetAtTime(clamp((oscAOn ? p.oscALevel : 0) + m.lvlA, 0, 1.5) * this.uNorm, t, 0.03);
+      this.groupB.level.gain.setTargetAtTime(clamp((oscBOn ? p.oscBLevel : 0) + m.lvlB, 0, 1.5) * this.uNorm, t, 0.03);
+      if (this.groupC) this.groupC.level.gain.setTargetAtTime(clamp((oscCOn ? p.oscCLevel : 0) + m.lvlC, 0, 1.5) * this.uNorm, t, 0.03);
     }
   }
 
@@ -1613,6 +1641,7 @@ export class FireCommandSynth {
   private warpTimer: ReturnType<typeof setTimeout> | null = null;
 
   private hasWarp(p: FirePatch): boolean {
+    if (p.moduleEnable?.["fire.sec.warp"] === false) return false;
     return Math.abs(p.warpStretch ?? 0) > 0.001
       || Math.abs(p.warpTilt ?? 0) > 0.001
       || (p.warpComb ?? 0) > 0.001;
@@ -1688,14 +1717,15 @@ export class FireCommandSynth {
    * `v` is null (global/bus destinations).
    */
   private modSource(src: ModSource, lfo1: number, lfo2: number, me: number, v: Voice | null): number {
+    const macrosOn = this.patch.moduleEnable?.["macros"] !== false;
     switch (src) {
       case "lfo1": return lfo1;
       case "lfo2": return lfo2;
       case "random": return this.mtxRandVal;
-      case "macro1": return this.patch.macro1;
-      case "macro2": return this.patch.macro2;
-      case "macro3": return this.patch.macro3;
-      case "macro4": return this.patch.macro4;
+      case "macro1": return macrosOn ? this.patch.macro1 : 0;
+      case "macro2": return macrosOn ? this.patch.macro2 : 0;
+      case "macro3": return macrosOn ? this.patch.macro3 : 0;
+      case "macro4": return macrosOn ? this.patch.macro4 : 0;
       case "modenv": return v ? me : 0;
       case "velocity": return v ? v.velocity : 0;
       case "keytrack": return v ? clamp((v.midi - 60) / 36, -1, 1) : 0;
@@ -1737,10 +1767,11 @@ export class FireCommandSynth {
     const lfo1 = this.jsLfoValue(p.lfo1Wave, p.lfo1Rate, this.sh1Val, now);
     const lfo2 = this.jsLfoValue(p.lfo2Wave, p.lfo2Rate, this.sh2Val, now);
     const routes = this.mtxRoutes;
+    const matrixOn = p.moduleEnable?.["matrix"] !== false;
 
     // ── global (bus) destinations ──
     let gPan = false, gVol = false, gRev = false, gDly = false;
-    if (this.mtxHasGlobal) {
+    if (matrixOn && this.mtxHasGlobal) {
       let accPan = 0, accVol = 0, accRev = 0, accDly = 0;
       for (let i = 0; i < routes.length; i++) {
         const r = routes[i];
@@ -1778,8 +1809,9 @@ export class FireCommandSynth {
       this.lastGateTarget = gateTarget;
     }
 
-    const pvActive = p.drift > 0 || (p.voiceInstability ?? 0) > 0 || (p.tuneVariance ?? 0) > 0
-      || (p.envVariance ?? 0) > 0 || this.mtxHasPerVoice;
+    const lifeOn = p.moduleEnable?.["analog.life"] !== false;
+    const pvActive = (lifeOn && (p.drift > 0 || (p.voiceInstability ?? 0) > 0 || (p.tuneVariance ?? 0) > 0
+      || (p.envVariance ?? 0) > 0)) || (matrixOn && this.mtxHasPerVoice);
     const A = this.mtxA;
     const m = this.mScratch;
 
@@ -1790,7 +1822,7 @@ export class FireCommandSynth {
       for (const v of this.voices) {
         const me = this.modEnvValue(v, now);
         let mWA = 0, mWB = 0, mWC = 0;
-        if (pvActive) {
+        if (pvActive && matrixOn) {
           m.pitch = 0; m.cutoff = 0; m.reso = 0; m.fm = 0; m.lvlA = 0; m.lvlB = 0; m.lvlC = 0;
           for (let i = 0; i < routes.length; i++) {
             const r = routes[i];
@@ -1808,6 +1840,8 @@ export class FireCommandSynth {
               case "wtC": mWC += c; break;
             }
           }
+        } else if (pvActive) {
+          m.pitch = 0; m.cutoff = 0; m.reso = 0; m.fm = 0; m.lvlA = 0; m.lvlB = 0; m.lvlC = 0;
         }
         const dutyMorph = (table: string, base: number) => {
           if (table !== "pulse" && table !== "chip") return base;
@@ -1815,20 +1849,28 @@ export class FireCommandSynth {
           const thin = Math.abs(clamp(p.pulseDuty ?? 0.5, 0, 1) - 0.5) * 2;
           return clamp(thin * 0.92 + base * 0.08, 0, 1);
         };
-        // Vector morph: slow opposing XY on A/B.
-        const vDepth = clamp(p.vectorDepth ?? 0, 0, 1);
-        const vRate = clamp(p.vectorRate ?? 0, 0, 8);
+        // Morph modulation gating: oscEnv/oscLfo only apply when morph module is on.
+        const morphOn = p.moduleEnable?.["morph"] !== false;
+        const envMod = morphOn ? me : 0;
+        const lfoMod = morphOn ? lfo1 : 0;
+        const matrixWA = matrixOn ? mWA : 0;
+        const matrixWB = matrixOn ? mWB : 0;
+        const matrixWC = matrixOn ? mWC : 0;
+        // Vector morph lives on FM Rack.
+        const rackOn = p.moduleEnable?.["fm.rack"] !== false;
+        const vDepth = rackOn ? clamp(p.vectorDepth ?? 0, 0, 1) : 0;
+        const vRate = rackOn ? clamp(p.vectorRate ?? 0, 0, 8) : 0;
         const vec = vDepth > 0 && vRate > 0
           ? Math.sin(now * vRate * Math.PI * 2) * vDepth * 0.45
           : 0;
         const syncTilt = p.hardSync ? 0.22 : 0;
         const posA = dutyMorph(
           p.oscATable,
-          clamp(p.oscAPos + me * p.oscAEnv + lfo1 * p.oscALfo + mWA + vec + syncTilt, 0, 1),
+          clamp(p.oscAPos + envMod * p.oscAEnv + lfoMod * p.oscALfo + matrixWA + vec + syncTilt, 0, 1),
         );
         const posB = dutyMorph(
           p.oscBTable,
-          clamp(p.oscBPos + me * p.oscBEnv + lfo1 * p.oscBLfo + mWB - vec, 0, 1),
+          clamp(p.oscBPos + envMod * p.oscBEnv + lfoMod * p.oscBLfo + matrixWB - vec, 0, 1),
         );
         v.setWtA(posA);
         v.setWtB(posB);
@@ -1837,17 +1879,22 @@ export class FireCommandSynth {
         if (v.hasGroupC()) {
           const posC = dutyMorph(
             p.oscCTable,
-            clamp(p.oscCPos + me * p.oscCEnv + lfo1 * p.oscCLfo + mWC, 0, 1),
+            clamp(p.oscCPos + envMod * p.oscCEnv + lfoMod * p.oscCLfo + matrixWC, 0, 1),
           );
           v.setWtC(posC);
           dispC = posC;
         }
         if (pvActive) {
-          const lifeAmt = Math.max(p.drift, (p.voiceInstability ?? 0) * 0.55, (p.tuneVariance ?? 0) * 0.25);
-          m.driftCents = (lifeAmt > 0 ? v.advanceDrift(lifeAmt, p.driftRate ?? 0.35) : 0)
-            + v.getTuneCents()
-            + v.advanceInstability(p.voiceInstability ?? 0);
-          m.aReso = A.reso; m.aFm = A.fm; m.aLvl = A.lvlA || A.lvlB || A.lvlC;
+          const lifeAmt = lifeOn
+            ? Math.max(p.drift, (p.voiceInstability ?? 0) * 0.55, (p.tuneVariance ?? 0) * 0.25)
+            : 0;
+          m.driftCents = lifeOn
+            ? ((lifeAmt > 0 ? v.advanceDrift(lifeAmt, p.driftRate ?? 0.35) : 0)
+              + v.getTuneCents()
+              + v.advanceInstability(p.voiceInstability ?? 0))
+            : 0;
+          m.aReso = matrixOn && A.reso; m.aFm = matrixOn && A.fm; m.aLvl = matrixOn && (A.lvlA || A.lvlB || A.lvlC);
+          if (!matrixOn) { m.pitch = 0; m.cutoff = 0; m.reso = 0; m.fm = 0; m.lvlA = 0; m.lvlB = 0; m.lvlC = 0; }
           v.applyMatrix(p, m);
         }
       }
@@ -2156,8 +2203,9 @@ export class FireCommandSynth {
 
   private applyBusParams(p: FirePatch): void {
     const t = this.ctx.currentTime;
-    const pathDrive = p.pathDrive !== false;
-    const pathAge = p.pathAge !== false;
+    const on = (id: string) => p.moduleEnable?.[id] !== false;
+    const pathDrive = p.pathDrive !== false && on("fx.drive");
+    const pathAge = p.pathAge !== false && on("fx.vintage");
     const pathFx = p.pathFx !== false;
     const pathMix = p.pathMix !== false;
 
@@ -2172,7 +2220,7 @@ export class FireCommandSynth {
     this.crushDry.gain.setTargetAtTime(1 - crushAmt, t, 0.02);
     this.crushWet.gain.setTargetAtTime(crushAmt, t, 0.02);
 
-    // Vintage Age bus — force neutral when path Age is off.
+    // Vintage Age bus — force neutral when path Age or module is off.
     this.vintage.apply(pathAge ? {
       cassetteGen: p.cassetteGen ?? 0,
       tapeSpeed: p.tapeSpeed ?? 0,
@@ -2192,14 +2240,15 @@ export class FireCommandSynth {
     });
 
     // Glue module owns bus compress (punch knob). Age analogComp still layers lightly.
-    const glueAmt = p.moduleEnable?.["glue"] === false ? 0 : clamp(p.punch, 0, 1);
+    const glueAmt = on("glue") ? clamp(p.punch, 0, 1) : 0;
     const ac = pathAge ? clamp(p.analogComp ?? 0, 0, 1) : 0;
     const glue = clamp(glueAmt + ac * 0.55, 0, 1);
     this.punchComp.threshold.setTargetAtTime(-glue * 30, t, 0.05);
     this.punchComp.ratio.setTargetAtTime(1 + glue * 7, t, 0.05);
     this.punchMakeup.gain.setTargetAtTime(1 + glue * 0.3, t, 0.05);
 
-    const phMix = pathFx ? clamp(p.phaserMix, 0, 1) : 0;
+    const phaserOn = pathFx && on("fx.phaser");
+    const phMix = phaserOn ? clamp(p.phaserMix, 0, 1) : 0;
     const phDepth = clamp(p.phaserDepth, 0, 1);
     this.phaserLfo.frequency.setTargetAtTime(clamp(p.phaserRate, 0.02, 12), t, 0.02);
     this.phaserDepth.gain.setTargetAtTime(560 * phDepth, t, 0.02);
@@ -2207,12 +2256,15 @@ export class FireCommandSynth {
     this.phaserWet.gain.setTargetAtTime(phMix, t, 0.02);
     this.phaserFb.gain.setTargetAtTime(phMix * 0.55, t, 0.02);
 
-    const ring = pathFx ? clamp(p.ringAmount, 0, 1) : 0;
+    // Ring lives under FM · Ring module.
+    const ringOn = on("fm");
+    const ring = ringOn ? clamp(p.ringAmount, 0, 1) : 0;
     this.ringDry.gain.setTargetAtTime(1 - ring, t, 0.02);
     this.ringDepth.gain.setTargetAtTime(ring, t, 0.02);
     this.ringCarrier.frequency.setTargetAtTime(clamp(p.ringFreq, 1, 8000), t, 0.02);
 
-    const chMix = pathFx ? clamp(p.chorusMix, 0, 1) : 0;
+    const chorusOn = pathFx && on("fx.chorus");
+    const chMix = chorusOn ? clamp(p.chorusMix, 0, 1) : 0;
     this.chorusDry.gain.setTargetAtTime(1 - chMix * 0.5, t, 0.02);
     this.chorusWet.gain.setTargetAtTime(chMix, t, 0.02);
     this.cLfoL.frequency.setTargetAtTime(clamp(p.chorusRate, 0.05, 8), t, 0.02);
@@ -2225,10 +2277,12 @@ export class FireCommandSynth {
     const fb = clamp(p.delayFeedback, 0, 0.92);
     this.dFbLR.gain.setTargetAtTime(fb, t, 0.02);
     this.dFbRL.gain.setTargetAtTime(fb, t, 0.02);
-    this.delayWet.gain.setTargetAtTime(pathFx ? clamp(p.delayMix, 0, 1) : 0, t, 0.02);
+    const delayOn = pathFx && on("fx.delay");
+    this.delayWet.gain.setTargetAtTime(delayOn ? clamp(p.delayMix, 0, 1) : 0, t, 0.02);
     this.tone.frequency.setTargetAtTime(clamp(p.tone, 200, 20000), t, 0.02);
 
-    const revMix = pathFx ? clamp(p.reverbMix, 0, 1) : 0;
+    const reverbOn = pathFx && on("fx.reverb");
+    const revMix = reverbOn ? clamp(p.reverbMix, 0, 1) : 0;
     this.reverbDry.gain.setTargetAtTime(1 - revMix * 0.4, t, 0.04);
     this.reverbWet.gain.setTargetAtTime(revMix, t, 0.04);
     const pre = clamp(p.reverbPredelay ?? 0, 0, 0.2);
@@ -2237,25 +2291,25 @@ export class FireCommandSynth {
       this.lastPredelay = pre;
     }
 
-    const widthOn = p.moduleEnable?.["width"] !== false;
+    const widthOn = on("width");
     this.widthSideAmt.gain.setTargetAtTime(widthOn ? clamp(p.stereoWidth ?? 1, 0, 1.4) : 1, t, 0.03);
 
-    // Air shelves — amount scales shelf gain; module Off forces flat.
-    const airOn = p.moduleEnable?.["air"] !== false;
+    const airOn = on("air");
     const airAmt = airOn ? clamp(p.airAmount ?? 0, 0, 1) : 0;
     this.airLow.gain.setTargetAtTime(clamp(p.airLow ?? 0, -1, 1) * 12 * airAmt, t, 0.04);
     this.airHigh.gain.setTargetAtTime(clamp(p.airHigh ?? 0, -1, 1) * 10 * airAmt, t, 0.04);
 
-    this.updateReverbConvolver(p, pathFx);
+    this.updateReverbConvolver(p, pathFx && reverbOn);
 
-    // Keep pathOsc / pathFilter live on existing voices.
     for (const v of this.voices) {
       v.setOscLevels(p);
       v.setFilterLive(p);
+      v.applyFm(p);
+      v.applyUnisonSpread(p);
     }
 
-    // Spectral follows path FX.
-    if (!pathFx && p.spectralMode !== "off") {
+    const spectralOn = pathFx && on("fx.spectral");
+    if (!spectralOn && p.spectralMode !== "off") {
       this.applySpectral({ ...p, spectralMode: "off" });
     } else {
       this.applySpectral(p);
@@ -2272,7 +2326,8 @@ export class FireCommandSynth {
    */
   private updateReverbConvolver(p: FirePatch, pathFx = true): void {
     const revMix = pathFx ? clamp(p.reverbMix, 0, 1) : 0;
-    const reverbNeeded = revMix > 0.0005 || (pathFx && this.mtxHasReverbRoute);
+    const matrixOn = p.moduleEnable?.["matrix"] !== false;
+    const reverbNeeded = revMix > 0.0005 || (pathFx && matrixOn && this.mtxHasReverbRoute);
     if (!reverbNeeded) {
       if (this.reverbConv.buffer !== null && !this.revNullTimer) {
         this.revNullTimer = setTimeout(() => {
@@ -2346,8 +2401,10 @@ export class FireCommandSynth {
   }
 
   private applyLfoParams(p: FirePatch): void {
-    this.applyOneLfo(this.lfo1, p.lfo1Wave, p.lfo1Rate, p.lfo1Depth, p.lfo1Dest);
-    this.applyOneLfo(this.lfo2, p.lfo2Wave, p.lfo2Rate, p.lfo2Depth, p.lfo2Dest);
+    const d1 = p.moduleEnable?.["lfo.1"] === false ? 0 : p.lfo1Depth;
+    const d2 = p.moduleEnable?.["lfo.2"] === false ? 0 : p.lfo2Depth;
+    this.applyOneLfo(this.lfo1, p.lfo1Wave, p.lfo1Rate, d1, p.lfo1Dest);
+    this.applyOneLfo(this.lfo2, p.lfo2Wave, p.lfo2Rate, d2, p.lfo2Dest);
   }
 
   private applyOneLfo(bank: LfoBank, wave: LfoWave, rate: number, depth: number, dest: LfoDest): void {

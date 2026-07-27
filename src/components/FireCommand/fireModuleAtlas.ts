@@ -101,7 +101,7 @@ export const FIRE_BANDS: FireBandEntry[] = [
     color: FC_BAND.fx,
     hint: "drive through vintage age · spectral",
     modules: [
-      m("fx.drive", "Drive · Punch", "Drive", FC.drive, "band.fx", "FX"),
+      m("fx.drive", "Drive", "Drive", FC.drive, "band.fx", "FX"),
       m("fx.vintage", "Vintage Age", "Age", FC.vintage, "band.fx", "FX"),
       m("fx.phaser", "Phaser", "Phase", FC.phaser, "band.fx", "FX"),
       m("fx.chorus", "Chorus", "Chor", FC.chorus, "band.fx", "FX"),
