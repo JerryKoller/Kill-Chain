@@ -2,6 +2,19 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.3] — 2026-07-26 — Visualizers · Chrome · Honesty
+
+### Changed
+- **Stage visualizers** — every Fire Command module elevated with its own philosophy (FM Rack cables, grain storms, tectonic sub, iris pluck, M/S Lissajous, VU glue, air shelves, constellation scenes, richer Core/FX stages, Morph Pad field, matrix cable energy, mixer bus theater)
+- **Title bar** — grid layout keeps min/max/close always reachable; System Monitor no longer overlays window chrome
+- **Scroll** — Fire Command can reach absolute top; Focus HUD + header Top jump
+
+### Fixed
+- Module On/Off bypass gaps (matrix global+voice, macros, morph, vector/FM Rack, arp module, pitch env/glide, osc levels under matrix)
+- Arp ticks ignored Scale Lock / Humanize; Arp module Off left the scheduler running
+- Scenes stripped `moduleEnable` on capture; preset load wiped module switches
+- Drive stage viz incorrectly read Glue’s punch
+
 ## [3.0.2] — 2026-07-26 — Module Fill
 
 ### Added
