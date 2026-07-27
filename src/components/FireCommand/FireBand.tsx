@@ -25,6 +25,7 @@ import { CollapseToggle } from "./CollapseToggle";
 import { FIRE_BANDS, type FireBandId } from "./fireModuleAtlas";
 import { ensureExpanded } from "./fireNavigate";
 import { useFireLayout } from "./FireLayoutContext";
+import { FireBandLabel } from "./FireSegTabs";
 
 export type BandModuleMeta = {
   id: string;
@@ -214,28 +215,22 @@ export function FireBand({
               )}
             </button>
           ) : (
-            <div className="flex items-center gap-2 min-w-0">
-              <span
-                className="h-2 w-2 rounded-full shrink-0"
-                style={{ background: color, boxShadow: `0 0 10px ${color}` }}
-                aria-hidden
+            <div className="min-w-0 flex-1">
+              <FireBandLabel
+                title={title}
+                color={color}
+                hint={hint}
+                right={
+                  holdsFocus ? (
+                    <span
+                      className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                      style={{ borderColor: `${color}66`, color, background: `${color}18` }}
+                    >
+                      Focus
+                    </span>
+                  ) : undefined
+                }
               />
-              <span className="text-[12px] font-black uppercase tracking-[0.2em]" style={{ color }}>
-                {title}
-              </span>
-              {hint && (
-                <span className="hidden sm:inline text-[9px] normal-case tracking-normal text-white/30 truncate">
-                  · {hint}
-                </span>
-              )}
-              {holdsFocus && (
-                <span
-                  className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
-                  style={{ borderColor: `${color}66`, color, background: `${color}18` }}
-                >
-                  Focus
-                </span>
-              )}
             </div>
           )}
           {showBody && list.length > 0 && (

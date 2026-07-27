@@ -153,7 +153,6 @@ export function FireCommandView() {
   const bypass = useAudioStore((s) => s.bypass);
   const fxOn = !bypass;
   const [browserOpen, setBrowserOpen] = useState(false);
-  const [browserFilter, setBrowserFilter] = useState<"All" | "Missions" | undefined>(undefined);
   const [characterBrowserOpen, setCharacterBrowserOpen] = useState(false);
   const [workspace, setWorkspaceRaw] = useFireWorkspace();
   const [synthBand, setSynthBandRaw] = useFireSynthBand();
@@ -316,12 +315,12 @@ export function FireCommandView() {
 
       {/* Patch bar — three balanced bays: library · generative · history */}
       <GlassPanel className="p-2.5">
-        <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)_minmax(0,0.85fr)] xl:items-stretch">
+        <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-3 xl:items-stretch">
           {/* Library bay */}
           <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px]">
             <div className="flex items-center gap-2">
               <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Patch</span>
-              <span className="text-[9px] text-white/25 truncate">library · browse · init</span>
+              <span className="text-[9px] text-white/25 truncate">browse · characters · init</span>
             </div>
             <div className="flex items-center gap-1.5 min-w-0">
               <button
@@ -331,7 +330,7 @@ export function FireCommandView() {
                 aria-label="Previous preset"
               >◂</button>
               <button
-                onClick={() => { setBrowserFilter(undefined); setBrowserOpen(true); }}
+                onClick={() => setBrowserOpen(true)}
                 className="flex items-center gap-2 rounded-xl border border-white/12 bg-black/30 hover:bg-black/45 hover:border-white/25 px-2.5 py-1.5 transition min-w-0 flex-1"
                 title="Open the preset library"
               >
@@ -345,21 +344,17 @@ export function FireCommandView() {
                 title="Next preset"
                 aria-label="Next preset"
               >▸</button>
-              <button
-                onClick={() => { setBrowserFilter("Missions"); setBrowserOpen(true); }}
-                className="h-8 shrink-0 rounded-xl border px-2.5 text-[11px] font-semibold transition"
-                style={{ color: "#ffd166", borderColor: "#ffd16655", background: "#ffd16614" }}
-                title="Browse mission packs"
-              >Missions</button>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 w-full">
               <button
                 onClick={() => setCharacterBrowserOpen(true)}
-                className="h-8 shrink-0 rounded-xl border px-2.5 text-[11px] font-semibold transition"
+                className="h-8 rounded-xl border px-2.5 text-[11px] font-semibold transition"
                 style={{ color: "#c4b5fd", borderColor: "#a78bfa55", background: "#a78bfa18" }}
                 title="Genesis character cards"
               >Characters</button>
               <button
                 onClick={() => loadPreset("init")}
-                className="h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-2.5 text-[11px] text-white/75 transition"
+                className="h-8 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-2.5 text-[11px] text-white/75 transition"
                 title="Reset to Init patch"
               >↺ Init</button>
             </div>
@@ -382,16 +377,17 @@ export function FireCommandView() {
         <SequencerPanel />
       ) : (
       <>
-      {/* Slim transport — hear the song while building the sound */}
-      <FireMiniTransport />
-
-      <FireSynthBandTabs band={synthBand} onChange={setSynthBand} />
+      {/* Synth chrome stack — transport + band tabs share the same rhythm as workspace tabs */}
+      <div className="space-y-1.5">
+        <FireMiniTransport />
+        <FireSynthBandTabs band={synthBand} onChange={setSynthBand} />
+      </div>
 
       {/* Home = Signal Path hub; band tabs mount only that category */}
       {synthBand === "home" && <FireCommandDeck />}
 
       {synthBand === "band.sources" && (
-      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp · chip">
+      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp · chip" foldable={false}>
         <OscPanel group="a" chipHosted />
         <OscPanel group="b" chipHosted />
         <OscPanel group="c" chipHosted />
@@ -481,7 +477,7 @@ export function FireCommandView() {
       )}
 
       {synthBand === "band.tone" && (
-      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes">
+      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes" foldable={false}>
         <Section title="Unison" color={FC.unison} collapseKey="mixer.unison" chipHosted>
           <UnisonStageViz />
           <div className="flex items-center justify-evenly gap-1">
@@ -538,7 +534,7 @@ export function FireCommandView() {
       )}
 
       {synthBand === "band.mod" && (
-      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp">
+      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp" foldable={false}>
         <LfoPanel idx={1} chipHosted />
         <LfoPanel idx={2} chipHosted />
         <Section title="FM · Ring" color={FC.fm} collapseKey="fm" chipHosted>
@@ -602,7 +598,7 @@ export function FireCommandView() {
       )}
 
       {synthBand === "band.fx" && (
-      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive · vintage age · spectral">
+      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive · vintage age · spectral" foldable={false}>
         <Section title="Drive" color={FC.drive} collapseKey="fx.drive" chipHosted right={
           <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
         }>
@@ -688,7 +684,7 @@ export function FireCommandView() {
       )}
 
       {synthBand === "band.mix" && (
-      <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="bus · morph · scope · performance">
+      <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="bus · morph · scope · performance" foldable={false}>
         <MixerPanel chipHosted />
         <FireMorphPad chipHosted />
         <Section title="Width" color={FC.width} collapseKey="width" chipHosted defaultCollapsed>
@@ -777,7 +773,7 @@ export function FireCommandView() {
       )}
 
       {synthBand === "band.perf" && (
-      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate · harmony · scenes">
+      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate · harmony · scenes" foldable={false}>
         <MacrosPanel chipHosted />
         <GatePanel chipHosted />
         <HarmonyPanel chipHosted />
@@ -807,8 +803,7 @@ export function FireCommandView() {
 
       <PresetBrowser
         open={browserOpen}
-        onClose={() => { setBrowserOpen(false); setBrowserFilter(undefined); }}
-        initialFilter={browserFilter}
+        onClose={() => setBrowserOpen(false)}
       />
       <CharacterBrowser
         open={characterBrowserOpen}

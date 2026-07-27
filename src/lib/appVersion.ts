@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.5";
+export const APP_VERSION = "3.0.9";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,15 +12,15 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Curated preset library",
-    body: "The old ~1000 near-duplicate factory patches are gone. Every category now has 20 hand-authored, sonically distinct presets — Bass through FM.",
+    title: "Fire Command — cleaner layout",
+    body: "Synth and Sequencer share one tab chrome. Band tabs (Home · Src · Tone · Mod · FX · Mix · Perf) replace folding category shells, and the patch bar is a balanced three-bay strip.",
   },
   {
-    title: "Capability Missions",
-    body: "Five new Missions showcase what the synth can do: Unison Width, Cross-FM Forge, Spectral Freeze, Gate · Matrix Pulse, and Vintage Age Bus — not genre templates.",
+    title: "Missions retired",
+    body: "Capability Missions are gone from Fire Command for now. Browse the curated patch library, Characters, and Init instead.",
   },
   {
-    title: "Synth · Sequencer workspaces",
-    body: "Fire Command still splits sound design and sequencing into clear tabs with slim transport on Synth.",
+    title: "Preset identity",
+    body: "Neutral Init, hard module resets on load, and quieter note starts so presets keep their own voice.",
   },
 ];

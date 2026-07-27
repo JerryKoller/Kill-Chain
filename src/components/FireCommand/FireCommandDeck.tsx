@@ -162,13 +162,11 @@ export function FireCommandDeck() {
       {/* ── Signal Path Theater ── */}
       <div className="border-b border-white/[0.06] px-3 pt-2.5 pb-2.5">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[9px] font-black uppercase tracking-[0.22em] text-white/40">
-              Signal Path
-            </span>
-            <span className="hidden sm:inline text-[9px] text-white/25 truncate">
-              click to jump · On/Off bypass · Solo to isolate
-            </span>
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold text-white/65">Signal Path</div>
+            <div className="hidden sm:block text-[9px] text-white/35 truncate">
+              jump · On/Off bypass · Solo to isolate
+            </div>
           </div>
           {focusActive && focusId && (
             <button
