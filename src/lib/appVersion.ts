@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.10";
+export const APP_VERSION = "3.0.11";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,15 +12,15 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
+    title: "Clearer arrangement",
+    body: "Add to end replaces the confusing Place button. Empty timeline shows what to do; click a bar or drag a pattern chip onto the grid.",
+  },
+  {
+    title: "Playlist track chrome",
+    body: "Fixed track label, denser bar grid, and richer clips with start bar and length — plus Editing badge so the open pattern is obvious.",
+  },
+  {
     title: "Arrangement playlist",
-    body: "Song Order is gone. Drag patterns onto a horizontal timeline, leave gaps for silence, and play the full arrangement — FL Playlist-style.",
-  },
-  {
-    title: "Expand all · Collapse all",
-    body: "Each Synth band header can open or chip-collapse every module in one click.",
-  },
-  {
-    title: "Blank patterns",
-    body: "New creates an empty pattern; Duplicate copies the one you're editing. Patterns no longer auto-join the arrangement.",
+    body: "FL-style pattern bank + timeline from 3.0.10 — gaps are silence; Loop pattern or Play arrangement.",
   },
 ];

@@ -463,12 +463,13 @@ export const SequencerPanel = memo(function SequencerPanel({
             const color = SECTION_COLORS[idx % SECTION_COLORS.length];
             return (
               <span
-                className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[11px] font-bold"
+                className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[11px] font-bold max-w-[10rem]"
                 style={{ borderColor: `${color}66`, background: `${color}12`, color }}
-                title="Editors below edit this pattern"
+                title="Piano roll and drums edit this pattern"
               >
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-                {sec?.name ?? "?"}
+                <span className="text-[8px] uppercase tracking-[0.16em] opacity-60 shrink-0">Editing</span>
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
+                <span className="truncate">{sec?.name ?? "?"}</span>
               </span>
             );
           })()}
