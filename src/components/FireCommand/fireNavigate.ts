@@ -4,6 +4,8 @@
  */
 
 import { FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
+import { writeFireWorkspace } from "./useFireWorkspace";
+import { writeFireSynthBand } from "./useFireSynthBand";
 
 export const FIRE_FOLD_EVENT = "killchain.firecmd.fold";
 export const foldStorageKey = (key: string) => `killchain.firecmd.fold.${key}`;
@@ -61,7 +63,6 @@ export function scrollToModule(moduleId: FireModuleId, behavior: ScrollBehavior 
 export function scrollFireCommandTop(behavior: ScrollBehavior = "smooth"): void {
   const root = document.querySelector("[data-fire-root]");
   if (!(root instanceof HTMLElement)) return;
-  // Prefer the nearest overflow scroll ancestor; fall back to main app pane.
   let pane = scrollParentOf(root);
   if (!pane) {
     const mainPane = document.querySelector("main .overflow-auto, main [class*='overflow-auto']");
@@ -69,8 +70,6 @@ export function scrollFireCommandTop(behavior: ScrollBehavior = "smooth"): void 
   }
   if (pane) {
     pane.scrollTo({ top: 0, behavior });
-    // Some Electron builds ignore smooth to exact 0 when sticky children exist —
-    // force a second snap after layout.
     if (behavior === "smooth") {
       window.setTimeout(() => { if (pane && pane.scrollTop > 0 && pane.scrollTop < 8) pane.scrollTop = 0; }, 320);
     } else {
@@ -85,11 +84,21 @@ export function scrollFireCommandTop(behavior: ScrollBehavior = "smooth"): void 
 export function jumpToModule(moduleId: FireModuleId): void {
   const entry = FIRE_MODULE_BY_ID.get(moduleId);
   if (!entry) return;
+  // Land on Synth workspace + the owning band tab so the module is mounted.
+  writeFireWorkspace("synth");
+  writeFireSynthBand(entry.bandKey);
   ensureExpanded(entry.bandKey);
   ensureExpanded(moduleId);
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
-      window.setTimeout(() => scrollToModule(moduleId), 64);
+      window.setTimeout(() => scrollToModule(moduleId), 100);
     });
   });
+}
+
+/** Open the Signal Path homepage (Synth · Home). */
+export function jumpToSynthHome(): void {
+  writeFireWorkspace("synth");
+  writeFireSynthBand("home");
+  scrollFireCommandTop("smooth");
 }

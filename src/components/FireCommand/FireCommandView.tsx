@@ -51,6 +51,8 @@ import { ensureExpanded, scrollFireCommandTop } from "./fireNavigate";
 import { useFireWorkspace, type FireWorkspace } from "./useFireWorkspace";
 import { FireWorkspaceTabs } from "./FireWorkspaceTabs";
 import { FireMiniTransport } from "./FireMiniTransport";
+import { useFireSynthBand, type FireSynthBand } from "./useFireSynthBand";
+import { FireSynthBandTabs } from "./FireSynthBandTabs";
 import { FC, FC_BAND } from "./fireColors";
 
 const FIRE = FC.fire; // mix / destination coral
@@ -154,6 +156,7 @@ export function FireCommandView() {
   const [browserFilter, setBrowserFilter] = useState<"All" | "Missions" | undefined>(undefined);
   const [characterBrowserOpen, setCharacterBrowserOpen] = useState(false);
   const [workspace, setWorkspaceRaw] = useFireWorkspace();
+  const [synthBand, setSynthBandRaw] = useFireSynthBand();
 
   const setWorkspace = useCallback((ws: FireWorkspace) => {
     if (ws === "sequencer") {
@@ -162,6 +165,11 @@ export function FireCommandView() {
     setWorkspaceRaw(ws);
     scrollFireCommandTop("smooth");
   }, [setWorkspaceRaw]);
+
+  const setSynthBand = useCallback((band: FireSynthBand) => {
+    setSynthBandRaw(band);
+    scrollFireCommandTop("smooth");
+  }, [setSynthBandRaw]);
 
   const currentName =
     presetId === "custom"
@@ -377,11 +385,12 @@ export function FireCommandView() {
       {/* Slim transport — hear the song while building the sound */}
       <FireMiniTransport />
 
-      {/* Signal Path Theater + Command Map */}
-      <FireCommandDeck />
+      <FireSynthBandTabs band={synthBand} onChange={setSynthBand} />
 
-      {/* ── Category bands (v2.5.7) — collapsed chips, even open grids ── */}
+      {/* Home = Signal Path hub; band tabs mount only that category */}
+      {synthBand === "home" && <FireCommandDeck />}
 
+      {synthBand === "band.sources" && (
       <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp · chip">
         <OscPanel group="a" chipHosted />
         <OscPanel group="b" chipHosted />
@@ -469,7 +478,9 @@ export function FireCommandView() {
           </div>
         </Section>
       </FireBand>
+      )}
 
+      {synthBand === "band.tone" && (
       <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes">
         <Section title="Unison" color={FC.unison} collapseKey="mixer.unison" chipHosted>
           <UnisonStageViz />
@@ -524,7 +535,9 @@ export function FireCommandView() {
           <div className="mt-1.5 text-center text-[10px] text-dim">Strike drives amp + brightness · replaces ADSR while on</div>
         </Section>
       </FireBand>
+      )}
 
+      {synthBand === "band.mod" && (
       <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp">
         <LfoPanel idx={1} chipHosted />
         <LfoPanel idx={2} chipHosted />
@@ -586,7 +599,9 @@ export function FireCommandView() {
         <ModMatrixPanel chipHosted />
         <ArpPanel arp={arp} setArp={setArp} chipHosted />
       </FireBand>
+      )}
 
+      {synthBand === "band.fx" && (
       <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive · vintage age · spectral">
         <Section title="Drive" color={FC.drive} collapseKey="fx.drive" chipHosted right={
           <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
@@ -670,7 +685,9 @@ export function FireCommandView() {
         </Section>
         <SpectralPanel chipHosted />
       </FireBand>
+      )}
 
+      {synthBand === "band.mix" && (
       <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="bus · morph · scope · performance">
         <MixerPanel chipHosted />
         <FireMorphPad chipHosted />
@@ -757,8 +774,10 @@ export function FireCommandView() {
           </div>
         </Section>
       </FireBand>
+      )}
 
-      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate · harmony · scenes" defaultCollapsed>
+      {synthBand === "band.perf" && (
+      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate · harmony · scenes">
         <MacrosPanel chipHosted />
         <GatePanel chipHosted />
         <HarmonyPanel chipHosted />
@@ -767,6 +786,7 @@ export function FireCommandView() {
         <HumanPanel chipHosted />
         <ScenesPanel chipHosted />
       </FireBand>
+      )}
 
       {/* Keyboard */}
       {keyboardMinimized ? (

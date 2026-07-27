@@ -20,8 +20,8 @@ const MR = (source: ModSource, dest: ModDest, amount: number): ModRoute => ({ so
 export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
   {
     id: "ms-cap-unison",
-    name: "Capability · Unison Width",
-    desc: "Five-voice detuned choir with stereo width pushed — hear the unison and M/S stage",
+    name: "Choir Wall Width",
+    desc: "Five-voice detuned choir with stereo width pushed — unison and M/S stage in full bloom",
     category: "Pad",
     patch: P({
       oscATable: "saw", oscAPos: 0.45, oscALevel: 0.7, oscADetune: -6,
@@ -43,8 +43,8 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
   },
   {
     id: "ms-cap-fm",
-    name: "Capability · Cross-FM Forge",
-    desc: "Classic FM + B→A cross-mod + ring — metallic punch that shows the FM · Ring rack",
+    name: "Cross-FM Forge",
+    desc: "Classic FM + B→A cross-mod + ring — metallic punch from the FM · Ring rack",
     category: "FM",
     patch: P({
       oscATable: "bell", oscAPos: 0.25, oscAEnv: 0.45, oscALevel: 0.8,
@@ -69,7 +69,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
   },
   {
     id: "ms-cap-spectral",
-    name: "Capability · Spectral Freeze",
+    name: "Frozen Lattice",
     desc: "Sustain a note and hear the spectral freeze lattice hold the partials",
     category: "Atmos",
     patch: P({
@@ -93,7 +93,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
   },
   {
     id: "ms-cap-gate",
-    name: "Capability · Gate · Matrix Pulse",
+    name: "Gate Chop Pulse",
     desc: "Trance gate chopping a bright pad while macros drive cutoff and delay",
     category: "Pad",
     patch: P({
@@ -121,7 +121,7 @@ export const MISSION_SHOWCASE_PRESETS: FirePreset[] = [
   },
   {
     id: "ms-cap-vintage",
-    name: "Capability · Vintage Age Bus",
+    name: "Cassette Age Bus",
     desc: "Cassette generation, wow/flutter, hiss and VHS color — the Age stage in full",
     category: "Vintage",
     patch: P({
