@@ -1,9 +1,9 @@
 /**
- * SequencerPanel — the Fire Command "war room": transport + piano roll +
- * drum grid, FL-Studio style. Lives at the top of the synth view.
+ * SequencerPanel — Fire Command sequence workspace: transport + piano roll +
+ * drum grid + patterns / song order.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { PianoRoll } from "./PianoRoll";
 import { DrumMachine } from "./DrumMachine";
@@ -28,6 +28,8 @@ import {
 } from "@/lib/fireStudio";
 import { RollFitProvider } from "./useRollFit";
 import { PIANO_GUTTER } from "./PianoRoll";
+import { writeFireWorkspace } from "./useFireWorkspace";
+import { scrollFireCommandTop } from "./fireNavigate";
 
 const FIRE = "#ff6a3d";
 const ICE = "#62b6ff";
@@ -390,7 +392,12 @@ function SwingControls() {
   );
 }
 
-export function SequencerPanel() {
+export const SequencerPanel = memo(function SequencerPanel({
+  asWorkspace = true,
+}: {
+  /** When true (default), stay expanded — Sequencer is its own Fire workspace. */
+  asWorkspace?: boolean;
+} = {}) {
   const playing = useFireSequencerStore((s) => s.playing);
   const bpm = useFireSequencerStore((s) => s.bpm);
   const bars = useFireSequencerStore((s) => s.bars);
@@ -428,6 +435,15 @@ export function SequencerPanel() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("wav");
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const toast = useUIStore((s) => s.toast);
+
+  useEffect(() => {
+    if (asWorkspace && collapsed) setCollapsed(false);
+  }, [asWorkspace, collapsed, setCollapsed]);
+
+  const openSynth = () => {
+    writeFireWorkspace("synth");
+    scrollFireCommandTop("smooth");
+  };
 
   const doExportWav = async () => {
     if (exporting) return;
@@ -509,9 +525,8 @@ export function SequencerPanel() {
     else clearDrums();
   };
 
-  // Collapsed: a one-line strip that keeps the transport (play/stop, BPM,
-  // channel arms) reachable without the editors taking any vertical space.
-  if (collapsed) {
+  // Collapsed strip only when embedded historically; workspace mode stays full.
+  if (collapsed && !asWorkspace) {
     return (
       <GlassPanel intense className="px-3 py-2">
         <div className="flex flex-wrap items-center gap-2.5">
@@ -694,11 +709,22 @@ export function SequencerPanel() {
             title="Drum channel level"
             aria-label="Drum level"
           />
-          <button
-            onClick={() => setCollapsed(true)}
-            className="h-8 px-2.5 rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 text-[11px] text-white/75 transition"
-            title="Collapse the sequencer to a compact transport strip"
-          >▲</button>
+          {asWorkspace ? (
+            <button
+              type="button"
+              onClick={openSynth}
+              className="h-8 px-2.5 rounded-lg border border-[#ff6a3d]/35 bg-[#ff6a3d]/10 hover:bg-[#ff6a3d]/18 text-[11px] font-semibold text-[#ffbfa0] transition"
+              title="Open Synth workspace"
+            >
+              ← Synth
+            </button>
+          ) : (
+            <button
+              onClick={() => setCollapsed(true)}
+              className="h-8 px-2.5 rounded-lg border border-white/12 bg-white/5 hover:bg-white/10 text-[11px] text-white/75 transition"
+              title="Collapse the sequencer to a compact transport strip"
+            >▲</button>
+          )}
         </div>
       </div>
 
@@ -869,4 +895,4 @@ export function SequencerPanel() {
       )}
     </GlassPanel>
   );
-}
+});

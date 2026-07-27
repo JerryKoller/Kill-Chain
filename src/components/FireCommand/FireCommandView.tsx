@@ -48,6 +48,9 @@ import { RandomizeCluster } from "./RandomizeCluster";
 import { FireLayoutProvider, useFireLayout } from "./FireLayoutContext";
 import { FireCommandDeck } from "./FireCommandDeck";
 import { ensureExpanded, scrollFireCommandTop } from "./fireNavigate";
+import { useFireWorkspace, type FireWorkspace } from "./useFireWorkspace";
+import { FireWorkspaceTabs } from "./FireWorkspaceTabs";
+import { FireMiniTransport } from "./FireMiniTransport";
 import { FC, FC_BAND } from "./fireColors";
 
 const FIRE = FC.fire; // mix / destination coral
@@ -138,7 +141,6 @@ export function FireCommandView() {
   const setParam = useFireCommandStore((s) => s.setParam);
   const loadPreset = useFireCommandStore((s) => s.loadPreset);
   const shiftOctave = useFireCommandStore((s) => s.shiftOctave);
-  const toast = useUIStore((s) => s.toast);
   const setRouteThroughFx = useFireCommandStore((s) => s.setRouteThroughFx);
   const setArp = useFireCommandStore((s) => s.setArp);
   const toggleKeyboard = useFireCommandStore((s) => s.toggleKeyboard);
@@ -151,6 +153,15 @@ export function FireCommandView() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browserFilter, setBrowserFilter] = useState<"All" | "Missions" | undefined>(undefined);
   const [characterBrowserOpen, setCharacterBrowserOpen] = useState(false);
+  const [workspace, setWorkspaceRaw] = useFireWorkspace();
+
+  const setWorkspace = useCallback((ws: FireWorkspace) => {
+    if (ws === "sequencer") {
+      useFireSequencerStore.getState().setCollapsed(false);
+    }
+    setWorkspaceRaw(ws);
+    scrollFireCommandTop("smooth");
+  }, [setWorkspaceRaw]);
 
   const currentName =
     presetId === "custom"
@@ -357,8 +368,14 @@ export function FireCommandView() {
         </div>
       </GlassPanel>
 
-      {/* Pattern sequencer: piano roll + drum grid */}
-      <SequencerPanel />
+      <FireWorkspaceTabs workspace={workspace} onChange={setWorkspace} />
+
+      {workspace === "sequencer" ? (
+        <SequencerPanel />
+      ) : (
+      <>
+      {/* Slim transport — hear the song while building the sound */}
+      <FireMiniTransport />
 
       {/* Signal Path Theater + Command Map */}
       <FireCommandDeck />
@@ -764,6 +781,8 @@ export function FireCommandView() {
         </div>
       ) : (
         <Keyboard octave={octave} onMinimize={toggleKeyboard} />
+      )}
+      </>
       )}
 
       <PresetBrowser

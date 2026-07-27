@@ -3,7 +3,7 @@
  * Organizational chrome: jump, focus, live heat, per-stage On/Off.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, SIGNAL_PATH, type FireModuleId, type SignalNodeId } from "./fireModuleAtlas";
@@ -24,34 +24,40 @@ const PATH_KEYS: Record<SignalNodeId, keyof FirePatch> = {
   scope: "pathScope",
 };
 
-/** Live “heat” for signal-path nodes from patch params — decorative only. */
+/** Live “heat” for signal-path nodes — polled so knob drags don’t thrash the deck. */
 function useSignalHeat(): Record<SignalNodeId, number> {
-  const oscA = useFireCommandStore((s) => s.patch.oscALevel);
-  const oscB = useFireCommandStore((s) => s.patch.oscBLevel);
-  const oscC = useFireCommandStore((s) => s.patch.oscCLevel);
-  const cutoff = useFireCommandStore((s) => s.patch.filterCutoff);
-  const res = useFireCommandStore((s) => s.patch.filterResonance);
-  const drive = useFireCommandStore((s) => s.patch.drive);
-  const delay = useFireCommandStore((s) => s.patch.delayMix);
-  const reverb = useFireCommandStore((s) => s.patch.reverbMix);
-  const phaser = useFireCommandStore((s) => s.patch.phaserMix);
-  const chorus = useFireCommandStore((s) => s.patch.chorusMix);
-  const master = useFireCommandStore((s) => s.patch.masterGain);
-  const cassette = useFireCommandStore((s) => s.patch.cassetteGen);
-  const wow = useFireCommandStore((s) => s.patch.wowFlutter);
-  const bbd = useFireCommandStore((s) => s.patch.bbdChorus);
-  const hiss = useFireCommandStore((s) => s.patch.hiss);
-  const vhs = useFireCommandStore((s) => s.patch.vhsColor);
+  const [heat, setHeat] = useState<Record<SignalNodeId, number>>(() => ({
+    osc: 0.35, filter: 0.35, drive: 0, age: 0, fx: 0, mix: 0.5, scope: 0.4,
+  }));
 
-  return useMemo(() => ({
-    osc: clamp01((oscA + oscB + oscC) / 2.2),
-    filter: clamp01(0.25 + (1 - Math.log10(Math.max(30, cutoff)) / 4.3) * 0.55 + Math.min(1, res / 12) * 0.35),
-    drive: clamp01(drive),
-    age: clamp01(Math.max(cassette, wow, bbd, hiss, vhs) * 1.2),
-    fx: clamp01(Math.max(delay, reverb, phaser, chorus) * 1.15),
-    mix: clamp01(master / 1.2),
-    scope: clamp01(0.35 + master * 0.4 + Math.max(oscA, oscB, oscC) * 0.25),
-  }), [oscA, oscB, oscC, cutoff, res, drive, delay, reverb, phaser, chorus, master, cassette, wow, bbd, hiss, vhs]);
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    let prev = "";
+    const tick = (t: number) => {
+      raf = requestAnimationFrame(tick);
+      if (document.hidden || t - last < 140) return;
+      last = t;
+      const p = useFireCommandStore.getState().patch;
+      const next = {
+        osc: clamp01((p.oscALevel + p.oscBLevel + p.oscCLevel) / 2.2),
+        filter: clamp01(0.25 + (1 - Math.log10(Math.max(30, p.filterCutoff)) / 4.3) * 0.55 + Math.min(1, p.filterResonance / 12) * 0.35),
+        drive: clamp01(p.drive),
+        age: clamp01(Math.max(p.cassetteGen ?? 0, p.wowFlutter ?? 0, p.bbdChorus ?? 0, p.hiss ?? 0, p.vhsColor ?? 0) * 1.2),
+        fx: clamp01(Math.max(p.delayMix, p.reverbMix, p.phaserMix, p.chorusMix) * 1.15),
+        mix: clamp01(p.masterGain / 1.2),
+        scope: clamp01(0.35 + p.masterGain * 0.4 + Math.max(p.oscALevel, p.oscBLevel, p.oscCLevel) * 0.25),
+      };
+      const key = `${next.osc.toFixed(2)}|${next.filter.toFixed(2)}|${next.drive.toFixed(2)}|${next.age.toFixed(2)}|${next.fx.toFixed(2)}|${next.mix.toFixed(2)}|${next.scope.toFixed(2)}`;
+      if (key === prev) return;
+      prev = key;
+      setHeat(next);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return heat;
 }
 
 /** Sticky strip while Focus Mode is on — always one click from exit. */

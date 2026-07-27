@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.3";
+export const APP_VERSION = "3.0.4";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,19 +12,15 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Stage visualizers elevated",
-    body: "Every Fire Command module now has its own visual philosophy — FM Rack cables, grain storms, tectonic sub, iris pluck, VU glue, constellation scenes, and richer Core/FX stages.",
+    title: "Synth · Sequencer workspaces",
+    body: "Fire Command splits into two clear tabs — build the sound on Synth, build the beat & melody on Sequencer. Slim transport keeps play reachable while you tweak the patch.",
   },
   {
-    title: "Window chrome & scroll",
-    body: "Min/max/close stay reachable (no drag overlap). Fire Command can scroll to the absolute top; Focus HUD and header include a Top jump.",
+    title: "Performance",
+    body: "Idle workspace unmounts its visualizers and playheads. Signal Path heat is throttled so knob drags stay smooth.",
   },
   {
-    title: "Module On/Off honesty",
-    body: "Matrix, macros, morph, vector, arp, pitch, and more fully honor All Modules bypass — including scenes that capture enable state.",
-  },
-  {
-    title: "Arp + performance path",
-    body: "Arpeggiator ticks respect Scale Lock and Humanize velocity; Arp module Off parks the scheduler so live notes play through.",
+    title: "Beginner path",
+    body: "Plain labels and short hints — Synth for sound, Sequencer for patterns, piano roll, and drums.",
   },
 ];
