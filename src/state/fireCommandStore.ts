@@ -838,9 +838,13 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory();
       const patch = { ...DEFAULT_FIRE_PATCH, ...(rawPatch as Partial<FirePatch>) };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      // Same contract as loadPreset: never inherit prior module bypasses / arp.
+      patch.moduleEnable = (rawPatch as Partial<FirePatch>)?.moduleEnable
+        ? { ...((rawPatch as Partial<FirePatch>).moduleEnable as Record<string, boolean>) }
+        : {};
       const arp: ArpSettings = rawArp && typeof rawArp === "object"
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
-        : { ...get().arp };
+        : { ...DEFAULT_ARP, enabled: false };
       stopArpScheduler();
       set({ patch, arp, presetId: "custom", heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1, mutation: null, mutateLineage: 0 });
       const fc = getEngine().fireCommand;
