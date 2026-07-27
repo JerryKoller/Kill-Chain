@@ -2,6 +2,17 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.9] — 2026-07-27 — Fire Command Cohesion
+
+### Removed
+- **Capability Missions** — packs, showcase presets, and the Missions browser entry are gone from Fire Command (Mission Log / Mission HUD elsewhere in the app are unchanged)
+
+### Changed
+- Shared segmented tab chrome for Synth · Sequencer and Home · Src · Tone · Mod · FX · Mix · Perf
+- Band tabs no longer double as foldable shells — selecting a band shows that category directly
+- Patch bar is a balanced three-bay layout (Patch · Generative · Studio); Characters and Init sit as equal twin actions
+- Mini transport and Signal Path headers match the same hint rhythm as the tab strips
+
 ## [3.0.8] — 2026-07-27 — Kill the Ghost Hi-Hat
 
 ### Fixed
