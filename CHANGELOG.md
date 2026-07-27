@@ -2,6 +2,15 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.7] — 2026-07-27 — Preset Identity · Symmetry
+
+### Fixed
+- **Preset sameness** — Init/default patch no longer paints every preset with 3-voice unison, 25% chorus, Osc B, sub, and drive; module bypasses and arp settings no longer stick across loads; fractional detune values in the bank were scaled to real cents
+- Bass presets restore explicit sub levels that had been inherited from the old default
+
+### Changed
+- Band chip grids use even atlas-width columns; All Modules map stays a 6-column band row earlier in the breakpoint range
+
 ## [3.0.6] — 2026-07-27 — Fire Band Tabs · Named Presets
 
 ### Added

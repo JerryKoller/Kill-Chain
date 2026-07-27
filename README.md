@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.0.6-c41e3a?style=flat-square" alt="Version 3.0.6" />
+  <img src="https://img.shields.io/badge/version-3.0.7-c41e3a?style=flat-square" alt="Version 3.0.7" />
   <img src="https://img.shields.io/badge/platform-Windows%2064--bit-1e2430?style=flat-square" alt="Windows 64-bit" />
   <img src="https://img.shields.io/badge/license-Proprietary-8b95a8?style=flat-square" alt="Proprietary license" />
 </p>
@@ -26,12 +26,12 @@
 
 ## Download
 
-**[⬇ Download Kill-Chain-Setup-3.0.6.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.6.exe)**
+**[⬇ Download Kill-Chain-Setup-3.0.7.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.7.exe)**
 
 | | |
 |---|---|
-| **Version** | 3.0.6 |
-| **File** | `Kill-Chain-Setup-3.0.6.exe` |
+| **Version** | 3.0.7 |
+| **File** | `Kill-Chain-Setup-3.0.7.exe` |
 | **Size** | ~77 MB |
 | **Platform** | Windows 10/11 (64-bit) |
 
