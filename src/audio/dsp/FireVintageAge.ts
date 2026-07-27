@@ -370,11 +370,14 @@ export class FireVintageAge {
     this.comp.ratio.setTargetAtTime(1 + ac * 5, t, 0.05);
     this.compMakeup.gain.setTargetAtTime(1 + ac * 0.22, t, 0.05);
 
-    // Noise beds
+    // Noise beds — snap to silence when off (no lingering hiss from prior preset).
     if (a.dust > 0.001 || a.hiss > 0.001) this.ensureNoise();
-    this.dustGain.gain.setTargetAtTime(a.dust * 0.04, t, 0.05);
-    this.hissGain.gain.setTargetAtTime(a.hiss * 0.035, t, 0.05);
-    this.humGain.gain.setTargetAtTime(a.hum * 0.025, t, 0.05);
+    if (a.dust < 0.001) this.dustGain.gain.setValueAtTime(0, t);
+    else this.dustGain.gain.setTargetAtTime(a.dust * 0.04, t, 0.05);
+    if (a.hiss < 0.001) this.hissGain.gain.setValueAtTime(0, t);
+    else this.hissGain.gain.setTargetAtTime(a.hiss * 0.035, t, 0.05);
+    if (a.hum < 0.001) this.humGain.gain.setValueAtTime(0, t);
+    else this.humGain.gain.setTargetAtTime(a.hum * 0.025, t, 0.05);
     this.printGain.gain.setTargetAtTime(a.printThrough * 0.18, t, 0.05);
   }
 }

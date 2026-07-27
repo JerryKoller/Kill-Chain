@@ -986,10 +986,9 @@ class Voice {
     const modOn = (id: string) => p.moduleEnable?.[id] !== false;
     const noiseOn = modOn("noise");
     const subOn = modOn("sub");
-    // Non-white chip noise stays audible even when the Noise knob is low (if Chip module on).
-    const chipOn = modOn("chip");
-    const chipBed = (chipOn && p.chipNoise && p.chipNoise !== "white") ? 0.1 : 0;
-    const noise = (!noiseOn || mute) ? 0 : Math.max(p.noiseLevel, chipBed * Math.min(1, 0.35 + p.noiseLevel));
+    // Noise is ONLY what the Noise knob says — never a hidden chip "bed".
+    // (Previously non-white chipNoise forced ~3.5% noise on every note = hi-hat tick.)
+    const noise = (!noiseOn || mute) ? 0 : clamp(p.noiseLevel, 0, 1);
     const oscAOn = modOn("osc.a");
     const oscBOn = modOn("osc.b");
     const oscCOn = modOn("osc.c");
@@ -997,7 +996,10 @@ class Voice {
     this.groupB.level.gain.setTargetAtTime((oscBOn ? p.oscBLevel : 0) * this.uNorm * nMul, t, 0.02);
     if (this.groupC) this.groupC.level.gain.setTargetAtTime((oscCOn ? p.oscCLevel : 0) * this.uNorm * nMul, t, 0.02);
     this.gSub.gain.setTargetAtTime((subOn ? p.subLevel : 0) * nMul, t, 0.02);
-    this.gNoise.gain.setTargetAtTime(noise, t, 0.02);
+    // Snap noise off immediately so a prior noisy preset can't bleed a hat-tick
+    // into the next note via setTargetAtTime lag.
+    if (noise < 0.0005) this.gNoise.gain.setValueAtTime(0, t);
+    else this.gNoise.gain.setTargetAtTime(noise, t, 0.02);
     this.applyNoiseColor(p);
   }
 
@@ -2434,7 +2436,7 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   unison: 1, unisonDetune: 0, unisonWidth: 0.5,
   subWave: "sine", subLevel: 0, noiseLevel: 0, noiseColor: 0,
   fmAmount: 0, fmRatio: 2, fmBtoA: 0, ringAmount: 0, ringFreq: 220,
-  filterType: "lowpass", filterCutoff: 2600, filterResonance: 0.7, filterEnvAmount: 0.4, filterKeyTrack: 0.3,
+  filterType: "lowpass", filterCutoff: 2600, filterResonance: 0.7, filterEnvAmount: 0, filterKeyTrack: 0.3,
   filterDrive: 0,
   ampAttack: 0.01, ampDecay: 0.25, ampSustain: 0.8, ampRelease: 0.35, velAmount: 1,
   lpgOn: false, lpgDecay: 0.4, lpgColor: 0.7,

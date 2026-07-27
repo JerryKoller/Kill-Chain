@@ -736,6 +736,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-kalimba", "Kalimba Tine", "Metallic kalimba tine pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "bell",
     oscALevel: 0.7,
     oscBTable: "basic",
@@ -750,6 +751,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-harp-gliss", "Harp Gliss", "Airy harp gliss pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "basic",
     oscALevel: 0.65,
     filterCutoff: 3600,
@@ -762,6 +764,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-muted-funk", "Muted Funk Pluck", "Muted funk guitar-style pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "pulse",
     oscAPos: 0.2,
     oscALevel: 0.75,
@@ -775,6 +778,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-glass-tap", "Glass Tap", "Glass-tapping crystalline pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "bell",
     oscALevel: 0.68,
     filterType: "highpass",
@@ -788,6 +792,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-bass-thump", "Bass Pluck Thump", "Low thumpy bass pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "basic",
     oscALevel: 0.8,
     oscAOctave: -1,
@@ -802,6 +807,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-chip-blip", "Chip Blip", "8-bit chip blip pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "pulse",
     oscAPos: 0.5,
     pulseDuty: 0.25,
@@ -814,6 +820,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-bloom-tail", "Bloom Tail Pluck", "Pluck that blooms into a soft pad tail", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "saw",
     oscALevel: 0.6,
     filterCutoff: 2800,
@@ -839,6 +846,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-marimba", "Marimba Wood", "Wooden marimba bar hit", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "basic",
     oscALevel: 0.7,
     oscBTable: "bell",
@@ -852,6 +860,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-delay-dots", "Delay Dot Plucks", "Sparse plucks painting delay dots", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "pulse",
     oscAPos: 0.4,
     oscALevel: 0.65,
@@ -866,6 +875,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-harmonic-ping", "Harmonic Ping", "High harmonic ping pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "harmonic",
     oscAPos: 0.6,
     oscALevel: 0.65,
@@ -879,6 +889,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-vinyl-scratch", "Vinyl Scratch Pluck", "Lo-fi vinyl-scuffed pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "pulse",
     oscAPos: 0.3,
     oscALevel: 0.7,
@@ -893,6 +904,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-formant", "Formant Pluck", "Vowel-shaped formant pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "vocal",
     oscAPos: 0.4,
     oscALevel: 0.7,
@@ -904,6 +916,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-wide-chorus", "Wide Chorus Pluck", "Stereo-wide chorused pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "saw",
     oscALevel: 0.65,
     unison: 3,
@@ -918,6 +931,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-dark-thumb", "Dark Thumb", "Dark thumb-muted pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "saw",
     oscALevel: 0.7,
     filterCutoff: 900,
@@ -929,6 +943,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-sparkle", "Sparkle Pluck", "Air and sparkle on a short pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "bell",
     oscALevel: 0.55,
     oscBTable: "pulse",
@@ -958,6 +973,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }),
 
   preset("fc-pluck-warm-decay", "Warm Decay Pluck", "Warm long-decay finger pluck", "Pluck", {
+    filterEnvAmount: 0.5,
     oscATable: "basic",
     oscALevel: 0.7,
     filterCutoff: 1800,
@@ -1574,6 +1590,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 
   // ===== ARP (20) =====
   preset("fc-arp-crystal-up", "Crystal Up Arp", "Bright crystal ascending arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "bell",
     oscALevel: 0.65,
     filterCutoff: 5200,
@@ -1598,6 +1615,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "updown", bpm: 120, division: "1/16", octaves: 3, gate: 0.55 }),
 
   preset("fc-arp-pluck-rain", "Pluck Rain", "Raindrop pluck arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "pulse",
     oscAPos: 0.4,
     oscALevel: 0.65,
@@ -1610,6 +1628,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "random", bpm: 110, division: "1/16", octaves: 2, gate: 0.5 }),
 
   preset("fc-arp-trance-drive", "Trance Drive Arp", "Driving trance arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "saw",
     oscALevel: 0.7,
     unison: 3,
@@ -1624,6 +1643,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 138, division: "1/16", octaves: 2, gate: 0.7 }),
 
   preset("fc-arp-chip-run", "Chip Run", "Fast chip-tune run", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "pulse",
     oscAPos: 0.5,
     pulseDuty: 0.5,
@@ -1636,6 +1656,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 150, division: "1/32", octaves: 3, gate: 0.8 }),
 
   preset("fc-arp-soft-lullaby", "Soft Lullaby Arp", "Soft lullaby rolling arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "basic",
     oscALevel: 0.6,
     filterCutoff: 2200,
@@ -1662,6 +1683,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 125, division: "1/16", octaves: 1, gate: 0.6 }),
 
   preset("fc-arp-glass-ladder", "Glass Ladder", "Glass ladder ascending arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "bell",
     oscALevel: 0.6,
     oscBTable: "harmonic",
@@ -1675,6 +1697,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 100, division: "1/8", octaves: 3, gate: 0.55 }),
 
   preset("fc-arp-pulse-machine", "Pulse Machine", "Mechanical pulse arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "pulse",
     oscAPos: 0.25,
     oscALevel: 0.7,
@@ -1687,6 +1710,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "down", bpm: 130, division: "1/16", octaves: 2, gate: 0.75 }),
 
   preset("fc-arp-echo-garden", "Echo Garden", "Garden of delayed arp echoes", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "saw",
     oscALevel: 0.55,
     filterCutoff: 3200,
@@ -1701,6 +1725,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "updown", bpm: 105, division: "1/8", octaves: 2, gate: 0.5 }),
 
   preset("fc-arp-bass-gallop", "Bass Gallop Arp", "Galloping bass arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "saw",
     oscALevel: 0.75,
     oscAOctave: -1,
@@ -1714,6 +1739,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 128, division: "1/16", octaves: 1, gate: 0.55 }),
 
   preset("fc-arp-vocal-chatter", "Vocal Chatter Arp", "Chattering vocal formant arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "vocal",
     oscAPos: 0.4,
     oscALevel: 0.65,
@@ -1725,6 +1751,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "random", bpm: 115, division: "1/16", octaves: 2, gate: 0.6 }),
 
   preset("fc-arp-wide-sparkle", "Wide Sparkle Arp", "Wide sparkling unison arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "saw",
     oscALevel: 0.55,
     unison: 4,
@@ -1740,6 +1767,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 120, division: "1/16", octaves: 2, gate: 0.65 }),
 
   preset("fc-arp-lofi-steps", "Lo-Fi Steps", "Wobbly lo-fi arp steps", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "pulse",
     oscAPos: 0.35,
     oscALevel: 0.65,
@@ -1754,6 +1782,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "updown", bpm: 95, division: "1/8", octaves: 2, gate: 0.6 }),
 
   preset("fc-arp-fm-bells", "FM Bell Arp", "FM bell cascading arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "bell",
     oscALevel: 0.6,
     oscBTable: "basic",
@@ -1769,6 +1798,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 110, division: "1/16", octaves: 2, gate: 0.55 }),
 
   preset("fc-arp-dark-crawl", "Dark Crawl Arp", "Dark crawling low arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "saw",
     oscALevel: 0.7,
     filterCutoff: 800,
@@ -1792,6 +1822,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "up", bpm: 140, division: "1/16", octaves: 2, gate: 0.4 }),
 
   preset("fc-arp-warm-circle", "Warm Circle Arp", "Warm circling arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "basic",
     oscALevel: 0.65,
     oscBTable: "saw",
@@ -1807,6 +1838,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "updown", bpm: 108, division: "1/8", octaves: 2, gate: 0.7 }),
 
   preset("fc-arp-noise-sparkle", "Noise Sparkle Arp", "Noise-kissed sparkle arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "bell",
     oscALevel: 0.5,
     noiseLevel: 0.2,
@@ -1820,6 +1852,7 @@ export const CURATED_PRESETS: FirePreset[] = [
   }, { enabled: true, mode: "random", bpm: 120, division: "1/16", octaves: 2, gate: 0.5 }),
 
   preset("fc-arp-octave-bounce", "Octave Bounce", "Octave-bouncing playful arp", "Arp", {
+    filterEnvAmount: 0.35,
     oscATable: "pulse",
     oscAPos: 0.5,
     oscALevel: 0.7,
