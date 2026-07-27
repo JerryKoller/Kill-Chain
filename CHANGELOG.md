@@ -2,7 +2,15 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.13] — 2026-07-27 — Fluid Sequencer Editing
+
+### Changed
+- **Piano roll** — Draw / Select / Erase tools, paint-drag, brush length, left+right edge resize
+- **Arrangement** — pointer-drag clips with ghost, reject overlaps (toast), Shift+click place, Del/arrows, track rename
+- **Patterns** — New + place, Duplicate pattern vs Double len, rename pencil, transport mode chip, clickable Editing badge
+
 ## [3.0.12] — 2026-07-27 — Multi-Lane Arrangement
+
 
 ### Added
 - **10 playlist tracks** — layer patterns on separate lanes; same-time clips on different tracks play together
