@@ -2,6 +2,12 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.8] — 2026-07-27 — Kill the Ghost Hi-Hat
+
+### Fixed
+- **Note-onset tick** — Init no longer applies a hidden filter-envelope zap (`filterEnvAmount` defaulted to 0.4) on every note; removed the forced chip-noise “bed” that added a hi-hat click whenever chip noise mode wasn’t white
+- Noise / tape hiss now snap to silence immediately when a clean preset loads (no setTarget lag)
+
 ## [3.0.7] — 2026-07-27 — Preset Identity · Symmetry
 
 ### Fixed
