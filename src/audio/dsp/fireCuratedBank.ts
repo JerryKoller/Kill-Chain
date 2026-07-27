@@ -25,6 +25,7 @@ function preset(
 export const CURATED_PRESETS: FirePreset[] = [
   // ===== BASS (20) =====
   preset("fc-bass-sub-sine", "Sub Sine Boom", "Pure sub bass with sine wave", "Bass", {
+    subLevel: 0.45,
     oscATable: "basic",
     oscALevel: 0.8,
     oscBTable: "basic",
@@ -42,11 +43,12 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-reese", "Reese Detune", "Classic detuned bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "saw",
     oscBLevel: 0.7,
-    oscBDetune: 0.15,
+    oscBDetune: 15,
     filterType: "lowpass",
     filterCutoff: 1200,
     filterResonance: 0.3,
@@ -56,11 +58,12 @@ export const CURATED_PRESETS: FirePreset[] = [
     ampSustain: 0.5,
     ampRelease: 0.3,
     unison: 3,
-    unisonDetune: 0.2,
+    unisonDetune: 10,
     mono: true
 }),
 
   preset("fc-bass-acid-squelch", "Acid Squelch", "Mono acid bass with resonance", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.8,
     filterType: "lowpass",
@@ -79,6 +82,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-fm-punch", "FM Punch", "FM bass with attack", "Bass", {
+    subLevel: 0.28,
     oscATable: "harmonic",
     oscALevel: 0.7,
     oscBTable: "basic",
@@ -96,6 +100,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-vocal-morph", "Talking Bass", "Vocal formant bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "vocal",
     oscALevel: 0.6,
     oscBTable: "formant2",
@@ -117,11 +122,12 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-growl-drive", "Growling Drive", "Distorted growl bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "growl",
     oscALevel: 0.7,
     oscBTable: "growl",
     oscBLevel: 0.7,
-    oscBDetune: -0.08,
+    oscBDetune: -8,
     filterType: "lowpass",
     filterCutoff: 1300,
     filterResonance: 0.6,
@@ -134,6 +140,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-808-thump", "808 Thump", "Clean 808-style bass", "Bass", {
+    subLevel: 0.45,
     oscATable: "basic",
     oscALevel: 0.9,
     filterType: "lowpass",
@@ -149,6 +156,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-mid-stab", "Mid Bass Stab", "Punchy mid-range bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "pulse",
     oscAPos: 0.3,
     oscALevel: 0.7,
@@ -166,6 +174,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-wobble-lfo", "Wobble LFO", "Filtered wobble bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "pulse",
@@ -186,6 +195,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-noisy-dirt", "Noisy Dirt", "Lo-fi dirty bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "pulse",
@@ -205,6 +215,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-glide-port", "Glide Portamento", "Smooth gliding bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "pulse",
@@ -223,6 +234,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-soft-triangle", "Soft Triangle Under", "Mellow triangle bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "basic",
     oscAPos: 0.5,
     oscALevel: 0.8,
@@ -240,16 +252,17 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-wide-unison", "Wide Unison Monster", "Massive unison bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "saw",
     oscBLevel: 0.7,
-    oscBDetune: 0.1,
+    oscBDetune: 10,
     filterType: "lowpass",
     filterCutoff: 1400,
     filterResonance: 0.4,
     unison: 5,
-    unisonDetune: 0.3,
+    unisonDetune: 15,
     unisonWidth: 0.8,
     ampAttack: 0.015,
     ampDecay: 0.6,
@@ -259,6 +272,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-formant", "Formant Bass", "Vowel-like bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "formant2",
     oscALevel: 0.7,
     oscBTable: "vocal",
@@ -274,6 +288,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-sync-sweep", "Sync Sweep Bass", "Hard sync bass sweep", "Bass", {
+    subLevel: 0.28,
     oscATable: "sync",
     oscAPos: 0.6,
     oscALevel: 0.7,
@@ -291,6 +306,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-crushed-lofi", "Crushed Lo-Fi", "Bitcrushed bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "pulse",
     oscAPos: 0.5,
     oscALevel: 0.7,
@@ -309,6 +325,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-pitch-env", "Pitch Env Thump", "Pitch envelope bass hit", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.8,
     filterType: "lowpass",
@@ -324,6 +341,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-ring-metal", "Ring Mod Metal", "Metallic ring mod bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "metallic",
@@ -340,6 +358,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-dual-oct", "Dual Octave Stack", "Two octave bass stack", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "saw",
@@ -355,6 +374,7 @@ export const CURATED_PRESETS: FirePreset[] = [
 }),
 
   preset("fc-bass-airy-high", "Airy High Bass", "High-passed airy bass", "Bass", {
+    subLevel: 0.28,
     oscATable: "saw",
     oscALevel: 0.7,
     oscBTable: "pulse",
@@ -407,9 +427,9 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.65,
     oscBTable: "saw",
     oscBLevel: 0.45,
-    oscBDetune: 0.12,
+    oscBDetune: 12,
     unison: 5,
-    unisonDetune: 0.28,
+    unisonDetune: 14,
     unisonWidth: 0.85,
     filterCutoff: 3600,
     ampAttack: 0.02,
@@ -489,7 +509,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscATable: "saw",
     oscALevel: 0.7,
     unison: 3,
-    unisonDetune: 0.18,
+    unisonDetune: 9,
     filterCutoff: 4800,
     ampAttack: 0.005,
     ampDecay: 0.2,
@@ -538,7 +558,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.55,
     oscBTable: "saw",
     oscBLevel: 0.5,
-    oscBDetune: 0.08,
+    oscBDetune: 8,
     oscCTable: "saw",
     oscCLevel: 0.4,
     oscCOctave: 1,
@@ -630,7 +650,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.68,
     oscBTable: "saw",
     oscBLevel: 0.5,
-    oscBDetune: 0.08,
+    oscBDetune: 8,
     filterCutoff: 2100,
     ampAttack: 0.03,
     ampDecay: 0.4,
@@ -887,7 +907,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscATable: "saw",
     oscALevel: 0.65,
     unison: 3,
-    unisonDetune: 0.15,
+    unisonDetune: 8,
     unisonWidth: 0.8,
     filterCutoff: 3400,
     ampAttack: 0.001,
@@ -957,7 +977,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscBTable: "pulse",
     oscBPos: 0.3,
     oscBLevel: 0.6,
-    oscBDetune: 0.1,
+    oscBDetune: 10,
     filterType: "lowpass",
     filterCutoff: 2600,
     filterResonance: 0.3,
@@ -966,7 +986,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     ampSustain: 0.8,
     ampRelease: 1,
     unison: 5,
-    unisonDetune: 0.2,
+    unisonDetune: 10,
     unisonWidth: 0.7,
     reverbMix: 0.4,
     chorusMix: 0.3
@@ -978,14 +998,14 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscBTable: "pulse",
     oscBPos: 0.4,
     oscBLevel: 0.45,
-    oscBDetune: 0.1,
+    oscBDetune: 10,
     filterCutoff: 2400,
     ampAttack: 0.8,
     ampDecay: 0.6,
     ampSustain: 0.9,
     ampRelease: 1.5,
     unison: 3,
-    unisonDetune: 0.15,
+    unisonDetune: 8,
     chorusMix: 0.35,
     reverbMix: 0.45,
   }),
@@ -1027,14 +1047,14 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.65,
     oscBTable: "saw",
     oscBLevel: 0.55,
-    oscBDetune: 0.08,
+    oscBDetune: 8,
     filterCutoff: 2000,
     ampAttack: 0.6,
     ampDecay: 0.5,
     ampSustain: 0.9,
     ampRelease: 1.2,
     unison: 4,
-    unisonDetune: 0.2,
+    unisonDetune: 10,
     chorusMix: 0.4,
     cassetteGen: 0.15,
   }),
@@ -1046,7 +1066,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscBTable: "vocal",
     oscBPos: 0.55,
     oscBLevel: 0.4,
-    oscBDetune: 0.06,
+    oscBDetune: 6,
     filterCutoff: 2600,
     ampAttack: 0.5,
     ampDecay: 0.5,
@@ -1125,7 +1145,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscBTable: "pulse",
     oscBLevel: 0.45,
     unison: 5,
-    unisonDetune: 0.25,
+    unisonDetune: 13,
     unisonWidth: 0.95,
     filterCutoff: 3200,
     ampAttack: 0.6,
@@ -1187,9 +1207,9 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscBTable: "vocal",
     oscBPos: 0.6,
     oscBLevel: 0.5,
-    oscBDetune: 0.12,
+    oscBDetune: 12,
     unison: 3,
-    unisonDetune: 0.2,
+    unisonDetune: 10,
     filterCutoff: 2200,
     ampAttack: 0.65,
     ampDecay: 0.5,
@@ -1499,7 +1519,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.65,
     oscBTable: "saw",
     oscBLevel: 0.45,
-    oscBDetune: 0.05,
+    oscBDetune: 5,
     filterCutoff: 3800,
     filterEnvAmount: 0.4,
     filtDecay: 0.25,
@@ -1593,7 +1613,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscATable: "saw",
     oscALevel: 0.7,
     unison: 3,
-    unisonDetune: 0.15,
+    unisonDetune: 8,
     filterCutoff: 4200,
     ampAttack: 0.001,
     ampDecay: 0.15,
@@ -1708,7 +1728,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscATable: "saw",
     oscALevel: 0.55,
     unison: 4,
-    unisonDetune: 0.2,
+    unisonDetune: 10,
     unisonWidth: 0.85,
     filterCutoff: 4000,
     ampAttack: 0.001,
@@ -1776,7 +1796,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.65,
     oscBTable: "saw",
     oscBLevel: 0.35,
-    oscBDetune: 0.05,
+    oscBDetune: 5,
     filterCutoff: 2400,
     ampAttack: 0.01,
     ampDecay: 0.3,
@@ -1964,7 +1984,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.7,
     oscBTable: "basic",
     oscBLevel: 0.5,
-    oscBDetune: 0.02,
+    oscBDetune: 2,
     filterCutoff: 3000,
     ampAttack: 0.001,
     ampDecay: 0.15,
@@ -2010,7 +2030,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.5,
     oscBTable: "saw",
     oscBLevel: 0.45,
-    oscBDetune: 0.2,
+    oscBDetune: 20,
     filterCutoff: 600,
     ampAttack: 1,
     ampDecay: 0.8,
@@ -2163,7 +2183,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.35,
     oscBTable: "saw",
     oscBLevel: 0.25,
-    oscBDetune: 0.15,
+    oscBDetune: 15,
     noiseLevel: 0.2,
     filterCutoff: 700,
     ampAttack: 1,
@@ -2270,7 +2290,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscBTable: "vocal",
     oscBPos: 0.6,
     oscBLevel: 0.35,
-    oscBDetune: 0.1,
+    oscBDetune: 10,
     filterCutoff: 2000,
     ampAttack: 1.5,
     ampDecay: 1,
@@ -2540,7 +2560,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.55,
     oscBTable: "saw",
     oscBLevel: 0.45,
-    oscBDetune: 0.1,
+    oscBDetune: 10,
     filterCutoff: 1800,
     ampAttack: 0.8,
     ampDecay: 0.6,
@@ -2627,7 +2647,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.55,
     oscBTable: "saw",
     oscBLevel: 0.4,
-    oscBDetune: 0.08,
+    oscBDetune: 8,
     filterCutoff: 2400,
     ampAttack: 0.6,
     ampDecay: 0.5,
@@ -2660,7 +2680,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.65,
     oscBTable: "saw",
     oscBLevel: 0.5,
-    oscBDetune: 0.06,
+    oscBDetune: 6,
     filterCutoff: 2000,
     filterResonance: 0.25,
     filterEnvAmount: 0.4,
@@ -2710,9 +2730,9 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.55,
     oscBTable: "saw",
     oscBLevel: 0.5,
-    oscBDetune: 0.12,
+    oscBDetune: 12,
     unison: 3,
-    unisonDetune: 0.15,
+    unisonDetune: 8,
     filterCutoff: 1900,
     ampAttack: 0.7,
     ampDecay: 0.5,
@@ -2876,7 +2896,7 @@ export const CURATED_PRESETS: FirePreset[] = [
     oscALevel: 0.5,
     oscBTable: "pulse",
     oscBLevel: 0.4,
-    oscBDetune: 0.08,
+    oscBDetune: 8,
     filterCutoff: 1800,
     ampAttack: 0.3,
     ampDecay: 0.4,

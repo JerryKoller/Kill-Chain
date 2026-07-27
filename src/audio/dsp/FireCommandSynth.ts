@@ -2425,14 +2425,16 @@ export class FireCommandSynth {
 }
 
 export const DEFAULT_FIRE_PATCH: FirePatch = {
+  // Neutral Init — one oscillator, no FX wet, no unison stack.
+  // Presets that want color must set it explicitly (via P(overrides)).
   oscATable: "basic", oscAPos: 0.66, oscAEnv: 0, oscALfo: 0, oscAOctave: 0, oscADetune: 0, oscALevel: 0.75,
-  oscBTable: "saw", oscBPos: 0.4, oscBEnv: 0, oscBLfo: 0, oscBOctave: 0, oscBDetune: 8, oscBLevel: 0.5,
+  oscBTable: "saw", oscBPos: 0.4, oscBEnv: 0, oscBLfo: 0, oscBOctave: 0, oscBDetune: 0, oscBLevel: 0,
   oscCTable: "harmonic", oscCPos: 0.4, oscCEnv: 0, oscCLfo: 0, oscCOctave: -1, oscCDetune: 0, oscCLevel: 0,
   warpStretch: 0, warpTilt: 0, warpComb: 0,
-  unison: 3, unisonDetune: 14, unisonWidth: 0.5,
-  subWave: "sine", subLevel: 0.3, noiseLevel: 0, noiseColor: 0,
+  unison: 1, unisonDetune: 0, unisonWidth: 0.5,
+  subWave: "sine", subLevel: 0, noiseLevel: 0, noiseColor: 0,
   fmAmount: 0, fmRatio: 2, fmBtoA: 0, ringAmount: 0, ringFreq: 220,
-  filterType: "lowpass", filterCutoff: 2600, filterResonance: 3, filterEnvAmount: 0.4, filterKeyTrack: 0.3,
+  filterType: "lowpass", filterCutoff: 2600, filterResonance: 0.7, filterEnvAmount: 0.4, filterKeyTrack: 0.3,
   filterDrive: 0,
   ampAttack: 0.01, ampDecay: 0.25, ampSustain: 0.8, ampRelease: 0.35, velAmount: 1,
   lpgOn: false, lpgDecay: 0.4, lpgColor: 0.7,
@@ -2441,11 +2443,11 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   lfo1Wave: "sine", lfo1Rate: 5, lfo1Depth: 0, lfo1Dest: "off",
   lfo2Wave: "triangle", lfo2Rate: 0.5, lfo2Depth: 0, lfo2Dest: "off",
   pitchEnvAmount: 0, pitchEnvTime: 0.2,
-  mono: false, glide: 0.06,
+  mono: false, glide: 0,
   harmonyMode: "off", harmonyLevel: 0.6,
-  drive: 0.08, driveMode: "soft", crush: 0, tone: 15000, punch: 0,
+  drive: 0, driveMode: "soft", crush: 0, tone: 15000, punch: 0,
   phaserRate: 0.4, phaserDepth: 0.6, phaserMix: 0,
-  chorusRate: 0.6, chorusDepth: 0.4, chorusMix: 0.25,
+  chorusRate: 0.6, chorusDepth: 0.4, chorusMix: 0,
   delayTime: 0.28, delayFeedback: 0.3, delayMix: 0,
   reverbSize: 2.2, reverbMix: 0, reverbDamp: 0.45, reverbPredelay: 0.02, reverbDiffusion: 0.7,
   spectralMode: "off", spectralAmount: 0.6, spectralMix: 0.5,

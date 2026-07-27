@@ -473,7 +473,7 @@ export function FireCommandView() {
         >
           <SubStageViz />
           <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="subLevel" label="Level" min={0} max={1} format={fmtPct} def={0.3} color={FC.sub} />
+            <FParamKnob paramKey="subLevel" label="Level" min={0} max={1} format={fmtPct} def={0} color={FC.sub} />
             <FParamKnob paramKey="subOctave" label="Oct" min={-2} max={0} integer format={fmtOct} def={-1} color={FC.sub} />
           </div>
         </Section>
@@ -485,8 +485,8 @@ export function FireCommandView() {
         <Section title="Unison" color={FC.unison} collapseKey="mixer.unison" chipHosted>
           <UnisonStageViz />
           <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={3} color={FC.unison} />
-            <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={14} color={FC.unison} />
+            <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={1} color={FC.unison} />
+            <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={0} color={FC.unison} />
             <FParamKnob paramKey="unisonWidth" label="Width" min={0} max={1} format={fmtPct} def={0.5} color={FC.unison} />
             <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
           </div>
@@ -507,7 +507,7 @@ export function FireCommandView() {
           <FilterStageViz />
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={46} color={FC.filter} />
-            <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={3} color={FC.filter} />
+            <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={0.7} color={FC.filter} />
             <FParamKnob paramKey="filterEnvAmount" label="Env Amt" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
             <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} color={FC.filter} />
             <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} color={FC.filter} />
@@ -593,7 +593,7 @@ export function FireCommandView() {
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
             <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} color={GRN} />
-            <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0.06} color={FC.pitch} />
+            <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0} color={FC.pitch} />
           </div>
         </Section>
         <ModMatrixPanel chipHosted />
@@ -608,7 +608,7 @@ export function FireCommandView() {
         }>
           <DriveStageViz />
           <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0.08} color={FC.drive} />
+            <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
             <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
             <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={46} color={FC.drive} />
           </div>
@@ -662,7 +662,7 @@ export function FireCommandView() {
           <div className="flex items-center justify-evenly gap-1">
             <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} color={FC.chorus} />
             <FParamKnob paramKey="chorusDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.4} color={FC.chorus} />
-            <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0.25} color={FC.chorus} />
+            <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.chorus} />
           </div>
         </Section>
         <Section title="Delay (Ping-Pong)" color={FC.delay} collapseKey="fx.delay" chipHosted>

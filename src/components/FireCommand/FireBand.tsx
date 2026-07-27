@@ -60,12 +60,15 @@ export function useFireBandRegister(
 
 function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
   if (modules.length === 0) return null;
+  // Prefer even atlas-width grids (7 modules → 7 equal chips) so every band
+  // reads as a symmetric row rather than a ragged 3× wrap.
+  const n = modules.length;
   const cols =
-    modules.length === 1 ? 1 :
-    modules.length === 2 ? 2 :
-    modules.length === 3 ? 3 :
-    modules.length === 4 ? 4 :
-    3;
+    n <= 4 ? n :
+    n === 5 ? 5 :
+    n === 6 ? 6 :
+    n === 7 ? 7 :
+    4;
   return (
     <div
       className="mb-2 grid gap-1.5"

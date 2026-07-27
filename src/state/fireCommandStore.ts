@@ -749,13 +749,16 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       // load with legacy-exact behavior.
       const patch = { ...DEFAULT_FIRE_PATCH, ...src.patch };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-      // Preserve module on/off when factory/user presets lack moduleEnable.
-      if (!src.patch.moduleEnable || Object.keys(src.patch.moduleEnable).length === 0) {
-        patch.moduleEnable = { ...(get().patch.moduleEnable ?? {}) };
-      }
+      // FIXED: Always reset moduleEnable to the preset's own setting (or empty
+      // = all modules on). Previously this preserved the current moduleEnable,
+      // causing modules disabled on one preset to stay disabled on all
+      // subsequent preset loads — the "sticky sound" bug.
+      patch.moduleEnable = src.patch.moduleEnable
+        ? { ...src.patch.moduleEnable }
+        : {};
       const arp: ArpSettings = src.arp
         ? { ...DEFAULT_ARP, ...src.arp }
-        : { ...get().arp, enabled: false };
+        : { ...DEFAULT_ARP, enabled: false };
       set({ patch, presetId: id, arp, arpOrder: [], arpCurrent: null, arpStepIndex: -1, heldNotes: [], mutation: null, mutateLineage: 0 });
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
@@ -874,7 +877,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
       const arp: ArpSettings = rawArp
         ? { ...DEFAULT_ARP, ...rawArp }
-        : { ...get().arp, enabled: false };
+        : { ...DEFAULT_ARP, enabled: false };
       stopArpScheduler();
       set({
         patch,

@@ -248,7 +248,7 @@ export function FireCommandDeck() {
                       title={focused ? "Exit solo" : `Solo ${node.label} only`}
                       aria-pressed={focused}
                     >
-                      {focused ? "Solo" : "Solo"}
+                      {focused ? "Exit" : "Solo"}
                     </button>
                   </div>
                 </div>
@@ -288,7 +288,7 @@ export function FireCommandDeck() {
           <span className="text-[10px] text-white/35">{mapOpen ? "▴" : "▾"}</span>
         </button>
         {mapOpen && (
-        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {FIRE_BANDS.map((band) => {
             const bandHasFocus = focusId
               ? band.modules.some((mod) => mod.id === focusId)
