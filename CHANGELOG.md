@@ -2,6 +2,13 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.11] — 2026-07-27 — Sequencer Arrangement UX
+
+### Changed
+- **Add to end** replaces the confusing “Place {pattern name}” button; empty timeline shows a clear drop hint
+- Click an empty bar to place the active pattern; denser playlist track with start bar / length on clips
+- Editor badge reads **Editing · {pattern}** so it doesn’t look like another tab
+
 ## [3.0.10] — 2026-07-27 — Arrangement Playlist
 
 ### Added
