@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.0.4";
+export const APP_VERSION = "3.0.5";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,15 +12,15 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
+    title: "Curated preset library",
+    body: "The old ~1000 near-duplicate factory patches are gone. Every category now has 20 hand-authored, sonically distinct presets — Bass through FM.",
+  },
+  {
+    title: "Capability Missions",
+    body: "Five new Missions showcase what the synth can do: Unison Width, Cross-FM Forge, Spectral Freeze, Gate · Matrix Pulse, and Vintage Age Bus — not genre templates.",
+  },
+  {
     title: "Synth · Sequencer workspaces",
-    body: "Fire Command splits into two clear tabs — build the sound on Synth, build the beat & melody on Sequencer. Slim transport keeps play reachable while you tweak the patch.",
-  },
-  {
-    title: "Performance",
-    body: "Idle workspace unmounts its visualizers and playheads. Signal Path heat is throttled so knob drags stay smooth.",
-  },
-  {
-    title: "Beginner path",
-    body: "Plain labels and short hints — Synth for sound, Sequencer for patterns, piano roll, and drums.",
+    body: "Fire Command still splits sound design and sequencing into clear tabs with slim transport on Synth.",
   },
 ];
