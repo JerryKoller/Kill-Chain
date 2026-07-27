@@ -2,6 +2,18 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.1.0] — 2026-07-27 — Fire Command Depth
+
+### Added
+- **Editable Synth B** — Edit A|B on the Synth rack; Draw B focuses the rack; full patch persistence for B
+- **Pattern sound recall** — each pattern snapshots Synth A+B on switch; arrangement restores section timbre
+- **Offline dry bounce** — OfflineAudioContext Fire export with realtime fallback; Save/Export on the transport
+- **Drum grooves** — House / Trap / Break / Clear patterns + Synth Kit clear; clearer Sample Deck callout
+
+### Changed
+- **Automation** — default-open with Cutoff preview when collapsed; live→restores-on-stop hint
+- Arp / QWERTY remain on Synth A only (documented in What’s New)
+
 ## [3.0.13] — 2026-07-27 — Fluid Sequencer Editing
 
 ### Changed
