@@ -2,6 +2,20 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.0.4] — 2026-07-26 — Synth · Sequencer Workspaces
+
+### Added
+- **Fire Command workspaces** — **Synth** (sound design + keyboard) and **Sequencer** (patterns, song order, piano roll, drums) as separate tabs inside Fire Command
+- **Slim transport** on Synth — Open Fire, BPM, A/B/DRM arms while tweaking the patch
+- Cross-links: Sequencer → / ← Synth
+
+### Changed
+- Sequencer no longer shares one endless scroll page with the synth rack
+- Signal Path deck heat is throttled (~140 ms) so knob drags don’t thrash the UI
+
+### Performance
+- Idle workspace unmounts (stage viz RAFs off on Sequencer; roll/drum playheads off on Synth)
+
 ## [3.0.3] — 2026-07-26 — Visualizers · Chrome · Honesty
 
 ### Changed
