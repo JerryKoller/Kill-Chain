@@ -1,14 +1,17 @@
 /**
  * firePresetBank — Fire Command factory preset types + curated library export.
  *
- * The old ~1000 seeded near-duplicates were replaced by 220 hand-authored
- * presets in fireCuratedBank.ts (20 per category).
+ * 440 hand-authored curated presets (40 per category × 11 categories):
+ *   - fireCuratedBank.ts: Vol.1 — 220 presets (fc-* IDs)
+ *   - fireCuratedBankVol2.ts: Vol.2 — 220 presets (fc2-* IDs)
  */
 
 import {
   DEFAULT_FIRE_PATCH,
   type FirePatch,
 } from "./FireCommandSynth";
+import { CURATED_PRESETS } from "./fireCuratedBank";
+import { CURATED_PRESETS_V2 } from "./fireCuratedBankVol2";
 
 export type PresetCategory =
   | "Bass" | "Lead" | "Pluck" | "Pad" | "Keys" | "Arp" | "FX" | "Atmos"
@@ -41,5 +44,5 @@ export interface FirePreset {
 
 export const P = (over: Partial<FirePatch>): FirePatch => ({ ...DEFAULT_FIRE_PATCH, ...over });
 
-/** Curated factory bank — 20 unique presets × 11 categories. */
-export { CURATED_PRESETS as GENERATED_PRESETS } from "./fireCuratedBank";
+/** Curated factory bank — 40 unique presets × 11 categories = 440 total. */
+export const GENERATED_PRESETS = [...CURATED_PRESETS, ...CURATED_PRESETS_V2];

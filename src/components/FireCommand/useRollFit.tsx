@@ -83,13 +83,11 @@ export function RollFitProvider({
     // Fallback until first measure so first paint isn't a zero-width flash.
     const fitCell = usable > 0 ? usable / steps : 26;
     const cellW = fitCell * zoom;
-    const gridW =
-      zoom <= 1.001 && viewportW > gutter
-        ? viewportW
-        : gutter + steps * cellW;
-    // Keep cellW consistent with snapped gridW in fit mode (avoid 1px drift).
+    // Always derive grid from gutter + cells so paint/hit share one geometry
+    // (avoid viewportW vs content-box drift from borders/padding).
     const snappedCell =
-      zoom <= 1.001 && viewportW > gutter ? (viewportW - gutter) / steps : cellW;
+      zoom <= 1.001 && usable > 0 ? usable / steps : cellW;
+    const gridW = gutter + steps * snappedCell;
     return {
       hostRef,
       viewportW,

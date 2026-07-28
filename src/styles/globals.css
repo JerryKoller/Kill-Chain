@@ -259,6 +259,34 @@ select option:checked {
     -webkit-backdrop-filter: blur(24px) saturate(160%);
   }
 
+  /**
+   * Fire Command unified console — soft seams so zone washes blend
+   * instead of reading as stacked cards.
+   */
+  .fire-console > * + * {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  }
+  .fire-console > * + *::before {
+    content: "";
+    position: absolute;
+    left: 6%;
+    right: 6%;
+    top: 0;
+    height: 20px;
+    margin-top: -10px;
+    pointer-events: none;
+    z-index: 6;
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.035) 50%,
+      transparent 100%
+    );
+  }
+  .fire-console > * {
+    position: relative;
+  }
+
   .grid-bg {
     background-image:
       linear-gradient(var(--c-grid-1) 1px, transparent 1px),

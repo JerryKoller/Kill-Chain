@@ -89,8 +89,12 @@ export function scrollFireCommandTop(behavior: ScrollBehavior = "smooth"): void 
   }
 }
 
+/** Monotonic token — rapid jumps invalidate any older raf/timeout chain. */
+let jumpSeq = 0;
+
 /** Expand band + module, wait for mount, then scroll into view. */
 export function jumpToModule(moduleId: FireModuleId): void {
+  const seq = ++jumpSeq;
   const entry = FIRE_MODULE_BY_ID.get(moduleId);
   if (!entry) return;
   // Land on Synth workspace + the owning band tab so the module is mounted.
@@ -99,8 +103,13 @@ export function jumpToModule(moduleId: FireModuleId): void {
   ensureExpanded(entry.bandKey);
   ensureExpanded(moduleId);
   window.requestAnimationFrame(() => {
+    if (seq !== jumpSeq) return;
     window.requestAnimationFrame(() => {
-      window.setTimeout(() => scrollToModule(moduleId), 100);
+      if (seq !== jumpSeq) return;
+      window.setTimeout(() => {
+        if (seq !== jumpSeq) return;
+        scrollToModule(moduleId);
+      }, 100);
     });
   });
 }

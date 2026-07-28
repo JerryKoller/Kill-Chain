@@ -114,17 +114,20 @@ export const MAX_PLAYLIST_TRACKS = 10;
 /** Soft ceiling for arrangement UI scroll (bars). */
 export const MAX_ARRANGEMENT_BARS = 128;
 export type PlayMode = "pattern" | "arrangement";
+export type PlayScope = "pattern" | "arrangement" | "selection";
 
 export const PLAYLIST_TRACK_COLORS = [
   "#ff6a3d", "#62b6ff", "#9be564", "#c98bff", "#ffd166",
   "#ff7bac", "#7ce8d5", "#ffb648", "#a78bfa", "#34d399",
 ];
 
-/** One playlist row (mute / solo / color / name). */
+/** One playlist row (mute / solo / arm / color / name). */
 export interface PlaylistTrack {
   name: string;
   mute: boolean;
   solo: boolean;
+  /** Record/edit arm for this arrangement lane. */
+  arm: boolean;
   color: string;
 }
 
@@ -148,8 +151,9 @@ function snapToBar(step: number): number {
   return Math.max(0, Math.round(step / STEPS_PER_BAR) * STEPS_PER_BAR);
 }
 
+/** Half-step allows 1/32 placement when STEPS_PER_BAR = 16 (sixteenth notes). */
 function snapToStep(step: number): number {
-  return Math.max(0, Math.round(step));
+  return Math.max(0, Math.round(step * 2) / 2);
 }
 
 function sectionLenSteps(sec: { bars: number }): number {
@@ -167,6 +171,7 @@ function defaultPlaylistTracks(): PlaylistTrack[] {
     name: i === 0 ? "Track 1" : `Track ${i + 1}`,
     mute: false,
     solo: false,
+    arm: i === 0,
     color: PLAYLIST_TRACK_COLORS[i % PLAYLIST_TRACK_COLORS.length],
   }));
 }
@@ -181,6 +186,7 @@ function sanitizePlaylistTracks(raw: unknown): PlaylistTrack[] {
       name: typeof t.name === "string" && t.name.trim() ? t.name.trim().slice(0, 18) : d.name,
       mute: t.mute === true,
       solo: t.solo === true,
+      arm: t.arm === true,
       color: typeof t.color === "string" && t.color ? t.color : d.color,
     };
   });
@@ -189,6 +195,11 @@ function sanitizePlaylistTracks(raw: unknown): PlaylistTrack[] {
 function migratePlayMode(raw: unknown): PlayMode {
   if (raw === "arrangement" || raw === "song") return "arrangement";
   return "pattern";
+}
+
+function migratePlayScope(raw: unknown, playMode: PlayMode): PlayScope {
+  if (raw === "selection" || raw === "arrangement" || raw === "pattern") return raw;
+  return playMode === "arrangement" ? "arrangement" : "pattern";
 }
 
 /** Expand a legacy song-order chain into absolute-time clips on track 0. */
@@ -624,6 +635,11 @@ interface PersistShape {
   /** Playlist rows (mute / solo / color / name) — clips live on `track`. */
   playlistTracks: PlaylistTrack[];
   playMode: PlayMode;
+  /** Open Fire transport scope (Selection loops a step range in pattern mode). */
+  playScope: PlayScope;
+  /** Inclusive start / exclusive end of Selection scope (pattern steps). */
+  selectionStart: number;
+  selectionEnd: number;
   /** Mixer (v1.6): per-part strips + Fire master limiter switch. */
   mixer: Record<MixerStripId, MixerStrip>;
   fireLimiterOn: boolean;
@@ -689,6 +705,9 @@ function defaults(): PersistShape {
     arrangement: [{ id: clipId(), patternId: sec.id, startStep: 0, track: 0 }],
     playlistTracks: defaultPlaylistTracks(),
     playMode: "pattern",
+    playScope: "pattern",
+    selectionStart: 0,
+    selectionEnd: 16,
     mixer: defaultMixer(),
     fireLimiterOn: true,
     duckEnabled: false,
@@ -788,25 +807,29 @@ function liveFireSlots(): { patchA: FirePatch; patchB: FirePatch } {
   return slotsFromState(useFireCommandStore.getState());
 }
 
-/** Push section snapshots into the synth store + both engines. */
-function restoreSectionPatches(sec: Section): void {
+/** Push section snapshots into synth engines; optionally also the edit store. */
+function restoreSectionPatches(sec: Section, mode: "store+engine" | "engine" = "store+engine"): void {
   if (!sec.patchA && !sec.patchB) return;
   const fire = useFireCommandStore.getState();
   if (sec.patchA) {
     const patch = clonePatchSnap(sec.patchA)!;
-    if (fire.editTarget === "a") {
-      useFireCommandStore.setState({ patch, patchA: patch });
-    } else {
-      useFireCommandStore.setState({ patchA: patch });
+    if (mode === "store+engine") {
+      if (fire.editTarget === "a") {
+        useFireCommandStore.setState({ patch, patchA: patch });
+      } else {
+        useFireCommandStore.setState({ patchA: patch });
+      }
     }
     getEngine().fireCommand.setPatch(patch);
   }
   if (sec.patchB) {
     const patch = clonePatchSnap(sec.patchB)!;
-    if (fire.editTarget === "b") {
-      useFireCommandStore.setState({ patch, patchB: patch });
-    } else {
-      useFireCommandStore.setState({ patchB: patch });
+    if (mode === "store+engine") {
+      if (fire.editTarget === "b") {
+        useFireCommandStore.setState({ patch, patchB: patch });
+      } else {
+        useFireCommandStore.setState({ patchB: patch });
+      }
     }
     getEngine().fireCommandB.setPatch(patch);
   }
@@ -835,7 +858,9 @@ function maybeRestoreArrSound(sectionId: string | null): void {
   const s = useFireSequencerStore.getState();
   const synced = sectionsWithActive(s).find((x) => x.id === sectionId)
     ?? s.sections.find((x) => x.id === sectionId);
-  if (synced) restoreSectionPatches(synced);
+  // Engine-only during arrangement playback so the user's live edit buffer
+  // isn't permanently overwritten by clip snapshots.
+  if (synced) restoreSectionPatches(synced, "engine");
 }
 
 function sanitizeSection(raw: unknown, fallbackName: string): Section | null {
@@ -985,6 +1010,16 @@ function load(): PersistShape & ActiveMirror {
       arrangement,
       playlistTracks: sanitizePlaylistTracks((p as { playlistTracks?: unknown }).playlistTracks),
       playMode: migratePlayMode(p.playMode),
+      playScope: migratePlayScope(
+        (p as { playScope?: unknown }).playScope,
+        migratePlayMode(p.playMode),
+      ),
+      selectionStart: typeof (p as { selectionStart?: unknown }).selectionStart === "number"
+        ? Math.max(0, Math.floor((p as { selectionStart: number }).selectionStart))
+        : 0,
+      selectionEnd: typeof (p as { selectionEnd?: unknown }).selectionEnd === "number"
+        ? Math.max(1, Math.floor((p as { selectionEnd: number }).selectionEnd))
+        : 16,
       mixer: sanitizeMixer(p.mixer),
       fireLimiterOn: p.fireLimiterOn !== false,
       duckEnabled: p.duckEnabled === true,
@@ -1040,6 +1075,9 @@ function persistShapeOf(s: FireSequencerState): PersistShape {
     arrangement: s.arrangement,
     playlistTracks: s.playlistTracks,
     playMode: s.playMode,
+    playScope: s.playScope,
+    selectionStart: s.selectionStart,
+    selectionEnd: s.selectionEnd,
     mixer: s.mixer,
     fireLimiterOn: s.fireLimiterOn,
     duckEnabled: s.duckEnabled,
@@ -1071,6 +1109,8 @@ const LOOKAHEAD_S = 0.12;
 const TICK_MS = 25;
 
 let timer: ReturnType<typeof setInterval> | null = null;
+/** Pending statechange retry from a failed resume() (cleared by stopScheduler). */
+let resumeRetry: { ctx: AudioContext; fn: () => void } | null = null;
 /** AudioContext time corresponding to pattern step 0 of the current loop pass. */
 let loopStartTime = 0;
 /** Next step index (fractional steps scheduled as whole numbers here). */
@@ -1093,7 +1133,8 @@ let songTotal = 0;
 let arrangementCueStep = 0;
 
 function stepDur(bpm: number): number {
-  return 60 / bpm / 4; // one 16th
+  // Hard floor — bpm 0/NaN would send Infinity through every playhead modulo.
+  return 60 / Math.max(1, bpm || 1) / 4; // one 16th
 }
 
 function trackIsAudible(tracks: PlaylistTrack[], track: number): boolean {
@@ -1211,6 +1252,12 @@ function contentFor(s: FireSequencerState, secId: string): {
 function stopScheduler(): void {
   startToken++;
   if (timer) { clearInterval(timer); timer = null; }
+  // Pending resume-retry from a wedged AudioContext — drop it, or repeated
+  // play/stop cycles stack statechange listeners.
+  if (resumeRetry) {
+    resumeRetry.ctx.removeEventListener("statechange", resumeRetry.fn);
+    resumeRetry = null;
+  }
   lastArrSoundSec = null;
 }
 
@@ -1225,10 +1272,15 @@ function applyAutomationTick(s: FireSequencerState, now: number): void {
   if (loopStartTime > now + 10) return; // clock not anchored yet
   const dur = stepDur(s.bpm);
   const song = s.playMode === "arrangement";
-  const total = song ? songTotal : s.bars * STEPS_PER_BAR;
+  const patternTotal = s.bars * STEPS_PER_BAR;
+  const sel = !song && s.playScope === "selection";
+  const selStart = sel ? clamp(s.selectionStart ?? 0, 0, Math.max(0, patternTotal - 1)) : 0;
+  const selEnd = sel ? clamp(s.selectionEnd ?? patternTotal, selStart + 1, patternTotal) : patternTotal;
+  const total = song ? songTotal : sel ? Math.max(1, selEnd - selStart) : patternTotal;
   if (total <= 0) return;
   const t = (now - loopStartTime) / dur;
-  const g = (t < 0 ? 0 : t) % total;
+  // In selection scope the audible position is offset into the pattern.
+  const g = selStart + ((t < 0 ? 0 : t) % total);
   let auto: AutomationMap = s.automation;
   let pos = g;
   if (song) {
@@ -1263,9 +1315,13 @@ function restoreAutomationBaseline(): void {
   if (autoTouched.size === 0) return;
   const keys = [...autoTouched];
   autoTouched = new Set();
+  const token = startToken;
   // Dynamic import keeps the ~500-preset bank out of the boot chunk (same
   // reason as applySynthBPreset above).
   void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
+    // A newer play pass started while this resolved — its automation owns the
+    // knobs now; restoring the stale baseline would stomp live sweeps.
+    if (token !== startToken) return;
     const patch = useFireCommandStore.getState().patch;
     const fc = getEngine().fireCommand;
     for (const k of keys) fc.set(k, patch[k]);
@@ -1447,13 +1503,25 @@ function startScheduler(get: () => FireSequencerState): void {
       if (!s.playing) return;
       const dur = stepDur(s.bpm);
       const song = s.playMode === "arrangement";
-      const total = song ? songTotal : s.bars * STEPS_PER_BAR;
+      const sel = !song && s.playScope === "selection";
+      const patternLen = s.bars * STEPS_PER_BAR;
+      const selStart = clamp(s.selectionStart ?? 0, 0, Math.max(0, patternLen - 1));
+      const selEnd = clamp(s.selectionEnd ?? patternLen, selStart + 1, patternLen);
+      const selLen = Math.max(1, selEnd - selStart);
+      const total = song ? songTotal : sel ? selLen : patternLen;
+      // Empty arrangement (no clips): total 0 would make every modulo NaN and
+      // the re-anchor branch spin — park until clips exist.
+      if (total <= 0) return;
       const now = ctx.currentTime;
       const horizon = now + LOOKAHEAD_S;
 
       // Schedule every whole step whose start time falls inside the window.
       while (loopStartTime + nextStep * dur < horizon) {
-        const globalStep = nextStep % total;
+        const globalStep = song
+          ? nextStep % total
+          : sel
+            ? selStart + (nextStep % total)
+            : nextStep % total;
 
         const base = loopStartTime + nextStep * dur;
         // A step already well in the past (main thread stalled / background
@@ -1511,10 +1579,12 @@ function startScheduler(get: () => FireSequencerState): void {
     // still fails (device wedged), retry the anchor once the context flips to
     // running rather than silently doing nothing.
     engine.resume().then(begin).catch(() => {
+      if (token !== startToken) return; // stopped while resume() was pending
       const onState = () => {
         ctx.removeEventListener("statechange", onState);
         begin();
       };
+      resumeRetry = { ctx, fn: onState };
       ctx.addEventListener("statechange", onState);
     });
   }
@@ -1540,6 +1610,15 @@ export function getPlayheadStep(bpm: number, bars: number): number {
   }
   const total = bars * STEPS_PER_BAR;
   const t = (ctx.currentTime - loopStartTime) / dur;
+  // Selection scope loops a sub-range of the pattern — the playhead must
+  // track the audible steps, not sweep the whole pattern.
+  if (s.playScope === "selection") {
+    const selStart = clamp(s.selectionStart ?? 0, 0, Math.max(0, total - 1));
+    const selEnd = clamp(s.selectionEnd ?? total, selStart + 1, total);
+    const selLen = Math.max(1, selEnd - selStart);
+    if (t < 0) return selStart;
+    return selStart + (t % selLen);
+  }
   if (t < 0) return 0;
   return t % total;
 }
@@ -1616,6 +1695,8 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   setCollapsed: (v: boolean) => void;
 
   addNote: (note: Omit<RollNote, "id">) => string;
+  /** Paint / place-stretch: commit many notes in one undo step. */
+  addNotes: (notes: Omit<RollNote, "id">[]) => string[];
   updateNote: (id: string, partial: Partial<Omit<RollNote, "id">>) => void;
   /** Batch update (group drags) — one state commit for N notes. */
   updateNotes: (entries: Array<{ id: string } & Partial<Omit<RollNote, "id">>>) => void;
@@ -1687,21 +1768,23 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   duplicateSection: () => string | null;
   renameSection: (id: string, name: string) => void;
   removeSection: (id: string) => void;
-  /** Place a pattern clip (snapped to bar). Overlap only blocked on the same track. */
+  /** Place a pattern clip (UI supplies pre-snapped step). Overlap only blocked on the same track. */
   placeClip: (patternId: string, startStep: number, track?: number) => string | null;
   removeClip: (clipId: string) => void;
   /** Move a clip; optional track change. Same-track overlaps park after last free end. */
   moveClip: (clipId: string, startStep: number, track?: number) => void;
   duplicateClip: (clipId: string) => string | null;
-  /** Nudge clip start by whole bars (negative = earlier). */
-  nudgeClip: (clipId: string, barsDelta: number) => void;
+  /** Nudge clip start by sequencer steps (negative = earlier). */
+  nudgeClip: (clipId: string, stepsDelta: number) => void;
   /** Trim audible length in steps (1..pattern length). Pass null to restore full. */
   trimClip: (clipId: string, lengthSteps: number | null) => void;
   setClipColor: (clipId: string, color: string | null) => void;
   setPlaylistTrack: (index: number, partial: Partial<PlaylistTrack>) => void;
-  /** Scrub arrangement playhead (snapped to bar). Works while stopped or playing. */
+  /** Scrub arrangement playhead. Works while stopped or playing. */
   seekArrangement: (absoluteStep: number) => void;
   setPlayMode: (mode: PlayMode) => void;
+  setPlayScope: (scope: PlayScope) => void;
+  setSelectionRange: (start: number, end: number) => void;
 
   // ── mixer + sidechain (v1.6) ──
   setMixerStrip: (id: MixerStripId, partial: Partial<MixerStrip>) => void;
@@ -1793,12 +1876,25 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         const t = (getEngine().ctx.currentTime - loopStartTime) / stepDur(s.bpm);
         if (t >= 0) arrangementCueStep = Math.floor(t % songTotal);
       }
+      const wasArrangement = s.playing && s.playMode === "arrangement";
       set({ playing: false });
       stopScheduler();
       pendingRec.clear();
       const engine = getEngine();
       engine.fireCommand.allNotesOff();
       engine.peekFireCommandB()?.allNotesOff();
+      // Arrangement playback applies section patches engine-only; put the
+      // engines back on the user's live A/B edit buffers after stop.
+      if (wasArrangement) {
+        const fire = useFireCommandStore.getState();
+        if (fire.editTarget === "a") {
+          engine.fireCommand.setPatch(fire.patch);
+          engine.peekFireCommandB()?.setPatch(fire.patchB);
+        } else {
+          engine.fireCommand.setPatch(fire.patchA);
+          engine.fireCommandB.setPatch(fire.patch);
+        }
+      }
       // Automated knobs return to their patch positions.
       restoreAutomationBaseline();
     },
@@ -1900,6 +1996,29 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       set({ notes: [...get().notes, n] });
       persist();
       return id;
+    },
+
+    /** Batch-add (paint / place-stretch commit) — one undo entry. */
+    addNotes: (batch) => {
+      if (batch.length === 0) return [];
+      pushFireHistory("addNotes");
+      const total = get().bars * STEPS_PER_BAR;
+      const ids: string[] = [];
+      const added: RollNote[] = batch.map((note) => {
+        const id = noteId();
+        ids.push(id);
+        return {
+          id,
+          step: clamp(note.step, 0, total - 0.25),
+          midi: clamp(Math.round(note.midi), 12, 108),
+          len: clamp(note.len, 0.25, total),
+          vel: clamp(note.vel, 0.05, 1),
+          ch: note.ch === 1 ? 1 : 0,
+        };
+      });
+      set({ notes: [...get().notes, ...added] });
+      persist();
+      return ids;
     },
 
     updateNote: (id, partial) => {
@@ -2442,7 +2561,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       pushFireHistory();
       const len = sectionLenSteps(sec);
       const tr = clamp(Math.round(track), 0, MAX_PLAYLIST_TRACKS - 1);
-      let start = snapToBar(startStep);
+      let start = snapToStep(startStep);
       const maxStart = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
       start = clamp(start, 0, Math.max(0, maxStart));
 
@@ -2491,7 +2610,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         0,
         MAX_PLAYLIST_TRACKS - 1,
       );
-      let start = snapToBar(startStep);
+      let start = snapToStep(startStep);
       const maxStart = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
       start = clamp(start, 0, Math.max(0, maxStart));
 
@@ -2545,11 +2664,11 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       return newId;
     },
 
-    nudgeClip: (id, barsDelta) => {
+    nudgeClip: (id, stepsDelta) => {
       const s = get();
       const clip = s.arrangement.find((c) => c.id === id);
-      if (!clip || !Number.isFinite(barsDelta) || barsDelta === 0) return;
-      get().moveClip(id, clip.startStep + Math.round(barsDelta) * STEPS_PER_BAR, clip.track);
+      if (!clip || !Number.isFinite(stepsDelta) || stepsDelta === 0) return;
+      get().moveClip(id, clip.startStep + stepsDelta, clip.track);
     },
 
     trimClip: (id, lengthSteps) => {
@@ -2603,6 +2722,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
           : t.name,
         mute: partial.mute ?? t.mute,
         solo: partial.solo ?? t.solo,
+        arm: partial.arm ?? t.arm,
         color: typeof partial.color === "string" && partial.color ? partial.color : t.color,
       };
       set({ playlistTracks: next });
@@ -2617,7 +2737,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const { map, total } = computeSongMap(s);
       songMap = map;
       songTotal = total;
-      const step = clamp(snapToBar(absoluteStep), 0, Math.max(0, total - STEPS_PER_BAR));
+      const step = clamp(snapToStep(absoluteStep), 0, Math.max(0, total - STEPS_PER_BAR));
       arrangementCueStep = step;
       if (!s.playing) return;
       const ctx = getEngine().ctx;
@@ -2633,8 +2753,29 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     setPlayMode: (mode) => {
       if (mode === get().playMode) return;
       const wasPlaying = get().playing;
-      set({ playMode: mode });
+      set({
+        playMode: mode,
+        playScope: mode === "arrangement" ? "arrangement" : get().playScope === "selection" ? "selection" : "pattern",
+      });
       if (wasPlaying) startScheduler(get);
+      persist();
+    },
+
+    setPlayScope: (scope) => {
+      const wasPlaying = get().playing;
+      if (scope === "arrangement") {
+        set({ playScope: scope, playMode: "arrangement" });
+      } else {
+        set({ playScope: scope, playMode: "pattern" });
+      }
+      if (wasPlaying) startScheduler(get);
+      persist();
+    },
+
+    setSelectionRange: (start, end) => {
+      const a = Math.max(0, Math.floor(Math.min(start, end)));
+      const b = Math.max(a + 1, Math.floor(Math.max(start, end)));
+      set({ selectionStart: a, selectionEnd: b });
       persist();
     },
 
@@ -2759,6 +2900,12 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 registerFireHistoryProvider("fireSequencer", {
   capture: () => {
     const s = useFireSequencerStore.getState();
+    // Strip per-section A/B patch snapshots from undo frames — they duplicate
+    // the synth history provider and dominate structuredClone cost (×16).
+    const sections = sectionsWithActive(s).map((sec) => {
+      const { patchA: _a, patchB: _b, ...rest } = sec;
+      return rest;
+    });
     return {
       bpm: s.bpm, swing: s.swing, bars: s.bars, notes: s.notes, drums: s.drums,
       automation: s.automation,
@@ -2768,12 +2915,14 @@ registerFireHistoryProvider("fireSequencer", {
       synthBPresetId: s.synthBPresetId, activeChannel: s.activeChannel,
       scaleRoot: s.scaleRoot, scaleId: s.scaleId, scaleSnap: s.scaleSnap,
       drumSamples: s.drumSamples, samples: s.samples,
-      // Mirror + sections are captured consistent with each other.
-      sections: sectionsWithActive(s),
+      sections,
       activeSectionId: s.activeSectionId,
       arrangement: s.arrangement,
       playlistTracks: s.playlistTracks,
       playMode: s.playMode,
+    playScope: s.playScope,
+    selectionStart: s.selectionStart,
+    selectionEnd: s.selectionEnd,
       mixer: s.mixer,
       fireLimiterOn: s.fireLimiterOn,
       duckEnabled: s.duckEnabled,
@@ -2785,8 +2934,23 @@ registerFireHistoryProvider("fireSequencer", {
   restore: (snap) => {
     const wasPlaying = useFireSequencerStore.getState().playing;
     const raw = snap as Partial<FireSequencerState> & { playlistTracks?: unknown };
+    // Merge section restores without wiping any live sound locks that weren't
+    // part of the slim history payload.
+    const cur = useFireSequencerStore.getState();
+    const incoming = Array.isArray(raw.sections) ? raw.sections : null;
+    const sections = incoming
+      ? incoming.map((sec) => {
+          const prev = cur.sections.find((x) => x.id === sec.id);
+          return {
+            ...sec,
+            patchA: (sec as Section).patchA ?? prev?.patchA,
+            patchB: (sec as Section).patchB ?? prev?.patchB,
+          };
+        })
+      : raw.sections;
     useFireSequencerStore.setState({
       ...raw,
+      sections: sections as FireSequencerState["sections"],
       playlistTracks: sanitizePlaylistTracks(raw.playlistTracks),
     } as Partial<FireSequencerState>);
     const ns = useFireSequencerStore.getState();

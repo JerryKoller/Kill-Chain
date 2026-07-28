@@ -84,8 +84,9 @@ export function TitleBar() {
   const engaged = useAudioStore((s) => !s.bypass);
 
   return (
+    // z-[95]: window controls must never end up under app overlays/toasts.
     <div
-      className="titlebar-drag relative grid h-9 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center pl-4 text-xs text-dim"
+      className="titlebar-drag relative z-[95] grid h-9 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center pl-4 text-xs text-dim"
       style={drag}
     >
       <div className="flex min-w-0 items-center gap-3 justify-self-start">

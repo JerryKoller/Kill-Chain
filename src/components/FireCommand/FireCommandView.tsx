@@ -1,39 +1,240 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import "./fireChrome.css";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { SequencerPanel } from "./SequencerPanel";
 import {
   useFireCommandStore,
   FIRE_PRESETS,
-  buildArpSequence,
   SCENE_SLOTS,
   type ArpMode,
   type ArpDivision,
   type ArpSettings,
+  type FireKeyboardMode,
+  DEFAULT_ARP,
 } from "@/state/fireCommandStore";
+import { FireBreadcrumb } from "./FireBreadcrumb";
+import { FireMasterMeter } from "./FireMasterMeter";
 import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
 import { getEngine } from "@/audio/AudioEngine";
 import { useFireSequencerStore, NOTE_NAMES, SCALES } from "@/state/fireSequencerStore";
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
-import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type HarmonyMode, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode } from "@/audio/dsp/FireCommandSynth";
+import { useFireMidiFocusStore, bootFireMidiFocus } from "@/state/fireMidiFocusStore";
+import { focusPageKnobs, focusModuleAt, focusPageCount, FIRE_FOCUS_COUNT } from "./fireKnobFocus";
+import { FIRE_BANDS, FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
+import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
-import { DriveStageViz, PhaserStageViz, ChorusStageViz, DelayStageViz, ReverbStageViz, SpectralStageViz, WarpStageViz, VintageAgeStageViz, ChipStageViz, AnalogLifeStageViz } from "./FxStageViz";
+import { DriveStageViz } from "./DriveStageViz";
+import { AgeStageViz } from "./AgeStageViz";
+import { PhaserStageViz } from "./PhaserStageViz";
+import { ChorusStageViz } from "./ChorusStageViz";
+import { DelayStageViz } from "./DelayStageViz";
+import { ReverbStageViz } from "./ReverbStageViz";
+import { SpectralStageViz } from "./SpectralStageViz";
+import { WarpStageViz } from "./WarpStageViz";
+import { ChipStageViz } from "./ChipStageViz";
+import { NoiseStageViz } from "./NoiseStageViz";
+import { SubStageViz } from "./SubStageViz";
+import { UnisonStageViz } from "./UnisonStageViz";
+import { AnalogLifeStageViz } from "./AnalogLifeStageViz";
+import { FilterStageViz } from "./FilterStageViz";
+import { AmpEnvStageViz } from "./AmpEnvStageViz";
+import { ModEnvStageViz } from "./ModEnvStageViz";
+import { FiltEnvStageViz } from "./FiltEnvStageViz";
+import { PluckStageViz } from "./PluckStageViz";
+import { Lfo1StageViz } from "./Lfo1StageViz";
+import { Lfo2StageViz } from "./Lfo2StageViz";
+import { FmStageViz } from "./FmStageViz";
+import { FmRackStageViz } from "./FmRackStageViz";
+import { PitchStageViz } from "./PitchStageViz";
+import { HarmonyStageViz } from "./HarmonyStageViz";
 import {
-  UnisonStageViz,
-  FilterStageViz,
-  AmpEnvStageViz,
-  ModEnvStageViz,
-  FiltEnvStageViz,
-  LfoStageViz,
-  FmRingStageViz,
-  PitchGlideStageViz,
-  OscStageViz,
-  PerformanceStageViz,
-} from "./CoreStageViz";
+  HarmCharacterStrip,
+  HarmModeStrip,
+  HarmLevelStrip,
+  HarmQuickActions,
+  HarmScaleBadge,
+  HarmMeter,
+  harmStageLabel,
+  harmonyVoiceCount,
+  HARMONY_MODES,
+  HARM_C,
+  HARM_C_GLOW,
+  HARM_C_LEVEL,
+  HARM_C_MODE,
+  HARM_C_ROOT,
+} from "./HarmonyPanel";
+import { ScaleStageViz } from "./ScaleStageViz";
 import {
-  NoiseStageViz, SubStageViz, PluckStageViz, WidthStageViz, GlueStageViz, AirStageViz,
-  HarmonyStageViz, ScaleStageViz, ChordStageViz, HumanStageViz, ScenesStageViz, FmRackStageViz,
-} from "./ModuleStageViz";
+  ScaleCharacterStrip,
+  ScaleRootStrip,
+  ScaleModeStrip,
+  ScaleQuickActions,
+  ScaleMeter,
+  scaleStageLabel,
+  scaleMeta,
+  SCALE_C,
+  SCALE_C_GLOW,
+  SCALE_C_ROOT,
+  SCALE_C_MODE,
+  SCALE_C_LOCK,
+} from "./ScalePanel";
+import { ChordStageViz } from "./ChordStageViz";
+import {
+  ChordCharacterStrip,
+  ChordDegreeStrip,
+  ChordQuickActions,
+  ChordMeter,
+  chordStageLabel,
+  chordPresetLabel,
+  normalizeChordIvs,
+  CHORD_PRESETS,
+  CHORD_C,
+  CHORD_C_GLOW,
+  CHORD_C_HOT,
+  CHORD_C_ROOT,
+  CHORD_C_VOICE,
+  CHORD_C_ARM,
+} from "./ChordPanel";
+import { HumanStageViz } from "./HumanStageViz";
+import {
+  HumanCharacterStrip,
+  HumanTimingStrip,
+  HumanVelStrip,
+  HumanQuickActions,
+  HumanMeter,
+  humanStageLabel,
+  humanCharMatch,
+  HUMAN_C,
+  HUMAN_C_GLOW,
+  HUMAN_C_TIME,
+  HUMAN_C_VEL,
+  HUMAN_C_ARM,
+} from "./HumanPanel";
+import { ScenesStageViz } from "./ScenesStageViz";
+import {
+  ScenesModeStrip,
+  ScenesQuickActions,
+  ScenesMeter,
+  sceneStageLabel,
+  sceneFingerprint,
+  occupiedCount,
+  avgSceneEnergy,
+  SCENE_MODES,
+  type SceneMode,
+  SCENES_C,
+  SCENES_C_GLOW,
+  SCENES_C_HOT,
+  SCENES_C_FILL,
+  SCENES_C_EMPTY,
+  SCENES_C_MODE,
+} from "./ScenesPanel";
+import { WidthStageViz } from "./WidthStageViz";
+import {
+  WidthCharacterStrip,
+  WidthSnapStrip,
+  WidthQuickActions,
+  WidthMeter,
+  widthStageLabel,
+  widthMidSide,
+  WIDTH_C,
+  WIDTH_C_GLOW,
+  WIDTH_C_MID,
+  WIDTH_C_SIDE,
+  WIDTH_C_CORR,
+  WIDTH_MAX,
+} from "./WidthPanel";
+import { GlueStageViz } from "./GlueStageViz";
+import {
+  GlueCharacterStrip,
+  GlueSnapStrip,
+  GlueQuickActions,
+  GlueMeter,
+  glueStageLabel,
+  glueMetrics,
+  GLUE_C,
+  GLUE_C_GLOW,
+  GLUE_C_THR,
+  GLUE_C_RAT,
+  GLUE_C_GR,
+  GLUE_C_MK,
+} from "./GluePanel";
+import { AirStageViz } from "./AirStageViz";
+import {
+  AirCharacterStrip,
+  AirAmountStrip,
+  AirQuickActions,
+  AirMeter,
+  airStageLabel,
+  airMetrics,
+  AIR_C,
+  AIR_C_GLOW,
+  AIR_C_LOW,
+  AIR_C_HIGH,
+  AIR_C_AMT,
+} from "./AirPanel";
+import { ScopeStageViz } from "./ScopeStageViz";
+import {
+  ScopeOscWave,
+  ScopeViewStrip,
+  ScopeZoomStrip,
+  ScopeQuickActions,
+  ScopeMeter,
+  ScopeVoiceBadge,
+  SCOPE_C,
+  SCOPE_C_GLOW,
+  SCOPE_C_HOT,
+  SCOPE_C_A,
+  SCOPE_C_B,
+  SCOPE_C_C,
+  SCOPE_C_MST,
+  SCOPE_DEFAULT_VIZ,
+  type ScopeViewMode,
+  type ScopeVizState,
+} from "./ScopePanel";
+import { LiveStageViz } from "./LiveStageViz";
+import {
+  LiveCharacterStrip,
+  LiveVoiceStrip,
+  LiveOctaveStrip,
+  LiveQuickActions,
+  LiveMeter,
+  LIVE_C,
+  LIVE_C_GLOW,
+  LIVE_C_HOT,
+  LIVE_C_POLY,
+  LIVE_C_FX,
+  LIVE_C_MST,
+  LIVE_C_OCT,
+} from "./LivePanel";
+import { MacroStageViz } from "./MacroStageViz";
+import {
+  MacroCharacterStrip,
+  MacroSnapStrip,
+  MacroQuickActions,
+  MacroMeter,
+  macroStageLabel,
+  MACRO_C,
+  MACRO_C_GLOW,
+  MACRO_HELM_COLORS,
+  MACRO_KEYS,
+} from "./MacroPanel";
+import { GateStageViz } from "./GateStageViz";
+import {
+  GateCharacterStrip,
+  GateRateStrip,
+  GateDepthStrip,
+  GateStepsStrip,
+  GateQuickActions,
+  GateMeter,
+  gateStageLabel,
+  GATE_C,
+  GATE_C_GLOW,
+  GATE_C_RATE,
+  GATE_C_DEPTH,
+  GATE_C_STEPS,
+  GATE_C_SMOOTH,
+} from "./GatePanel";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
 import { FireBand, useFireBandRegister } from "./FireBand";
@@ -41,19 +242,26 @@ import { PresetBrowser } from "./PresetBrowser";
 import { CharacterBrowser } from "./CharacterBrowser";
 import { MixerPanel } from "./MixerPanel";
 import { ModPatchGrid } from "./ModPatchGrid";
+import { MatrixStageViz } from "./MatrixStageViz";
+import { ArpStageViz } from "./ArpStageViz";
 import { FireMorphPad } from "./FireMorphPad";
 import { undoFire, redoFire, useFireHistoryStore } from "@/lib/fireHistory";
 import { MutateCluster } from "./MutateCluster";
 import { RandomizeCluster } from "./RandomizeCluster";
 import { FireLayoutProvider, useFireLayout } from "./FireLayoutContext";
 import { FireCommandDeck } from "./FireCommandDeck";
-import { ensureExpanded, scrollFireCommandTop } from "./fireNavigate";
+import { ensureExpanded, foldStorageKey, scrollFireCommandTop, writeFold } from "./fireNavigate";
 import { useFireWorkspace, type FireWorkspace } from "./useFireWorkspace";
 import { FireWorkspaceTabs } from "./FireWorkspaceTabs";
 import { FireMiniTransport } from "./FireMiniTransport";
+import { FireCommandPalette } from "./FireCommandPalette";
+import { FireSaveTiers } from "./FireSaveTiers";
 import { useFireSynthBand, type FireSynthBand } from "./useFireSynthBand";
 import { FireSynthBandTabs } from "./FireSynthBandTabs";
-import { FC, FC_BAND } from "./fireColors";
+import { OscAStageViz } from "./OscAStageViz";
+import { OscBStageViz } from "./OscBStageViz";
+import { OscCStageViz } from "./OscCStageViz";
+import { FC, bandShade, FC_BAND } from "./fireColors";
 
 const FIRE = FC.fire; // mix / destination coral
 const ICE = FC.lfo; // modulation sky
@@ -83,9 +291,36 @@ const fmtBpm = (v: number) => `${Math.round(v)}`;
 const fmtInt = (v: number) => `${Math.round(v)}`;
 const fmtHzRate = (v: number) => `${v.toFixed(2)}Hz`;
 
-function StudioBay() {
+function StudioBay({ compact = false }: { compact?: boolean }) {
   const undoDepth = useFireHistoryStore((s) => s.undoDepth);
   const redoDepth = useFireHistoryStore((s) => s.redoDepth);
+  if (compact) {
+    const btn = (on: boolean) =>
+      `h-8 px-2.5 rounded-md text-[10px] font-bold uppercase tracking-[0.06em] transition inline-flex items-center gap-1.5 ${
+        on
+          ? "bg-white/[0.09] text-white/90 hover:bg-white/[0.14] ring-1 ring-white/15"
+          : "bg-white/[0.03] text-white/25 cursor-default ring-1 ring-white/6"
+      }`;
+    return (
+      <div className="flex flex-col justify-center gap-1.5 shrink-0 h-full min-h-[56px]">
+        <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40 leading-none">
+          Studio
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button onClick={() => undoFire()} disabled={undoDepth === 0} className={btn(undoDepth > 0)} title="Undo (Ctrl+Z)">
+            <span aria-hidden>↶</span>
+            Undo
+            <span className="font-mono tabular-nums text-[9px] opacity-50">{undoDepth}</span>
+          </button>
+          <button onClick={() => redoFire()} disabled={redoDepth === 0} className={btn(redoDepth > 0)} title="Redo (Ctrl+Y)">
+            <span aria-hidden>↷</span>
+            Redo
+            <span className="font-mono tabular-nums text-[9px] opacity-50">{redoDepth}</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
   const cell = (enabled: boolean) =>
     `h-10 rounded-xl border text-[12px] font-semibold transition truncate ${
       enabled
@@ -115,22 +350,36 @@ function StudioBay() {
           title="Redo (Ctrl+Y)"
         >↷ Redo</button>
       </div>
-      {/* Depth rails — how deep the history stacks run */}
       <div className="grid grid-cols-2 gap-1.5 w-full">
+        {/* Neutral history bars — coral/sky here read as Snapshot A/B. */}
         <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]" title={`${undoDepth} undo steps`}>
           <div
-            className="h-full rounded-full bg-[#ff6a3d]/55 transition-[width] duration-200"
+            className="h-full rounded-full bg-white/45 transition-[width] duration-200"
             style={{ width: `${Math.min(100, undoDepth * 8)}%` }}
           />
         </div>
         <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]" title={`${redoDepth} redo steps`}>
           <div
-            className="h-full rounded-full bg-[#62b6ff]/55 transition-[width] duration-200"
+            className="h-full rounded-full bg-white/25 transition-[width] duration-200"
             style={{ width: `${Math.min(100, redoDepth * 8)}%` }}
           />
         </div>
       </div>
     </div>
+  );
+}
+
+/** Soft vertical hairline — zones share one panel, no hard boxes. */
+function CommandRailSep() {
+  return (
+    <div
+      aria-hidden
+      className="hidden lg:block w-px self-stretch shrink-0 my-1.5"
+      style={{
+        background:
+          "linear-gradient(to bottom, transparent 10%, rgba(255,255,255,0.16) 40%, rgba(255,255,255,0.16) 60%, transparent 90%)",
+      }}
+    />
   );
 }
 
@@ -140,29 +389,42 @@ export function FireCommandView() {
   const editTarget = useFireCommandStore((s) => s.editTarget);
   const setEditTarget = useFireCommandStore((s) => s.setEditTarget);
   const octave = useFireCommandStore((s) => s.octave);
+  const midiInputs = useMidiStore((s) => s.inputs);
+  const midiListening = useMidiStore((s) => s.listening);
+  const midiLastNote = useMidiStore((s) => s.lastNote);
+  const midiAvailable = useMidiStore((s) => s.available);
+  const midiError = useMidiStore((s) => s.error);
+  const rescanMidi = useMidiStore((s) => s.rescan);
   const mono = useFireCommandStore((s) => s.patch.mono);
-  const arp = useFireCommandStore((s) => s.arp);
-  const keyboardMinimized = useFireCommandStore((s) => s.keyboardMinimized);
+  const keyboardMode = useFireCommandStore((s) => s.keyboardMode);
+  const setKeyboardMode = useFireCommandStore((s) => s.setKeyboardMode);
+  const cycleKeyboardMode = useFireCommandStore((s) => s.cycleKeyboardMode);
+  const fireUiDensity = useFireCommandStore((s) => s.fireUiDensity);
   const setParam = useFireCommandStore((s) => s.setParam);
   const loadPreset = useFireCommandStore((s) => s.loadPreset);
   const shiftOctave = useFireCommandStore((s) => s.shiftOctave);
   const setRouteThroughFx = useFireCommandStore((s) => s.setRouteThroughFx);
-  const setArp = useFireCommandStore((s) => s.setArp);
-  const toggleKeyboard = useFireCommandStore((s) => s.toggleKeyboard);
   const panic = useFireCommandStore((s) => s.panic);
-  const userPresets = useFireCommandStore((s) => s.userPresets);
   const maxVoices = useFireCommandStore((s) => s.maxVoices);
   const setMaxVoices = useFireCommandStore((s) => s.setMaxVoices);
   const bypass = useAudioStore((s) => s.bypass);
   const fxOn = !bypass;
   const [browserOpen, setBrowserOpen] = useState(false);
   const [characterBrowserOpen, setCharacterBrowserOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [workspace, setWorkspaceRaw] = useFireWorkspace();
   const [synthBand, setSynthBandRaw] = useFireSynthBand();
 
   const setWorkspace = useCallback((ws: FireWorkspace) => {
     if (ws === "sequencer") {
       useFireSequencerStore.getState().setCollapsed(false);
+      const mode = useFireCommandStore.getState().keyboardMode;
+      if (mode === "full") useFireCommandStore.getState().setKeyboardMode("strip");
+      useFireCommandStore.getState().enterFireFocusDensity();
+    } else {
+      // Leaving the sequencer restores whatever density Focus replaced —
+      // otherwise the console stays stuck in Focus with the header hidden.
+      useFireCommandStore.getState().exitFireFocusDensity();
     }
     setWorkspaceRaw(ws);
     scrollFireCommandTop("smooth");
@@ -178,7 +440,7 @@ export function FireCommandView() {
     activePresetId === "custom"
       ? (editTarget === "b" ? "Custom B" : "Custom")
       : FIRE_PRESETS.find((p) => p.id === activePresetId)?.name ??
-        userPresets.find((p) => p.id === activePresetId)?.name ??
+        useFireCommandStore.getState().userPresets.find((p) => p.id === activePresetId)?.name ??
         (editTarget === "b" ? "Synth B" : "Custom");
 
   // Prev/Next patch cycling — walks factory bank then user presets, wrapping
@@ -207,22 +469,29 @@ export function FireCommandView() {
     useFireCommandStore.getState().sync();
     // Persisted mixer/limiter/duck state lands on the engine buses (v1.6).
     useFireSequencerStore.getState().syncFireMixer();
+    // Warm the AudioContext so the first MIDI hit isn't waiting on resume().
+    void getEngine().resume();
     return () => useFireCommandStore.getState().panic();
   }, []);
 
-  // v1.6: a USB MIDI keyboard plays Synth A live while this view is open
-  // (same noteOn/noteOff path as QWERTY — arp-aware, record-armed capture).
+  // USB MIDI keyboard (e.g. Akai MPK Mini) → Synth A live.
+  // MPK Octave ± shifts note numbers on the device itself — no MIDI CC.
+  // QWERTY Z/X still shift the on-screen / computer-key octave.
+  // Knobs → Signal Path focus (see fireMidiFocusStore).
   useEffect(() => {
     void useMidiStore.getState().startListening();
+    bootFireMidiFocus();
     registerMidiNoteHandler({
       noteOn: (midi, vel) => useFireCommandStore.getState().noteOn(midi, vel),
       noteOff: (midi) => useFireCommandStore.getState().noteOff(midi),
+      octaveDelta: (d) => useFireCommandStore.getState().shiftOctave(d),
+      octaveReset: () => useFireCommandStore.getState().setOctave(4),
     });
     return () => registerMidiNoteHandler(null);
   }, []);
 
   useEffect(() => {
-    const pressed = new Set<string>();
+    const pressed = new Map<string, number>();
     const isText = (t: EventTarget | null) => {
       const el = t as HTMLElement | null;
       // SELECT included: letter keys drive native type-ahead on the wavetable
@@ -234,6 +503,11 @@ export function FireCommandView() {
       // than globally so Ctrl+Z elsewhere in the app keeps native behavior.
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !isText(e.target)) {
         const k = e.key.toLowerCase();
+        if (k === "k") {
+          e.preventDefault();
+          setPaletteOpen(true);
+          return;
+        }
         if (k === "z" && !e.shiftKey) {
           e.preventDefault();
           if (!undoFire()) useUIStore.getState().toast("Nothing to undo");
@@ -254,16 +528,16 @@ export function FireCommandView() {
       if (semi === undefined) return;
       e.preventDefault();
       if (e.repeat || pressed.has(k)) return;
-      pressed.add(k);
-      store.noteOn((store.octave + 1) * 12 + semi);
+      const midi = (store.octave + 1) * 12 + semi;
+      pressed.set(k, midi);
+      store.noteOn(midi);
     };
     const onUp = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (!pressed.has(k)) return;
+      const midi = pressed.get(k);
+      if (midi === undefined) return;
       pressed.delete(k);
-      const semi = KEY_TO_SEMITONE[k];
-      if (semi === undefined) return;
-      useFireCommandStore.getState().noteOff((useFireCommandStore.getState().octave + 1) * 12 + semi);
+      useFireCommandStore.getState().noteOff(midi);
     };
     const onBlur = () => { pressed.clear(); useFireCommandStore.getState().panic(); };
     window.addEventListener("keydown", onDown);
@@ -276,534 +550,289 @@ export function FireCommandView() {
     };
   }, []);
 
+  const flush = true; // Synth + Sequencer share one continuous console
+
   return (
     <FireLayoutProvider>
-    <div className="space-y-2 pb-6" data-fire-root>
-      {/* MK IV command-deck header — targeting-reticle mark, no mascot */}
-      <div className="fire-header relative overflow-hidden rounded-2xl border border-[#ff6a3d]/25 px-4 py-2.5">
-        {/* hazard chevrons along the bottom edge */}
+    <div
+      className="h-full min-h-0 flex flex-col"
+      data-fire-root
+      data-fire-density={fireUiDensity}
+      data-fire-host={typeof window !== "undefined" && (window as Window & { __KILLCHAIN_PLUGIN__?: boolean }).__KILLCHAIN_PLUGIN__ ? "plugin" : "standalone"}
+    >
+      <div
+        className="fire-console relative rounded-2xl flex-1 min-h-0 flex flex-col overflow-hidden"
+        style={{
+          border: "1px solid rgba(255,255,255,0.1)",
+          background:
+            "linear-gradient(180deg, #141218 0%, #0c0c10 42%, #0a0a0e 100%)",
+          boxShadow:
+            "0 0 0 1px rgba(0,0,0,0.35) inset, 0 16px 48px rgba(0,0,0,0.4)",
+        }}
+      >
+      <FireBreadcrumb workspace={workspace} synthBand={synthBand} meter={<FireMasterMeter />} />
+      {/* Modules scroll; keyboard stays pinned to the console footer. */}
+      <div className={`flex-1 min-h-0 overscroll-y-contain ${workspace === "sequencer" ? "overflow-hidden flex flex-col min-h-[120px]" : "overflow-y-auto min-h-[120px]"}`}>
+      {/* One continuous command rail — fire → green gradient, soft zone seps */}
+      <div
+        className="fire-header relative overflow-hidden rounded-t-2xl"
+        style={undefined}
+      >
+        {/* Master wash: red left → amber mid → green right */}
         <div
-          className="absolute inset-x-0 bottom-0 h-[3px] opacity-40 pointer-events-none"
-          style={{ background: "repeating-linear-gradient(115deg, #ff6a3d 0 10px, transparent 10px 20px)" }}
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(105deg, #2a100c 0%, #1a1210 18%, #121412 52%, #0c1612 78%, #0a1614 100%)",
+          }}
         />
-        <div className="relative z-10 flex flex-wrap items-center gap-3">
-          <div
-            className="w-9 h-9 rounded-lg grid place-items-center shrink-0"
-            style={{ background: "linear-gradient(145deg, #ff6a3d24, #0a0a0a)", border: "1px solid #ff6a3d55", boxShadow: "0 0 24px #ff6a3d2e, inset 0 0 12px #ff6a3d1a" }}
-            title="Fire Command MK IV"
-          >
-            {/* targeting reticle */}
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <circle cx="12" cy="12" r="8" stroke="#ff6a3d" strokeWidth="1.4" opacity="0.9" />
-              <circle cx="12" cy="12" r="3.4" stroke="#ffcf5c" strokeWidth="1.2" opacity="0.85" />
-              <circle cx="12" cy="12" r="1" fill="#ff6a3d" />
-              <path d="M12 1v4.4M12 18.6V23M1 12h4.4M18.6 12H23" stroke="#ff6a3d" strokeWidth="1.4" strokeLinecap="round" />
-              <path d="M5.2 5.2l1.8 1.8M18.8 5.2L17 7M5.2 18.8L7 17M18.8 18.8L17 17" stroke="#ff6a3d" strokeWidth="1" opacity="0.45" strokeLinecap="round" />
-            </svg>
-          </div>
-          <div className="min-w-0 flex items-baseline gap-3">
-            <h1 className="fire-title text-lg font-black tracking-[0.08em] leading-none">FIRE COMMAND</h1>
-            <span
-              className="text-[10px] font-black tracking-[0.18em] leading-none px-1.5 py-0.5 rounded"
-              style={{ color: "#ffcf5c", border: "1px solid #ffcf5c44", background: "#ffcf5c12", textShadow: "0 0 10px #ffcf5c66" }}
-            >MK IV</span>
-          </div>
-          <div className="flex-1" />
-          <button
-            type="button"
-            onClick={() => scrollFireCommandTop()}
-            className="rounded-lg border border-white/15 bg-white/[0.06] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-white/70 hover:bg-white/10 hover:text-white transition"
-            title="Scroll to top of Fire Command"
-          >
-            Top
-          </button>
-        </div>
-      </div>
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(90deg, rgba(255,106,61,0.22) 0%, rgba(255,140,80,0.1) 28%, rgba(180,160,90,0.05) 50%, rgba(80,180,120,0.1) 72%, rgba(52,211,153,0.2) 100%)",
+          }}
+        />
+        {/* Soft bloom accents */}
+        <div
+          className="pointer-events-none absolute -left-8 top-1/2 h-28 w-28 -translate-y-1/2 rounded-full blur-3xl opacity-50"
+          style={{ background: "rgba(255,106,61,0.45)" }}
+        />
+        <div
+          className="pointer-events-none absolute -right-6 top-1/2 h-28 w-36 -translate-y-1/2 rounded-full blur-3xl opacity-40"
+          style={{ background: "rgba(52,211,153,0.4)" }}
+        />
+        {/* Specular sheen */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-px"
+          style={{ background: "linear-gradient(90deg, rgba(255,160,100,0.35), rgba(255,255,255,0.12), rgba(120,230,180,0.3))" }}
+        />
+        {/* Soft handoff into the next zone (violet workspace / brass transport) */}
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-10"
+          style={{
+            background:
+              "linear-gradient(180deg, transparent 0%, rgba(167,139,250,0.08) 55%, rgba(12,12,16,0.35) 100%)",
+          }}
+        />
 
-      {/* Patch bar — three balanced bays: library · generative · history */}
-      <GlassPanel className="p-2.5">
-        <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-3 xl:items-stretch">
-          {/* Library bay */}
-          <div className="flex flex-col justify-center gap-2 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px]">
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Patch</span>
-              <div className="inline-flex rounded-md border border-white/12 bg-black/30 p-0.5">
+        {/* Always allow wrapping — shrink-0 cluster contents overlap when the
+            row is forced onto one line at sub-1600px widths. */}
+        <div className="relative z-10 flex flex-wrap items-stretch gap-x-0 gap-y-1.5 px-1.5 py-2.5">
+          {/* Brand */}
+          <div className="flex items-center gap-2.5 px-3 py-1 shrink-0 min-h-[60px]">
+            <div
+              className="w-11 h-11 rounded-xl grid place-items-center shrink-0 animate-[evolve-breathe_4.5s_ease-in-out_infinite]"
+              style={{
+                background: "linear-gradient(145deg, rgba(255,106,61,0.32), rgba(10,10,10,0.92))",
+                boxShadow: "0 0 26px rgba(255,106,61,0.35), inset 0 0 14px rgba(255,106,61,0.14)",
+                border: "1px solid rgba(255,106,61,0.45)",
+              }}
+              title="Fire Command MK IV — weapons free"
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <circle cx="12" cy="12" r="8" stroke="#ff6a3d" strokeWidth="1.4" opacity="0.95" />
+                <circle cx="12" cy="12" r="3.4" stroke="#ffcf5c" strokeWidth="1.2" opacity="0.9" />
+                <circle cx="12" cy="12" r="1" fill="#ff6a3d" />
+                <path d="M12 1v4.4M12 18.6V23M1 12h4.4M18.6 12H23" stroke="#ff6a3d" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </div>
+            <div className="min-w-0 leading-none">
+              <div className="fire-title text-[16px] font-black tracking-[0.1em]">FIRE COMMAND</div>
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <span
+                  className="text-[9px] font-black tracking-[0.22em] px-1.5 py-0.5 rounded"
+                  style={{ color: "#ffcf5c", background: "rgba(255,207,92,0.12)", boxShadow: "inset 0 0 0 1px rgba(255,207,92,0.35)" }}
+                >
+                  MK IV
+                </span>
+                <span className="text-[8px] uppercase tracking-[0.16em] text-[#ff9a6b]/70">weapons free</span>
+              </div>
+            </div>
+          </div>
+
+          <CommandRailSep />
+
+          {/* Patch — row1 tools, row2 preset strip (aligned) */}
+          <div className="flex flex-col justify-center gap-1.5 px-3 py-1 flex-[1.2] basis-[19rem] min-w-[19rem] min-h-[60px]">
+            <div className="flex items-center gap-1.5 min-w-0 min-h-[2rem] flex-wrap">
+              <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40 leading-none shrink-0">
+                Snapshot
+              </div>
+              <div className="inline-flex h-8 rounded-md bg-black/35 p-0.5 shrink-0 ring-1 ring-white/10 fc-snapshot-toggle">
                 {(["a", "b"] as const).map((t) => (
                   <button
                     key={t}
                     type="button"
                     onClick={() => setEditTarget(t)}
-                    className="px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] rounded transition"
+                    className="h-full min-w-[30px] px-2.5 text-[10px] font-black uppercase tracking-[0.1em] rounded transition"
                     style={
                       editTarget === t
                         ? {
-                            background: t === "b" ? "rgba(98,182,255,0.22)" : "rgba(255,106,61,0.22)",
+                            background: t === "b" ? "rgba(98,182,255,0.28)" : "rgba(255,106,61,0.32)",
                             color: t === "b" ? "#b8dcff" : "#ffbfa0",
                           }
                         : { color: "rgba(255,255,255,0.35)" }
                     }
-                    title={t === "a" ? "Edit Synth A in the rack" : "Edit Synth B in the rack"}
+                    title={t === "a" ? "Snapshot A — edit Synth A patch" : "Snapshot B — edit Synth B patch"}
                   >
-                    Edit {t.toUpperCase()}
+                    {t.toUpperCase()}
                   </button>
                 ))}
               </div>
-              <span className="text-[9px] text-white/25 truncate">
-                {editTarget === "b" ? "rack edits B · arp stays on A" : "browse · characters · init"}
-              </span>
+              {/* Neutral chrome — the violet accent belonged to the Synth
+                  workspace tab and made two unrelated violet CTAs. */}
+              <button
+                onClick={() => setCharacterBrowserOpen(true)}
+                className="h-8 px-2.5 rounded-md text-[10px] font-semibold transition bg-white/[0.05] text-white/75 hover:bg-white/10 ring-1 ring-white/12 shrink-0"
+                title="Characters — genesis character cards / starting personalities"
+              >
+                Characters
+              </button>
+              <button
+                onClick={() => loadPreset("init")}
+                className="h-8 px-2.5 rounded-md text-[10px] text-white/70 transition bg-white/[0.04] hover:bg-white/10 ring-1 ring-white/10 shrink-0"
+                title="Reset to Init patch"
+              >
+                ↺ Init
+              </button>
             </div>
-            <div className="flex items-center gap-1.5 min-w-0">
+            <div className="flex items-center gap-1 min-w-0 h-8">
               <button
                 onClick={() => cyclePreset(-1)}
-                className="w-8 h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
+                className="w-8 h-8 shrink-0 rounded-md bg-white/[0.04] hover:bg-white/10 text-white/65 text-xs leading-none transition ring-1 ring-white/10"
                 title="Previous preset"
                 aria-label="Previous preset"
-              >◂</button>
+              >
+                ◂
+              </button>
               <button
                 onClick={() => setBrowserOpen(true)}
-                className="flex items-center gap-2 rounded-xl border border-white/12 bg-black/30 hover:bg-black/45 hover:border-white/25 px-2.5 py-1.5 transition min-w-0 flex-1"
+                className="flex items-center gap-2 rounded-md bg-black/40 hover:bg-black/55 px-2.5 h-8 transition min-w-0 flex-1 ring-1 ring-white/10 hover:ring-white/20"
                 title="Open the preset library"
               >
-                <span className="text-base leading-none shrink-0" style={{ color: FIRE }}>♪</span>
-                <span className="text-sm font-semibold text-white truncate">{currentName}</span>
-                <span className="ml-auto text-[9px] uppercase tracking-widest text-white/40 shrink-0">Browse</span>
+                <span className="text-sm leading-none shrink-0" style={{ color: FIRE }}>♪</span>
+                <span className="text-[12px] font-semibold text-white truncate">{currentName}</span>
+                <span className="ml-auto text-[9px] uppercase tracking-[0.14em] text-white/40 shrink-0">Browse</span>
               </button>
               <button
                 onClick={() => cyclePreset(1)}
-                className="w-8 h-8 shrink-0 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-sm leading-none transition"
+                className="w-8 h-8 shrink-0 rounded-md bg-white/[0.04] hover:bg-white/10 text-white/65 text-xs leading-none transition ring-1 ring-white/10"
                 title="Next preset"
                 aria-label="Next preset"
-              >▸</button>
-            </div>
-            <div className="grid grid-cols-2 gap-1.5 w-full">
-              <button
-                onClick={() => setCharacterBrowserOpen(true)}
-                className="h-8 rounded-xl border px-2.5 text-[11px] font-semibold transition"
-                style={{ color: "#c4b5fd", borderColor: "#a78bfa55", background: "#a78bfa18" }}
-                title="Genesis character cards"
-              >Characters</button>
-              <button
-                onClick={() => loadPreset("init")}
-                className="h-8 rounded-xl border border-white/12 bg-white/5 hover:bg-white/10 px-2.5 text-[11px] text-white/75 transition"
-                title="Reset to Init patch"
-              >↺ Init</button>
+              >
+                ▸
+              </button>
             </div>
           </div>
 
-          {/* Generative bay — twin pods */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0 overflow-hidden">
-            <RandomizeCluster />
-            <MutateCluster />
+          <CommandRailSep />
+
+          {/* Random Armory */}
+          <div className="fc-chrome-armory flex items-stretch px-3 py-1 flex-1 basis-[13.5rem] min-w-[13.5rem] min-h-[60px]">
+            <RandomizeCluster compact />
           </div>
 
-          {/* Studio bay — undo / redo only (library lives in Patch bay) */}
-          <StudioBay />
+          <CommandRailSep />
+
+          {/* Natural Selection */}
+          <div className="fc-chrome-mutate flex items-stretch px-3 py-1 flex-1 basis-[15rem] min-w-[15rem] min-h-[60px]">
+            <MutateCluster compact />
+          </div>
+
+          <CommandRailSep />
+
+          {/* Studio — labeled Undo / Redo + save tiers */}
+          <div className="fc-chrome-studio flex items-stretch px-3 py-1 shrink-0 min-h-[60px] gap-3">
+            <StudioBay compact />
+            <FireSaveTiers />
+          </div>
         </div>
-      </GlassPanel>
-
-      <FireWorkspaceTabs workspace={workspace} onChange={setWorkspace} />
-
-      {workspace === "sequencer" ? (
-        <SequencerPanel />
-      ) : (
-      <>
-      {/* Synth chrome stack — transport + band tabs share the same rhythm as workspace tabs */}
-      <div className="space-y-1.5">
-        <FireMiniTransport />
-        <FireSynthBandTabs band={synthBand} onChange={setSynthBand} />
       </div>
 
+      <FireCommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onWorkspace={setWorkspace}
+      />
+
+      <FireWorkspaceTabs workspace={workspace} onChange={setWorkspace} flush={flush} />
+
+      {workspace === "sequencer" ? (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <SequencerPanel flush={flush} />
+        </div>
+      ) : (
+      <>
+      {/* Synth chrome — transport + band tabs flush into the console */}
+      <FireMiniTransport flush={flush} />
+      <FireSynthBandTabs band={synthBand} onChange={setSynthBand} flush={flush} />
+
       {/* Home = Signal Path hub; band tabs mount only that category */}
-      {synthBand === "home" && <FireCommandDeck />}
+      {synthBand === "home" && <FireCommandDeck flush={flush} />}
 
       {synthBand === "band.sources" && (
-      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp · chip" foldable={false}>
-        <OscPanel group="a" chipHosted />
-        <OscPanel group="b" chipHosted />
-        <OscPanel group="c" chipHosted />
-        <Section
-          title="Spectral Warp"
-          color={FC.warp}
-          collapseKey="fire.sec.warp"
-          chipHosted
-          right={
-            <span className="text-[9px] text-dim normal-case tracking-normal">
-              reshapes harmonics of all three oscillators
-            </span>
-          }
-        >
-          <WarpStageViz />
-          <div className="flex items-center justify-evenly gap-2">
-            <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.warp} />
-            <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.warp} />
-            <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} color={FC.warp} />
-          </div>
-        </Section>
-        <Section
-          title="Chip · Acid"
-          color={FC.chip}
-          collapseKey="chip"
-          chipHosted
-          defaultCollapsed
-          right={
-            <FSeg<ChipNoiseMode>
-              paramKey="chipNoise"
-              color={FC.chip}
-              options={[
-                { id: "white", label: "Wht" },
-                { id: "nes", label: "Hold" },
-                { id: "gb", label: "Soft" },
-                { id: "periodic", label: "Per" },
-              ]}
-            />
-          }
-        >
-          <ChipStageViz />
-          <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
-            <BoolToggle paramKey="hardSync" label="Hard Sync" color={FC.chip} />
-            <BoolToggle paramKey="slideOn" label="Slide" color={FC.chip} />
-          </div>
-          <div className="flex items-center justify-evenly gap-1 flex-wrap">
-            <FParamKnob paramKey="pulseDuty" label="Pulse" min={0.05} max={0.95} format={fmtPct} def={0.5} color={FC.chip} />
-            <FParamKnob paramKey="chipVoiceLimit" label="Voices" min={0} max={8} integer format={(v) => (v < 0.5 ? "Off" : fmtInt(v))} def={0} color={FC.chip} />
-            <FParamKnob paramKey="accentAmount" label="Accent" min={0} max={1} format={fmtPct} def={0} color={FC.chip} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">PWM · sync · chip noise · acid accent/slide</div>
-        </Section>
-        <Section title="Noise" color={FC.noise} collapseKey="noise" chipHosted defaultCollapsed>
-          <NoiseStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="noiseLevel" label="Level" min={0} max={1} format={fmtPct} def={0} color={FC.noise} />
-            <FParamKnob paramKey="noiseColor" label="Color" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.noise} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Bed level · tilt · chip noise type lives on Chip</div>
-        </Section>
-        <Section
-          title="Sub"
-          color={FC.sub}
-          collapseKey="sub"
-          chipHosted
-          defaultCollapsed
-          right={
-            <FSeg<SubWave>
-              paramKey="subWave"
-              color={FC.sub}
-              options={[
-                { id: "sine", label: "Sin" },
-                { id: "triangle", label: "Tri" },
-                { id: "square", label: "Sqr" },
-                { id: "sawtooth", label: "Saw" },
-              ]}
-            />
-          }
-        >
-          <SubStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="subLevel" label="Level" min={0} max={1} format={fmtPct} def={0} color={FC.sub} />
-            <FParamKnob paramKey="subOctave" label="Oct" min={-2} max={0} integer format={fmtOct} def={-1} color={FC.sub} />
-          </div>
-        </Section>
+      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="oscillators · spectral warp · chip" foldable={false} flush={flush}>
+        <OscAPanel chipHosted />
+        <OscBPanel chipHosted />
+        <OscCPanel chipHosted />
+        <WarpPanel chipHosted />
+        <ChipPanel chipHosted />
+        <NoisePanel chipHosted />
+        <SubPanel chipHosted />
       </FireBand>
       )}
 
       {synthBand === "band.tone" && (
-      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes" foldable={false}>
-        <Section title="Unison" color={FC.unison} collapseKey="mixer.unison" chipHosted>
-          <UnisonStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={1} color={FC.unison} />
-            <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={0} color={FC.unison} />
-            <FParamKnob paramKey="unisonWidth" label="Width" min={0} max={1} format={fmtPct} def={0.5} color={FC.unison} />
-            <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} color={FC.unison} />
-          </div>
-        </Section>
-        <Section title="Analog Life" color={FC.analogLife} collapseKey="analog.life" chipHosted defaultCollapsed>
-          <AnalogLifeStageViz />
-          <div className="flex items-center justify-evenly gap-1 flex-wrap">
-            <FParamKnob paramKey="driftRate" label="Rate" min={0.05} max={1} format={fmtPct} def={0.35} color={FC.analogLife} />
-            <FParamKnob paramKey="voiceInstability" label="Instab" min={0} max={1} format={fmtPct} def={0} color={FC.analogLife} />
-            <FParamKnob paramKey="tuneVariance" label="Tune Δ" min={0} max={1} format={fmtPct} def={0} color={FC.analogLife} />
-            <FParamKnob paramKey="envVariance" label="Env Δ" min={0} max={1} format={fmtPct} def={0} color={FC.analogLife} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Per-voice drift · tune · envelope organic variance</div>
-        </Section>
-        <Section title="Filter" color={FC.filter} collapseKey="filter" chipHosted right={
-          <FSeg<FireFilterType> paramKey="filterType" options={[{ id: "lowpass", label: "LP" }, { id: "bandpass", label: "BP" }, { id: "highpass", label: "HP" }, { id: "notch", label: "NT" }]} />
-        }>
-          <FilterStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={46} color={FC.filter} />
-            <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={0.7} color={FC.filter} />
-            <FParamKnob paramKey="filterEnvAmount" label="Env Amt" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
-            <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} color={FC.filter} />
-            <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} color={FC.filter} />
-          </div>
-        </Section>
-        <Section title="Amp Envelope" color={FC.envAmp} collapseKey="env.amp" chipHosted>
-          <AmpEnvStageViz />
-          <LpgAwareAmpRow />
-        </Section>
-        <Section title="Mod Envelope → Morph" color={FC.envMod} collapseKey="env.mod" chipHosted>
-          <ModEnvStageViz />
-          <AdsrRow a="modAttack" d="modDecay" s="modSustain" r="modRelease" color={FC.envMod} />
-        </Section>
-        <Section title="Filter Envelope" color={FC.envFilt} collapseKey="env.filt" chipHosted>
-          <FiltEnvStageViz />
-          <AdsrRow a="filtAttack" d="filtDecay" s="filtSustain" r="filtRelease" color={FC.envFilt} />
-        </Section>
-        <Section title="Pluck Gate" color={FC.pluck} collapseKey="pluck" chipHosted defaultCollapsed right={<LpgToggle />}>
-          <PluckStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} color={FC.pluck} size={46} />
-            <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} color={FC.pluck} />
-            <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={FC.pluck} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Strike drives amp + brightness · replaces ADSR while on</div>
-        </Section>
+      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes" foldable={false} flush={flush}>
+        <UnisonPanel chipHosted />
+        <AnalogLifePanel chipHosted />
+        <FilterPanel chipHosted />
+        <AmpEnvPanel chipHosted />
+        <ModEnvPanel chipHosted />
+        <FiltEnvPanel chipHosted />
+        <PluckPanel chipHosted />
       </FireBand>
       )}
 
       {synthBand === "band.mod" && (
-      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp" foldable={false}>
-        <LfoPanel idx={1} chipHosted />
-        <LfoPanel idx={2} chipHosted />
-        <Section title="FM · Ring" color={FC.fm} collapseKey="fm" chipHosted>
-          <FmRingStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
-            <FParamKnob paramKey="fmRatio" label="FM Ratio" min={0.5} max={12} curve="log" format={fmtRatio} def={2} color={FC.fm} />
-            <FParamKnob paramKey="fmBtoA" label="B→A FM" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
-            <FParamKnob paramKey="ringAmount" label="Ring" min={0} max={1} format={fmtPct} def={0} color={FC.fm} />
-            <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} color={FC.fm} />
-          </div>
-        </Section>
-        <Section
-          title="FM Rack · Vector"
-          color={FC.fmRack}
-          collapseKey="fm.rack"
-          chipHosted
-          defaultCollapsed
-          right={
-            <FSeg<FmEngineMode>
-              paramKey="fmEngine"
-              color={FC.fmRack}
-              options={[
-                { id: "classic", label: "2-op" },
-                { id: "ops4", label: "4-op" },
-              ]}
-            />
-          }
-        >
-          <FmRackStageViz />
-          <div className="flex items-center justify-evenly gap-1 flex-wrap mb-2">
-            <FParamKnob paramKey="fmAlg" label="Alg" min={0} max={7} integer format={fmtInt} def={0} color={FC.fmRack} />
-            <FParamKnob paramKey="fmFeedback" label="Fbk" min={0} max={1} format={fmtPct} def={0} color={FC.fmRack} />
-            <FParamKnob paramKey="vectorRate" label="Vec Rate" min={0} max={1} format={fmtPct} def={0} color={FC.fmRack} />
-            <FParamKnob paramKey="vectorDepth" label="Vec Depth" min={0} max={1} format={fmtPct} def={0} color={FC.fmRack} />
-          </div>
-          <div className="flex items-center justify-evenly gap-1 flex-wrap">
-            <FParamKnob paramKey="fmOp1Level" label="Op1" min={0} max={1} format={fmtPct} def={1} color={FC.fmRack} />
-            <FParamKnob paramKey="fmOp2Level" label="Op2" min={0} max={1} format={fmtPct} def={0.7} color={FC.fmRack} />
-            <FParamKnob paramKey="fmOp3Level" label="Op3" min={0} max={1} format={fmtPct} def={0.5} color={FC.fmRack} />
-            <FParamKnob paramKey="fmOp4Level" label="Op4" min={0} max={1} format={fmtPct} def={0.35} color={FC.fmRack} />
-          </div>
-          <div className="flex items-center justify-evenly gap-1 flex-wrap mt-1">
-            <FParamKnob paramKey="fmOp2Ratio" label="R2" min={0.25} max={16} curve="log" format={fmtRatio} def={1} color={FC.fmRack} />
-            <FParamKnob paramKey="fmOp3Ratio" label="R3" min={0.25} max={16} curve="log" format={fmtRatio} def={2} color={FC.fmRack} />
-            <FParamKnob paramKey="fmOp4Ratio" label="R4" min={0.25} max={16} curve="log" format={fmtRatio} def={3} color={FC.fmRack} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">4-op algorithms · operator levels/ratios · vector morph</div>
-        </Section>
-        <Section title="Pitch · Glide" color={FC.pitch} collapseKey="pitch" chipHosted>
-          <PitchGlideStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} color={GRN} />
-            <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} color={GRN} />
-            <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0} color={FC.pitch} />
-          </div>
-        </Section>
+      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp" foldable={false} flush={flush}>
+        <Lfo1Panel chipHosted />
+        <Lfo2Panel chipHosted />
+        <FmPanel chipHosted />
+        <FmRackPanel chipHosted />
+        <PitchPanel chipHosted />
         <ModMatrixPanel chipHosted />
-        <ArpPanel arp={arp} setArp={setArp} chipHosted />
+        <ArpPanel chipHosted />
       </FireBand>
       )}
 
       {synthBand === "band.fx" && (
-      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive · vintage age · spectral" foldable={false}>
-        <Section title="Drive" color={FC.drive} collapseKey="fx.drive" chipHosted right={
-          <FSeg<DriveMode> paramKey="driveMode" options={[{ id: "soft", label: "Soft" }, { id: "tube", label: "Tube" }, { id: "fold", label: "Fold" }, { id: "hard", label: "Hard" }, { id: "fuzz", label: "Fuzz" }]} />
-        }>
-          <DriveStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
-            <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} color={FC.drive} />
-            <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={46} color={FC.drive} />
-          </div>
-        </Section>
-        <Section
-          title="Vintage Age"
-          color={FC.vintage}
-          collapseKey="fx.vintage"
-          chipHosted
-          defaultCollapsed
-          right={
-            <FSeg<FireBitDepth>
-              paramKey="bitDepth"
-              color={FC.vintage}
-              options={[
-                { id: "off", label: "Off" },
-                { id: "12bit", label: "12b" },
-                { id: "8bit", label: "8b" },
-              ]}
-            />
-          }
-        >
-          <VintageAgeStageViz />
-          <div className="flex items-center justify-evenly gap-1 flex-wrap">
-            <FParamKnob paramKey="cassetteGen" label="Cass" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="tapeSpeed" label="Speed" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="wowFlutter" label="Wow" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="vhsColor" label="VHS" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="sampleRateReduce" label="SR↓" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="bbdChorus" label="BBD" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="analogComp" label="Comp" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-          </div>
-          <div className="flex items-center justify-evenly gap-1 flex-wrap mt-1">
-            <FParamKnob paramKey="dust" label="Dust" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="hiss" label="Hiss" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="hum" label="Hum" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-            <FParamKnob paramKey="printThrough" label="Print" min={0} max={1} format={fmtPct} def={0} color={FC.vintage} />
-          </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">Tape · VHS · bit depth · BBD · dust beds</div>
-        </Section>
-        <Section title="Phaser" color={FC.phaser} collapseKey="fx.phaser" chipHosted>
-          <PhaserStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} color={FC.phaser} />
-            <FParamKnob paramKey="phaserDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.6} color={FC.phaser} />
-            <FParamKnob paramKey="phaserMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.phaser} />
-          </div>
-        </Section>
-        <Section title="Chorus" color={FC.chorus} collapseKey="fx.chorus" chipHosted>
-          <ChorusStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} color={FC.chorus} />
-            <FParamKnob paramKey="chorusDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.4} color={FC.chorus} />
-            <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.chorus} />
-          </div>
-        </Section>
-        <Section title="Delay (Ping-Pong)" color={FC.delay} collapseKey="fx.delay" chipHosted>
-          <DelayStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="delayTime" label="Time" min={0.01} max={1.5} curve="log" format={fmtSec} def={0.28} color={FC.delay} />
-            <FParamKnob paramKey="delayFeedback" label="Fbk" min={0} max={0.92} format={fmtPct} def={0.3} color={FC.delay} />
-            <FParamKnob paramKey="delayMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.delay} />
-          </div>
-        </Section>
-        <Section title="Reverb" color={FC.reverb} collapseKey="fx.reverb" chipHosted>
-          <ReverbStageViz />
-          <div className="flex items-center justify-evenly gap-1 flex-wrap">
-            <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} color={FC.reverb} />
-            <FParamKnob paramKey="reverbDamp" label="Damp" min={0} max={1} format={fmtPct} def={0.45} color={FC.reverb} />
-            <FParamKnob paramKey="reverbPredelay" label="Pre" min={0} max={0.2} format={fmtSec} def={0.02} color={FC.reverb} />
-            <FParamKnob paramKey="reverbDiffusion" label="Diff" min={0} max={1} format={fmtPct} def={0.7} color={FC.reverb} />
-            <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} color={FC.reverb} />
-          </div>
-        </Section>
+      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="drive · vintage age · spectral" foldable={false} flush={flush}>
+        <DrivePanel chipHosted />
+        <AgePanel chipHosted />
+        <PhaserPanel chipHosted />
+        <ChorusPanel chipHosted />
+        <DelayPanel chipHosted />
+        <ReverbPanel chipHosted />
         <SpectralPanel chipHosted />
       </FireBand>
       )}
 
       {synthBand === "band.mix" && (
-      <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="bus · morph · scope · performance" foldable={false}>
+      <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="bus · morph · width · glue · air · scope · live" foldable={false} flush={flush}>
         <MixerPanel chipHosted />
         <FireMorphPad chipHosted />
-        <Section title="Width" color={FC.width} collapseKey="width" chipHosted defaultCollapsed>
-          <WidthStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} color={FC.width} />
-          </div>
-        </Section>
-        <Section title="Glue" color={FC.glue} collapseKey="glue" chipHosted defaultCollapsed>
-          <GlueStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} color={FC.glue} />
-          </div>
-        </Section>
-        <Section title="Air" color={FC.air} collapseKey="air" chipHosted defaultCollapsed>
-          <AirStageViz />
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob paramKey="airLow" label="Low" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.air} />
-            <FParamKnob paramKey="airHigh" label="High" min={-1} max={1} bipolar format={fmtBi} def={0} color={FC.air} />
-            <FParamKnob paramKey="airAmount" label="Amount" min={0} max={1} format={fmtPct} def={0} color={FC.air} />
-          </div>
-        </Section>
-        <Section title="Output · Scope" color={FC.scope} collapseKey="output" chipHosted defaultCollapsed right={<VoiceCount />}>
-          <PathScopeGate>
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
-            <div className="rounded-xl border border-[#ff6a3d]/22 bg-gradient-to-b from-[#ff6a3d]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,106,61,0.08)] lg:col-span-1">
-              <WaveDisplay group="a" color={FIRE} />
-            </div>
-            <div className="rounded-xl border border-[#ff9a6b]/22 bg-gradient-to-b from-[#ff9a6b]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,154,107,0.08)] lg:col-span-1">
-              <WaveDisplay group="b" color="#ff9a6b" />
-            </div>
-            <div className="rounded-xl border border-[#ffcf5c]/22 bg-gradient-to-b from-[#ffcf5c]/[0.08] to-black/40 p-2 shadow-[0_0_18px_rgba(255,207,92,0.08)] lg:col-span-1">
-              <WaveDisplay group="c" color="#ffcf5c" />
-            </div>
-            <div className="rounded-xl border border-[#ff6a3d]/28 bg-gradient-to-b from-[#ff6a3d]/[0.1] to-black/50 p-2 shadow-[0_0_22px_rgba(255,106,61,0.12)] lg:col-span-2">
-              <div className="mb-1 flex items-center justify-between gap-2 min-w-0">
-                <span className="text-[10px] uppercase tracking-widest text-dim shrink-0">Master Trace</span>
-                <span className="text-[9px] text-white/30 truncate hidden sm:inline">post-synth · pre Kill-Chain</span>
-              </div>
-              <Scope />
-            </div>
-          </div>
-          </PathScopeGate>
-        </Section>
-        <Section title="Live Controls" color={FIRE} collapseKey="performance" chipHosted>
-          <PerformanceStageViz />
-          <div className="flex flex-wrap items-center justify-evenly gap-2.5">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] uppercase tracking-widest text-dim">Octave</span>
-              <Stepper onClick={() => shiftOctave(-1)}>−</Stepper>
-              <div className="w-6 text-center font-mono text-sm" style={{ color: FIRE }}>{octave}</div>
-              <Stepper onClick={() => shiftOctave(1)}>+</Stepper>
-            </div>
-            <Seg<"poly" | "mono">
-              value={mono ? "mono" : "poly"}
-              onChange={(v) => setParam("mono", v === "mono")}
-              options={[{ id: "poly", label: "Poly" }, { id: "mono", label: "Mono" }]}
-            />
-            <button
-              onClick={() => setRouteThroughFx(!fxOn)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                fxOn ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_18px_rgb(var(--c-cyan)/0.3)]" : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-              }`}
-              title="Run the synth through the program's EQ/FX chain, or play it raw."
-            >{fxOn ? "● Kill-Chain FX: ON" : "FX: OFF (raw)"}</button>
-            <div className="flex items-center gap-1.5" title="Polyphony cap. Higher = richer chords but more CPU; lower this if audio crackles or drops out.">
-              <span className="text-[10px] uppercase tracking-widest text-dim">Voices</span>
-              <Seg<string>
-                value={String(maxVoices)}
-                onChange={(v) => setMaxVoices(Number(v))}
-                options={[{ id: "6", label: "6" }, { id: "8", label: "8" }, { id: "12", label: "12" }, { id: "16", label: "16" }, { id: "24", label: "24" }, { id: "32", label: "32" }]}
-              />
-            </div>
-            <FParamKnob paramKey="masterGain" label="Master" min={0} max={1.2} format={fmtPct} def={0.72} size={38} />
-            <button
-              onClick={() => {
-                useFireSequencerStore.getState().stop();
-                panic();
-              }}
-              className="rounded-lg border border-rose-400/40 bg-rose-500/10 hover:bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-200 transition"
-              title="Stop the sequencer and silence every voice"
-            >✕ Cease Fire</button>
-          </div>
-        </Section>
+        <WidthPanel chipHosted />
+        <GluePanel chipHosted />
+        <AirPanel chipHosted />
+        <ScopePanel chipHosted />
+        <LivePanel chipHosted />
       </FireBand>
       )}
 
       {synthBand === "band.perf" && (
-      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · trance gate · harmony · scenes" foldable={false}>
+      <FireBand title="Macros & Gate" color={FC_BAND.perf} bandKey="band.perf" hint="macros · gate · harmony · scale · chord · humanize · scenes" foldable={false} flush={flush}>
         <MacrosPanel chipHosted />
         <GatePanel chipHosted />
         <HarmonyPanel chipHosted />
@@ -814,22 +843,89 @@ export function FireCommandView() {
       </FireBand>
       )}
 
-      {/* Keyboard */}
-      {keyboardMinimized ? (
-        <div className="sticky bottom-0 z-10 pt-2">
-          <GlassPanel intense className="px-4 py-2.5 flex items-center justify-between">
-            <div className="text-[11px] text-dim">
-              <span className="uppercase tracking-[0.3em] mr-3">Keyboard hidden</span>
-              <span className="font-mono text-white/70">A W S E D F T G…</span> still plays · octave {octave}
-            </div>
-            <button onClick={toggleKeyboard} className="rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-xs text-white/80 transition">▲ Show keyboard</button>
-          </GlassPanel>
-        </div>
-      ) : (
-        <Keyboard octave={octave} onMinimize={toggleKeyboard} />
-      )}
       </>
       )}
+      </div>{/* /modules scroll */}
+
+      {/* Keyboard — outside the scroll region so it stays docked above transport */}
+      {(() => {
+        const effectiveMode: FireKeyboardMode =
+          workspace === "sequencer" && keyboardMode === "full" ? "strip" : keyboardMode;
+        const midiText = !midiAvailable
+          ? "MIDI unsupported"
+          : midiError
+            ? "MIDI error"
+            : !midiListening
+              ? "MIDI connecting…"
+              : midiInputs.length === 0
+                ? "No MIDI device"
+                : midiInputs.map((i) => i.name).join(" · ");
+
+        if (effectiveMode === "hidden") {
+          return (
+            <div className={`shrink-0 z-10 ${flush ? "rounded-b-2xl bg-black/30 backdrop-blur-md" : "pt-2"}`}>
+              <div className="px-3 py-1.5 flex items-center justify-between gap-2 flex-wrap">
+                <div className="fc-text-secondary min-w-0 truncate">
+                  <span className="uppercase tracking-[0.2em] mr-2 text-white/45">Keys</span>
+                  {midiText} · OCT {octave}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => panic()}
+                    className="rounded-md border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[#ffbfa0]"
+                    title="All notes off"
+                  >
+                    Panic
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setKeyboardMode("strip")}
+                    className="rounded-md border border-white/15 bg-white/5 hover:bg-white/10 px-2 py-1 text-[10px] text-white/80"
+                  >
+                    Show strip
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        if (effectiveMode === "strip") {
+          return (
+            <div className={`shrink-0 z-10 ${flush ? "rounded-b-2xl bg-black/30 backdrop-blur-md" : "pt-2"}`}>
+              <div className="px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
+                <div className="fc-text-secondary min-w-0">
+                  <span className="uppercase tracking-[0.2em] mr-2 text-white/45">Keyboard strip</span>
+                  <span className="font-mono text-white/75">QWERTY · MIDI</span>
+                  <span className="ml-2">OCT {octave}</span>
+                  <span className="ml-2 text-white/40">· {midiText}</span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button type="button" onClick={() => panic()} className="rounded-md border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[#ffbfa0]">Panic</button>
+                  <button type="button" onClick={() => setKeyboardMode("full")} className="rounded-md border border-white/15 bg-white/5 hover:bg-white/10 px-2 py-1 text-[10px] text-white/80">Full</button>
+                  <button type="button" onClick={() => setKeyboardMode("hidden")} className="rounded-md border border-white/15 bg-white/5 hover:bg-white/10 px-2 py-1 text-[10px] text-white/80">Hide</button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <Keyboard
+            octave={octave}
+            onMinimize={cycleKeyboardMode}
+            onCycleMode={cycleKeyboardMode}
+            flush={flush}
+            midiLabel={midiText}
+            midiHot={!!midiLastNote && Date.now() - midiLastNote.at < 400}
+            midiNote={midiLastNote?.midi ?? null}
+            onRescanMidi={() => void rescanMidi()}
+          />
+        );
+      })()}
+
+      </div>
 
       <PresetBrowser
         open={browserOpen}
@@ -1259,25 +1355,6 @@ function EnvGraph({ a, d, s, r, color = GRN }: { a: NumericKey; d: NumericKey; s
   );
 }
 
-/** Vactrol pluck curve for LPG mode — strike, ring, die. */
-function LpgGraph() {
-  const decay = useFireCommandStore((s) => s.patch.lpgDecay);
-  const color = "#ffcf5c";
-  const W = 220, H = 44, PAD = 3;
-  const k = 4 / Math.max(0.05, decay);
-  const pts: string[] = [];
-  for (let i = 0; i <= 60; i++) {
-    const t = (i / 60) * 2.5;
-    const v = Math.min(1, t / 0.012) * Math.exp(-k * t * 0.4);
-    pts.push(`${PAD + (i / 60) * (W - PAD * 2)},${PAD + (1 - v) * (H - PAD * 2)}`);
-  }
-  return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block rounded-md bg-black/30 mb-1.5" style={{ height: H }} aria-hidden>
-      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={1.6} style={{ filter: `drop-shadow(0 0 3px ${color}88)` }} />
-    </svg>
-  );
-}
-
 /** Animated LFO scope — the waveform with a phase-locked tracer dot. */
 function LfoScope({ idx }: { idx: 1 | 2 }) {
   const wave = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Wave : s.patch.lfo2Wave));
@@ -1401,384 +1478,13 @@ const ARP_MODE_GLYPHS: Record<ArpMode, string> = {
   asplayed: "M2 10 L5 10 L5 6 L8 6 L8 12 L11 12 L11 4 L14 4",
 };
 
-type ArpPt = { x: number; y: number; midi: number; accented: boolean; i: number; hue: number };
-type ArpBloom = { x: number; y: number; life: number; accented: boolean; hue: number };
-type ArpAfterglow = { i: number; life: number; hue: number };
-
-/** Pitch → hue: lows ember, mids amber, highs ice — shifts slowly with time. */
-function arpHue(midi: number, lo: number, span: number, tMs: number): number {
-  const n = (midi - lo) / Math.max(1, span);
-  return 12 + n * 38 + Math.sin(tMs / 2800 + n * 2.4) * 10;
-}
-
-/** Arp sequence stage — hi-DPI depth field, color-shifting contour, targeting blooms. Display only. */
-function ArpViz({ arp }: { arp: ArpSettings }) {
-  const arpOrder = useFireCommandStore((s) => s.arpOrder);
-  const arpStepIndex = useFireCommandStore((s) => s.arpStepIndex);
-  const arpCurrent = useFireCommandStore((s) => s.arpCurrent);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const bloomsRef = useRef<ArpBloom[]>([]);
-  const afterglowRef = useRef<ArpAfterglow[]>([]);
-  const lastStepRef = useRef(-1);
-  const pulseRef = useRef(0);
-  const sizeRef = useRef({ w: 720, h: 132, dpr: 1 });
-  const stateRef = useRef({ arp, arpOrder, arpStepIndex, arpCurrent });
-  stateRef.current = { arp, arpOrder, arpStepIndex, arpCurrent };
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const wrap = wrapRef.current;
-    if (!canvas || !wrap) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const syncSize = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      const cssH = 132;
-      sizeRef.current = { w: cssW, h: cssH, dpr };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    syncSize();
-    const ro = new ResizeObserver(syncSize);
-    ro.observe(wrap);
-
-    let raf = 0;
-    let lastTick = 0;
-
-    const drawContourPath = (pts: ArpPt[]) => {
-      if (pts.length === 0) return;
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      if (pts.length === 1) return;
-      for (let i = 1; i < pts.length - 1; i++) {
-        const xc = (pts[i].x + pts[i + 1].x) / 2;
-        const yc = (pts[i].y + pts[i + 1].y) / 2;
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, xc, yc);
-      }
-      const last = pts[pts.length - 1];
-      ctx.quadraticCurveTo(last.x, last.y, last.x, last.y);
-    };
-
-    const draw = (nowMs: number) => {
-      raf = requestAnimationFrame(draw);
-      if (document.hidden) return;
-      if (nowMs - lastTick < 22) return;
-      lastTick = nowMs;
-      const { arp: a, arpOrder: order, arpStepIndex: stepIdx, arpCurrent: cur } = stateRef.current;
-      const { w: W, h: H } = sizeRef.current;
-      const ghost = order.length === 0;
-      const held = ghost ? [60, 64, 67] : order;
-      const seq = buildArpSequence(held, a.mode, a.octaves);
-      ctx.clearRect(0, 0, W, H);
-
-      // Depth field: drifting aurora wash
-      const drift = (nowMs / 9000) % 1;
-      const gBg = ctx.createLinearGradient(0, 0, W, H);
-      const hA = 18 + Math.sin(nowMs / 3200) * 8;
-      const hB = 205 + Math.cos(nowMs / 4100) * 12;
-      gBg.addColorStop(0, `hsla(${hA}, 85%, 48%, 0.11)`);
-      gBg.addColorStop(0.35 + drift * 0.15, "rgba(8,10,16,0.55)");
-      gBg.addColorStop(0.7, `hsla(${hB}, 70%, 42%, 0.07)`);
-      gBg.addColorStop(1, `hsla(${hA + 20}, 80%, 40%, 0.05)`);
-      ctx.fillStyle = gBg;
-      ctx.fillRect(0, 0, W, H);
-
-      // Parallax depth grid
-      const gridOff = (nowMs / 40) % 28;
-      ctx.save();
-      ctx.globalAlpha = 0.045;
-      for (let x = -28 + gridOff; x < W + 28; x += 28) {
-        ctx.strokeStyle = "rgba(255,180,120,0.9)";
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-      }
-      for (let y = 18; y < H; y += 22) {
-        ctx.strokeStyle = "rgba(140,190,255,0.7)";
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-      }
-      ctx.restore();
-
-      // Soft vignette
-      const vig = ctx.createRadialGradient(W * 0.5, H * 0.45, H * 0.15, W * 0.5, H * 0.5, W * 0.62);
-      vig.addColorStop(0, "rgba(0,0,0,0)");
-      vig.addColorStop(1, "rgba(0,0,0,0.45)");
-      ctx.fillStyle = vig;
-      ctx.fillRect(0, 0, W, H);
-
-      if (seq.length === 0) return;
-
-      const lo = Math.min(...seq);
-      const hi = Math.max(...seq);
-      const span = Math.max(1, hi - lo);
-      const n = Math.min(seq.length, 48);
-      const PAD_X = 18;
-      const PAD_Y = 22;
-      const usableW = W - PAD_X * 2;
-      const usableH = H - PAD_Y * 2 - 10;
-      const swing = a.swing ?? 0;
-      const gate = a.gate;
-      const every = Math.max(0, Math.round(a.accentEvery ?? 4));
-      const accentAmt = a.accent ?? 0;
-      const running = !ghost && a.enabled && stepIdx >= 0;
-      const breath = ghost || !a.enabled ? 0.55 + 0.45 * Math.sin(nowMs / 900) : 1;
-
-      const pts: ArpPt[] = [];
-      for (let i = 0; i < n; i++) {
-        const midi = seq[i];
-        const t = n === 1 ? 0.5 : i / (n - 1);
-        const swingNudge = (i % 2 === 1 ? swing : -swing * 0.35) * (usableW / Math.max(1, n)) * 0.9;
-        const x = PAD_X + t * usableW + swingNudge;
-        const y = PAD_Y + (1 - (midi - lo) / span) * usableH;
-        const accented = accentAmt > 0 && every > 0 && i % every === 0;
-        pts.push({ x, y, midi, accented, i, hue: arpHue(midi, lo, span, nowMs) });
-      }
-
-      // Contour under-fill (depth volume)
-      if (pts.length > 1) {
-        drawContourPath(pts);
-        ctx.lineTo(pts[pts.length - 1].x, H - 4);
-        ctx.lineTo(pts[0].x, H - 4);
-        ctx.closePath();
-        const fill = ctx.createLinearGradient(0, 0, 0, H);
-        fill.addColorStop(0, `hsla(${pts[Math.floor(pts.length / 2)].hue}, 90%, 55%, ${0.14 * breath})`);
-        fill.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = fill;
-        ctx.fill();
-
-        // Wide soft glow pass
-        drawContourPath(pts);
-        ctx.strokeStyle = ghost
-          ? `rgba(255,255,255,${0.08 * breath})`
-          : `hsla(${pts[0].hue}, 90%, 60%, ${0.2 * breath})`;
-        ctx.lineWidth = 8;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        ctx.stroke();
-
-        // Color-shifting ribbon (hue travels along the path)
-        for (let i = 1; i < pts.length; i++) {
-          const p0 = pts[i - 1];
-          const p1 = pts[i];
-          const g = ctx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
-          const alpha = ghost ? 0.18 * breath : a.enabled ? 0.85 * breath : 0.4 * breath;
-          g.addColorStop(0, `hsla(${p0.hue}, 95%, 62%, ${alpha})`);
-          g.addColorStop(1, `hsla(${p1.hue}, 95%, 62%, ${alpha})`);
-          ctx.beginPath();
-          ctx.moveTo(p0.x, p0.y);
-          ctx.lineTo(p1.x, p1.y);
-          ctx.strokeStyle = g;
-          ctx.lineWidth = 2.25;
-          ctx.lineCap = "round";
-          ctx.shadowBlur = a.enabled && !ghost ? 12 : 0;
-          ctx.shadowColor = `hsla(${p1.hue}, 100%, 55%, 0.7)`;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-        }
-      }
-
-      // Gate columns + nodes
-      const colW = Math.max(4, Math.min(16, (usableW / n) * 0.5));
-      for (const p of pts) {
-        const isLive = running && stepIdx === p.i;
-        const ag = afterglowRef.current.find((g) => g.i === p.i);
-        const glowLife = ag?.life ?? 0;
-        const barH = Math.max(8, (H - p.y - 8) * (0.35 + gate * 0.65));
-
-        const cg = ctx.createLinearGradient(p.x, p.y, p.x, p.y + barH);
-        const baseA = ghost ? 0.06 * breath : isLive ? 0.42 : 0.1 + glowLife * 0.25;
-        cg.addColorStop(0, `hsla(${p.hue}, 90%, 65%, ${baseA})`);
-        cg.addColorStop(1, `hsla(${p.hue}, 80%, 40%, 0)`);
-        ctx.fillStyle = cg;
-        const hw = colW / 2;
-        ctx.beginPath();
-        ctx.moveTo(p.x - hw, p.y);
-        ctx.lineTo(p.x + hw, p.y);
-        ctx.lineTo(p.x + hw * 0.7, p.y + barH);
-        ctx.lineTo(p.x - hw * 0.7, p.y + barH);
-        ctx.closePath();
-        ctx.fill();
-
-        const r = isLive ? 6 : p.accented ? 4.5 : 3.4;
-        const core = ctx.createRadialGradient(p.x - 1, p.y - 1, 0, p.x, p.y, r * 1.8);
-        if (ghost) {
-          core.addColorStop(0, `rgba(255,255,255,${0.35 * breath})`);
-          core.addColorStop(1, "rgba(255,255,255,0)");
-        } else if (isLive) {
-          core.addColorStop(0, "#fff");
-          core.addColorStop(0.45, `hsla(${p.hue}, 100%, 72%, 1)`);
-          core.addColorStop(1, `hsla(${p.hue}, 100%, 50%, 0)`);
-        } else if (p.accented) {
-          core.addColorStop(0, `hsla(42, 100%, 72%, ${0.9 + accentAmt * 0.1})`);
-          core.addColorStop(1, "hsla(42, 100%, 50%, 0)");
-        } else {
-          core.addColorStop(0, `hsla(${p.hue}, 95%, 62%, 0.95)`);
-          core.addColorStop(1, `hsla(${p.hue}, 90%, 45%, 0)`);
-        }
-        ctx.fillStyle = core;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, r * 1.8, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, r * 0.55, 0, Math.PI * 2);
-        ctx.fillStyle = isLive ? "#fff" : ghost ? `rgba(255,255,255,${0.35 * breath})` : `hsla(${p.hue}, 100%, 85%, 0.95)`;
-        ctx.fill();
-
-        if (p.accented && !ghost && accentAmt > 0.05) {
-          ctx.strokeStyle = `hsla(42, 100%, 65%, ${0.55 + accentAmt * 0.4})`;
-          ctx.lineWidth = 1.25;
-          ctx.beginPath();
-          ctx.moveTo(p.x, p.y - r - 6);
-          ctx.lineTo(p.x + 3.5, p.y - r - 1);
-          ctx.lineTo(p.x - 3.5, p.y - r - 1);
-          ctx.closePath();
-          ctx.stroke();
-        }
-      }
-
-      // Playhead beam + note label
-      if (running && stepIdx < pts.length) {
-        const p = pts[stepIdx];
-        const beam = ctx.createLinearGradient(p.x, 0, p.x, H);
-        beam.addColorStop(0, `hsla(${p.hue}, 100%, 75%, 0)`);
-        beam.addColorStop(0.35, `hsla(${p.hue}, 100%, 65%, 0.45)`);
-        beam.addColorStop(1, `hsla(${p.hue}, 90%, 50%, 0)`);
-        ctx.fillStyle = beam;
-        ctx.fillRect(p.x - 2, 0, 4, H);
-
-        ctx.font = "600 12px ui-monospace, SFMono-Regular, Menlo, monospace";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(255,255,255,0.95)";
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = `hsla(${p.hue}, 100%, 55%, 0.9)`;
-        ctx.fillText(noteName(p.midi), p.x, Math.max(14, p.y - 14));
-        ctx.shadowBlur = 0;
-      }
-
-      // Targeting bloom + afterglow (not particle confetti)
-      if (running && stepIdx !== lastStepRef.current && stepIdx >= 0 && stepIdx < pts.length) {
-        const p = pts[stepIdx];
-        bloomsRef.current.push({ x: p.x, y: p.y, life: 1, accented: p.accented, hue: p.hue });
-        afterglowRef.current.push({ i: p.i, life: 1, hue: p.hue });
-        if (afterglowRef.current.length > 12) afterglowRef.current.shift();
-        pulseRef.current = 1;
-        lastStepRef.current = stepIdx;
-      }
-      if (!running) lastStepRef.current = -1;
-
-      for (let i = afterglowRef.current.length - 1; i >= 0; i--) {
-        afterglowRef.current[i].life -= 0.028;
-        if (afterglowRef.current[i].life <= 0) afterglowRef.current.splice(i, 1);
-      }
-
-      // Expanding reticle rings + crosshair ticks
-      const blooms = bloomsRef.current;
-      for (let i = blooms.length - 1; i >= 0; i--) {
-        const b = blooms[i];
-        b.life -= 0.038;
-        if (b.life <= 0) { blooms.splice(i, 1); continue; }
-        const expand = (1 - b.life) * (b.accented ? 34 : 24);
-        const alpha = b.life * b.life;
-        ctx.strokeStyle = `hsla(${b.hue}, 95%, 68%, ${alpha * 0.85})`;
-        ctx.lineWidth = 1.4;
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, 4 + expand, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([3, 4]);
-        ctx.strokeStyle = `hsla(${b.hue + (b.accented ? 24 : 0)}, 90%, 70%, ${alpha * 0.5})`;
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, 2 + expand * 0.55, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        const tick = 3 + expand * 0.15;
-        const gap = 5 + expand * 0.35;
-        ctx.strokeStyle = `hsla(${b.hue}, 100%, 80%, ${alpha})`;
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(b.x - gap - tick, b.y); ctx.lineTo(b.x - gap, b.y);
-        ctx.moveTo(b.x + gap, b.y); ctx.lineTo(b.x + gap + tick, b.y);
-        ctx.moveTo(b.x, b.y - gap - tick); ctx.lineTo(b.x, b.y - gap);
-        ctx.moveTo(b.x, b.y + gap); ctx.lineTo(b.x, b.y + gap + tick);
-        ctx.stroke();
-      }
-
-      // Ratchet: double-ring pulse
-      if (running && (a.ratchet ?? 0) > 0.05 && stepIdx < pts.length) {
-        const p = pts[stepIdx];
-        const shimmer = 0.5 + 0.5 * Math.sin(nowMs / (55 - (a.ratchet ?? 0) * 35));
-        ctx.strokeStyle = `hsla(150, 70%, 65%, ${0.28 * shimmer * (a.ratchet ?? 0)})`;
-        ctx.lineWidth = 1.25;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 10 + shimmer * 4, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 14 + shimmer * 5, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Soft edge flash
-      if (pulseRef.current > 0) {
-        const eg = ctx.createLinearGradient(0, 0, W, 0);
-        eg.addColorStop(0, `rgba(255,106,61,${pulseRef.current * 0.2})`);
-        eg.addColorStop(0.5, `rgba(255,180,100,${pulseRef.current * 0.08})`);
-        eg.addColorStop(1, `rgba(98,182,255,${pulseRef.current * 0.15})`);
-        ctx.fillStyle = eg;
-        ctx.fillRect(0, 0, W, 2);
-        ctx.fillRect(0, H - 2, W, 2);
-        pulseRef.current = Math.max(0, pulseRef.current - 0.05);
-      }
-
-      // Status chrome
-      ctx.font = "600 10px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = "rgba(255,255,255,0.32)";
-      ctx.fillText(a.mode.toUpperCase(), 12, H - 10);
-      ctx.fillStyle = "rgba(255,255,255,0.18)";
-      ctx.fillText(`${a.octaves} OCT`, 12 + ctx.measureText(a.mode.toUpperCase()).width + 10, H - 10);
-      ctx.textAlign = "right";
-      if (ghost) {
-        ctx.fillStyle = `rgba(180,210,255,${0.28 * breath})`;
-        ctx.fillText("HOLD A CHORD", W - 12, H - 10);
-      } else if (a.enabled) {
-        ctx.fillStyle = "rgba(255,160,110,0.85)";
-        ctx.fillText(cur != null ? `● ${noteName(cur)}` : "● LIVE", W - 12, H - 10);
-      } else {
-        ctx.fillStyle = "rgba(255,255,255,0.28)";
-        ctx.fillText("STANDBY", W - 12, H - 10);
-      }
-    };
-
-    raf = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-  }, []);
-
-  return (
-    <div
-      ref={wrapRef}
-      className="relative mb-3 overflow-hidden rounded-2xl border border-[#ff6a3d]/22 bg-black/45 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_0_28px_rgba(255,106,61,0.1),0_8px_28px_rgba(0,0,0,0.35)]"
-    >
-      <canvas ref={canvasRef} className="block w-full" style={{ height: 132 }} aria-hidden />
-      <span className="pointer-events-none absolute inset-x-4 top-1.5 h-px bg-[#ff6a3d]/35" />
-      <span className="pointer-events-none absolute inset-x-4 bottom-1.5 h-px bg-[#62b6ff]/25" />
-    </div>
-  );
-}
-
 function ArpModeGlyph({ mode, active }: { mode: ArpMode; active: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" className="shrink-0" aria-hidden>
       <path
         d={ARP_MODE_GLYPHS[mode]}
         fill="none"
-        stroke={active ? "#ffd9c9" : "currentColor"}
+        stroke={active ? bandShade(FC.mod, 0.96) : "currentColor"}
         strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -1787,338 +1493,221 @@ function ArpModeGlyph({ mode, active }: { mode: ArpMode; active: boolean }) {
   );
 }
 
-// ════════════════════ osc panel ════════════════════
+// ════════════════════ OSC A — Prime Voice ════════════════════
 
-function OscPanel({ group, chipHosted = false }: { group: "a" | "b" | "c"; chipHosted?: boolean }) {
-  const cap = group.toUpperCase();
-  const tableKey = `osc${cap}Table` as keyof FirePatch;
-  const posKey = `osc${cap}Pos` as NumericKey;
-  const envKey = `osc${cap}Env` as NumericKey;
-  const lfoKey = `osc${cap}Lfo` as NumericKey;
-  const octKey = `osc${cap}Octave` as NumericKey;
-  const detKey = `osc${cap}Detune` as NumericKey;
-  const lvlKey = `osc${cap}Level` as NumericKey;
-  const defLevel = group === "a" ? 0.75 : group === "b" ? 0.5 : 0;
-  const defOct = group === "c" ? -1 : 0;
-  const color = group === "a" ? FIRE : group === "b" ? "#ff9a6b" : "#ffcf5c";
+function OscATableBrowser() {
+  const table = useFireCommandStore((s) => s.patch.oscATable);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const idx = Math.max(0, WAVETABLES.findIndex((w) => w.id === table));
+  const go = (dir: -1 | 1) => {
+    const next = WAVETABLES[(idx + dir + WAVETABLES.length) % WAVETABLES.length]!;
+    setParam("oscATable", next.id);
+  };
+  const c = FC.oscA;
+  const cHot = bandShade(FC.sources, 0.75);
   return (
-    <Section
-      title={`Oscillator ${cap}${group === "c" ? "  (off at 0)" : ""}`}
-      color={color}
-      collapseKey={`osc.${group}`}
-      chipHosted={chipHosted}
-      right={<TableSelect paramKey={tableKey} />}
-    >
-      <OscStageViz group={group} color={color} />
-      <div className="flex items-center justify-evenly gap-1">
-        <FParamKnob paramKey={posKey} label="Morph" min={0} max={1} format={fmtPct} def={group === "a" ? 0.66 : 0.4} size={46} />
-        <FParamKnob paramKey={envKey} label="Env→WT" min={-1} max={1} bipolar format={fmtBi} def={0} color={GRN} />
-        <FParamKnob paramKey={lfoKey} label="LFO→WT" min={-1} max={1} bipolar format={fmtBi} def={0} color={ICE} />
-        <FParamKnob paramKey={octKey} label="Octave" min={-2} max={2} integer bipolar format={fmtOct} def={defOct} />
-        <FParamKnob paramKey={detKey} label="Detune" min={-50} max={50} integer bipolar format={fmtCents} def={0} />
-        <FParamKnob paramKey={lvlKey} label="Level" min={0} max={1} format={fmtPct} def={defLevel} />
-      </div>
-    </Section>
+    <div className="flex items-center gap-1 min-w-0">
+      <button
+        type="button"
+        onClick={() => go(-1)}
+        className="h-7 w-7 shrink-0 rounded-md border text-[11px] font-bold transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: cHot, background: `${c}18` }}
+        title="Previous wavetable"
+      >
+        ‹
+      </button>
+      <select
+        value={table}
+        onChange={(e) => setParam("oscATable", e.target.value)}
+        className="min-w-0 flex-1 truncate rounded-lg border px-2 py-1 text-[11px] font-semibold focus:outline-none cursor-pointer"
+        style={{
+          borderColor: `${c}55`,
+          background: `linear-gradient(180deg, ${c}28, rgba(0,0,0,0.55))`,
+          color: cHot,
+        }}
+        title={wavetableName(table)}
+      >
+        {WAVETABLES.map((w) => (
+          <option key={w.id} value={w.id} className="bg-ink text-white">
+            {w.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => go(1)}
+        className="h-7 w-7 shrink-0 rounded-md border text-[11px] font-bold transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: cHot, background: `${c}18` }}
+        title="Next wavetable"
+      >
+        ›
+      </button>
+    </div>
   );
 }
 
-function LfoPanel({ idx, chipHosted = false }: { idx: 1 | 2; chipHosted?: boolean }) {
-  const waveKey = `lfo${idx}Wave` as keyof FirePatch;
-  const destKey = `lfo${idx}Dest` as keyof FirePatch;
-  const rateKey = `lfo${idx}Rate` as NumericKey;
-  const depthKey = `lfo${idx}Depth` as NumericKey;
+function OscAModMeter({ label, value, color }: { label: string; value: number; color: string }) {
+  const abs = Math.abs(value);
+  const pos = value >= 0;
   return (
-    <Section title={`LFO ${idx}`} color={ICE} collapseKey={`lfo.${idx}`} chipHosted={chipHosted} right={<FLfoWave paramKey={waveKey} />}>
-      <LfoStageViz idx={idx} />
-      <div className="mb-2 flex justify-center">
-        <FSeg<LfoDest>
-          paramKey={destKey}
-          color={ICE}
-          options={[
-            { id: "off", label: "Off" },
-            { id: "pitch", label: "Pitch" },
-            { id: "filter", label: "Filter" },
-            { id: "volume", label: "Vol" },
-            { id: "pan", label: "Pan" },
-          ]}
+    <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${fmtBi(value)}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+          style={{
+            width: `${abs * 50}%`,
+            left: pos ? "50%" : `${50 - abs * 50}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: abs > 0.05 ? `0 0 8px ${color}88` : undefined,
+          }}
         />
+        <div className="absolute left-1/2 top-0 h-full w-px bg-white/25" />
       </div>
-      <div className="flex items-center justify-evenly gap-1">
-        <FParamKnob paramKey={rateKey} label="Rate" min={0.05} max={30} curve="log" format={fmtHzRate} def={idx === 1 ? 5 : 0.5} color={ICE} />
-        <FParamKnob paramKey={depthKey} label="Depth" min={0} max={1} format={fmtPct} def={0} color={ICE} />
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: abs > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {pos ? "+" : "−"}{Math.round(abs * 100)}
       </div>
-      {idx === 1 && <div className="mt-1.5 text-center text-[10px] text-dim">LFO 1 also feeds each osc's LFO→WT amount.</div>}
-      {idx === 2 && <div className="mt-1.5 text-center text-[10px] text-dim">LFO 2 — secondary modulator, independent destination.</div>}
-    </Section>
+    </div>
   );
 }
 
-// ════════════════════ macros · gate · matrix ════════════════════
-
-const MACRO_COLORS = [FC.macros, FC.drive, FC.oscC, FC.performance] as const;
-const MACRO_KEYS = ["macro1", "macro2", "macro3", "macro4"] as const;
-
-/** Per-macro ring meter — lives inside each command card. */
-function MacroRingMeter({ value, color }: { value: number; color: string }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    let raf = 0;
-    let last = 0;
-    const size = 72;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
-    canvas.style.width = `${size}px`;
-    canvas.style.height = `${size}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const draw = (t: number) => {
-      raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 32) return;
-      last = t;
-      const v = value;
-      ctx.clearRect(0, 0, size, size);
-      const cx = size / 2;
-      const cy = size / 2;
-      const R = 28;
-      // Track
-      ctx.strokeStyle = "rgba(255,255,255,0.08)";
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.arc(cx, cy, R, 0, Math.PI * 2);
-      ctx.stroke();
-      // Value arc
-      const start = -Math.PI * 0.75;
-      const span = Math.PI * 1.5 * v;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 5;
-      ctx.lineCap = "round";
-      ctx.shadowBlur = 8 + v * 10;
-      ctx.shadowColor = color;
-      ctx.beginPath();
-      ctx.arc(cx, cy, R, start, start + span);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      // Hub pulse
-      const pulse = 0.85 + 0.15 * Math.sin(t / 400 + v * 4);
-      const hub = ctx.createRadialGradient(cx - 2, cy - 2, 0, cx, cy, 12 * pulse);
-      hub.addColorStop(0, "#fff8");
-      hub.addColorStop(0.45, color);
-      hub.addColorStop(1, `${color}00`);
-      ctx.fillStyle = hub;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 7 + v * 4, 0, Math.PI * 2);
-      ctx.fill();
-      // Readout
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.font = "700 11px ui-monospace, Menlo, monospace";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`${Math.round(v * 100)}`, cx, cy + 0.5);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [value, color]);
-  return <canvas ref={ref} className="block mx-auto" aria-hidden />;
+function OscAOctaveStrip() {
+  const oct = useFireCommandStore((s) => s.patch.oscAOctave);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscA;
+  const cHot = bandShade(FC.sources, 0.8);
+  return (
+    <div className="flex items-stretch rounded-lg border p-0.5" style={{ borderColor: `${c}44`, background: "rgba(0,0,0,0.35)" }}>
+      {([-2, -1, 0, 1, 2] as const).map((n) => {
+        const on = oct === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setParam("oscAOctave", n)}
+            className="min-w-[1.75rem] rounded-md px-1.5 py-1 text-[10px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    background: `linear-gradient(180deg, ${cHot}55, ${c}40)`,
+                    color: "#ffe8e4",
+                    boxShadow: `0 0 14px ${c}66`,
+                  }
+                : { color: "rgba(255,255,255,0.4)" }
+            }
+            aria-pressed={on}
+          >
+            {n > 0 ? `+${n}` : n === 0 ? "0" : String(n)}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
-/**
- * Macros personality — four equal command cards (not a cramped radar).
- * Each card: ring meter + dest chips. Fills the bay; text never clips.
- */
-/**
- * Macros personality — four command cards with animated canvas energy background.
- * Each card: ring meter + dest chips. Subtle energy trails react to macro values.
- */
-function MacroClusterViz() {
-  const m1 = useFireCommandStore((s) => s.patch.macro1);
-  const m2 = useFireCommandStore((s) => s.patch.macro2);
-  const m3 = useFireCommandStore((s) => s.patch.macro3);
-  const m4 = useFireCommandStore((s) => s.patch.macro4);
-  const matrix = useFireCommandStore((s) => s.patch.modMatrix);
-  const values = [m1, m2, m3, m4];
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const st = useRef({ values });
-  st.current = { values };
+function OscAWaveThumbs() {
+  const table = useFireCommandStore((s) => s.patch.oscATable);
+  const pos = useFireCommandStore((s) => s.patch.oscAPos);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const c = FC.oscA;
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    let raf = 0;
-    let last = 0;
-    const particles: Array<{ x: number; y: number; vx: number; vy: number; life: number; macro: number }> = [];
-
-    const syncSize = () => {
-      const wrap = wrapRef.current;
-      if (!wrap) return;
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      const cssH = Math.max(1, Math.floor(wrap.clientHeight) || 1);
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = "100%";
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    syncSize();
-    const ro = new ResizeObserver(syncSize);
-    if (wrapRef.current) ro.observe(wrapRef.current);
-
-    const draw = (t: number) => {
-      raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 28) return;
-      last = t;
-      const W = canvas.width / (Math.min(2, window.devicePixelRatio || 1));
-      const H = canvas.height / (Math.min(2, window.devicePixelRatio || 1));
-      const { values: vals } = st.current;
+    const frame = Math.round(pos * (FRAME_COUNT - 1));
+    WAVETABLES.forEach((w, wi) => {
+      const canvas = canvasRefs.current[wi];
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const W = canvas.width;
+      const H = canvas.height;
+      const samples = frameSamples(w.id, frame / Math.max(1, FRAME_COUNT - 1), 48);
       ctx.clearRect(0, 0, W, H);
-
-      const activeEnergy = Math.max(...vals);
-
-      for (let m = 0; m < 4; m++) {
-        const val = vals[m];
-        if (val < 0.08) continue;
-        
-        const color = MACRO_COLORS[m];
-        const rgb = color === FC.macros ? [255,140,100] : 
-                    color === FC.drive ? [255,106,61] : 
-                    color === FC.oscC ? [255,207,92] : 
-                    [98,182,255];
-        
-        const cx = (W / 4) * m + W / 8;
-        const cy = H * 0.5;
-        
-        const pulseGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 40 + val * 30);
-        pulseGrad.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${0.08 * val})`);
-        pulseGrad.addColorStop(0.6, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${0.04 * val})`);
-        pulseGrad.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = pulseGrad;
-        ctx.fillRect(0, 0, W, H);
-        
-        if (Math.random() < 0.08 * val) {
-          const angle = Math.random() * Math.PI * 2;
-          particles.push({
-            x: cx + Math.cos(angle) * 8,
-            y: cy + Math.sin(angle) * 8,
-            vx: Math.cos(angle) * (0.3 + val * 0.7),
-            vy: Math.sin(angle) * (0.3 + val * 0.7),
-            life: 1,
-            macro: m
-          });
-        }
+      const active = w.id === table;
+      ctx.fillStyle = active ? `${c}22` : "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.beginPath();
+      for (let i = 0; i < samples.length; i++) {
+        const x = (i / (samples.length - 1)) * (W - 2) + 1;
+        const y = H * 0.5 - samples[i]! * H * 0.38;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
       }
-
-      for (let i = particles.length - 1; i >= 0; i--) {
-        const p = particles[i];
-        p.life -= 0.015;
-        if (p.life <= 0) {
-          particles.splice(i, 1);
-          continue;
-        }
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vx *= 0.98;
-        p.vy *= 0.98;
-        
-        const color = MACRO_COLORS[p.macro];
-        const rgb = color === FC.macros ? [255,140,100] : 
-                    color === FC.drive ? [255,106,61] : 
-                    color === FC.oscC ? [255,207,92] : 
-                    [98,182,255];
-        
-        const alpha = p.life * 0.4;
-        const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 3);
-        pg.addColorStop(0, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`);
-        pg.addColorStop(0.6, `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha * 0.5})`);
-        pg.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = pg;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      if (activeEnergy > 0.1) {
-        const flowCount = Math.floor(3 + activeEnergy * 8);
-        for (let f = 0; f < flowCount; f++) {
-          const fx = ((f * 47 + t * 0.02) % W);
-          const fy = H * 0.5 + Math.sin(fx * 0.03 + t * 0.003 + f) * (H * 0.3);
-          ctx.fillStyle = `rgba(200,220,255,${0.04 * activeEnergy})`;
-          ctx.fillRect(fx, fy, 1.5, 1.5);
-        }
-      }
-    };
-
-    raf = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-  }, []);
+      ctx.strokeStyle = active ? c : "rgba(255,255,255,0.35)";
+      ctx.lineWidth = active ? 1.6 : 1;
+      ctx.stroke();
+    });
+  }, [table, pos, c]);
 
   return (
-    <div ref={wrapRef} className="relative mb-3 min-h-[140px]">
-      <canvas
-        ref={canvasRef}
-        className="pointer-events-none absolute inset-0 block h-full w-full"
-        aria-hidden
-      />
-      <div className="relative grid grid-cols-2 lg:grid-cols-4 gap-2 min-w-0">
-        {MACRO_KEYS.map((key, i) => {
-          const routes = matrix.filter((r) => r.source === key && r.dest !== "none");
-          const color = MACRO_COLORS[i];
+    <div className="mb-2 flex gap-1 overflow-x-auto pb-0.5 scrollbar-thin">
+      {WAVETABLES.map((w, wi) => {
+        const on = w.id === table;
+        return (
+          <button
+            key={w.id}
+            type="button"
+            onClick={() => setParam("oscATable", w.id)}
+            className="shrink-0 rounded-md border p-0.5 transition"
+            style={{
+              borderColor: on ? `${c}99` : "rgba(255,255,255,0.1)",
+              boxShadow: on ? `0 0 12px ${c}44` : undefined,
+              background: on ? `${c}14` : "transparent",
+            }}
+            title={w.name}
+          >
+            <canvas
+              ref={(el) => { canvasRefs.current[wi] = el; }}
+              width={56}
+              height={28}
+              className="block rounded-sm"
+            />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OscAFrameScrub() {
+  const pos = useFireCommandStore((s) => s.patch.oscAPos);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscA;
+  const frame = Math.round(pos * (FRAME_COUNT - 1));
+  return (
+    <div className="mb-2 flex items-center gap-1.5">
+      <span className="shrink-0 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Frame
+      </span>
+      <div className="flex flex-1 items-center gap-0.5">
+        {Array.from({ length: FRAME_COUNT }, (_, i) => {
+          const on = i === frame;
+          const near = Math.abs(i - frame) === 1;
           return (
-            <div
-              key={key}
-              className="relative min-w-0 overflow-hidden rounded-xl border bg-gradient-to-b from-black/50 to-black/30 px-2.5 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-              style={{ borderColor: `${color}44` }}
+            <button
+              key={i}
+              type="button"
+              onClick={() => setParam("oscAPos", FRAME_COUNT > 1 ? i / (FRAME_COUNT - 1) : 0)}
+              className="h-6 flex-1 rounded-md border text-[9px] font-bold tabular-nums transition"
+              style={
+                on
+                  ? {
+                      borderColor: `${c}aa`,
+                      background: `linear-gradient(180deg, ${c}55, ${c}28)`,
+                      color: "#ffe8e4",
+                      boxShadow: `0 0 12px ${c}55`,
+                    }
+                  : {
+                      borderColor: near ? `${c}44` : "rgba(255,255,255,0.08)",
+                      background: near ? `${c}12` : "rgba(0,0,0,0.35)",
+                      color: near ? `${c}cc` : "rgba(255,255,255,0.35)",
+                    }
+              }
+              aria-pressed={on}
+              title={`Frame ${i + 1}/${FRAME_COUNT}`}
             >
-              <div
-                className="pointer-events-none absolute -right-4 -top-4 h-16 w-16 rounded-full blur-2xl opacity-40"
-                style={{ background: color }}
-              />
-              <div className="relative flex items-center justify-between gap-1 mb-1.5">
-                <span className="text-[10px] font-black uppercase tracking-[0.18em]" style={{ color }}>
-                  Macro {i + 1}
-                </span>
-                <span className="text-[9px] font-mono text-white/35">{Math.round(values[i] * 100)}%</span>
-              </div>
-              <MacroRingMeter value={values[i]} color={color} />
-              <div className="mt-2 min-h-[32px]">
-                {routes.length === 0 ? (
-                  <div className="rounded-md border border-dashed border-white/10 px-1.5 py-1 text-center text-[9px] text-white/30">
-                    unpatched
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-1 justify-center">
-                    {routes.slice(0, 3).map((r) => (
-                      <span
-                        key={`${r.source}-${r.dest}`}
-                        className="max-w-full truncate rounded-md border px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wider"
-                        style={{ borderColor: `${color}55`, color, background: `${color}18` }}
-                        title={r.dest}
-                      >
-                        {r.dest}
-                      </span>
-                    ))}
-                    {routes.length > 3 && (
-                      <span className="text-[8px] text-white/35">+{routes.length - 3}</span>
-                    )}
-                  </div>
-                )}
-              </div>
-              <div className="mt-2 h-1 rounded-full bg-white/[0.06] overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-[width] duration-75"
-                  style={{ width: `${Math.round(values[i] * 100)}%`, background: color, boxShadow: `0 0 8px ${color}` }}
-                />
-              </div>
-            </div>
+              {i + 1}
+            </button>
           );
         })}
       </div>
@@ -2126,21 +1715,9142 @@ function MacroClusterViz() {
   );
 }
 
-function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
-  const matrix = useFireCommandStore((s) => s.patch.modMatrix);
-  const wired = (key: typeof MACRO_KEYS[number]) =>
-    matrix.filter((r) => r.source === key && r.dest !== "none").map((r) => r.dest);
+function OscAQuickActions() {
+  const level = useFireCommandStore((s) => s.patch.oscALevel);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef(0.75);
+  const c = FC.oscA;
+  const muted = level < 0.02;
   return (
-    <Section title="Macros" color={FC.macros} collapseKey="macros" defaultCollapsed chipHosted={chipHosted}>
-      <MacroClusterViz />
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (muted) setParam("oscALevel", savedRef.current > 0.02 ? savedRef.current : 0.75);
+          else {
+            savedRef.current = level;
+            setParam("oscALevel", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: muted ? "rgba(255,255,255,0.2)" : `${c}66`,
+          color: muted ? "rgba(255,255,255,0.45)" : bandShade(FC.sources, 0.9),
+          background: muted ? "rgba(0,0,0,0.4)" : `${c}28`,
+          boxShadow: muted ? undefined : `0 0 10px ${c}33`,
+        }}
+        title={muted ? "Restore level" : "Mute OSC A"}
+      >
+        {muted ? "Muted" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("oscAPos", 0.66);
+          setParam("oscAEnv", 0);
+          setParam("oscALfo", 0);
+          setParam("oscADetune", 0);
+          setParam("oscAOctave", 0);
+          setParam("oscALevel", 0.75);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset OSC A to defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function OscAPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.oscA;
+  const cEnv = bandShade(FC.sources, 0.55);
+  const cLfo = bandShade(FC.sources, 0.72);
+  const cDet = bandShade(FC.sources, 0.42);
+  const cLvl = bandShade(FC.sources, 0.22);
+  const env = useFireCommandStore((s) => s.patch.oscAEnv);
+  const lfo = useFireCommandStore((s) => s.patch.oscALfo);
+  const level = useFireCommandStore((s) => s.patch.oscALevel);
+  const pos = useFireCommandStore((s) => s.patch.oscAPos);
+  const detune = useFireCommandStore((s) => s.patch.oscADetune);
+  const oct = useFireCommandStore((s) => s.patch.oscAOctave);
+  const table = useFireCommandStore((s) => s.patch.oscATable);
+
+  return (
+    <Section
+      title="Oscillator A"
+      color={c}
+      collapseKey="osc.a"
+      chipHosted={chipHosted}
+      right={<OscATableBrowser />}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: `${c}40`,
+          background: `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`,
+          boxShadow: `inset 0 1px 0 ${c}22`,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Sources
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.88) }}>
+            Prime Voice
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {wavetableName(table)} · morph {Math.round(pos * 100)}% · {oct >= 0 ? `+${oct}` : oct}oct
+              {Math.abs(detune) > 0.5 ? ` · ${detune > 0 ? "+" : ""}${Math.round(detune)}¢` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <OscAQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: level < 0.02 ? "rgba(255,255,255,0.35)" : bandShade(FC.sources, 0.92),
+              background: level < 0.02 ? "rgba(0,0,0,0.45)" : `${c}36`,
+              border: `1px solid ${level < 0.02 ? "rgba(255,255,255,0.12)" : `${c}70`}`,
+              boxShadow: level > 0.02 ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {level < 0.02 ? "Silent" : `${Math.round(level * 100)}%`}
+          </div>
+        </div>
+      </div>
+
+      <OscAWaveThumbs />
+      <OscAStageViz />
+      <OscAFrameScrub />
+
+      <div className="mb-2 flex items-center justify-center gap-4">
+        <OscAModMeter label="Env→WT" value={env} color={cEnv} />
+        <OscAOctaveStrip />
+        <OscAModMeter label="LFO→WT" value={lfo} color={cLfo} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="oscAPos" label="Morph" min={0} max={1} format={fmtPct} def={0.66} size={50} color={c} />
+        <FParamKnob paramKey="oscAEnv" label="Env→WT" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={cEnv} />
+        <FParamKnob paramKey="oscALfo" label="LFO→WT" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={cLfo} />
+        <FParamKnob paramKey="oscADetune" label="Detune" min={-50} max={50} integer bipolar format={fmtCents} def={0} size={44} color={cDet} />
+        <FParamKnob paramKey="oscALevel" label="Level" min={0} max={1} format={fmtPct} def={0.75} size={50} color={cLvl} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Crimson core of the Signal Path — scrub the rail, snap frames, carve with Env / LFO.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ OSC B — Twin Voice ════════════════════
+
+function OscBTableBrowser() {
+  const table = useFireCommandStore((s) => s.patch.oscBTable);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const idx = Math.max(0, WAVETABLES.findIndex((w) => w.id === table));
+  const go = (dir: -1 | 1) => {
+    const next = WAVETABLES[(idx + dir + WAVETABLES.length) % WAVETABLES.length]!;
+    setParam("oscBTable", next.id);
+  };
+  const c = FC.oscB;
+  const cHot = bandShade(FC.sources, 0.7);
+  return (
+    <div className="flex items-center gap-1 min-w-0">
+      <button
+        type="button"
+        onClick={() => go(-1)}
+        className="h-7 w-7 shrink-0 rounded-md border text-[11px] font-bold transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: cHot, background: `${c}18` }}
+        title="Previous wavetable"
+      >
+        ‹
+      </button>
+      <select
+        value={table}
+        onChange={(e) => setParam("oscBTable", e.target.value)}
+        className="min-w-0 flex-1 truncate rounded-lg border px-2 py-1 text-[11px] font-semibold focus:outline-none cursor-pointer"
+        style={{
+          borderColor: `${c}55`,
+          background: `linear-gradient(180deg, ${c}28, rgba(0,0,0,0.55))`,
+          color: cHot,
+        }}
+        title={wavetableName(table)}
+      >
+        {WAVETABLES.map((w) => (
+          <option key={w.id} value={w.id} className="bg-ink text-white">
+            {w.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => go(1)}
+        className="h-7 w-7 shrink-0 rounded-md border text-[11px] font-bold transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: cHot, background: `${c}18` }}
+        title="Next wavetable"
+      >
+        ›
+      </button>
+    </div>
+  );
+}
+
+function OscBModMeter({ label, value, color }: { label: string; value: number; color: string }) {
+  const abs = Math.abs(value);
+  const pos = value >= 0;
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${fmtBi(value)}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+          style={{
+            width: `${abs * 50}%`,
+            left: pos ? "50%" : `${50 - abs * 50}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: abs > 0.05 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+        <div className="absolute left-1/2 top-0 h-full w-px bg-white/25" />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: abs > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {pos ? "+" : "−"}{Math.round(abs * 100)}
+      </div>
+    </div>
+  );
+}
+
+function OscBOctaveStrip() {
+  const oct = useFireCommandStore((s) => s.patch.oscBOctave);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscB;
+  const cHot = bandShade(FC.sources, 0.75);
+  return (
+    <div className="flex items-stretch rounded-lg border p-0.5" style={{ borderColor: `${c}44`, background: "rgba(0,0,0,0.35)" }}>
+      {([-2, -1, 0, 1, 2] as const).map((n) => {
+        const on = oct === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setParam("oscBOctave", n)}
+            className="min-w-[1.75rem] rounded-md px-1.5 py-1 text-[10px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    background: `linear-gradient(180deg, ${cHot}55, ${c}40)`,
+                    color: "#ffe4ea",
+                    boxShadow: `0 0 14px ${c}66`,
+                  }
+                : { color: "rgba(255,255,255,0.4)" }
+            }
+            aria-pressed={on}
+          >
+            {n > 0 ? `+${n}` : n === 0 ? "0" : String(n)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OscBWaveThumbs() {
+  const table = useFireCommandStore((s) => s.patch.oscBTable);
+  const pos = useFireCommandStore((s) => s.patch.oscBPos);
+  const detune = useFireCommandStore((s) => s.patch.oscBDetune);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const c = FC.oscB;
+  const cTwin = bandShade(FC.sources, 0.4);
+
+  useEffect(() => {
+    const frame = Math.round(pos * (FRAME_COUNT - 1));
+    const phase = Math.min(1, Math.abs(detune) / 50) * 6;
+    WAVETABLES.forEach((w, wi) => {
+      const canvas = canvasRefs.current[wi];
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const W = canvas.width;
+      const H = canvas.height;
+      const samples = frameSamples(w.id, frame / Math.max(1, FRAME_COUNT - 1), 48);
+      ctx.clearRect(0, 0, W, H);
+      const active = w.id === table;
+      ctx.fillStyle = active ? `${c}22` : "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, W, H);
+      // Twin thumbnail strokes
+      for (const [off, col, lw] of [[-2, active ? c : "rgba(255,255,255,0.28)", 1] as const, [2, active ? cTwin : "rgba(255,255,255,0.2)", 1] as const]) {
+        ctx.beginPath();
+        for (let i = 0; i < samples.length; i++) {
+          const j = (i + (off > 0 ? phase : 0)) % samples.length;
+          const x = (i / (samples.length - 1)) * (W - 2) + 1;
+          const y = H * 0.5 + off - samples[Math.floor(j)]! * H * 0.32;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = col;
+        ctx.lineWidth = active ? lw + 0.5 : lw;
+        ctx.stroke();
+      }
+    });
+  }, [table, pos, detune, c, cTwin]);
+
+  return (
+    <div className="mb-2 flex gap-1 overflow-x-auto pb-0.5 scrollbar-thin">
+      {WAVETABLES.map((w, wi) => {
+        const on = w.id === table;
+        return (
+          <button
+            key={w.id}
+            type="button"
+            onClick={() => setParam("oscBTable", w.id)}
+            className="shrink-0 rounded-md border p-0.5 transition"
+            style={{
+              borderColor: on ? `${c}99` : "rgba(255,255,255,0.1)",
+              boxShadow: on ? `0 0 12px ${c}44` : undefined,
+              background: on ? `${c}14` : "transparent",
+            }}
+            title={w.name}
+          >
+            <canvas
+              ref={(el) => { canvasRefs.current[wi] = el; }}
+              width={56}
+              height={28}
+              className="block rounded-sm"
+            />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OscBFrameScrub() {
+  const pos = useFireCommandStore((s) => s.patch.oscBPos);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscB;
+  const frame = Math.round(pos * (FRAME_COUNT - 1));
+  return (
+    <div className="mb-2 flex items-center gap-1.5">
+      <span className="shrink-0 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Frame
+      </span>
+      <div className="flex flex-1 items-center gap-0.5">
+        {Array.from({ length: FRAME_COUNT }, (_, i) => {
+          const on = i === frame;
+          const near = Math.abs(i - frame) === 1;
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setParam("oscBPos", FRAME_COUNT > 1 ? i / (FRAME_COUNT - 1) : 0)}
+              className="h-6 flex-1 rounded-md border text-[9px] font-bold tabular-nums transition"
+              style={
+                on
+                  ? {
+                      borderColor: `${c}aa`,
+                      background: `linear-gradient(180deg, ${c}55, ${c}28)`,
+                      color: "#ffe4ea",
+                      boxShadow: `0 0 12px ${c}55`,
+                    }
+                  : {
+                      borderColor: near ? `${c}44` : "rgba(255,255,255,0.08)",
+                      background: near ? `${c}12` : "rgba(0,0,0,0.35)",
+                      color: near ? `${c}cc` : "rgba(255,255,255,0.35)",
+                    }
+              }
+              aria-pressed={on}
+              title={`Frame ${i + 1}/${FRAME_COUNT}`}
+            >
+              {i + 1}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OscBDetunePresets() {
+  const detune = useFireCommandStore((s) => s.patch.oscBDetune);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscB;
+  const presets = [
+    { label: "0", v: 0 },
+    { label: "±7", v: 7 },
+    { label: "±12", v: 12 },
+    { label: "±24", v: 24 },
+  ] as const;
+  return (
+    <div className="mb-2 flex items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Beat
+      </span>
+      {presets.map((p) => {
+        const on = Math.abs(detune) === p.v || (p.v === 0 && Math.abs(detune) < 0.5);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("oscBDetune", detune < 0 && p.v !== 0 ? -p.v : p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.85),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`Detune ${p.v === 0 ? "unison" : `${p.v} cents`}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        onClick={() => setParam("oscBDetune", -detune)}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Flip detune polarity"
+      >
+        Flip
+      </button>
+    </div>
+  );
+}
+
+function OscBQuickActions() {
+  const level = useFireCommandStore((s) => s.patch.oscBLevel);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef(0.5);
+  const c = FC.oscB;
+  const muted = level < 0.02;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          const patch = useFireCommandStore.getState().patch;
+          setParam("oscBTable", patch.oscATable);
+          setParam("oscBPos", patch.oscAPos);
+          setParam("oscBEnv", patch.oscAEnv);
+          setParam("oscBLfo", patch.oscALfo);
+          setParam("oscBOctave", patch.oscAOctave);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.sources, 0.8), background: `${c}20` }}
+        title="Copy table, morph, Env, LFO, octave from OSC A"
+      >
+        ← A
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (muted) setParam("oscBLevel", savedRef.current > 0.02 ? savedRef.current : 0.5);
+          else {
+            savedRef.current = level;
+            setParam("oscBLevel", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: muted ? "rgba(255,255,255,0.2)" : `${c}66`,
+          color: muted ? "rgba(255,255,255,0.45)" : bandShade(FC.sources, 0.88),
+          background: muted ? "rgba(0,0,0,0.4)" : `${c}28`,
+          boxShadow: muted ? undefined : `0 0 10px ${c}33`,
+        }}
+        title={muted ? "Restore level" : "Mute OSC B"}
+      >
+        {muted ? "Muted" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("oscBPos", 0.4);
+          setParam("oscBEnv", 0);
+          setParam("oscBLfo", 0);
+          setParam("oscBDetune", 0);
+          setParam("oscBOctave", 0);
+          setParam("oscBLevel", 0.5);
+          setParam("oscBTable", "saw");
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset OSC B to twin defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function OscBPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.oscB;
+  const cEnv = bandShade(FC.sources, 0.48);
+  const cLfo = bandShade(FC.sources, 0.64);
+  const cDet = bandShade(FC.sources, 0.36);
+  const cLvl = bandShade(FC.sources, 0.28);
+  const env = useFireCommandStore((s) => s.patch.oscBEnv);
+  const lfo = useFireCommandStore((s) => s.patch.oscBLfo);
+  const level = useFireCommandStore((s) => s.patch.oscBLevel);
+  const pos = useFireCommandStore((s) => s.patch.oscBPos);
+  const detune = useFireCommandStore((s) => s.patch.oscBDetune);
+  const oct = useFireCommandStore((s) => s.patch.oscBOctave);
+  const table = useFireCommandStore((s) => s.patch.oscBTable);
+
+  return (
+    <Section
+      title="Oscillator B"
+      color={c}
+      collapseKey="osc.b"
+      chipHosted={chipHosted}
+      right={<OscBTableBrowser />}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: `${c}40`,
+          background: `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`,
+          boxShadow: `inset 0 1px 0 ${c}22`,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Sources
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.78) }}>
+            Twin Voice
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {wavetableName(table)} · morph {Math.round(pos * 100)}% · {oct >= 0 ? `+${oct}` : oct}oct
+              {Math.abs(detune) > 0.5 ? ` · ${detune > 0 ? "+" : ""}${Math.round(detune)}¢` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <OscBQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: level < 0.02 ? "rgba(255,255,255,0.35)" : bandShade(FC.sources, 0.88),
+              background: level < 0.02 ? "rgba(0,0,0,0.45)" : `${c}36`,
+              border: `1px solid ${level < 0.02 ? "rgba(255,255,255,0.12)" : `${c}70`}`,
+              boxShadow: level > 0.02 ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {level < 0.02 ? "Silent" : `${Math.round(level * 100)}%`}
+          </div>
+        </div>
+      </div>
+
+      <OscBWaveThumbs />
+      <OscBStageViz />
+      <OscBFrameScrub />
+      <OscBDetunePresets />
+
+      <div className="mb-2 flex items-center justify-center gap-4">
+        <OscBModMeter label="Env→WT" value={env} color={cEnv} />
+        <OscBOctaveStrip />
+        <OscBModMeter label="LFO→WT" value={lfo} color={cLfo} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="oscBPos" label="Morph" min={0} max={1} format={fmtPct} def={0.4} size={50} color={c} />
+        <FParamKnob paramKey="oscBEnv" label="Env→WT" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={cEnv} />
+        <FParamKnob paramKey="oscBLfo" label="LFO→WT" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={cLfo} />
+        <FParamKnob paramKey="oscBDetune" label="Detune" min={-50} max={50} integer bipolar format={fmtCents} def={0} size={46} color={cDet} />
+        <FParamKnob paramKey="oscBLevel" label="Level" min={0} max={1} format={fmtPct} def={0.5} size={50} color={cLvl} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Twin of the Signal Path — pull from A, spread the beat, snap frames, carve with Env / LFO.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ OSC C — Depth Voice ════════════════════
+
+function OscCTableBrowser() {
+  const table = useFireCommandStore((s) => s.patch.oscCTable);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const idx = Math.max(0, WAVETABLES.findIndex((w) => w.id === table));
+  const go = (dir: -1 | 1) => {
+    const next = WAVETABLES[(idx + dir + WAVETABLES.length) % WAVETABLES.length]!;
+    setParam("oscCTable", next.id);
+  };
+  const c = FC.oscC;
+  const cHot = bandShade(FC.sources, 0.78);
+  return (
+    <div className="flex items-center gap-1 min-w-0">
+      <button
+        type="button"
+        onClick={() => go(-1)}
+        className="h-7 w-7 shrink-0 rounded-md border text-[11px] font-bold transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: cHot, background: `${c}18` }}
+        title="Previous wavetable"
+      >
+        ‹
+      </button>
+      <select
+        value={table}
+        onChange={(e) => setParam("oscCTable", e.target.value)}
+        className="min-w-0 flex-1 truncate rounded-lg border px-2 py-1 text-[11px] font-semibold focus:outline-none cursor-pointer"
+        style={{
+          borderColor: `${c}55`,
+          background: `linear-gradient(180deg, ${c}28, rgba(0,0,0,0.55))`,
+          color: cHot,
+        }}
+        title={wavetableName(table)}
+      >
+        {WAVETABLES.map((w) => (
+          <option key={w.id} value={w.id} className="bg-ink text-white">
+            {w.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => go(1)}
+        className="h-7 w-7 shrink-0 rounded-md border text-[11px] font-bold transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: cHot, background: `${c}18` }}
+        title="Next wavetable"
+      >
+        ›
+      </button>
+    </div>
+  );
+}
+
+function OscCModMeter({ label, value, color }: { label: string; value: number; color: string }) {
+  const abs = Math.abs(value);
+  const pos = value >= 0;
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${fmtBi(value)}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+          style={{
+            width: `${abs * 50}%`,
+            left: pos ? "50%" : `${50 - abs * 50}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: abs > 0.05 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+        <div className="absolute left-1/2 top-0 h-full w-px bg-white/25" />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: abs > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {pos ? "+" : "−"}{Math.round(abs * 100)}
+      </div>
+    </div>
+  );
+}
+
+function OscCOctaveStrip() {
+  const oct = useFireCommandStore((s) => s.patch.oscCOctave);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscC;
+  const cHot = bandShade(FC.sources, 0.8);
+  return (
+    <div className="flex items-stretch rounded-lg border p-0.5" style={{ borderColor: `${c}44`, background: "rgba(0,0,0,0.35)" }}>
+      {([-2, -1, 0, 1, 2] as const).map((n) => {
+        const on = oct === n;
+        const depth = n <= -1;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setParam("oscCOctave", n)}
+            className="min-w-[1.75rem] rounded-md px-1.5 py-1 text-[10px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    background: `linear-gradient(180deg, ${cHot}55, ${c}40)`,
+                    color: "#ffe8f0",
+                    boxShadow: `0 0 14px ${c}66`,
+                  }
+                : { color: depth ? `${c}99` : "rgba(255,255,255,0.4)" }
+            }
+            aria-pressed={on}
+            title={n <= -1 ? `Depth ${n} oct` : `Octave ${n}`}
+          >
+            {n > 0 ? `+${n}` : n === 0 ? "0" : String(n)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OscCWaveThumbs() {
+  const table = useFireCommandStore((s) => s.patch.oscCTable);
+  const pos = useFireCommandStore((s) => s.patch.oscCPos);
+  const oct = useFireCommandStore((s) => s.patch.oscCOctave);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const c = FC.oscC;
+  const cFloor = bandShade(FC.sources, 0.35);
+
+  useEffect(() => {
+    const frame = Math.round(pos * (FRAME_COUNT - 1));
+    const sink = Math.max(0, -oct) * 1.5;
+    WAVETABLES.forEach((w, wi) => {
+      const canvas = canvasRefs.current[wi];
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const W = canvas.width;
+      const H = canvas.height;
+      const samples = frameSamples(w.id, frame / Math.max(1, FRAME_COUNT - 1), 48);
+      ctx.clearRect(0, 0, W, H);
+      const active = w.id === table;
+      ctx.fillStyle = active ? `${c}22` : "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, W, H);
+      // Floor fill under wave
+      ctx.beginPath();
+      for (let i = 0; i < samples.length; i++) {
+        const x = (i / (samples.length - 1)) * (W - 2) + 1;
+        const y = H * 0.42 + sink - samples[i]! * H * 0.3;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.lineTo(W - 1, H - 1);
+      ctx.lineTo(1, H - 1);
+      ctx.closePath();
+      ctx.fillStyle = active ? `${cFloor}33` : "rgba(255,255,255,0.04)";
+      ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i < samples.length; i++) {
+        const x = (i / (samples.length - 1)) * (W - 2) + 1;
+        const y = H * 0.42 + sink - samples[i]! * H * 0.3;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = active ? c : "rgba(255,255,255,0.35)";
+      ctx.lineWidth = active ? 1.6 : 1;
+      ctx.stroke();
+    });
+  }, [table, pos, oct, c, cFloor]);
+
+  return (
+    <div className="mb-2 flex gap-1 overflow-x-auto pb-0.5 scrollbar-thin">
+      {WAVETABLES.map((w, wi) => {
+        const on = w.id === table;
+        return (
+          <button
+            key={w.id}
+            type="button"
+            onClick={() => setParam("oscCTable", w.id)}
+            className="shrink-0 rounded-md border p-0.5 transition"
+            style={{
+              borderColor: on ? `${c}99` : "rgba(255,255,255,0.1)",
+              boxShadow: on ? `0 0 12px ${c}44` : undefined,
+              background: on ? `${c}14` : "transparent",
+            }}
+            title={w.name}
+          >
+            <canvas
+              ref={(el) => { canvasRefs.current[wi] = el; }}
+              width={56}
+              height={28}
+              className="block rounded-sm"
+            />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OscCFrameScrub() {
+  const pos = useFireCommandStore((s) => s.patch.oscCPos);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscC;
+  const frame = Math.round(pos * (FRAME_COUNT - 1));
+  return (
+    <div className="mb-2 flex items-center gap-1.5">
+      <span className="shrink-0 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Frame
+      </span>
+      <div className="flex flex-1 items-center gap-0.5">
+        {Array.from({ length: FRAME_COUNT }, (_, i) => {
+          const on = i === frame;
+          const near = Math.abs(i - frame) === 1;
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setParam("oscCPos", FRAME_COUNT > 1 ? i / (FRAME_COUNT - 1) : 0)}
+              className="h-6 flex-1 rounded-md border text-[9px] font-bold tabular-nums transition"
+              style={
+                on
+                  ? {
+                      borderColor: `${c}aa`,
+                      background: `linear-gradient(180deg, ${c}55, ${c}28)`,
+                      color: "#ffe8f0",
+                      boxShadow: `0 0 12px ${c}55`,
+                    }
+                  : {
+                      borderColor: near ? `${c}44` : "rgba(255,255,255,0.08)",
+                      background: near ? `${c}12` : "rgba(0,0,0,0.35)",
+                      color: near ? `${c}cc` : "rgba(255,255,255,0.35)",
+                    }
+              }
+              aria-pressed={on}
+              title={`Frame ${i + 1}/${FRAME_COUNT}`}
+            >
+              {i + 1}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OscCDepthPresets() {
+  const oct = useFireCommandStore((s) => s.patch.oscCOctave);
+  const level = useFireCommandStore((s) => s.patch.oscCLevel);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.oscC;
+  const presets = [
+    { id: "sub2", label: "−2 Floor", oct: -2 as const, lvl: 0.45 },
+    { id: "sub1", label: "−1 Depth", oct: -1 as const, lvl: 0.4 },
+    { id: "uni", label: "Unison 0", oct: 0 as const, lvl: 0.35 },
+  ] as const;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Depth
+      </span>
+      {presets.map((p) => {
+        const on = oct === p.oct && level >= 0.02;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("oscCOctave", p.oct);
+              if (level < 0.02) setParam("oscCLevel", p.lvl);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.88),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`Set octave ${p.oct}${level < 0.02 ? " and wake" : ""}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OscCQuickActions() {
+  const level = useFireCommandStore((s) => s.patch.oscCLevel);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef(0.4);
+  const c = FC.oscC;
+  const dormant = level < 0.02;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (dormant) {
+            setParam("oscCLevel", savedRef.current > 0.02 ? savedRef.current : 0.4);
+            setParam("oscCOctave", -1);
+          } else {
+            savedRef.current = level;
+            setParam("oscCLevel", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: dormant ? `${c}88` : `${c}66`,
+          color: dormant ? bandShade(FC.sources, 0.9) : bandShade(FC.sources, 0.75),
+          background: dormant ? `${c}40` : `${c}22`,
+          boxShadow: dormant ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={dormant ? "Wake Depth Voice (−1 oct @ 40%)" : "Sleep / mute OSC C"}
+      >
+        {dormant ? "Wake" : "Sleep"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const patch = useFireCommandStore.getState().patch;
+          setParam("oscCTable", patch.oscATable);
+          setParam("oscCPos", patch.oscAPos);
+          setParam("oscCEnv", patch.oscAEnv);
+          setParam("oscCLfo", patch.oscALfo);
+        }}
+        className="rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Copy table, morph, Env, LFO from OSC A (keeps C octave)"
+      >
+        ← A
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const patch = useFireCommandStore.getState().patch;
+          setParam("oscCTable", patch.oscBTable);
+          setParam("oscCPos", patch.oscBPos);
+          setParam("oscCEnv", patch.oscBEnv);
+          setParam("oscCLfo", patch.oscBLfo);
+        }}
+        className="rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Copy table, morph, Env, LFO from OSC B (keeps C octave)"
+      >
+        ← B
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("oscCTable", "harmonic");
+          setParam("oscCPos", 0.4);
+          setParam("oscCEnv", 0);
+          setParam("oscCLfo", 0);
+          setParam("oscCDetune", 0);
+          setParam("oscCOctave", -1);
+          setParam("oscCLevel", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset OSC C to depth defaults (dormant)"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function OscCPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.oscC;
+  const cEnv = bandShade(FC.sources, 0.5);
+  const cLfo = bandShade(FC.sources, 0.7);
+  const cDet = bandShade(FC.sources, 0.38);
+  const cLvl = bandShade(FC.sources, 0.32);
+  const env = useFireCommandStore((s) => s.patch.oscCEnv);
+  const lfo = useFireCommandStore((s) => s.patch.oscCLfo);
+  const level = useFireCommandStore((s) => s.patch.oscCLevel);
+  const pos = useFireCommandStore((s) => s.patch.oscCPos);
+  const detune = useFireCommandStore((s) => s.patch.oscCDetune);
+  const oct = useFireCommandStore((s) => s.patch.oscCOctave);
+  const table = useFireCommandStore((s) => s.patch.oscCTable);
+  const dormant = level < 0.02;
+
+  return (
+    <Section
+      title="Oscillator C"
+      color={c}
+      collapseKey="osc.c"
+      chipHosted={chipHosted}
+      right={<OscCTableBrowser />}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: dormant ? `${c}28` : `${c}40`,
+          background: dormant
+            ? `linear-gradient(180deg, rgba(0,0,0,0.45), ${c}10)`
+            : `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`,
+          boxShadow: dormant ? undefined : `inset 0 1px 0 ${c}22`,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Sources · Off at 0
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.82) }}>
+            Depth Voice
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {wavetableName(table)} · morph {Math.round(pos * 100)}% · {oct >= 0 ? `+${oct}` : oct}oct
+              {Math.abs(detune) > 0.5 ? ` · ${detune > 0 ? "+" : ""}${Math.round(detune)}¢` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <OscCQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: dormant ? "rgba(255,255,255,0.35)" : bandShade(FC.sources, 0.9),
+              background: dormant ? "rgba(0,0,0,0.5)" : `${c}36`,
+              border: `1px solid ${dormant ? "rgba(255,255,255,0.12)" : `${c}70`}`,
+              boxShadow: !dormant ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {dormant ? "Dormant" : `${Math.round(level * 100)}%`}
+          </div>
+        </div>
+      </div>
+
+      <OscCWaveThumbs />
+      <OscCStageViz />
+      <OscCFrameScrub />
+      <OscCDepthPresets />
+
+      <div className="mb-2 flex items-center justify-center gap-4">
+        <OscCModMeter label="Env→WT" value={env} color={cEnv} />
+        <OscCOctaveStrip />
+        <OscCModMeter label="LFO→WT" value={lfo} color={cLfo} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="oscCPos" label="Morph" min={0} max={1} format={fmtPct} def={0.4} size={50} color={c} />
+        <FParamKnob paramKey="oscCEnv" label="Env→WT" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={cEnv} />
+        <FParamKnob paramKey="oscCLfo" label="LFO→WT" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={cLfo} />
+        <FParamKnob paramKey="oscCDetune" label="Detune" min={-50} max={50} integer bipolar format={fmtCents} def={0} size={44} color={cDet} />
+        <FParamKnob paramKey="oscCLevel" label="Level" min={0} max={1} format={fmtPct} def={0} size={50} color={cLvl} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Floor of the Signal Path — Wake to engage, sink with −1/−2, pull from A or B.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ WARP — Harmonic Forge ════════════════════
+
+function WarpModMeter({ label, value, bipolar, color }: { label: string; value: number; bipolar?: boolean; color: string }) {
+  const abs = Math.abs(value);
+  const pos = value >= 0;
+  const width = bipolar ? abs * 50 : abs * 100;
+  const left = bipolar ? (pos ? "50%" : `${50 - abs * 50}%`) : "0%";
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[3.5rem]" title={`${label} ${bipolar ? fmtBi(value) : fmtPct(value)}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+          style={{
+            width: `${width}%`,
+            left,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: abs > 0.05 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+        {bipolar && <div className="absolute left-1/2 top-0 h-full w-px bg-white/25" />}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: abs > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {bipolar ? `${pos ? "+" : "−"}${Math.round(abs * 100)}` : `${Math.round(abs * 100)}%`}
+      </div>
+    </div>
+  );
+}
+
+const WARP_PRESETS = [
+  { id: "neutral", label: "Neutral", stretch: 0, tilt: 0, comb: 0 },
+  { id: "bell", label: "Bell", stretch: 0.55, tilt: 0.1, comb: 0.12 },
+  { id: "hollow", label: "Hollow", stretch: 0.05, tilt: 0.72, comb: 0 },
+  { id: "reed", label: "Reed", stretch: -0.1, tilt: -0.65, comb: 0.05 },
+  { id: "squash", label: "Squash", stretch: -0.6, tilt: -0.15, comb: 0 },
+  { id: "metal", label: "Metal", stretch: 0.25, tilt: 0.2, comb: 0.7 },
+  { id: "piano", label: "Piano", stretch: 0.4, tilt: -0.2, comb: 0.18 },
+] as const;
+
+function WarpCharacterStrip() {
+  const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
+  const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
+  const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.warp;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Character
+      </span>
+      {WARP_PRESETS.map((p) => {
+        const on =
+          Math.abs(stretch - p.stretch) < 0.04 &&
+          Math.abs(tilt - p.tilt) < 0.04 &&
+          Math.abs(comb - p.comb) < 0.04;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("warpStretch", p.stretch);
+              setParam("warpTilt", p.tilt);
+              setParam("warpComb", p.comb);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label}: ST ${p.stretch} · TL ${p.tilt} · CB ${p.comb}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function WarpQuickActions() {
+  const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
+  const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
+  const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ stretch: 0.35, tilt: -0.15, comb: 0.2 });
+  const c = FC.warp;
+  const idle = Math.abs(stretch) < 0.01 && Math.abs(tilt) < 0.01 && comb < 0.01;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("warpStretch", savedRef.current.stretch);
+            setParam("warpTilt", savedRef.current.tilt);
+            setParam("warpComb", savedRef.current.comb);
+          } else {
+            savedRef.current = { stretch, tilt, comb };
+            setParam("warpStretch", 0);
+            setParam("warpTilt", 0);
+            setParam("warpComb", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.sources, 0.9) : bandShade(FC.sources, 0.75),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore last forge" : "Bypass warp (neutral)"}
+      >
+        {idle ? "Forge" : "Bypass"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("warpStretch", -stretch);
+          setParam("warpTilt", -tilt);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Invert Stretch & Tilt polarity"
+      >
+        Flip
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("warpStretch", 0);
+          setParam("warpTilt", 0);
+          setParam("warpComb", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset to neutral"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function WarpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.warp;
+  const cSt = bandShade(FC.sources, 0.55);
+  const cTl = bandShade(FC.sources, 0.72);
+  const cCb = bandShade(FC.sources, 0.42);
+  const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
+  const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
+  const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
+  const active = Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01;
+
+  return (
+    <Section
+      title="Spectral Warp"
+      color={c}
+      collapseKey="fire.sec.warp"
+      chipHosted={chipHosted}
+      right={
+        <span className="text-[9px] normal-case tracking-normal" style={{ color: `${c}99` }}>
+          reshapes A · B · C harmonics
+        </span>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: active ? `${c}40` : `${c}28`,
+          background: active
+            ? `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: active ? `inset 0 1px 0 ${c}22` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Sources
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.85) }}>
+            Harmonic Forge
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {active
+                ? `ST ${stretch > 0 ? "+" : ""}${Math.round(stretch * 100)} · TL ${tilt > 0 ? "+" : ""}${Math.round(tilt * 100)} · CB ${Math.round(comb * 100)}`
+                : "neutral · pass-through"}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <WarpQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: active ? bandShade(FC.sources, 0.92) : "rgba(255,255,255,0.35)",
+              background: active ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${active ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: active ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {active ? "Forging" : "Idle"}
+          </div>
+        </div>
+      </div>
+
+      <WarpStageViz />
+      <WarpCharacterStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-5">
+        <WarpModMeter label="Stretch" value={stretch} bipolar color={cSt} />
+        <WarpModMeter label="Tilt" value={tilt} bipolar color={cTl} />
+        <WarpModMeter label="Comb" value={comb} color={cCb} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-2">
+        <FParamKnob paramKey="warpStretch" label="Stretch" min={-1} max={1} bipolar format={fmtBi} def={0} size={52} color={cSt} />
+        <FParamKnob paramKey="warpTilt" label="Tilt" min={-1} max={1} bipolar format={fmtBi} def={0} size={52} color={cTl} />
+        <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} size={52} color={cCb} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Shared spectral DNA — drag the forge pad (ST↔ TL↕), scrub Comb on the rail, stamp a character.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ CHIP — Acid Circuit ════════════════════
+
+function ChipPulsePresets() {
+  const duty = useFireCommandStore((s) => s.patch.pulseDuty) ?? 0.5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.chip;
+  const presets = [
+    { label: "12%", v: 0.125 },
+    { label: "25%", v: 0.25 },
+    { label: "50%", v: 0.5 },
+    { label: "75%", v: 0.75 },
+  ] as const;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        PWM
+      </span>
+      {presets.map((p) => {
+        const on = Math.abs(duty - p.v) < 0.03;
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("pulseDuty", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`Pulse width ${p.label}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChipNoiseModes() {
+  const noise = useFireCommandStore((s) => s.patch.chipNoise) ?? "white";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.chip;
+  const modes: { id: ChipNoiseMode; label: string; hint: string }[] = [
+    { id: "white", label: "White", hint: "Analog hiss" },
+    { id: "nes", label: "Hold", hint: "NES LFSR hold" },
+    { id: "gb", label: "Soft", hint: "Softer stepped noise" },
+    { id: "periodic", label: "Per", hint: "Metallic short loop" },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Noise
+      </span>
+      {modes.map((m) => {
+        const on = noise === m.id;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setParam("chipNoise", m.id)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={m.hint}
+            aria-pressed={on}
+          >
+            {m.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChipVoiceStrip() {
+  const voices = useFireCommandStore((s) => s.patch.chipVoiceLimit) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.chip;
+  return (
+    <div className="mb-2 flex items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Poly
+      </span>
+      {[0, 1, 2, 3, 4, 6, 8].map((n) => {
+        const on = Math.round(voices) === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setParam("chipVoiceLimit", n)}
+            className="min-w-[1.6rem] rounded-md border px-1.5 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={n === 0 ? "Voice limit off" : `Cap at ${n} voices`}
+          >
+            {n === 0 ? "∞" : n}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChipQuickActions() {
+  const sync = useFireCommandStore((s) => s.patch.hardSync) ?? false;
+  const slide = useFireCommandStore((s) => s.patch.slideOn) ?? false;
+  const accent = useFireCommandStore((s) => s.patch.accentAmount) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.chip;
+  const acidOn = sync && slide && accent > 0.25;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (acidOn) {
+            setParam("hardSync", false);
+            setParam("slideOn", false);
+            setParam("accentAmount", 0);
+          } else {
+            setParam("hardSync", true);
+            setParam("slideOn", true);
+            setParam("accentAmount", 0.55);
+            setParam("pulseDuty", 0.25);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: acidOn ? `${c}99` : `${c}55`,
+          color: acidOn ? bandShade(FC.sources, 0.92) : `${c}bb`,
+          background: acidOn ? `${c}40` : `${c}18`,
+          boxShadow: acidOn ? `0 0 14px ${c}55` : undefined,
+        }}
+        title={acidOn ? "Disarm acid kit" : "Acid kit: Sync + Slide + Accent + 25% PWM"}
+      >
+        {acidOn ? "Acid On" : "Acid"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("pulseDuty", 0.5);
+          setParam("hardSync", false);
+          setParam("slideOn", false);
+          setParam("accentAmount", 0);
+          setParam("chipVoiceLimit", 0);
+          setParam("chipNoise", "white");
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset chip to defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function ChipPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.chip;
+  const cPulse = bandShade(FC.sources, 0.58);
+  const cVoices = bandShade(FC.sources, 0.7);
+  const cAcc = bandShade(FC.sources, 0.78);
+  const duty = useFireCommandStore((s) => s.patch.pulseDuty) ?? 0.5;
+  const sync = useFireCommandStore((s) => s.patch.hardSync) ?? false;
+  const slide = useFireCommandStore((s) => s.patch.slideOn) ?? false;
+  const accent = useFireCommandStore((s) => s.patch.accentAmount) ?? 0;
+  const voices = useFireCommandStore((s) => s.patch.chipVoiceLimit) ?? 0;
+  const noise = useFireCommandStore((s) => s.patch.chipNoise) ?? "white";
+  const active =
+    Math.abs(duty - 0.5) > 0.02 || sync || slide || accent > 0.02 || voices > 0 || noise !== "white";
+
+  return (
+    <Section
+      title="Chip · Acid"
+      color={c}
+      collapseKey="chip"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={
+        <FSeg<ChipNoiseMode>
+          paramKey="chipNoise"
+          color={c}
+          options={[
+            { id: "white", label: "Wht" },
+            { id: "nes", label: "Hold" },
+            { id: "gb", label: "Soft" },
+            { id: "periodic", label: "Per" },
+          ]}
+        />
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: active ? `${c}40` : `${c}28`,
+          background: active
+            ? `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: active ? `inset 0 1px 0 ${c}22` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Sources
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.88) }}>
+            Acid Circuit
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              PWM {Math.round(duty * 100)}% · {noise}
+              {sync ? " · sync" : ""}
+              {slide ? " · slide" : ""}
+              {voices > 0 ? ` · V${Math.round(voices)}` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <ChipQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: active ? bandShade(FC.sources, 0.92) : "rgba(255,255,255,0.35)",
+              background: active ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${active ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: active ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {active ? "Live" : "Idle"}
+          </div>
+        </div>
+      </div>
+
+      <ChipStageViz />
+      <ChipPulsePresets />
+      <ChipNoiseModes />
+      <ChipVoiceStrip />
+
+      <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+        <BoolToggle paramKey="hardSync" label="Hard Sync" color={c} />
+        <BoolToggle paramKey="slideOn" label="Slide" color={c} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="pulseDuty" label="Pulse" min={0.05} max={0.95} format={fmtPct} def={0.5} size={50} color={cPulse} />
+        <FParamKnob paramKey="chipVoiceLimit" label="Voices" min={0} max={8} integer format={(v) => (v < 0.5 ? "Off" : fmtInt(v))} def={0} size={46} color={cVoices} />
+        <FParamKnob paramKey="accentAmount" label="Accent" min={0} max={1} format={fmtPct} def={0} size={50} color={cAcc} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Pixel Sources cart — scrub PWM, stamp Acid, pick noise grit, cap poly voices.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ NOISE — Grain Storm ════════════════════
+
+function NoiseModMeter({ label, value, bipolar, color }: { label: string; value: number; bipolar?: boolean; color: string }) {
+  const abs = Math.abs(value);
+  const pos = value >= 0;
+  const width = bipolar ? abs * 50 : abs * 100;
+  const left = bipolar ? (pos ? "50%" : `${50 - abs * 50}%`) : "0%";
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[3.5rem]" title={`${label} ${bipolar ? fmtBi(value) : fmtPct(value)}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+          style={{
+            width: `${width}%`,
+            left,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: abs > 0.05 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+        {bipolar && <div className="absolute left-1/2 top-0 h-full w-px bg-white/25" />}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: abs > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {bipolar ? `${pos ? "+" : "−"}${Math.round(abs * 100)}` : `${Math.round(abs * 100)}%`}
+      </div>
+    </div>
+  );
+}
+
+const NOISE_COLOR_PRESETS = [
+  { id: "rumble", label: "Rumble", color: -0.75, level: 0.35 },
+  { id: "dark", label: "Dark", color: -0.4, level: 0.28 },
+  { id: "flat", label: "Flat", color: 0, level: 0.25 },
+  { id: "air", label: "Air", color: 0.45, level: 0.3 },
+  { id: "hiss", label: "Hiss", color: 0.8, level: 0.22 },
+] as const;
+
+function NoiseCharacterStrip() {
+  const level = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
+  const color = useFireCommandStore((s) => s.patch.noiseColor) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.noise;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Bed
+      </span>
+      {NOISE_COLOR_PRESETS.map((p) => {
+        const on = Math.abs(color - p.color) < 0.08 && level >= 0.02 && Math.abs(level - p.level) < 0.15;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("noiseColor", p.color);
+              if (level < 0.02) setParam("noiseLevel", p.level);
+              else setParam("noiseLevel", Math.max(level, p.level * 0.6));
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.92),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label}: color ${p.color}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function NoiseGritModes() {
+  const noise = useFireCommandStore((s) => s.patch.chipNoise) ?? "white";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.noise;
+  const modes: { id: ChipNoiseMode; label: string; hint: string }[] = [
+    { id: "white", label: "White", hint: "Fine analog hiss" },
+    { id: "nes", label: "Hold", hint: "NES LFSR grit" },
+    { id: "gb", label: "Soft", hint: "Softer stepped noise" },
+    { id: "periodic", label: "Per", hint: "Metallic short loop" },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Grit
+      </span>
+      {modes.map((m) => {
+        const on = noise === m.id;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setParam("chipNoise", m.id)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.92),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${m.hint} (shared with Chip)`}
+            aria-pressed={on}
+          >
+            {m.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function NoiseQuickActions() {
+  const level = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
+  const color = useFireCommandStore((s) => s.patch.noiseColor) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ level: 0.28, color: 0 });
+  const c = FC.noise;
+  const silent = level < 0.02;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (silent) {
+            setParam("noiseLevel", savedRef.current.level > 0.02 ? savedRef.current.level : 0.28);
+            setParam("noiseColor", savedRef.current.color);
+          } else {
+            savedRef.current = { level, color };
+            setParam("noiseLevel", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: silent ? `${c}88` : `${c}66`,
+          color: silent ? bandShade(FC.sources, 0.92) : bandShade(FC.sources, 0.78),
+          background: silent ? `${c}40` : `${c}22`,
+          boxShadow: silent ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={silent ? "Raise noise bed" : "Silence noise bed"}
+      >
+        {silent ? "Storm" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setParam("noiseColor", -color)}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Flip color tilt (dark ↔ bright)"
+      >
+        Flip
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("noiseLevel", 0);
+          setParam("noiseColor", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset noise bed"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function NoisePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.noise;
+  const cLvl = bandShade(FC.sources, 0.55);
+  const cCol = bandShade(FC.sources, 0.75);
+  const level = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
+  const color = useFireCommandStore((s) => s.patch.noiseColor) ?? 0;
+  const mode = useFireCommandStore((s) => s.patch.chipNoise) ?? "white";
+  const silent = level < 0.02;
+  const tiltLabel = color < -0.1 ? "Dark LP" : color > 0.1 ? "Bright HP" : "Flat";
+
+  return (
+    <Section
+      title="Noise"
+      color={c}
+      collapseKey="noise"
+      chipHosted={chipHosted}
+      defaultCollapsed
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: silent ? `${c}28` : `${c}40`,
+          background: silent
+            ? `linear-gradient(180deg, rgba(0,0,0,0.45), ${c}0c)`
+            : `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`,
+          boxShadow: silent ? undefined : `inset 0 1px 0 ${c}22`,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Sources
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.9) }}>
+            Grain Storm
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {silent ? "silent" : `${Math.round(level * 100)}% · ${tiltLabel} · ${mode}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <NoiseQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: silent ? "rgba(255,255,255,0.35)" : bandShade(FC.sources, 0.92),
+              background: silent ? "rgba(0,0,0,0.45)" : `${c}36`,
+              border: `1px solid ${silent ? "rgba(255,255,255,0.12)" : `${c}70`}`,
+              boxShadow: !silent ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {silent ? "Silent" : `${Math.round(level * 100)}%`}
+          </div>
+        </div>
+      </div>
+
+      <NoiseStageViz />
+      <NoiseCharacterStrip />
+      <NoiseGritModes />
+
+      <div className="mb-2 flex items-center justify-center gap-5">
+        <NoiseModMeter label="Level" value={level} color={cLvl} />
+        <NoiseModMeter label="Color" value={color} bipolar color={cCol} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-2">
+        <FParamKnob paramKey="noiseLevel" label="Level" min={0} max={1} format={fmtPct} def={0} size={52} color={cLvl} />
+        <FParamKnob paramKey="noiseColor" label="Color" min={-1} max={1} bipolar format={fmtBi} def={0} size={52} color={cCol} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Sources static bed — drag Color↔ / Level↕, stamp a bed, grit shared with Chip.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ SUB — Tectonic ════════════════════
+
+function SubWavePicker() {
+  const wave = useFireCommandStore((s) => s.patch.subWave) ?? "sine";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const c = FC.sub;
+  const waves: { id: SubWave; label: string }[] = [
+    { id: "sine", label: "Sin" },
+    { id: "triangle", label: "Tri" },
+    { id: "square", label: "Sqr" },
+    { id: "sawtooth", label: "Saw" },
+  ];
+
+  useEffect(() => {
+    waves.forEach((w, wi) => {
+      const canvas = canvasRefs.current[wi];
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      const on = w.id === wave;
+      ctx.fillStyle = on ? `${c}22` : "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.beginPath();
+      for (let i = 0; i < 48; i++) {
+        const u = (i / 47) * Math.PI * 2;
+        let v = 0;
+        if (w.id === "sine") v = Math.sin(u);
+        else if (w.id === "triangle") v = (2 / Math.PI) * Math.asin(Math.sin(u));
+        else if (w.id === "square") v = Math.sin(u) > 0 ? 1 : -1;
+        else v = 2 * ((u / (Math.PI * 2)) % 1) - 1;
+        const x = (i / 47) * (W - 2) + 1;
+        const y = H * 0.5 - v * H * 0.35;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = on ? c : "rgba(255,255,255,0.35)";
+      ctx.lineWidth = on ? 1.7 : 1;
+      ctx.stroke();
+    });
+  }, [wave, c]);
+
+  return (
+    <div className="mb-2 flex gap-1 justify-center">
+      {waves.map((w, wi) => {
+        const on = w.id === wave;
+        return (
+          <button
+            key={w.id}
+            type="button"
+            onClick={() => setParam("subWave", w.id)}
+            className="shrink-0 rounded-md border p-0.5 transition"
+            style={{
+              borderColor: on ? `${c}99` : "rgba(255,255,255,0.1)",
+              boxShadow: on ? `0 0 12px ${c}44` : undefined,
+              background: on ? `${c}14` : "transparent",
+            }}
+            title={w.label}
+            aria-pressed={on}
+          >
+            <canvas
+              ref={(el) => { canvasRefs.current[wi] = el; }}
+              width={56}
+              height={28}
+              className="block rounded-sm"
+            />
+            <div className="text-center text-[8px] font-bold mt-0.5" style={{ color: on ? c : "rgba(255,255,255,0.4)" }}>
+              {w.label}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SubOctaveStrip() {
+  const oct = useFireCommandStore((s) => s.patch.subOctave ?? -1);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.sub;
+  const cHot = bandShade(FC.sources, 0.88);
+  return (
+    <div className="mb-2 flex items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Oct
+      </span>
+      {([-2, -1, 0] as const).map((n) => {
+        const on = oct === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setParam("subOctave", n)}
+            className="min-w-[2.5rem] rounded-md border px-2 py-1 text-[10px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}aa`,
+                    background: `linear-gradient(180deg, ${cHot}55, ${c}40)`,
+                    color: "#fff5f0",
+                    boxShadow: `0 0 14px ${c}66`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
+            }
+            aria-pressed={on}
+            title={`Sub octave ${n}`}
+          >
+            {n === 0 ? "0" : String(n)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const SUB_PRESETS = [
+  { id: "sine-floor", label: "Sine −1", wave: "sine" as SubWave, oct: -1 as const, level: 0.4 },
+  { id: "sine-deep", label: "Sine −2", wave: "sine" as SubWave, oct: -2 as const, level: 0.45 },
+  { id: "sqr-punch", label: "Sqr Punch", wave: "square" as SubWave, oct: -1 as const, level: 0.35 },
+  { id: "saw-growl", label: "Saw Growl", wave: "sawtooth" as SubWave, oct: -2 as const, level: 0.38 },
+  { id: "tri-warm", label: "Tri Warm", wave: "triangle" as SubWave, oct: -1 as const, level: 0.42 },
+] as const;
+
+function SubCharacterStrip() {
+  const wave = useFireCommandStore((s) => s.patch.subWave) ?? "sine";
+  const oct = useFireCommandStore((s) => s.patch.subOctave ?? -1);
+  const level = useFireCommandStore((s) => s.patch.subLevel) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.sub;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Foundation
+      </span>
+      {SUB_PRESETS.map((p) => {
+        const on = wave === p.wave && oct === p.oct && level >= 0.02;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("subWave", p.wave);
+              setParam("subOctave", p.oct);
+              if (level < 0.02) setParam("subLevel", p.level);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.94),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label} foundation`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SubQuickActions() {
+  const level = useFireCommandStore((s) => s.patch.subLevel) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef(0.4);
+  const c = FC.sub;
+  const silent = level < 0.02;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (silent) {
+            setParam("subLevel", savedRef.current > 0.02 ? savedRef.current : 0.4);
+            setParam("subOctave", -1);
+            setParam("subWave", "sine");
+          } else {
+            savedRef.current = level;
+            setParam("subLevel", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: silent ? `${c}88` : `${c}66`,
+          color: silent ? bandShade(FC.sources, 0.94) : bandShade(FC.sources, 0.8),
+          background: silent ? `${c}40` : `${c}22`,
+          boxShadow: silent ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={silent ? "Wake tectonic foundation (−1 sine)" : "Mute sub"}
+      >
+        {silent ? "Wake" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("subWave", "sine");
+          setParam("subOctave", -1);
+          setParam("subLevel", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset sub to defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function SubPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.sub;
+  const cLvl = bandShade(FC.sources, 0.62);
+  const cOct = bandShade(FC.sources, 0.78);
+  const level = useFireCommandStore((s) => s.patch.subLevel) ?? 0;
+  const oct = useFireCommandStore((s) => s.patch.subOctave ?? -1);
+  const wave = useFireCommandStore((s) => s.patch.subWave) ?? "sine";
+  const silent = level < 0.02;
+
+  return (
+    <Section
+      title="Sub"
+      color={c}
+      collapseKey="sub"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={
+        <FSeg<SubWave>
+          paramKey="subWave"
+          color={c}
+          options={[
+            { id: "sine", label: "Sin" },
+            { id: "triangle", label: "Tri" },
+            { id: "square", label: "Sqr" },
+            { id: "sawtooth", label: "Saw" },
+          ]}
+        />
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: silent ? `${c}28` : `${c}40`,
+          background: silent
+            ? `linear-gradient(180deg, rgba(0,0,0,0.45), ${c}0c)`
+            : `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`,
+          boxShadow: silent ? undefined : `inset 0 1px 0 ${c}22`,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Sources
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.94) }}>
+            Tectonic
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {silent ? "off" : `${wave} · ${oct}oct · ${Math.round(level * 100)}%`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <SubQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: silent ? "rgba(255,255,255,0.35)" : bandShade(FC.sources, 0.95),
+              background: silent ? "rgba(0,0,0,0.45)" : `${c}36`,
+              border: `1px solid ${silent ? "rgba(255,255,255,0.12)" : `${c}70`}`,
+              boxShadow: !silent ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {silent ? "Off" : `${Math.round(level * 100)}%`}
+          </div>
+        </div>
+      </div>
+
+      <SubWavePicker />
+      <SubStageViz />
+      <SubOctaveStrip />
+      <SubCharacterStrip />
+
+      <div className="flex items-center justify-evenly gap-2">
+        <FParamKnob paramKey="subLevel" label="Level" min={0} max={1} format={fmtPct} def={0} size={52} color={cLvl} />
+        <FParamKnob paramKey="subOctave" label="Oct" min={-2} max={0} integer format={fmtOct} def={-1} size={52} color={cOct} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Foundation of the Signal Path — drag level, tap octave rail, stamp a tectonic character.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ UNI — Voice Choir ════════════════════
+
+function UniVoiceStrip() {
+  const unison = useFireCommandStore((s) => s.patch.unison) ?? 1;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.unison;
+  return (
+    <div className="mb-2 flex items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Voices
+      </span>
+      {[1, 2, 3, 4, 5, 6, 7].map((n) => {
+        const on = Math.round(unison) === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            onClick={() => setParam("unison", n)}
+            className="min-w-[1.65rem] rounded-md border px-1.5 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={n === 1 ? "Mono" : `${n}-voice unison`}
+            aria-pressed={on}
+          >
+            {n}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function UniDetunePresets() {
+  const detune = useFireCommandStore((s) => s.patch.unisonDetune) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.unison;
+  const presets = [
+    { label: "0¢", v: 0 },
+    { label: "8¢", v: 8 },
+    { label: "14¢", v: 14 },
+    { label: "22¢", v: 22 },
+    { label: "35¢", v: 35 },
+  ] as const;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Detune
+      </span>
+      {presets.map((p) => {
+        const on = Math.abs(detune - p.v) < 1.5;
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("unisonDetune", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const UNI_CHARACTERS = [
+  { id: "mono", label: "Mono", unison: 1, detune: 0, width: 0.5, drift: 0 },
+  { id: "soft", label: "Soft", unison: 3, detune: 8, width: 0.55, drift: 0.1 },
+  { id: "chorus", label: "Chorus", unison: 3, detune: 14, width: 0.7, drift: 0.15 },
+  { id: "supersaw", label: "Supersaw", unison: 5, detune: 18, width: 0.85, drift: 0.12 },
+  { id: "wall", label: "Wall", unison: 7, detune: 28, width: 1, drift: 0.2 },
+] as const;
+
+function UniCharacterStrip() {
+  const unison = useFireCommandStore((s) => s.patch.unison) ?? 1;
+  const detune = useFireCommandStore((s) => s.patch.unisonDetune) ?? 0;
+  const width = useFireCommandStore((s) => s.patch.unisonWidth) ?? 0.5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.unison;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Choir
+      </span>
+      {UNI_CHARACTERS.map((p) => {
+        const on =
+          Math.round(unison) === p.unison &&
+          Math.abs(detune - p.detune) < 3 &&
+          Math.abs(width - p.width) < 0.12;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("unison", p.unison);
+              setParam("unisonDetune", p.detune);
+              setParam("unisonWidth", p.width);
+              setParam("drift", p.drift);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label}: ${p.unison}V · ${p.detune}¢ · W${Math.round(p.width * 100)}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function UniQuickActions() {
+  const unison = useFireCommandStore((s) => s.patch.unison) ?? 1;
+  const detune = useFireCommandStore((s) => s.patch.unisonDetune) ?? 0;
+  const width = useFireCommandStore((s) => s.patch.unisonWidth) ?? 0.5;
+  const drift = useFireCommandStore((s) => s.patch.drift) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ unison: 5, detune: 18, width: 0.85, drift: 0.12 });
+  const c = FC.unison;
+  const mono = Math.round(unison) <= 1 && detune < 1;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (mono) {
+            setParam("unison", savedRef.current.unison);
+            setParam("unisonDetune", savedRef.current.detune);
+            setParam("unisonWidth", savedRef.current.width);
+            setParam("drift", savedRef.current.drift);
+          } else {
+            savedRef.current = { unison, detune, width, drift };
+            setParam("unison", 1);
+            setParam("unisonDetune", 0);
+            setParam("unisonWidth", 0.5);
+            setParam("drift", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: mono ? `${c}88` : `${c}66`,
+          color: mono ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
+          background: mono ? `${c}40` : `${c}22`,
+          boxShadow: mono ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={mono ? "Restore choir stack" : "Collapse to mono"}
+      >
+        {mono ? "Stack" : "Mono"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("unison", 1);
+          setParam("unisonDetune", 0);
+          setParam("unisonWidth", 0.5);
+          setParam("drift", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset unison"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function UniModMeter({ label, value, max = 1, format, color }: {
+  label: string; value: number; max?: number; format: (v: number) => string; color: string;
+}) {
+  const t = Math.min(1, Math.abs(value) / max);
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${format(value)}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.08 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.05 ? color : "rgba(255,255,255,0.3)" }}>
+        {format(value)}
+      </div>
+    </div>
+  );
+}
+
+function UnisonPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.unison;
+  const cVoices = bandShade(FC.tone, 0.35);
+  const cDet = bandShade(FC.tone, 0.48);
+  const cWid = bandShade(FC.tone, 0.65);
+  const cDrift = bandShade(FC.tone, 0.78);
+  const unison = useFireCommandStore((s) => s.patch.unison) ?? 1;
+  const detune = useFireCommandStore((s) => s.patch.unisonDetune) ?? 0;
+  const width = useFireCommandStore((s) => s.patch.unisonWidth) ?? 0.5;
+  const drift = useFireCommandStore((s) => s.patch.drift) ?? 0;
+  const stacked = Math.round(unison) > 1 || detune > 1;
+
+  return (
+    <Section
+      title="Unison"
+      color={c}
+      collapseKey="mixer.unison"
+      chipHosted={chipHosted}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: stacked ? `${c}40` : `${c}28`,
+          background: stacked
+            ? `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: stacked ? `inset 0 1px 0 ${c}22` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Tone
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.tone, 0.88) }}>
+            Voice Choir
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {Math.round(unison)}V · {Math.round(detune)}¢ · W{Math.round(width * 100)}
+              {drift > 0.04 ? ` · DR${Math.round(drift * 100)}` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <UniQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: stacked ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.35)",
+              background: stacked ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${stacked ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: stacked ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {stacked ? `${Math.round(unison)}V` : "Mono"}
+          </div>
+        </div>
+      </div>
+
+      <UnisonStageViz />
+      <UniVoiceStrip />
+      <UniDetunePresets />
+      <UniCharacterStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-4">
+        <UniModMeter label="Voices" value={unison} max={7} format={(v) => `${Math.round(v)}`} color={cVoices} />
+        <UniModMeter label="Detune" value={detune} max={50} format={(v) => `${Math.round(v)}¢`} color={cDet} />
+        <UniModMeter label="Width" value={width} format={fmtPct} color={cWid} />
+        <UniModMeter label="Drift" value={drift} format={fmtPct} color={cDrift} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="unison" label="Unison" min={1} max={7} integer format={fmtInt} def={1} size={48} color={cVoices} />
+        <FParamKnob paramKey="unisonDetune" label="Detune" min={0} max={50} integer format={fmtCents} def={0} size={48} color={cDet} />
+        <FParamKnob paramKey="unisonWidth" label="Width" min={0} max={1} format={fmtPct} def={0.5} size={48} color={cWid} />
+        <FParamKnob paramKey="drift" label="Drift" min={0} max={1} format={fmtPct} def={0} size={46} color={cDrift} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Tone stack choir — drag Width↔ / Detune↕, tap voice rail, stamp a choir character.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ LIFE — Organic Pulse ════════════════════
+
+const LIFE_CHARS = [
+  { id: "still", label: "Still", drift: 0, rate: 0.35, instab: 0, tune: 0, env: 0 },
+  { id: "warm", label: "Warm", drift: 0.18, rate: 0.32, instab: 0.1, tune: 0.08, env: 0.06 },
+  { id: "vintage", label: "Vintage", drift: 0.28, rate: 0.4, instab: 0.18, tune: 0.12, env: 0.1 },
+  { id: "unstable", label: "Unstable", drift: 0.4, rate: 0.55, instab: 0.35, tune: 0.22, env: 0.15 },
+  { id: "chaos", label: "Chaos", drift: 0.65, rate: 0.8, instab: 0.55, tune: 0.4, env: 0.35 },
+] as const;
+
+const LIFE_TEMPO = [
+  { id: "slow", label: "Largo", rate: 0.18 },
+  { id: "andante", label: "Andante", rate: 0.35 },
+  { id: "allegro", label: "Allegro", rate: 0.58 },
+  { id: "presto", label: "Presto", rate: 0.88 },
+] as const;
+
+function lifeNear(a: number, b: number, tol = 0.07) {
+  return Math.abs(a - b) < tol;
+}
+
+function LifeCharacterStrip() {
+  const drift = useFireCommandStore((s) => s.patch.drift) ?? 0;
+  const rate = useFireCommandStore((s) => s.patch.driftRate) ?? 0.35;
+  const instab = useFireCommandStore((s) => s.patch.voiceInstability) ?? 0;
+  const tune = useFireCommandStore((s) => s.patch.tuneVariance) ?? 0;
+  const env = useFireCommandStore((s) => s.patch.envVariance) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.analogLife;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Pulse
+      </span>
+      {LIFE_CHARS.map((p) => {
+        const on =
+          (p.id === "still" && drift < 0.02 && instab < 0.02 && tune < 0.02 && env < 0.02) ||
+          (p.id !== "still" &&
+            lifeNear(drift, p.drift) &&
+            lifeNear(instab, p.instab, 0.1) &&
+            lifeNear(rate, p.rate, 0.12));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("drift", p.drift);
+              setParam("driftRate", p.rate);
+              setParam("voiceInstability", p.instab);
+              setParam("tuneVariance", p.tune);
+              setParam("envVariance", p.env);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label} — drift ${Math.round(p.drift * 100)} · ~${Math.round(28 + p.rate * 92)}bpm`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LifeTempoStrip() {
+  const rate = useFireCommandStore((s) => s.patch.driftRate) ?? 0.35;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.analogLife;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Tempo
+      </span>
+      {LIFE_TEMPO.map((t) => {
+        const on = lifeNear(rate, t.rate, 0.08);
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setParam("driftRate", t.rate)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.tone, 0.5)}99`,
+                    background: `${bandShade(FC.tone, 0.5)}28`,
+                    color: bandShade(FC.tone, 0.88),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${t.label} · ~${Math.round(28 + t.rate * 92)} bpm`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LifeQuickActions() {
+  const drift = useFireCommandStore((s) => s.patch.drift) ?? 0;
+  const rate = useFireCommandStore((s) => s.patch.driftRate) ?? 0.35;
+  const instab = useFireCommandStore((s) => s.patch.voiceInstability) ?? 0;
+  const tune = useFireCommandStore((s) => s.patch.tuneVariance) ?? 0;
+  const env = useFireCommandStore((s) => s.patch.envVariance) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ drift: 0.28, rate: 0.4, instab: 0.18, tune: 0.12, env: 0.1 });
+  const c = FC.analogLife;
+  const still = drift < 0.02 && instab < 0.02 && tune < 0.02 && env < 0.02;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (still) {
+            setParam("drift", savedRef.current.drift);
+            setParam("driftRate", savedRef.current.rate);
+            setParam("voiceInstability", savedRef.current.instab);
+            setParam("tuneVariance", savedRef.current.tune);
+            setParam("envVariance", savedRef.current.env);
+          } else {
+            savedRef.current = { drift, rate, instab, tune, env };
+            setParam("drift", 0);
+            setParam("voiceInstability", 0);
+            setParam("tuneVariance", 0);
+            setParam("envVariance", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: still ? `${c}88` : `${c}66`,
+          color: still ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
+          background: still ? `${c}40` : `${c}22`,
+          boxShadow: still ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={still ? "Restore organic life" : "Freeze to still"}
+      >
+        {still ? "Wake" : "Still"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          // Gentle vintage life — musical default
+          setParam("drift", 0.28);
+          setParam("driftRate", 0.4);
+          setParam("voiceInstability", 0.18);
+          setParam("tuneVariance", 0.12);
+          setParam("envVariance", 0.1);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.tone, 0.82), background: `${c}1c` }}
+        title="Stamp vintage organism"
+      >
+        Breathe
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("drift", 0);
+          setParam("driftRate", 0.35);
+          setParam("voiceInstability", 0);
+          setParam("tuneVariance", 0);
+          setParam("envVariance", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset analog life"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function LifeModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function AnalogLifePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.analogLife;
+  const cDrift = bandShade(FC.tone, 0.4);
+  const cRate = bandShade(FC.tone, 0.52);
+  const cInst = bandShade(FC.tone, 0.62);
+  const cTune = bandShade(FC.tone, 0.72);
+  const cEnv = bandShade(FC.tone, 0.82);
+  const drift = useFireCommandStore((s) => s.patch.drift) ?? 0;
+  const rate = useFireCommandStore((s) => s.patch.driftRate) ?? 0.35;
+  const instab = useFireCommandStore((s) => s.patch.voiceInstability) ?? 0;
+  const tune = useFireCommandStore((s) => s.patch.tuneVariance) ?? 0;
+  const env = useFireCommandStore((s) => s.patch.envVariance) ?? 0;
+  const alive = drift > 0.02 || instab > 0.02 || tune > 0.02 || env > 0.02;
+  const bpm = Math.round(28 + rate * 92);
+  const vitality = Math.min(1, drift * 0.45 + instab * 0.25 + tune * 0.15 + env * 0.15);
+
+  return (
+    <Section
+      title="Analog Life"
+      color={c}
+      collapseKey="analog.life"
+      chipHosted={chipHosted}
+      defaultCollapsed
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: alive ? `${c}45` : `${c}28`,
+          background: alive
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: alive ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Tone
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.tone, 0.88) }}>
+            Organic Pulse
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {alive
+                ? `DR${Math.round(drift * 100)} · ${bpm}bpm · IN${Math.round(instab * 100)}`
+                : "still · digital-stable"}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <LifeQuickActions />
+          <div
+            className="relative overflow-hidden rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: alive ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.35)",
+              background: alive ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${alive ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: alive ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {alive && (
+              <span
+                className="pointer-events-none absolute inset-y-0 left-0 opacity-40"
+                style={{
+                  width: `${vitality * 100}%`,
+                  background: `linear-gradient(90deg, transparent, ${c})`,
+                }}
+              />
+            )}
+            <span className="relative">{alive ? `${bpm} BPM` : "Still"}</span>
+          </div>
+        </div>
+      </div>
+
+      <AnalogLifeStageViz />
+      <LifeCharacterStrip />
+      <LifeTempoStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-3 flex-wrap">
+        <LifeModMeter label="Drift" value={drift} color={cDrift} />
+        <LifeModMeter label="Rate" value={(rate - 0.05) / 0.95} color={cRate} format={() => `${bpm}`} />
+        <LifeModMeter label="Instab" value={instab} color={cInst} />
+        <LifeModMeter label="Tune Δ" value={tune} color={cTune} />
+        <LifeModMeter label="Env Δ" value={env} color={cEnv} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="drift" label="Life" min={0} max={1} format={fmtPct} def={0} size={52} color={cDrift} />
+        <FParamKnob paramKey="driftRate" label="Rate" min={0.05} max={1} format={fmtPct} def={0.35} size={52} color={cRate} />
+        <FParamKnob paramKey="voiceInstability" label="Instab" min={0} max={1} format={fmtPct} def={0} size={44} color={cInst} />
+        <FParamKnob paramKey="tuneVariance" label="Tune Δ" min={0} max={1} format={fmtPct} def={0} size={44} color={cTune} />
+        <FParamKnob paramKey="envVariance" label="Env Δ" min={0} max={1} format={fmtPct} def={0} size={44} color={cEnv} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Tone organism — drag Rate↔ / Life↕, scrub Env rail, stamp a pulse or tempo.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ FILT — Spectral Blade ════════════════════
+
+const FILT_CHARS = [
+  { id: "open", label: "Open", type: "lowpass" as const, cut: 12000, reso: 0.5, env: 0, key: 0.2, sat: 0 },
+  { id: "warm", label: "Warm", type: "lowpass" as const, cut: 1800, reso: 1.2, env: 0.35, key: 0.35, sat: 0.15 },
+  { id: "scream", label: "Scream", type: "lowpass" as const, cut: 900, reso: 12, env: 0.55, key: 0.25, sat: 0.4 },
+  { id: "band", label: "Band", type: "bandpass" as const, cut: 1400, reso: 4, env: 0.2, key: 0.4, sat: 0.1 },
+  { id: "air", label: "Air", type: "highpass" as const, cut: 420, reso: 0.8, env: -0.15, key: 0.5, sat: 0 },
+  { id: "notch", label: "Notch", type: "notch" as const, cut: 2200, reso: 6, env: 0, key: 0.3, sat: 0.2 },
+] as const;
+
+const FILT_CUT_PRESETS = [
+  { label: "80", v: 80 },
+  { label: "220", v: 220 },
+  { label: "800", v: 800 },
+  { label: "2k", v: 2000 },
+  { label: "5k", v: 5000 },
+  { label: "12k", v: 12000 },
+] as const;
+
+function filtNearHz(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(30, a) / Math.max(30, b))) < 0.18;
+}
+
+function FiltTypeStrip() {
+  const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.filter;
+  const opts: { id: FireFilterType; label: string; tip: string }[] = [
+    { id: "lowpass", label: "LP", tip: "Lowpass — open the top" },
+    { id: "bandpass", label: "BP", tip: "Bandpass — carve a window" },
+    { id: "highpass", label: "HP", tip: "Highpass — thin the body" },
+    { id: "notch", label: "NT", tip: "Notch — cut a slot" },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Blade
+      </span>
+      {opts.map((o) => {
+        const on = type === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setParam("filterType", o.id)}
+            className="min-w-[2.1rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.92),
+                    boxShadow: `0 0 12px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={o.tip}
+            aria-pressed={on}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FiltCharacterStrip() {
+  const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
+  const cut = useFireCommandStore((s) => s.patch.filterCutoff) ?? 2600;
+  const reso = useFireCommandStore((s) => s.patch.filterResonance) ?? 0.7;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.filter;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Edge
+      </span>
+      {FILT_CHARS.map((p) => {
+        const on = type === p.type && filtNearHz(cut, p.cut) && Math.abs(Math.log10(Math.max(0.2, reso) / Math.max(0.2, p.reso))) < 0.25;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("filterType", p.type);
+              setParam("filterCutoff", p.cut);
+              setParam("filterResonance", p.reso);
+              setParam("filterEnvAmount", p.env);
+              setParam("filterKeyTrack", p.key);
+              setParam("filterDrive", p.sat);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label} · ${p.type} · ${p.cut}Hz · Q${p.reso}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FiltCutoffStrip() {
+  const cut = useFireCommandStore((s) => s.patch.filterCutoff) ?? 2600;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.filter;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Cut
+      </span>
+      {FILT_CUT_PRESETS.map((p) => {
+        const on = filtNearHz(cut, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("filterCutoff", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.tone, 0.5)}99`,
+                    background: `${bandShade(FC.tone, 0.5)}28`,
+                    color: bandShade(FC.tone, 0.88),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${p.v} Hz`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FiltQuickActions() {
+  const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
+  const cut = useFireCommandStore((s) => s.patch.filterCutoff) ?? 2600;
+  const reso = useFireCommandStore((s) => s.patch.filterResonance) ?? 0.7;
+  const env = useFireCommandStore((s) => s.patch.filterEnvAmount) ?? 0;
+  const key = useFireCommandStore((s) => s.patch.filterKeyTrack) ?? 0.3;
+  const sat = useFireCommandStore((s) => s.patch.filterDrive) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ type: "lowpass" as FireFilterType, cut: 1800, reso: 1.2, env: 0.35, key: 0.35, sat: 0.15 });
+  const c = FC.filter;
+  const open = cut > 9000 && reso < 1.5 && Math.abs(env) < 0.05 && sat < 0.05;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (open) {
+            setParam("filterType", savedRef.current.type);
+            setParam("filterCutoff", savedRef.current.cut);
+            setParam("filterResonance", savedRef.current.reso);
+            setParam("filterEnvAmount", savedRef.current.env);
+            setParam("filterKeyTrack", savedRef.current.key);
+            setParam("filterDrive", savedRef.current.sat);
+          } else {
+            savedRef.current = { type, cut, reso, env, key, sat };
+            setParam("filterType", "lowpass");
+            setParam("filterCutoff", 12000);
+            setParam("filterResonance", 0.5);
+            setParam("filterEnvAmount", 0);
+            setParam("filterDrive", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: open ? `${c}88` : `${c}66`,
+          color: open ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
+          background: open ? `${c}40` : `${c}22`,
+          boxShadow: open ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={open ? "Restore sculpted edge" : "Bypass to open LP"}
+      >
+        {open ? "Sculpt" : "Open"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("filterType", "lowpass");
+          setParam("filterCutoff", 1800);
+          setParam("filterResonance", 2.8);
+          setParam("filterEnvAmount", 0.45);
+          setParam("filterKeyTrack", 0.4);
+          setParam("filterDrive", 0.25);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.tone, 0.82), background: `${c}1c` }}
+        title="Musical warm LP with env bite"
+      >
+        Carve
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("filterType", "lowpass");
+          setParam("filterCutoff", 2600);
+          setParam("filterResonance", 0.7);
+          setParam("filterEnvAmount", 0);
+          setParam("filterKeyTrack", 0.3);
+          setParam("filterDrive", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset filter defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function FiltModMeter({
+  label,
+  value,
+  color,
+  format,
+  bipolar,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+  bipolar?: boolean;
+}) {
+  const t = bipolar ? Math.min(1, Math.abs(value)) : Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        {bipolar ? (
+          <>
+            <div className="absolute left-1/2 top-0 h-full w-px bg-white/20" />
+            <div
+              className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+              style={{
+                left: value >= 0 ? "50%" : `${50 - t * 50}%`,
+                width: `${t * 50}%`,
+                background: `linear-gradient(90deg, ${color}55, ${color})`,
+                boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+              }}
+            />
+          </>
+        ) : (
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+            style={{
+              width: `${t * 100}%`,
+              background: `linear-gradient(90deg, ${color}55, ${color})`,
+              boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+            }}
+          />
+        )}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function FilterPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.filter;
+  const cCut = bandShade(FC.tone, 0.42);
+  const cRes = bandShade(FC.tone, 0.55);
+  const cEnv = bandShade(FC.tone, 0.68);
+  const cKey = bandShade(FC.tone, 0.78);
+  const cSat = bandShade(FC.tone, 0.88);
+  const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
+  const cut = useFireCommandStore((s) => s.patch.filterCutoff) ?? 2600;
+  const reso = useFireCommandStore((s) => s.patch.filterResonance) ?? 0.7;
+  const env = useFireCommandStore((s) => s.patch.filterEnvAmount) ?? 0;
+  const key = useFireCommandStore((s) => s.patch.filterKeyTrack) ?? 0.3;
+  const sat = useFireCommandStore((s) => s.patch.filterDrive) ?? 0;
+  const sculpted = Math.abs(Math.log10(cut / 2600)) > 0.08 || reso > 1.2 || Math.abs(env) > 0.05 || sat > 0.05;
+  const cutNorm = Math.log(Math.max(20, cut) / 20) / Math.log(18000 / 20);
+  const resNorm = Math.log(Math.max(0.1, reso) / 0.1) / Math.log(28 / 0.1);
+  const typeShort = type === "lowpass" ? "LP" : type === "highpass" ? "HP" : type === "bandpass" ? "BP" : "NT";
+
+  return (
+    <Section
+      title="Filter"
+      color={c}
+      collapseKey="filter"
+      chipHosted={chipHosted}
+      right={
+        <FSeg<FireFilterType>
+          paramKey="filterType"
+          color={c}
+          options={[
+            { id: "lowpass", label: "LP" },
+            { id: "bandpass", label: "BP" },
+            { id: "highpass", label: "HP" },
+            { id: "notch", label: "NT" },
+          ]}
+        />
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: sculpted ? `${c}45` : `${c}28`,
+          background: sculpted
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: sculpted ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Tone
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.tone, 0.88) }}>
+            Spectral Blade
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {typeShort} · {fmtHz(cut)} · Q{reso.toFixed(1)}
+              {Math.abs(env) > 0.04 ? ` · E${fmtBi(env)}` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <FiltQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: sculpted ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.35)",
+              background: sculpted ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${sculpted ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: sculpted ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {sculpted ? typeShort : "Flat"}
+          </div>
+        </div>
+      </div>
+
+      <FilterStageViz />
+      <FiltTypeStrip />
+      <FiltCharacterStrip />
+      <FiltCutoffStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-3 flex-wrap">
+        <FiltModMeter label="Cut" value={cutNorm} color={cCut} format={() => fmtHz(cut)} />
+        <FiltModMeter label="Reso" value={resNorm} color={cRes} format={() => reso.toFixed(1)} />
+        <FiltModMeter label="Env" value={env} color={cEnv} bipolar format={fmtBi} />
+        <FiltModMeter label="Key" value={key} color={cKey} />
+        <FiltModMeter label="Sat" value={sat} color={cSat} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={52} color={cCut} />
+        <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={0.7} size={52} color={cRes} />
+        <FParamKnob paramKey="filterEnvAmount" label="Env Amt" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={cEnv} />
+        <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} size={44} color={cKey} />
+        <FParamKnob paramKey="filterDrive" label="Sat" min={0} max={1} format={fmtPct} def={0} size={44} color={cSat} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Tone sculptor — drag Cut↔ / Reso↕, scrub Sat rail, double-click cycles blade type.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ AMP — Breath Contour ════════════════════
+
+const A_MIN_UI = 0.001;
+
+const AMP_CHARS = [
+  { id: "snap", label: "Snap", a: 0.001, d: 0.08, s: 0.0, r: 0.08, vel: 1 },
+  { id: "pluck", label: "Pluck", a: 0.002, d: 0.18, s: 0.15, r: 0.22, vel: 1 },
+  { id: "punch", label: "Punch", a: 0.005, d: 0.22, s: 0.55, r: 0.28, vel: 0.9 },
+  { id: "pad", label: "Pad", a: 0.45, d: 0.8, s: 0.85, r: 1.4, vel: 0.7 },
+  { id: "swell", label: "Swell", a: 1.2, d: 0.6, s: 0.9, r: 2.0, vel: 0.55 },
+  { id: "gate", label: "Gate", a: 0.001, d: 0.05, s: 1, r: 0.05, vel: 1 },
+] as const;
+
+function ampNearSec(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.001, a) / Math.max(0.001, b))) < 0.55;
+}
+
+function AmpCharacterStrip() {
+  const a = useFireCommandStore((s) => s.patch.ampAttack) ?? 0.01;
+  const d = useFireCommandStore((s) => s.patch.ampDecay) ?? 0.25;
+  const sus = useFireCommandStore((s) => s.patch.ampSustain) ?? 0.8;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.envAmp;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Contour
+      </span>
+      {AMP_CHARS.map((p) => {
+        const on = ampNearSec(a, p.a) && ampNearSec(d, p.d) && Math.abs(sus - p.s) < 0.12;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("ampAttack", p.a);
+              setParam("ampDecay", p.d);
+              setParam("ampSustain", p.s);
+              setParam("ampRelease", p.r);
+              setParam("velAmount", p.vel);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label} contour`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AmpQuickActions() {
+  const a = useFireCommandStore((s) => s.patch.ampAttack) ?? 0.01;
+  const d = useFireCommandStore((s) => s.patch.ampDecay) ?? 0.25;
+  const sus = useFireCommandStore((s) => s.patch.ampSustain) ?? 0.8;
+  const r = useFireCommandStore((s) => s.patch.ampRelease) ?? 0.35;
+  const vel = useFireCommandStore((s) => s.patch.velAmount) ?? 1;
+  const lpgOn = useFireCommandStore((s) => s.patch.lpgOn) ?? false;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ a: 0.01, d: 0.25, s: 0.8, r: 0.35, vel: 1 });
+  const c = FC.envAmp;
+  const gated = sus > 0.95 && a < 0.02 && r < 0.12;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => setParam("lpgOn", !lpgOn)}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: lpgOn ? `${FC.pluck}88` : `${c}55`,
+          color: lpgOn ? bandShade(FC.tone, 0.92) : bandShade(FC.tone, 0.75),
+          background: lpgOn ? `${FC.pluck}36` : `${c}18`,
+          boxShadow: lpgOn ? `0 0 12px ${FC.pluck}44` : undefined,
+        }}
+        title={lpgOn ? "Return to amp ADSR" : "Hand loudness to Pluck Gate (LPG)"}
+      >
+        {lpgOn ? "ADSR" : "→LPG"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (gated) {
+            setParam("ampAttack", savedRef.current.a);
+            setParam("ampDecay", savedRef.current.d);
+            setParam("ampSustain", savedRef.current.s);
+            setParam("ampRelease", savedRef.current.r);
+            setParam("velAmount", savedRef.current.vel);
+          } else {
+            savedRef.current = { a, d, s: sus, r, vel };
+            setParam("ampAttack", 0.001);
+            setParam("ampDecay", 0.05);
+            setParam("ampSustain", 1);
+            setParam("ampRelease", 0.05);
+            setParam("velAmount", 1);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: gated ? `${c}88` : `${c}66`,
+          color: gated ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
+          background: gated ? `${c}40` : `${c}22`,
+          boxShadow: gated ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={gated ? "Restore previous contour" : "Full gate — hold while key down"}
+      >
+        {gated ? "Shape" : "Gate"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("ampAttack", 0.01);
+          setParam("ampDecay", 0.25);
+          setParam("ampSustain", 0.8);
+          setParam("ampRelease", 0.35);
+          setParam("velAmount", 1);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset amp defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function AmpModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function AmpEnvPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.envAmp;
+  const cA = bandShade(FC.tone, 0.42);
+  const cD = bandShade(FC.tone, 0.55);
+  const cS = bandShade(FC.tone, 0.68);
+  const cR = bandShade(FC.tone, 0.78);
+  const cVel = bandShade(FC.tone, 0.9);
+  const a = useFireCommandStore((s) => s.patch.ampAttack) ?? 0.01;
+  const d = useFireCommandStore((s) => s.patch.ampDecay) ?? 0.25;
+  const sus = useFireCommandStore((s) => s.patch.ampSustain) ?? 0.8;
+  const r = useFireCommandStore((s) => s.patch.ampRelease) ?? 0.35;
+  const vel = useFireCommandStore((s) => s.patch.velAmount) ?? 1;
+  const lpgOn = useFireCommandStore((s) => s.patch.lpgOn) ?? false;
+  const pluckOn = useFireCommandStore((s) => s.patch.moduleEnable?.["pluck"] !== false);
+  const parked = lpgOn && pluckOn;
+  const aN = Math.log(Math.max(A_MIN_UI, a) / A_MIN_UI) / Math.log(3 / A_MIN_UI);
+  const dN = Math.log(Math.max(0.005, d) / 0.005) / Math.log(3 / 0.005);
+  const rN = Math.log(Math.max(0.005, r) / 0.005) / Math.log(4 / 0.005);
+
+  return (
+    <Section title="Amp Envelope" color={c} collapseKey="env.amp" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: parked ? `${FC.pluck}45` : `${c}40`,
+          background: parked
+            ? `linear-gradient(105deg, ${FC.pluck}22 0%, ${c}0a 42%, transparent 70%)`
+            : `linear-gradient(105deg, ${c}24 0%, ${c}0a 42%, transparent 70%)`,
+          boxShadow: `inset 0 1px 0 ${c}22`,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Tone
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.tone, 0.88) }}>
+            Breath Contour
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {parked
+                ? "LPG parked · edit under Pluck"
+                : `A${fmtSec(a)} · D${fmtSec(d)} · S${Math.round(sus * 100)} · R${fmtSec(r)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <AmpQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: parked ? bandShade(FC.tone, 0.92) : bandShade(FC.tone, 0.9),
+              background: parked ? `${FC.pluck}36` : `${c}36`,
+              border: `1px solid ${parked ? `${FC.pluck}70` : `${c}70`}`,
+              boxShadow: `0 0 14px ${parked ? FC.pluck : c}50`,
+            }}
+          >
+            {parked ? "LPG" : "ADSR"}
+          </div>
+        </div>
+      </div>
+
+      <AmpEnvStageViz />
+      {!parked && <AmpCharacterStrip />}
+
+      {parked ? (
+        <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${FC.pluck}99` }}>
+          Pluck Gate owns loudness — drag the scope for Decay/Color, or tap ADSR to reclaim the contour.
+        </div>
+      ) : (
+        <>
+          <div className="mb-2 flex items-center justify-center gap-3 flex-wrap">
+            <AmpModMeter label="A" value={aN} color={cA} format={() => fmtSec(a)} />
+            <AmpModMeter label="D" value={dN} color={cD} format={() => fmtSec(d)} />
+            <AmpModMeter label="S" value={sus} color={cS} />
+            <AmpModMeter label="R" value={rN} color={cR} format={() => fmtSec(r)} />
+            <AmpModMeter label="Vel" value={vel} color={cVel} />
+          </div>
+          <div className="flex items-end justify-evenly gap-1 flex-wrap">
+            <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} def={0.01} size={52} color={cA} />
+            <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} def={0.25} size={52} color={cD} />
+            <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} def={0.8} size={48} color={cS} />
+            <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} def={0.35} size={52} color={cR} />
+            <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} size={44} color={cVel} />
+          </div>
+          <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+            Loudness breath — drag A/D/S/R zones, scrub Vel rail, stamp a contour.
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
+// ════════════════════ MOD — Morph Weaver ════════════════════
+
+const MOD_CHARS = [
+  { id: "still", label: "Still", a: 0.02, d: 0.5, s: 0.3, r: 0.4, ea: 0, eb: 0, ec: 0 },
+  { id: "nudge", label: "Nudge", a: 0.01, d: 0.35, s: 0.2, r: 0.3, ea: 0.25, eb: 0, ec: 0 },
+  { id: "sweep", label: "Sweep", a: 0.08, d: 0.7, s: 0.15, r: 0.55, ea: 0.55, eb: 0.2, ec: 0 },
+  { id: "cross", label: "Cross", a: 0.02, d: 0.4, s: 0.4, r: 0.45, ea: 0.4, eb: -0.35, ec: 0.2 },
+  { id: "dive", label: "Dive", a: 0.005, d: 0.9, s: 0.05, r: 0.6, ea: -0.65, eb: -0.25, ec: 0 },
+  { id: "weave", label: "Weave", a: 0.15, d: 0.55, s: 0.55, r: 0.8, ea: 0.45, eb: 0.35, ec: 0.3 },
+] as const;
+
+function modNearSec(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.001, a) / Math.max(0.001, b))) < 0.55;
+}
+
+function ModCharacterStrip() {
+  const a = useFireCommandStore((s) => s.patch.modAttack) ?? 0.02;
+  const envA = useFireCommandStore((s) => s.patch.oscAEnv) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.envMod;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Weave
+      </span>
+      {MOD_CHARS.map((p) => {
+        const on =
+          (p.id === "still" && Math.abs(envA) < 0.04) ||
+          (p.id !== "still" && modNearSec(a, p.a) && Math.abs(envA - p.ea) < 0.12);
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("modAttack", p.a);
+              setParam("modDecay", p.d);
+              setParam("modSustain", p.s);
+              setParam("modRelease", p.r);
+              setParam("oscAEnv", p.ea);
+              setParam("oscBEnv", p.eb);
+              setParam("oscCEnv", p.ec);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label} morph weave`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ModQuickActions() {
+  const a = useFireCommandStore((s) => s.patch.modAttack) ?? 0.02;
+  const d = useFireCommandStore((s) => s.patch.modDecay) ?? 0.5;
+  const sus = useFireCommandStore((s) => s.patch.modSustain) ?? 0.3;
+  const r = useFireCommandStore((s) => s.patch.modRelease) ?? 0.4;
+  const envA = useFireCommandStore((s) => s.patch.oscAEnv) ?? 0;
+  const envB = useFireCommandStore((s) => s.patch.oscBEnv) ?? 0;
+  const envC = useFireCommandStore((s) => s.patch.oscCEnv) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ a: 0.02, d: 0.5, s: 0.3, r: 0.4, ea: 0.4, eb: 0.15, ec: 0 });
+  const c = FC.envMod;
+  const idle = Math.abs(envA) < 0.02 && Math.abs(envB) < 0.02 && Math.abs(envC) < 0.02;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("modAttack", savedRef.current.a);
+            setParam("modDecay", savedRef.current.d);
+            setParam("modSustain", savedRef.current.s);
+            setParam("modRelease", savedRef.current.r);
+            setParam("oscAEnv", savedRef.current.ea);
+            setParam("oscBEnv", savedRef.current.eb);
+            setParam("oscCEnv", savedRef.current.ec);
+          } else {
+            savedRef.current = { a, d, s: sus, r, ea: envA, eb: envB, ec: envC };
+            setParam("oscAEnv", 0);
+            setParam("oscBEnv", 0);
+            setParam("oscCEnv", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore morph routing" : "Mute all Env→WT amounts"}
+      >
+        {idle ? "Weave" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("modAttack", 0.05);
+          setParam("modDecay", 0.6);
+          setParam("modSustain", 0.2);
+          setParam("modRelease", 0.5);
+          setParam("oscAEnv", 0.5);
+          setParam("oscBEnv", 0.2);
+          setParam("oscCEnv", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.tone, 0.82), background: `${c}1c` }}
+        title="Classic WT morph sweep on A (+light B)"
+      >
+        Scan
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("modAttack", 0.02);
+          setParam("modDecay", 0.5);
+          setParam("modSustain", 0.3);
+          setParam("modRelease", 0.4);
+          setParam("oscAEnv", 0);
+          setParam("oscBEnv", 0);
+          setParam("oscCEnv", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset mod envelope + morph routing"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function ModModMeter({
+  label,
+  value,
+  color,
+  format,
+  bipolar,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+  bipolar?: boolean;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : bipolar ? fmtBi(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.5rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        {bipolar ? (
+          <>
+            <div className="absolute left-1/2 top-0 h-full w-px bg-white/20" />
+            <div
+              className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+              style={{
+                left: value >= 0 ? "50%" : `${50 - t * 50}%`,
+                width: `${t * 50}%`,
+                background: `linear-gradient(90deg, ${color}55, ${color})`,
+                boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+              }}
+            />
+          </>
+        ) : (
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+            style={{
+              width: `${t * 100}%`,
+              background: `linear-gradient(90deg, ${color}55, ${color})`,
+              boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+            }}
+          />
+        )}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function ModEnvPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.envMod;
+  const cA = bandShade(FC.tone, 0.42);
+  const cD = bandShade(FC.tone, 0.55);
+  const cS = bandShade(FC.tone, 0.68);
+  const cR = bandShade(FC.tone, 0.78);
+  const a = useFireCommandStore((s) => s.patch.modAttack) ?? 0.02;
+  const d = useFireCommandStore((s) => s.patch.modDecay) ?? 0.5;
+  const sus = useFireCommandStore((s) => s.patch.modSustain) ?? 0.3;
+  const r = useFireCommandStore((s) => s.patch.modRelease) ?? 0.4;
+  const envA = useFireCommandStore((s) => s.patch.oscAEnv) ?? 0;
+  const envB = useFireCommandStore((s) => s.patch.oscBEnv) ?? 0;
+  const envC = useFireCommandStore((s) => s.patch.oscCEnv) ?? 0;
+  const morphAmt = Math.max(Math.abs(envA), Math.abs(envB), Math.abs(envC));
+  const weaving = morphAmt > 0.04;
+  const aN = Math.log(Math.max(0.001, a) / 0.001) / Math.log(3 / 0.001);
+  const dN = Math.log(Math.max(0.005, d) / 0.005) / Math.log(3 / 0.005);
+  const rN = Math.log(Math.max(0.005, r) / 0.005) / Math.log(4 / 0.005);
+
+  return (
+    <Section title="Mod Envelope → Morph" color={c} collapseKey="env.mod" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: weaving ? `${c}45` : `${c}28`,
+          background: weaving
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: weaving ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Tone
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.tone, 0.88) }}>
+            Morph Weaver
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {weaving
+                ? `A${fmtSec(a)} · →${Math.round(morphAmt * 100)} · S${Math.round(sus * 100)}`
+                : `A${fmtSec(a)} · idle morph`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <ModQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: weaving ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.35)",
+              background: weaving ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${weaving ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: weaving ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {weaving ? "Scan" : "Still"}
+          </div>
+        </div>
+      </div>
+
+      <ModEnvStageViz />
+      <ModCharacterStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <ModModMeter label="A" value={aN} color={cA} format={() => fmtSec(a)} />
+        <ModModMeter label="D" value={dN} color={cD} format={() => fmtSec(d)} />
+        <ModModMeter label="S" value={sus} color={cS} />
+        <ModModMeter label="R" value={rN} color={cR} format={() => fmtSec(r)} />
+        <ModModMeter label="→A" value={envA} color={FC.oscA} bipolar />
+        <ModModMeter label="→B" value={envB} color={FC.oscB} bipolar />
+        <ModModMeter label="→C" value={envC} color={FC.oscC} bipolar />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="modAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} def={0.02} size={48} color={cA} />
+        <FParamKnob paramKey="modDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} def={0.5} size={48} color={cD} />
+        <FParamKnob paramKey="modSustain" label="S" min={0} max={1} format={fmtPct} def={0.3} size={46} color={cS} />
+        <FParamKnob paramKey="modRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} def={0.4} size={48} color={cR} />
+        <FParamKnob paramKey="oscAEnv" label="→A" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={FC.oscA} />
+        <FParamKnob paramKey="oscBEnv" label="→B" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={FC.oscB} />
+        <FParamKnob paramKey="oscCEnv" label="→C" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={FC.oscC} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Wavetable weaver — drag A/D/S/R, scrub →WT rail (thirds focus A/B/C), stamp a weave.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ FENV — Cutoff Sweep ════════════════════
+
+const FENV_CHARS = [
+  { id: "flat", label: "Flat", a: 0.01, d: 0.3, s: 0.5, r: 0.3, amt: 0 },
+  { id: "open", label: "Open", a: 0.005, d: 0.4, s: 0.35, r: 0.35, amt: 0.55 },
+  { id: "pluck", label: "Pluck", a: 0.001, d: 0.18, s: 0.1, r: 0.2, amt: 0.7 },
+  { id: "wah", label: "Wah", a: 0.08, d: 0.55, s: 0.45, r: 0.5, amt: 0.4 },
+  { id: "close", label: "Close", a: 0.02, d: 0.5, s: 0.2, r: 0.4, amt: -0.45 },
+  { id: "scream", label: "Scream", a: 0.002, d: 0.9, s: 0.05, r: 0.35, amt: 0.85 },
+] as const;
+
+function fenvNearSec(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.001, a) / Math.max(0.001, b))) < 0.55;
+}
+
+function FenvCharacterStrip() {
+  const a = useFireCommandStore((s) => s.patch.filtAttack) ?? 0.01;
+  const amt = useFireCommandStore((s) => s.patch.filterEnvAmount) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.envFilt;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Sweep
+      </span>
+      {FENV_CHARS.map((p) => {
+        const on =
+          (p.id === "flat" && Math.abs(amt) < 0.04) ||
+          (p.id !== "flat" && fenvNearSec(a, p.a) && Math.abs(amt - p.amt) < 0.12);
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("filtAttack", p.a);
+              setParam("filtDecay", p.d);
+              setParam("filtSustain", p.s);
+              setParam("filtRelease", p.r);
+              setParam("filterEnvAmount", p.amt);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label} · Env ${p.amt > 0 ? "+" : ""}${Math.round(p.amt * 100)}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FenvQuickActions() {
+  const a = useFireCommandStore((s) => s.patch.filtAttack) ?? 0.01;
+  const d = useFireCommandStore((s) => s.patch.filtDecay) ?? 0.3;
+  const sus = useFireCommandStore((s) => s.patch.filtSustain) ?? 0.5;
+  const r = useFireCommandStore((s) => s.patch.filtRelease) ?? 0.3;
+  const amt = useFireCommandStore((s) => s.patch.filterEnvAmount) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ a: 0.01, d: 0.3, s: 0.5, r: 0.3, amt: 0.55 });
+  const c = FC.envFilt;
+  const flat = Math.abs(amt) < 0.03;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (flat) {
+            setParam("filtAttack", savedRef.current.a);
+            setParam("filtDecay", savedRef.current.d);
+            setParam("filtSustain", savedRef.current.s);
+            setParam("filtRelease", savedRef.current.r);
+            setParam("filterEnvAmount", savedRef.current.amt);
+          } else {
+            savedRef.current = { a, d, s: sus, r, amt };
+            setParam("filterEnvAmount", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: flat ? `${c}88` : `${c}66`,
+          color: flat ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
+          background: flat ? `${c}40` : `${c}22`,
+          boxShadow: flat ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={flat ? "Restore Env Amt sweep" : "Zero Env Amt (flat cutoff)"}
+      >
+        {flat ? "Sweep" : "Flat"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("filtAttack", 0.005);
+          setParam("filtDecay", 0.35);
+          setParam("filtSustain", 0.25);
+          setParam("filtRelease", 0.3);
+          setParam("filterEnvAmount", 0.6);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.tone, 0.82), background: `${c}1c` }}
+        title="Classic opening filter bite"
+      >
+        Bite
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("filtAttack", 0.01);
+          setParam("filtDecay", 0.3);
+          setParam("filtSustain", 0.5);
+          setParam("filtRelease", 0.3);
+          setParam("filterEnvAmount", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset filter envelope defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function FenvModMeter({
+  label,
+  value,
+  color,
+  format,
+  bipolar,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+  bipolar?: boolean;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : bipolar ? fmtBi(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        {bipolar ? (
+          <>
+            <div className="absolute left-1/2 top-0 h-full w-px bg-white/20" />
+            <div
+              className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+              style={{
+                left: value >= 0 ? "50%" : `${50 - t * 50}%`,
+                width: `${t * 50}%`,
+                background: `linear-gradient(90deg, ${color}55, ${color})`,
+                boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+              }}
+            />
+          </>
+        ) : (
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+            style={{
+              width: `${t * 100}%`,
+              background: `linear-gradient(90deg, ${color}55, ${color})`,
+              boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+            }}
+          />
+        )}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function FiltEnvPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.envFilt;
+  const cA = bandShade(FC.tone, 0.42);
+  const cD = bandShade(FC.tone, 0.55);
+  const cS = bandShade(FC.tone, 0.68);
+  const cR = bandShade(FC.tone, 0.78);
+  const cAmt = bandShade(FC.tone, 0.85);
+  const a = useFireCommandStore((s) => s.patch.filtAttack) ?? 0.01;
+  const d = useFireCommandStore((s) => s.patch.filtDecay) ?? 0.3;
+  const sus = useFireCommandStore((s) => s.patch.filtSustain) ?? 0.5;
+  const r = useFireCommandStore((s) => s.patch.filtRelease) ?? 0.3;
+  const amt = useFireCommandStore((s) => s.patch.filterEnvAmount) ?? 0;
+  const sweeping = Math.abs(amt) > 0.04;
+  const aN = Math.log(Math.max(0.001, a) / 0.001) / Math.log(3 / 0.001);
+  const dN = Math.log(Math.max(0.005, d) / 0.005) / Math.log(3 / 0.005);
+  const rN = Math.log(Math.max(0.005, r) / 0.005) / Math.log(4 / 0.005);
+
+  return (
+    <Section title="Filter Envelope" color={c} collapseKey="env.filt" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: sweeping ? `${c}45` : `${c}28`,
+          background: sweeping
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: sweeping ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Tone
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.tone, 0.88) }}>
+            Cutoff Sweep
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {sweeping
+                ? `A${fmtSec(a)} · E${fmtBi(amt)} · S${Math.round(sus * 100)}`
+                : `A${fmtSec(a)} · flat · S${Math.round(sus * 100)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <FenvQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: sweeping ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.35)",
+              background: sweeping ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${sweeping ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: sweeping ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {sweeping ? (amt > 0 ? "Open" : "Close") : "Flat"}
+          </div>
+        </div>
+      </div>
+
+      <FiltEnvStageViz />
+      <FenvCharacterStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-3 flex-wrap">
+        <FenvModMeter label="A" value={aN} color={cA} format={() => fmtSec(a)} />
+        <FenvModMeter label="D" value={dN} color={cD} format={() => fmtSec(d)} />
+        <FenvModMeter label="S" value={sus} color={cS} />
+        <FenvModMeter label="R" value={rN} color={cR} format={() => fmtSec(r)} />
+        <FenvModMeter label="Amt" value={amt} color={cAmt} bipolar />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="filtAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} def={0.01} size={50} color={cA} />
+        <FParamKnob paramKey="filtDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} def={0.3} size={50} color={cD} />
+        <FParamKnob paramKey="filtSustain" label="S" min={0} max={1} format={fmtPct} def={0.5} size={48} color={cS} />
+        <FParamKnob paramKey="filtRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} def={0.3} size={50} color={cR} />
+        <FParamKnob paramKey="filterEnvAmount" label="Env Amt" min={-1} max={1} bipolar format={fmtBi} def={0} size={46} color={cAmt} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Cutoff sculptor — drag A/D/S/R, scrub Env Amt rail (±), stamp a sweep.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ PLUCK — Vactrol Strike ════════════════════
+
+const PLUCK_CHARS = [
+  { id: "mute", label: "Mute", decay: 0.12, color: 0.15, vel: 0.7 },
+  { id: "snap", label: "Snap", decay: 0.18, color: 0.55, vel: 1 },
+  { id: "classic", label: "Classic", decay: 0.4, color: 0.7, vel: 1 },
+  { id: "warm", label: "Warm", decay: 0.65, color: 0.85, vel: 0.85 },
+  { id: "long", label: "Long", decay: 1.4, color: 0.6, vel: 0.9 },
+  { id: "bright", label: "Bright", decay: 0.35, color: 1, vel: 1 },
+] as const;
+
+function pluckNearSec(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.05, a) / Math.max(0.05, b))) < 0.35;
+}
+
+function PluckCharacterStrip() {
+  const decay = useFireCommandStore((s) => s.patch.lpgDecay) ?? 0.4;
+  const color = useFireCommandStore((s) => s.patch.lpgColor) ?? 0.7;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.pluck;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Strike
+      </span>
+      {PLUCK_CHARS.map((p) => {
+        const on = pluckNearSec(decay, p.decay) && Math.abs(color - p.color) < 0.12;
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("lpgOn", true);
+              setParam("lpgDecay", p.decay);
+              setParam("lpgColor", p.color);
+              setParam("velAmount", p.vel);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.92),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`${p.label} · ${Math.round(p.decay * 1000)}ms · C${Math.round(p.color * 100)}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PluckQuickActions() {
+  const on = useFireCommandStore((s) => s.patch.lpgOn) ?? false;
+  const decay = useFireCommandStore((s) => s.patch.lpgDecay) ?? 0.4;
+  const color = useFireCommandStore((s) => s.patch.lpgColor) ?? 0.7;
+  const vel = useFireCommandStore((s) => s.patch.velAmount) ?? 1;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ decay: 0.4, color: 0.7, vel: 1 });
+  const c = FC.pluck;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (!on) savedRef.current = { decay, color, vel };
+          setParam("lpgOn", !on);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: on ? `${c}88` : `${c}55`,
+          color: on ? bandShade(FC.tone, 0.92) : bandShade(FC.tone, 0.75),
+          background: on ? `${c}40` : `${c}18`,
+          boxShadow: on ? `0 0 14px ${c}55` : `0 0 8px ${c}22`,
+        }}
+        title={on ? "Return loudness to amp ADSR" : "Arm vactrol LPG (replaces amp ADSR)"}
+      >
+        {on ? "Armed" : "Arm"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("lpgOn", true);
+          setParam("lpgDecay", 0.22);
+          setParam("lpgColor", 0.75);
+          setParam("velAmount", 1);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.tone, 0.85), background: `${c}1c` }}
+        title="Snappy Buchla-style pluck"
+      >
+        Snap
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("lpgDecay", 0.4);
+          setParam("lpgColor", 0.7);
+          setParam("velAmount", 1);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset pluck defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function PluckModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function PluckPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.pluck;
+  const cDec = bandShade(FC.tone, 0.45);
+  const cCol = bandShade(FC.tone, 0.65);
+  const cVel = bandShade(FC.tone, 0.85);
+  const on = useFireCommandStore((s) => s.patch.lpgOn) ?? false;
+  const decay = useFireCommandStore((s) => s.patch.lpgDecay) ?? 0.4;
+  const color = useFireCommandStore((s) => s.patch.lpgColor) ?? 0.7;
+  const vel = useFireCommandStore((s) => s.patch.velAmount) ?? 1;
+  const decN = Math.log(Math.max(0.05, decay) / 0.05) / Math.log(2.5 / 0.05);
+
+  return (
+    <Section
+      title="Pluck Gate"
+      color={c}
+      collapseKey="pluck"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={<LpgToggle />}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: on ? `${c}48` : `${c}28`,
+          background: on
+            ? `linear-gradient(105deg, ${c}2a 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: on ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}1a` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Tone
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.tone, 0.9) }}>
+            Vactrol Strike
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {on
+                ? `${fmtSec(decay)} · C${Math.round(color * 100)} · V${Math.round(vel * 100)}`
+                : "sleep · amp ADSR owns loudness"}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <PluckQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: on ? bandShade(FC.tone, 0.94) : "rgba(255,255,255,0.35)",
+              background: on ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${on ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: on ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {on ? "LPG" : "Sleep"}
+          </div>
+        </div>
+      </div>
+
+      <PluckStageViz />
+      <PluckCharacterStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-4 flex-wrap">
+        <PluckModMeter label="Decay" value={decN} color={cDec} format={() => fmtSec(decay)} />
+        <PluckModMeter label="Color" value={color} color={cCol} />
+        <PluckModMeter label="Vel" value={vel} color={cVel} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="lpgDecay" label="Decay" min={0.05} max={2.5} curve="log" format={fmtSec} def={0.4} size={52} color={cDec} />
+        <FParamKnob paramKey="lpgColor" label="Color" min={0} max={1} format={fmtPct} def={0.7} size={52} color={cCol} />
+        <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} size={48} color={cVel} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Struck vactrol — arm LPG, drag Decay↔ / Color↕, scrub Vel. Loud is bright · quiet is dark.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ LFO 1 — Phase Aurora ════════════════════
+
+const LFO1_WAVES: { id: LfoWave; label: string; tip: string }[] = [
+  { id: "sine", label: "∿", tip: "Sine" },
+  { id: "triangle", label: "△", tip: "Triangle" },
+  { id: "sawtooth", label: "◺", tip: "Saw" },
+  { id: "square", label: "⊓", tip: "Square" },
+  { id: "sample-hold", label: "S&H", tip: "Sample & Hold" },
+];
+
+const LFO1_CHARS = [
+  { id: "idle", label: "Idle", wave: "sine" as const, rate: 5, depth: 0, dest: "off" as const, a: 0, b: 0, c: 0 },
+  { id: "trem", label: "Trem", wave: "sine" as const, rate: 5.5, depth: 0.35, dest: "volume" as const, a: 0, b: 0, c: 0 },
+  { id: "vib", label: "Vib", wave: "sine" as const, rate: 5.2, depth: 0.22, dest: "pitch" as const, a: 0, b: 0, c: 0 },
+  { id: "wah", label: "Wah", wave: "triangle" as const, rate: 1.2, depth: 0.55, dest: "filter" as const, a: 0, b: 0, c: 0 },
+  { id: "scan", label: "Scan", wave: "sawtooth" as const, rate: 0.35, depth: 0.15, dest: "off" as const, a: 0.55, b: 0.2, c: 0 },
+  { id: "chaos", label: "Chaos", wave: "sample-hold" as const, rate: 8, depth: 0.4, dest: "filter" as const, a: 0.3, b: -0.25, c: 0.15 },
+] as const;
+
+const LFO1_RATES = [
+  { label: "0.2", v: 0.2 },
+  { label: "1", v: 1 },
+  { label: "3", v: 3 },
+  { label: "5", v: 5 },
+  { label: "8", v: 8 },
+  { label: "16", v: 16 },
+] as const;
+
+function lfo1NearHz(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.05, a) / Math.max(0.05, b))) < 0.25;
+}
+
+function Lfo1WaveStrip() {
+  const wave = useFireCommandStore((s) => s.patch.lfo1Wave) ?? "sine";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Wave
+      </span>
+      {LFO1_WAVES.map((o) => {
+        const on = wave === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setParam("lfo1Wave", o.id)}
+            className="min-w-[2rem] rounded-md border px-2 py-0.5 text-[10px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.92),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={o.tip}
+            aria-pressed={on}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo1DestStrip() {
+  const dest = useFireCommandStore((s) => s.patch.lfo1Dest) ?? "off";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo;
+  const opts: { id: LfoDest; label: string }[] = [
+    { id: "off", label: "Off" },
+    { id: "pitch", label: "Pitch" },
+    { id: "filter", label: "Filt" },
+    { id: "volume", label: "Vol" },
+    { id: "pan", label: "Pan" },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Dest
+      </span>
+      {opts.map((o) => {
+        const on = dest === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setParam("lfo1Dest", o.id)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, 0.7)}99`,
+                    background: `${bandShade(FC.mod, 0.7)}28`,
+                    color: bandShade(FC.mod, 0.9),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo1CharacterStrip() {
+  const depth = useFireCommandStore((s) => s.patch.lfo1Depth) ?? 0;
+  const dest = useFireCommandStore((s) => s.patch.lfo1Dest) ?? "off";
+  const lfoA = useFireCommandStore((s) => s.patch.oscALfo) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Aura
+      </span>
+      {LFO1_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && depth < 0.02 && dest === "off" && Math.abs(lfoA) < 0.04) ||
+          (p.id !== "idle" && dest === p.dest && Math.abs(depth - p.depth) < 0.1);
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("lfo1Wave", p.wave);
+              setParam("lfo1Rate", p.rate);
+              setParam("lfo1Depth", p.depth);
+              setParam("lfo1Dest", p.dest);
+              setParam("oscALfo", p.a);
+              setParam("oscBLfo", p.b);
+              setParam("oscCLfo", p.c);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.9),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo1RateStrip() {
+  const rate = useFireCommandStore((s) => s.patch.lfo1Rate) ?? 5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Rate
+      </span>
+      {LFO1_RATES.map((p) => {
+        const on = lfo1NearHz(rate, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("lfo1Rate", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, 0.5)}99`,
+                    background: `${bandShade(FC.mod, 0.5)}28`,
+                    color: bandShade(FC.mod, 0.88),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${p.v} Hz`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo1QuickActions() {
+  const wave = useFireCommandStore((s) => s.patch.lfo1Wave) ?? "sine";
+  const rate = useFireCommandStore((s) => s.patch.lfo1Rate) ?? 5;
+  const depth = useFireCommandStore((s) => s.patch.lfo1Depth) ?? 0;
+  const dest = useFireCommandStore((s) => s.patch.lfo1Dest) ?? "off";
+  const lfoA = useFireCommandStore((s) => s.patch.oscALfo) ?? 0;
+  const lfoB = useFireCommandStore((s) => s.patch.oscBLfo) ?? 0;
+  const lfoC = useFireCommandStore((s) => s.patch.oscCLfo) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ wave: "sine" as LfoWave, rate: 5, depth: 0.35, dest: "volume" as LfoDest, a: 0, b: 0, c: 0 });
+  const c = FC.lfo;
+  const idle = depth < 0.02 && dest === "off" && Math.abs(lfoA) < 0.02 && Math.abs(lfoB) < 0.02 && Math.abs(lfoC) < 0.02;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("lfo1Wave", savedRef.current.wave);
+            setParam("lfo1Rate", savedRef.current.rate);
+            setParam("lfo1Depth", savedRef.current.depth);
+            setParam("lfo1Dest", savedRef.current.dest);
+            setParam("oscALfo", savedRef.current.a);
+            setParam("oscBLfo", savedRef.current.b);
+            setParam("oscCLfo", savedRef.current.c);
+          } else {
+            savedRef.current = { wave, rate, depth, dest, a: lfoA, b: lfoB, c: lfoC };
+            setParam("lfo1Depth", 0);
+            setParam("lfo1Dest", "off");
+            setParam("oscALfo", 0);
+            setParam("oscBLfo", 0);
+            setParam("oscCLfo", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.mod, 0.92) : bandShade(FC.mod, 0.75),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore aurora" : "Mute depth + dest + WT"}
+      >
+        {idle ? "Wake" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("lfo1Wave", "sine");
+          setParam("lfo1Rate", 5.5);
+          setParam("lfo1Depth", 0.4);
+          setParam("lfo1Dest", "filter");
+          setParam("oscALfo", 0.25);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.85), background: `${c}1c` }}
+        title="Musical filter aurora + light WT"
+      >
+        Glow
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("lfo1Wave", "sine");
+          setParam("lfo1Rate", 5);
+          setParam("lfo1Depth", 0);
+          setParam("lfo1Dest", "off");
+          setParam("oscALfo", 0);
+          setParam("oscBLfo", 0);
+          setParam("oscCLfo", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset LFO 1 defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function Lfo1ModMeter({
+  label,
+  value,
+  color,
+  format,
+  bipolar,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+  bipolar?: boolean;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : bipolar ? fmtBi(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.5rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        {bipolar ? (
+          <>
+            <div className="absolute left-1/2 top-0 h-full w-px bg-white/20" />
+            <div
+              className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+              style={{
+                left: value >= 0 ? "50%" : `${50 - t * 50}%`,
+                width: `${t * 50}%`,
+                background: `linear-gradient(90deg, ${color}55, ${color})`,
+                boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+              }}
+            />
+          </>
+        ) : (
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+            style={{
+              width: `${t * 100}%`,
+              background: `linear-gradient(90deg, ${color}55, ${color})`,
+              boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+            }}
+          />
+        )}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function Lfo1Panel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.lfo;
+  const cRate = bandShade(FC.mod, 0.45);
+  const cDepth = bandShade(FC.mod, 0.65);
+  const wave = useFireCommandStore((s) => s.patch.lfo1Wave) ?? "sine";
+  const rate = useFireCommandStore((s) => s.patch.lfo1Rate) ?? 5;
+  const depth = useFireCommandStore((s) => s.patch.lfo1Depth) ?? 0;
+  const dest = useFireCommandStore((s) => s.patch.lfo1Dest) ?? "off";
+  const lfoA = useFireCommandStore((s) => s.patch.oscALfo) ?? 0;
+  const lfoB = useFireCommandStore((s) => s.patch.oscBLfo) ?? 0;
+  const lfoC = useFireCommandStore((s) => s.patch.oscCLfo) ?? 0;
+  const live = depth > 0.02 || dest !== "off" || Math.abs(lfoA) > 0.04 || Math.abs(lfoB) > 0.04 || Math.abs(lfoC) > 0.04;
+  const rateN = Math.log(Math.max(0.05, rate) / 0.05) / Math.log(30 / 0.05);
+
+  return (
+    <Section
+      title="LFO 1"
+      color={c}
+      collapseKey="lfo.1"
+      chipHosted={chipHosted}
+      right={<FLfoWave paramKey="lfo1Wave" />}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mod
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.9) }}>
+            Phase Aurora
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${wave} · ${rate.toFixed(2)}Hz · D${Math.round(depth * 100)}${dest !== "off" ? ` · →${dest}` : ""}`
+                : `${wave} · idle`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Lfo1QuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.mod, 0.94) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? (dest === "off" ? "WT" : dest) : "Idle"}
+          </div>
+        </div>
+      </div>
+
+      <Lfo1StageViz />
+      <Lfo1WaveStrip />
+      <Lfo1DestStrip />
+      <Lfo1CharacterStrip />
+      <Lfo1RateStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <Lfo1ModMeter label="Rate" value={rateN} color={cRate} format={() => `${rate.toFixed(1)}`} />
+        <Lfo1ModMeter label="Depth" value={depth} color={cDepth} />
+        <Lfo1ModMeter label="→A" value={lfoA} color={FC.oscA} bipolar />
+        <Lfo1ModMeter label="→B" value={lfoB} color={FC.oscB} bipolar />
+        <Lfo1ModMeter label="→C" value={lfoC} color={FC.oscC} bipolar />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="lfo1Rate" label="Rate" min={0.05} max={30} curve="log" format={fmtHzRate} def={5} size={52} color={cRate} />
+        <FParamKnob paramKey="lfo1Depth" label="Depth" min={0} max={1} format={fmtPct} def={0} size={52} color={cDepth} />
+        <FParamKnob paramKey="oscALfo" label="→A" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={FC.oscA} />
+        <FParamKnob paramKey="oscBLfo" label="→B" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={FC.oscB} />
+        <FParamKnob paramKey="oscCLfo" label="→C" min={-1} max={1} bipolar format={fmtBi} def={0} size={44} color={FC.oscC} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Mod sky — drag Rate↔ / Depth↕, scrub →WT rail, double-click cycles wave. Also feeds osc LFO→WT.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ LFO 2 — Twin Orbit ════════════════════
+
+const LFO2_WAVES: { id: LfoWave; label: string; tip: string }[] = [
+  { id: "sine", label: "∿", tip: "Sine" },
+  { id: "triangle", label: "△", tip: "Triangle" },
+  { id: "sawtooth", label: "◺", tip: "Saw" },
+  { id: "square", label: "⊓", tip: "Square" },
+  { id: "sample-hold", label: "S&H", tip: "Sample & Hold" },
+];
+
+const LFO2_CHARS = [
+  { id: "idle", label: "Idle", wave: "sine" as const, rate: 0.5, depth: 0, dest: "off" as const },
+  { id: "drift", label: "Drift", wave: "sine" as const, rate: 0.15, depth: 0.45, dest: "pan" as const },
+  { id: "crawl", label: "Crawl", wave: "triangle" as const, rate: 0.35, depth: 0.55, dest: "filter" as const },
+  { id: "trem", label: "Trem", wave: "sine" as const, rate: 4.2, depth: 0.28, dest: "volume" as const },
+  { id: "sway", label: "Sway", wave: "sine" as const, rate: 0.8, depth: 0.3, dest: "pitch" as const },
+  { id: "glitch", label: "Glitch", wave: "sample-hold" as const, rate: 3.5, depth: 0.4, dest: "filter" as const },
+] as const;
+
+const LFO2_RATES = [
+  { label: "0.1", v: 0.1 },
+  { label: "0.5", v: 0.5 },
+  { label: "1", v: 1 },
+  { label: "2", v: 2 },
+  { label: "4", v: 4 },
+  { label: "8", v: 8 },
+] as const;
+
+const LFO2_SYNC = [
+  { label: "¼", r: 0.25 },
+  { label: "½", r: 0.5 },
+  { label: "1×", r: 1 },
+  { label: "2×", r: 2 },
+  { label: "4×", r: 4 },
+] as const;
+
+function lfo2NearHz(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.05, a) / Math.max(0.05, b))) < 0.25;
+}
+
+function lfo2NearRatio(rate2: number, rate1: number, ratio: number) {
+  const target = Math.max(0.05, rate1) * ratio;
+  return Math.abs(Math.log2(Math.max(0.05, rate2) / target)) < 0.12;
+}
+
+function Lfo2WaveStrip() {
+  const wave = useFireCommandStore((s) => s.patch.lfo2Wave) ?? "sine";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo2;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Wave
+      </span>
+      {LFO2_WAVES.map((o) => {
+        const on = wave === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setParam("lfo2Wave", o.id)}
+            className="min-w-[2rem] rounded-md border px-2 py-0.5 text-[10px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.94),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={o.tip}
+            aria-pressed={on}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo2DestStrip() {
+  const dest = useFireCommandStore((s) => s.patch.lfo2Dest) ?? "off";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo2;
+  const opts: { id: LfoDest; label: string }[] = [
+    { id: "off", label: "Off" },
+    { id: "pitch", label: "Pitch" },
+    { id: "filter", label: "Filt" },
+    { id: "volume", label: "Vol" },
+    { id: "pan", label: "Pan" },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Dest
+      </span>
+      {opts.map((o) => {
+        const on = dest === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setParam("lfo2Dest", o.id)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, 0.78)}99`,
+                    background: `${bandShade(FC.mod, 0.78)}28`,
+                    color: bandShade(FC.mod, 0.94),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo2CharacterStrip() {
+  const depth = useFireCommandStore((s) => s.patch.lfo2Depth) ?? 0;
+  const dest = useFireCommandStore((s) => s.patch.lfo2Dest) ?? "off";
+  const rate = useFireCommandStore((s) => s.patch.lfo2Rate) ?? 0.5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo2;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Orbit
+      </span>
+      {LFO2_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && depth < 0.02 && dest === "off") ||
+          (p.id !== "idle" && dest === p.dest && Math.abs(depth - p.depth) < 0.1 && lfo2NearHz(rate, p.rate));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("lfo2Wave", p.wave);
+              setParam("lfo2Rate", p.rate);
+              setParam("lfo2Depth", p.depth);
+              setParam("lfo2Dest", p.dest);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.94),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo2RateStrip() {
+  const rate = useFireCommandStore((s) => s.patch.lfo2Rate) ?? 0.5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo2;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Rate
+      </span>
+      {LFO2_RATES.map((p) => {
+        const on = lfo2NearHz(rate, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("lfo2Rate", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, 0.58)}99`,
+                    background: `${bandShade(FC.mod, 0.58)}28`,
+                    color: bandShade(FC.mod, 0.92),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${p.v} Hz`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo2SyncStrip() {
+  const rate = useFireCommandStore((s) => s.patch.lfo2Rate) ?? 0.5;
+  const rate1 = useFireCommandStore((s) => s.patch.lfo1Rate) ?? 5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.lfo2;
+  const link = bandShade(FC.mod, 0.62);
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        ×L1
+      </span>
+      {LFO2_SYNC.map((p) => {
+        const on = lfo2NearRatio(rate, rate1, p.r);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => {
+              const next = Math.min(30, Math.max(0.05, rate1 * p.r));
+              setParam("lfo2Rate", Math.round(next * 1000) / 1000);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${link}99`,
+                    background: `${link}30`,
+                    color: bandShade(FC.mod, 0.94),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`LFO2 = LFO1 × ${p.r}`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lfo2QuickActions() {
+  const wave = useFireCommandStore((s) => s.patch.lfo2Wave) ?? "sine";
+  const rate = useFireCommandStore((s) => s.patch.lfo2Rate) ?? 0.5;
+  const depth = useFireCommandStore((s) => s.patch.lfo2Depth) ?? 0;
+  const dest = useFireCommandStore((s) => s.patch.lfo2Dest) ?? "off";
+  const wave1 = useFireCommandStore((s) => s.patch.lfo1Wave) ?? "sine";
+  const rate1 = useFireCommandStore((s) => s.patch.lfo1Rate) ?? 5;
+  const depth1 = useFireCommandStore((s) => s.patch.lfo1Depth) ?? 0;
+  const dest1 = useFireCommandStore((s) => s.patch.lfo1Dest) ?? "off";
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ wave: "sine" as LfoWave, rate: 0.5, depth: 0.35, dest: "pan" as LfoDest });
+  const c = FC.lfo2;
+  const idle = depth < 0.02 && dest === "off";
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("lfo2Wave", savedRef.current.wave);
+            setParam("lfo2Rate", savedRef.current.rate);
+            setParam("lfo2Depth", savedRef.current.depth);
+            setParam("lfo2Dest", savedRef.current.dest);
+          } else {
+            savedRef.current = { wave, rate, depth, dest };
+            setParam("lfo2Depth", 0);
+            setParam("lfo2Dest", "off");
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.mod, 0.94) : bandShade(FC.mod, 0.78),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore orbit" : "Mute depth + dest"}
+      >
+        {idle ? "Wake" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("lfo2Wave", wave1);
+          setParam("lfo2Rate", Math.min(30, Math.max(0.05, rate1 * 0.5)));
+          setParam("lfo2Depth", Math.max(0.2, depth1 * 0.85 || 0.35));
+          setParam("lfo2Dest", dest1 === "off" ? "pan" : dest1);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${FC.lfo}66`, color: bandShade(FC.mod, 0.88), background: `${FC.lfo}1c` }}
+        title="Mirror LFO 1 at half rate (twin)"
+      >
+        Twin
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("lfo2Wave", "sine");
+          setParam("lfo2Rate", 0.2);
+          setParam("lfo2Depth", 0.5);
+          setParam("lfo2Dest", "pan");
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.88), background: `${c}1c` }}
+        title="Slow stereo drift"
+      >
+        Drift
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("lfo2Wave", "sine");
+          setParam("lfo2Rate", 0.5);
+          setParam("lfo2Depth", 0);
+          setParam("lfo2Dest", "off");
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset LFO 2 defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function Lfo2ModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.8rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function Lfo2Panel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.lfo2;
+  const cRate = bandShade(FC.mod, 0.55);
+  const cDepth = bandShade(FC.mod, 0.78);
+  const cLink = bandShade(FC.mod, 0.62);
+  const wave = useFireCommandStore((s) => s.patch.lfo2Wave) ?? "sine";
+  const rate = useFireCommandStore((s) => s.patch.lfo2Rate) ?? 0.5;
+  const depth = useFireCommandStore((s) => s.patch.lfo2Depth) ?? 0;
+  const dest = useFireCommandStore((s) => s.patch.lfo2Dest) ?? "off";
+  const rate1 = useFireCommandStore((s) => s.patch.lfo1Rate) ?? 5;
+  const live = depth > 0.02 || dest !== "off";
+  const rateN = Math.log(Math.max(0.05, rate) / 0.05) / Math.log(30 / 0.05);
+  const linkRatio = rate / Math.max(0.05, rate1);
+  const linked = LFO2_SYNC.some((p) => lfo2NearRatio(rate, rate1, p.r));
+
+  return (
+    <Section
+      title="LFO 2"
+      color={c}
+      collapseKey="lfo.2"
+      chipHosted={chipHosted}
+      right={<FLfoWave paramKey="lfo2Wave" />}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mod
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.94) }}>
+            Twin Orbit
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${wave} · ${rate.toFixed(2)}Hz · D${Math.round(depth * 100)}${dest !== "off" ? ` · →${dest}` : ""}`
+                : `${wave} · idle`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Lfo2QuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.mod, 0.96) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? (linked ? `×${linkRatio < 1 ? `1/${Math.round(1 / linkRatio)}` : Math.round(linkRatio)}` : dest === "off" ? "Live" : dest) : "Idle"}
+          </div>
+        </div>
+      </div>
+
+      <Lfo2StageViz />
+      <Lfo2WaveStrip />
+      <Lfo2DestStrip />
+      <Lfo2CharacterStrip />
+      <Lfo2RateStrip />
+      <Lfo2SyncStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <Lfo2ModMeter label="Rate" value={rateN} color={cRate} format={() => `${rate.toFixed(2)}`} />
+        <Lfo2ModMeter label="Depth" value={depth} color={cDepth} />
+        <Lfo2ModMeter
+          label="×L1"
+          value={linked ? 1 : Math.min(1, Math.abs(Math.log2(Math.max(0.05, linkRatio))) / 3)}
+          color={cLink}
+          format={() => (linked ? "sync" : `${linkRatio.toFixed(2)}×`)}
+        />
+        <Lfo2ModMeter label="Dest" value={dest === "off" ? 0 : 1} color={bandShade(FC.mod, 0.88)} format={() => (dest === "off" ? "—" : dest)} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="lfo2Rate" label="Rate" min={0.05} max={30} curve="log" format={fmtHzRate} def={0.5} size={56} color={cRate} />
+        <FParamKnob paramKey="lfo2Depth" label="Depth" min={0} max={1} format={fmtPct} def={0} size={56} color={cDepth} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Secondary Mod sky — drag Rate↔ / Depth↕, scrub ×L1 rail, Twin mirrors LFO 1 at half rate.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ FM · Ring — Sideband Forge ════════════════════
+
+const FM_CHARS = [
+  { id: "idle", label: "Idle", amt: 0, ratio: 2, ba: 0, ring: 0, hz: 220 },
+  { id: "soft", label: "Soft", amt: 0.22, ratio: 1, ba: 0, ring: 0, hz: 220 },
+  { id: "bell", label: "Bell", amt: 0.55, ratio: 3.5, ba: 0, ring: 0, hz: 220 },
+  { id: "brass", label: "Brass", amt: 0.42, ratio: 2, ba: 0.18, ring: 0, hz: 220 },
+  { id: "clang", label: "Clang", amt: 0.78, ratio: 7, ba: 0.1, ring: 0, hz: 220 },
+  { id: "cross", label: "Cross", amt: 0.15, ratio: 2, ba: 0.72, ring: 0, hz: 220 },
+  { id: "ring", label: "Ring", amt: 0.08, ratio: 1, ba: 0, ring: 0.62, hz: 440 },
+  { id: "swarm", label: "Swarm", amt: 0.38, ratio: 1.5, ba: 0.2, ring: 0.35, hz: 110 },
+] as const;
+
+const FM_RATIOS = [
+  { label: "½", v: 0.5 },
+  { label: "1", v: 1 },
+  { label: "1½", v: 1.5 },
+  { label: "2", v: 2 },
+  { label: "3½", v: 3.5 },
+  { label: "4", v: 4 },
+  { label: "5", v: 5 },
+  { label: "7", v: 7 },
+] as const;
+
+const FM_RING_HZ = [
+  { label: "55", v: 55 },
+  { label: "110", v: 110 },
+  { label: "220", v: 220 },
+  { label: "440", v: 440 },
+  { label: "880", v: 880 },
+  { label: "1.7k", v: 1760 },
+] as const;
+
+function fmNearRatio(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.5, a) / Math.max(0.5, b))) < 0.08;
+}
+
+function fmNearHz(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(20, a) / Math.max(20, b))) < 0.12;
+}
+
+function FmCharacterStrip() {
+  const amt = useFireCommandStore((s) => s.patch.fmAmount) ?? 0;
+  const ratio = useFireCommandStore((s) => s.patch.fmRatio) ?? 2;
+  const ba = useFireCommandStore((s) => s.patch.fmBtoA) ?? 0;
+  const ring = useFireCommandStore((s) => s.patch.ringAmount) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.fm;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Forge
+      </span>
+      {FM_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && amt < 0.02 && ba < 0.02 && ring < 0.02) ||
+          (p.id !== "idle" &&
+            Math.abs(amt - p.amt) < 0.1 &&
+            fmNearRatio(ratio, p.ratio) &&
+            Math.abs(ba - p.ba) < 0.12 &&
+            Math.abs(ring - p.ring) < 0.12);
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("fmAmount", p.amt);
+              setParam("fmRatio", p.ratio);
+              setParam("fmBtoA", p.ba);
+              setParam("ringAmount", p.ring);
+              setParam("ringFreq", p.hz);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.94),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FmRatioStrip() {
+  const ratio = useFireCommandStore((s) => s.patch.fmRatio) ?? 2;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.fm;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Ratio
+      </span>
+      {FM_RATIOS.map((p) => {
+        const on = fmNearRatio(ratio, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("fmRatio", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, 0.68)}99`,
+                    background: `${bandShade(FC.mod, 0.68)}28`,
+                    color: bandShade(FC.mod, 0.94),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${p.v}×`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FmRingHzStrip() {
+  const hz = useFireCommandStore((s) => s.patch.ringFreq) ?? 220;
+  const ring = useFireCommandStore((s) => s.patch.ringAmount) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.fm;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Ring Hz
+      </span>
+      {FM_RING_HZ.map((p) => {
+        const on = ring > 0.02 && fmNearHz(hz, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => {
+              setParam("ringFreq", p.v);
+              if (ring < 0.05) setParam("ringAmount", 0.45);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, 0.88)}99`,
+                    background: `${bandShade(FC.mod, 0.88)}28`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${p.v} Hz`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FmQuickActions() {
+  const amt = useFireCommandStore((s) => s.patch.fmAmount) ?? 0;
+  const ratio = useFireCommandStore((s) => s.patch.fmRatio) ?? 2;
+  const ba = useFireCommandStore((s) => s.patch.fmBtoA) ?? 0;
+  const ring = useFireCommandStore((s) => s.patch.ringAmount) ?? 0;
+  const hz = useFireCommandStore((s) => s.patch.ringFreq) ?? 220;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ amt: 0.45, ratio: 3.5, ba: 0, ring: 0, hz: 220 });
+  const c = FC.fm;
+  const idle = amt < 0.02 && ba < 0.02 && ring < 0.02;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("fmAmount", savedRef.current.amt);
+            setParam("fmRatio", savedRef.current.ratio);
+            setParam("fmBtoA", savedRef.current.ba);
+            setParam("ringAmount", savedRef.current.ring);
+            setParam("ringFreq", savedRef.current.hz);
+          } else {
+            savedRef.current = { amt, ratio, ba, ring, hz };
+            setParam("fmAmount", 0);
+            setParam("fmBtoA", 0);
+            setParam("ringAmount", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.mod, 0.94) : bandShade(FC.mod, 0.78),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore forge" : "Mute FM / B→A / Ring"}
+      >
+        {idle ? "Wake" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("fmAmount", 0.55);
+          setParam("fmRatio", 3.5);
+          setParam("fmBtoA", 0);
+          setParam("ringAmount", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.88), background: `${c}1c` }}
+        title="Classic FM bell"
+      >
+        Bell
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("fmAmount", 0.4);
+          setParam("fmRatio", 2);
+          setParam("fmBtoA", 0.35);
+          setParam("ringAmount", 0.25);
+          setParam("ringFreq", 220);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.88), background: `${c}1c` }}
+        title="FM + cross + light ring"
+      >
+        Forge
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("fmAmount", 0);
+          setParam("fmRatio", 2);
+          setParam("fmBtoA", 0);
+          setParam("ringAmount", 0);
+          setParam("ringFreq", 220);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset FM · Ring defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function FmModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function FmPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.fm;
+  const cAmt = bandShade(FC.mod, 0.5);
+  const cRatio = bandShade(FC.mod, 0.68);
+  const cBa = bandShade(FC.mod, 0.78);
+  const cRing = bandShade(FC.mod, 0.88);
+  const amt = useFireCommandStore((s) => s.patch.fmAmount) ?? 0;
+  const ratio = useFireCommandStore((s) => s.patch.fmRatio) ?? 2;
+  const ba = useFireCommandStore((s) => s.patch.fmBtoA) ?? 0;
+  const ring = useFireCommandStore((s) => s.patch.ringAmount) ?? 0;
+  const hz = useFireCommandStore((s) => s.patch.ringFreq) ?? 220;
+  const live = amt > 0.02 || ba > 0.02 || ring > 0.02;
+  const ratioN = Math.log(Math.max(0.5, ratio) / 0.5) / Math.log(12 / 0.5);
+  const hzN = Math.log(Math.max(20, hz) / 20) / Math.log(4000 / 20);
+
+  return (
+    <Section title="FM · Ring" color={c} collapseKey="fm" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mod
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.94) }}>
+            Sideband Forge
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `I${Math.round(amt * 100)} · ${ratio.toFixed(2)}×${ba > 0.02 ? ` · B→A${Math.round(ba * 100)}` : ""}${ring > 0.02 ? ` · R${Math.round(hz)}` : ""}`
+                : `${ratio.toFixed(2)}× · idle`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <FmQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.mod, 0.96) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? (ring > amt && ring > ba ? "Ring" : ba > amt ? "Cross" : "FM") : "Idle"}
+          </div>
+        </div>
+      </div>
+
+      <FmStageViz />
+      <FmCharacterStrip />
+      <FmRatioStrip />
+      <FmRingHzStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2 flex-wrap">
+        <FmModMeter label="Amt" value={amt} color={cAmt} />
+        <FmModMeter label="Ratio" value={ratioN} color={cRatio} format={() => `${ratio.toFixed(2)}×`} />
+        <FmModMeter label="B→A" value={ba} color={cBa} />
+        <FmModMeter label="Ring" value={ring} color={cRing} />
+        <FmModMeter label="Hz" value={hzN} color={bandShade(FC.mod, 0.72)} format={() => fmtHz(hz)} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="fmAmount" label="FM Amt" min={0} max={1} format={fmtPct} def={0} size={50} color={cAmt} />
+        <FParamKnob paramKey="fmRatio" label="Ratio" min={0.5} max={12} curve="log" format={fmtRatio} def={2} size={50} color={cRatio} />
+        <FParamKnob paramKey="fmBtoA" label="B→A" min={0} max={1} format={fmtPct} def={0} size={46} color={cBa} />
+        <FParamKnob paramKey="ringAmount" label="Ring" min={0} max={1} format={fmtPct} def={0} size={46} color={cRing} />
+        <FParamKnob paramKey="ringFreq" label="Ring Hz" min={20} max={4000} curve="log" format={fmtHz} def={220} size={46} color={bandShade(FC.mod, 0.72)} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Mod forge — drag Ratio↔ / Amount↕, scrub B→A · Ring · Hz rail, double-click cycles harmonics.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ FM Rack · Vector — Vector Lattice ════════════════════
+
+const RACK_ALG_NAMES = ["Stack1", "Stack2", "Twin", "Cascade", "Fork", "Parallel", "Branch", "All→C"] as const;
+
+const RACK_CHARS = [
+  {
+    id: "idle",
+    label: "Idle",
+    engine: "classic" as const,
+    alg: 0,
+    fb: 0,
+    ops: [1, 0.7, 0.5, 0.35] as const,
+    ratios: [1, 2, 3] as const,
+    vr: 0,
+    vd: 0,
+  },
+  {
+    id: "stack",
+    label: "Stack",
+    engine: "ops4" as const,
+    alg: 3,
+    fb: 0.15,
+    ops: [1, 0.85, 0.65, 0.45] as const,
+    ratios: [1, 2, 4] as const,
+    vr: 0,
+    vd: 0,
+  },
+  {
+    id: "parallel",
+    label: "Para",
+    engine: "ops4" as const,
+    alg: 5,
+    fb: 0,
+    ops: [1, 0.6, 0.55, 0.5] as const,
+    ratios: [1, 1.5, 2] as const,
+    vr: 0.2,
+    vd: 0.25,
+  },
+  {
+    id: "growl",
+    label: "Growl",
+    engine: "ops4" as const,
+    alg: 1,
+    fb: 0.65,
+    ops: [1, 0.9, 0.4, 0.2] as const,
+    ratios: [1.5, 2, 3] as const,
+    vr: 0,
+    vd: 0,
+  },
+  {
+    id: "bell",
+    label: "Bell",
+    engine: "ops4" as const,
+    alg: 0,
+    fb: 0,
+    ops: [1, 0.7, 0.35, 0.15] as const,
+    ratios: [3.5, 7, 2] as const,
+    vr: 0,
+    vd: 0.1,
+  },
+  {
+    id: "vector",
+    label: "Vector",
+    engine: "ops4" as const,
+    alg: 4,
+    fb: 0.1,
+    ops: [1, 0.75, 0.6, 0.4] as const,
+    ratios: [1, 2, 3] as const,
+    vr: 0.55,
+    vd: 0.7,
+  },
+  {
+    id: "metal",
+    label: "Metal",
+    engine: "ops4" as const,
+    alg: 6,
+    fb: 0.35,
+    ops: [0.9, 0.8, 0.7, 0.55] as const,
+    ratios: [2.7, 5.1, 7] as const,
+    vr: 0.3,
+    vd: 0.4,
+  },
+] as const;
+
+function rackNear(a: number, b: number, tol = 0.12) {
+  return Math.abs(a - b) < tol;
+}
+
+function FmRackAlgStrip() {
+  const alg = Math.round(useFireCommandStore((s) => s.patch.fmAlg) ?? 0);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.fmRack;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Alg
+      </span>
+      {RACK_ALG_NAMES.map((name, i) => {
+        const on = alg === i;
+        return (
+          <button
+            key={name}
+            type="button"
+            onClick={() => {
+              setParam("fmAlg", i);
+              setParam("fmEngine", "ops4");
+            }}
+            className="rounded-md border px-1.5 py-0.5 text-[8px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={`Algorithm ${i}: ${name}`}
+          >
+            {i}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FmRackCharacterStrip() {
+  const engine = useFireCommandStore((s) => s.patch.fmEngine) ?? "classic";
+  const alg = Math.round(useFireCommandStore((s) => s.patch.fmAlg) ?? 0);
+  const fb = useFireCommandStore((s) => s.patch.fmFeedback) ?? 0;
+  const vd = useFireCommandStore((s) => s.patch.vectorDepth) ?? 0;
+  const op2 = useFireCommandStore((s) => s.patch.fmOp2Level) ?? 0.7;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.fmRack;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Lattice
+      </span>
+      {RACK_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && engine === "classic" && fb < 0.02 && vd < 0.02) ||
+          (p.id !== "idle" && engine === "ops4" && alg === p.alg && rackNear(fb, p.fb) && rackNear(vd, p.vd) && rackNear(op2, p.ops[1]));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("fmEngine", p.engine);
+              setParam("fmAlg", p.alg);
+              setParam("fmFeedback", p.fb);
+              setParam("fmOp1Level", p.ops[0]);
+              setParam("fmOp2Level", p.ops[1]);
+              setParam("fmOp3Level", p.ops[2]);
+              setParam("fmOp4Level", p.ops[3]);
+              setParam("fmOp2Ratio", p.ratios[0]);
+              setParam("fmOp3Ratio", p.ratios[1]);
+              setParam("fmOp4Ratio", p.ratios[2]);
+              setParam("vectorRate", p.vr);
+              setParam("vectorDepth", p.vd);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FmRackQuickActions() {
+  const engine = useFireCommandStore((s) => s.patch.fmEngine) ?? "classic";
+  const alg = useFireCommandStore((s) => s.patch.fmAlg) ?? 0;
+  const fb = useFireCommandStore((s) => s.patch.fmFeedback) ?? 0;
+  const op1 = useFireCommandStore((s) => s.patch.fmOp1Level) ?? 1;
+  const op2 = useFireCommandStore((s) => s.patch.fmOp2Level) ?? 0.7;
+  const op3 = useFireCommandStore((s) => s.patch.fmOp3Level) ?? 0.5;
+  const op4 = useFireCommandStore((s) => s.patch.fmOp4Level) ?? 0.35;
+  const r2 = useFireCommandStore((s) => s.patch.fmOp2Ratio) ?? 1;
+  const r3 = useFireCommandStore((s) => s.patch.fmOp3Ratio) ?? 2;
+  const r4 = useFireCommandStore((s) => s.patch.fmOp4Ratio) ?? 3;
+  const vr = useFireCommandStore((s) => s.patch.vectorRate) ?? 0;
+  const vd = useFireCommandStore((s) => s.patch.vectorDepth) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({
+    engine: "ops4" as FmEngineMode,
+    alg: 3,
+    fb: 0.2,
+    ops: [1, 0.8, 0.6, 0.4],
+    ratios: [1, 2, 3],
+    vr: 0.4,
+    vd: 0.5,
+  });
+  const c = FC.fmRack;
+  const idle = engine === "classic" || (fb < 0.02 && vd < 0.02 && op2 < 0.05 && op3 < 0.05 && op4 < 0.05);
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            const s = savedRef.current;
+            setParam("fmEngine", s.engine);
+            setParam("fmAlg", s.alg);
+            setParam("fmFeedback", s.fb);
+            setParam("fmOp1Level", s.ops[0]!);
+            setParam("fmOp2Level", s.ops[1]!);
+            setParam("fmOp3Level", s.ops[2]!);
+            setParam("fmOp4Level", s.ops[3]!);
+            setParam("fmOp2Ratio", s.ratios[0]!);
+            setParam("fmOp3Ratio", s.ratios[1]!);
+            setParam("fmOp4Ratio", s.ratios[2]!);
+            setParam("vectorRate", s.vr);
+            setParam("vectorDepth", s.vd);
+          } else {
+            savedRef.current = {
+              engine: engine as FmEngineMode,
+              alg,
+              fb,
+              ops: [op1, op2, op3, op4],
+              ratios: [r2, r3, r4],
+              vr,
+              vd,
+            };
+            setParam("fmEngine", "classic");
+            setParam("fmFeedback", 0);
+            setParam("vectorDepth", 0);
+            setParam("vectorRate", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.mod, 0.96) : bandShade(FC.mod, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore lattice" : "Park rack (2-op)"}
+      >
+        {idle ? "Arm" : "Park"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("fmEngine", "ops4");
+          setParam("fmAlg", 3);
+          setParam("fmFeedback", 0.2);
+          setParam("fmOp1Level", 1);
+          setParam("fmOp2Level", 0.85);
+          setParam("fmOp3Level", 0.65);
+          setParam("fmOp4Level", 0.45);
+          setParam("fmOp2Ratio", 1);
+          setParam("fmOp3Ratio", 2);
+          setParam("fmOp4Ratio", 4);
+          setParam("vectorRate", 0.35);
+          setParam("vectorDepth", 0.45);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.9), background: `${c}1c` }}
+        title="Arm 4-op cascade + light vector"
+      >
+        Lattice
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("fmEngine", "classic");
+          setParam("fmAlg", 0);
+          setParam("fmFeedback", 0);
+          setParam("fmOp1Level", 1);
+          setParam("fmOp2Level", 0.7);
+          setParam("fmOp3Level", 0.5);
+          setParam("fmOp4Level", 0.35);
+          setParam("fmOp2Ratio", 1);
+          setParam("fmOp3Ratio", 2);
+          setParam("fmOp4Ratio", 3);
+          setParam("vectorRate", 0);
+          setParam("vectorDepth", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset FM Rack defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function FmRackModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.2rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function FmRackPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.fmRack;
+  const cAlg = bandShade(FC.mod, 0.55);
+  const cFb = bandShade(FC.mod, 0.72);
+  const cVec = bandShade(FC.mod, 0.82);
+  const cOps = [
+    bandShade(FC.mod, 0.95),
+    bandShade(FC.mod, 0.75),
+    bandShade(FC.mod, 0.58),
+    bandShade(FC.mod, 0.42),
+  ] as const;
+  const engine = useFireCommandStore((s) => s.patch.fmEngine) ?? "classic";
+  const alg = Math.round(useFireCommandStore((s) => s.patch.fmAlg) ?? 0);
+  const fb = useFireCommandStore((s) => s.patch.fmFeedback) ?? 0;
+  const op1 = useFireCommandStore((s) => s.patch.fmOp1Level) ?? 1;
+  const op2 = useFireCommandStore((s) => s.patch.fmOp2Level) ?? 0.7;
+  const op3 = useFireCommandStore((s) => s.patch.fmOp3Level) ?? 0.5;
+  const op4 = useFireCommandStore((s) => s.patch.fmOp4Level) ?? 0.35;
+  const r2 = useFireCommandStore((s) => s.patch.fmOp2Ratio) ?? 1;
+  const r3 = useFireCommandStore((s) => s.patch.fmOp3Ratio) ?? 2;
+  const r4 = useFireCommandStore((s) => s.patch.fmOp4Ratio) ?? 3;
+  const vr = useFireCommandStore((s) => s.patch.vectorRate) ?? 0;
+  const vd = useFireCommandStore((s) => s.patch.vectorDepth) ?? 0;
+  const ops4 = engine === "ops4";
+  const live = ops4 && (fb > 0.02 || vd > 0.02 || op2 > 0.08 || op3 > 0.08 || op4 > 0.08);
+
+  return (
+    <Section
+      title="FM Rack · Vector"
+      color={c}
+      collapseKey="fm.rack"
+      chipHosted={chipHosted}
+      right={
+        <FSeg<FmEngineMode>
+          paramKey="fmEngine"
+          color={c}
+          options={[
+            { id: "classic", label: "2-op" },
+            { id: "ops4", label: "4-op" },
+          ]}
+        />
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mod
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.96) }}>
+            Vector Lattice
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {ops4
+                ? `ALG ${alg} · ${RACK_ALG_NAMES[alg] ?? "?"} · FB${Math.round(fb * 100)} · V${Math.round(vd * 100)}`
+                : "2-op classic · rack standby"}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <FmRackQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.mod, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {ops4 ? (live ? "4-OP" : "Armed") : "2-OP"}
+          </div>
+        </div>
+      </div>
+
+      <FmRackStageViz />
+      <FmRackAlgStrip />
+      <FmRackCharacterStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-1.5 flex-wrap">
+        <FmRackModMeter label="Alg" value={alg / 7} color={cAlg} format={() => String(alg)} />
+        <FmRackModMeter label="Fbk" value={fb} color={cFb} />
+        <FmRackModMeter label="VecR" value={vr} color={cVec} />
+        <FmRackModMeter label="VecD" value={vd} color={bandShade(FC.mod, 0.88)} />
+        <FmRackModMeter label="Op1" value={op1} color={cOps[0]} />
+        <FmRackModMeter label="Op2" value={op2} color={cOps[1]} />
+        <FmRackModMeter label="Op3" value={op3} color={cOps[2]} />
+        <FmRackModMeter label="Op4" value={op4} color={cOps[3]} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap mb-1">
+        <FParamKnob paramKey="fmAlg" label="Alg" min={0} max={7} integer format={fmtInt} def={0} size={44} color={cAlg} />
+        <FParamKnob paramKey="fmFeedback" label="Fbk" min={0} max={1} format={fmtPct} def={0} size={44} color={cFb} />
+        <FParamKnob paramKey="vectorRate" label="Vec Rate" min={0} max={1} format={fmtPct} def={0} size={44} color={cVec} />
+        <FParamKnob paramKey="vectorDepth" label="Vec Depth" min={0} max={1} format={fmtPct} def={0} size={44} color={bandShade(FC.mod, 0.88)} />
+      </div>
+      <div className="flex items-end justify-evenly gap-1 flex-wrap mb-1">
+        <FParamKnob paramKey="fmOp1Level" label="Op1" min={0} max={1} format={fmtPct} def={1} size={42} color={cOps[0]} />
+        <FParamKnob paramKey="fmOp2Level" label="Op2" min={0} max={1} format={fmtPct} def={0.7} size={42} color={cOps[1]} />
+        <FParamKnob paramKey="fmOp3Level" label="Op3" min={0} max={1} format={fmtPct} def={0.5} size={42} color={cOps[2]} />
+        <FParamKnob paramKey="fmOp4Level" label="Op4" min={0} max={1} format={fmtPct} def={0.35} size={42} color={cOps[3]} />
+      </div>
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="fmOp2Ratio" label="R2" min={0.25} max={16} curve="log" format={fmtRatio} def={1} size={42} color={cOps[1]} />
+        <FParamKnob paramKey="fmOp3Ratio" label="R3" min={0.25} max={16} curve="log" format={fmtRatio} def={2} size={42} color={cOps[2]} />
+        <FParamKnob paramKey="fmOp4Ratio" label="R4" min={0.25} max={16} curve="log" format={fmtRatio} def={3} size={42} color={cOps[3]} />
+        <div className="flex flex-col items-center gap-0.5 min-w-[2.8rem] pb-1" title={`R2 ${r2.toFixed(2)} · R3 ${r3.toFixed(2)} · R4 ${r4.toFixed(2)}`}>
+          <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>Ratios</div>
+          <div className="font-mono text-[9px] tabular-nums" style={{ color: bandShade(FC.mod, 0.9) }}>
+            {r2.toFixed(1)}/{r3.toFixed(1)}/{r4.toFixed(1)}
+          </div>
+        </div>
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        4-op lattice — pad Vec Rate↔/Depth↕, drag orbs Level↕/Ratio↔, scrub Feedback, double-click cycles alg (arms 4-op). Needs FM module on.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Pitch · Glide — Glide Horizon ════════════════════
+
+const PITCH_CHARS = [
+  { id: "idle", label: "Idle", amt: 0, time: 0.2, glide: 0, mono: false },
+  { id: "pluck", label: "Pluck", amt: 12, time: 0.08, glide: 0, mono: false },
+  { id: "dive", label: "Dive", amt: -24, time: 0.35, glide: 0, mono: false },
+  { id: "rise", label: "Rise", amt: 24, time: 0.45, glide: 0, mono: false },
+  { id: "slide", label: "Slide", amt: 0, time: 0.2, glide: 0.45, mono: true },
+  { id: "acid", label: "Acid", amt: -12, time: 0.12, glide: 0.55, mono: true },
+  { id: "scream", label: "Scream", amt: 36, time: 0.25, glide: 0.2, mono: true },
+] as const;
+
+const PITCH_AMTS = [
+  { label: "-24", v: -24 },
+  { label: "-12", v: -12 },
+  { label: "-7", v: -7 },
+  { label: "0", v: 0 },
+  { label: "+7", v: 7 },
+  { label: "+12", v: 12 },
+  { label: "+24", v: 24 },
+] as const;
+
+const PITCH_TIMES = [
+  { label: "30ms", v: 0.03 },
+  { label: "80ms", v: 0.08 },
+  { label: "200ms", v: 0.2 },
+  { label: "500ms", v: 0.5 },
+  { label: "1s", v: 1 },
+] as const;
+
+function pitchNearAmt(a: number, b: number) {
+  return Math.abs(a - b) < 1.5;
+}
+
+function pitchNearTime(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.01, a) / Math.max(0.01, b))) < 0.2;
+}
+
+function PitchCharacterStrip() {
+  const amt = useFireCommandStore((s) => s.patch.pitchEnvAmount) ?? 0;
+  const glide = useFireCommandStore((s) => s.patch.glide) ?? 0;
+  const mono = useFireCommandStore((s) => s.patch.mono) ?? false;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.pitch;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Horizon
+      </span>
+      {PITCH_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && Math.abs(amt) < 1 && glide < 0.02) ||
+          (p.id !== "idle" && pitchNearAmt(amt, p.amt) && Math.abs(glide - p.glide) < 0.12 && mono === p.mono);
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("pitchEnvAmount", p.amt);
+              setParam("pitchEnvTime", p.time);
+              setParam("glide", p.glide);
+              setParam("mono", p.mono);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PitchAmtStrip() {
+  const amt = useFireCommandStore((s) => s.patch.pitchEnvAmount) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.pitch;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Env
+      </span>
+      {PITCH_AMTS.map((p) => {
+        const on = pitchNearAmt(amt, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("pitchEnvAmount", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, p.v >= 0 ? 0.85 : 0.45)}99`,
+                    background: `${bandShade(FC.mod, p.v >= 0 ? 0.85 : 0.45)}28`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${p.v} semitones`}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PitchTimeStrip() {
+  const time = useFireCommandStore((s) => s.patch.pitchEnvTime) ?? 0.2;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.pitch;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Time
+      </span>
+      {PITCH_TIMES.map((p) => {
+        const on = pitchNearTime(time, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("pitchEnvTime", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.mod, 0.78)}99`,
+                    background: `${bandShade(FC.mod, 0.78)}28`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtSec(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PitchQuickActions() {
+  const amt = useFireCommandStore((s) => s.patch.pitchEnvAmount) ?? 0;
+  const time = useFireCommandStore((s) => s.patch.pitchEnvTime) ?? 0.2;
+  const glide = useFireCommandStore((s) => s.patch.glide) ?? 0;
+  const mono = useFireCommandStore((s) => s.patch.mono) ?? false;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ amt: 12, time: 0.12, glide: 0.4, mono: true });
+  const c = FC.pitch;
+  const idle = Math.abs(amt) < 1 && glide < 0.02;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("pitchEnvAmount", savedRef.current.amt);
+            setParam("pitchEnvTime", savedRef.current.time);
+            setParam("glide", savedRef.current.glide);
+            setParam("mono", savedRef.current.mono);
+          } else {
+            savedRef.current = { amt, time, glide, mono };
+            setParam("pitchEnvAmount", 0);
+            setParam("glide", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.mod, 0.96) : bandShade(FC.mod, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore horizon" : "Mute env + glide"}
+      >
+        {idle ? "Wake" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setParam("mono", !mono)}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{
+          borderColor: mono ? `${c}88` : `${c}44`,
+          color: mono ? bandShade(FC.mod, 0.96) : `${c}bb`,
+          background: mono ? `${c}38` : `${c}14`,
+          boxShadow: mono ? `0 0 12px ${c}44` : undefined,
+        }}
+        title="Toggle mono (needed for portamento)"
+      >
+        {mono ? "Mono" : "Poly"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("mono", true);
+          setParam("glide", 0.5);
+          setParam("pitchEnvAmount", -12);
+          setParam("pitchEnvTime", 0.1);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.9), background: `${c}1c` }}
+        title="Acid mono slide + dive"
+      >
+        Acid
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("pitchEnvAmount", 0);
+          setParam("pitchEnvTime", 0.2);
+          setParam("glide", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset pitch env + glide"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function PitchModMeter({
+  label,
+  value,
+  color,
+  format,
+  bipolar,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+  bipolar?: boolean;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        {bipolar ? (
+          <>
+            <div className="absolute left-1/2 top-0 h-full w-px bg-white/20" />
+            <div
+              className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+              style={{
+                left: value >= 0 ? "50%" : `${50 - t * 50}%`,
+                width: `${t * 50}%`,
+                background: `linear-gradient(90deg, ${color}55, ${color})`,
+                boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+              }}
+            />
+          </>
+        ) : (
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+            style={{
+              width: `${t * 100}%`,
+              background: `linear-gradient(90deg, ${color}55, ${color})`,
+              boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+            }}
+          />
+        )}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function PitchPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.pitch;
+  const cAmt = bandShade(FC.mod, 0.62);
+  const cTime = bandShade(FC.mod, 0.78);
+  const cGlide = bandShade(FC.mod, 0.88);
+  const amt = useFireCommandStore((s) => s.patch.pitchEnvAmount) ?? 0;
+  const time = useFireCommandStore((s) => s.patch.pitchEnvTime) ?? 0.2;
+  const glide = useFireCommandStore((s) => s.patch.glide) ?? 0;
+  const mono = useFireCommandStore((s) => s.patch.mono) ?? false;
+  const live = Math.abs(amt) > 0.5 || glide > 0.02;
+  const timeN = Math.log(Math.max(0.01, time) / 0.01) / Math.log(2 / 0.01);
+  const amtN = amt / 48;
+
+  return (
+    <Section
+      title="Pitch · Glide"
+      color={c}
+      collapseKey="pitch"
+      chipHosted={chipHosted}
+      right={
+        <Seg<"poly" | "mono">
+          value={mono ? "mono" : "poly"}
+          onChange={(v) => useFireCommandStore.getState().setParam("mono", v === "mono")}
+          options={[
+            { id: "poly", label: "Poly" },
+            { id: "mono", label: "Mono" },
+          ]}
+          color={c}
+        />
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mod
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.96) }}>
+            Glide Horizon
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${amt > 0 ? "+" : ""}${Math.round(amt)}st · ${fmtSec(time)}${glide > 0.02 ? ` · G${Math.round(glide * 100)}` : ""} · ${mono ? "mono" : "poly"}`
+                : `${mono ? "mono" : "poly"} · idle`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <PitchQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.mod, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? (glide > Math.abs(amt) / 48 ? "Glide" : amt > 0 ? "Rise" : "Dive") : mono ? "Mono" : "Poly"}
+          </div>
+        </div>
+      </div>
+
+      <PitchStageViz />
+      <PitchCharacterStrip />
+      <PitchAmtStrip />
+      <PitchTimeStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <PitchModMeter label="Env" value={amtN} color={cAmt} bipolar format={() => fmtSemi(amt)} />
+        <PitchModMeter label="Time" value={timeN} color={cTime} format={() => fmtSec(time)} />
+        <PitchModMeter label="Glide" value={glide} color={cGlide} format={() => (glide < 0.01 ? "off" : fmtSec(glide))} />
+        <PitchModMeter label="Mode" value={mono ? 1 : 0} color={bandShade(FC.mod, 0.7)} format={() => (mono ? "mono" : "poly")} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="pitchEnvAmount" label="Ptch Env" min={-48} max={48} integer bipolar format={fmtSemi} def={0} size={52} color={cAmt} />
+        <FParamKnob paramKey="pitchEnvTime" label="Env Time" min={0.01} max={2} curve="log" format={fmtSec} def={0.2} size={52} color={cTime} />
+        <FParamKnob paramKey="glide" label="Glide" min={0} max={1} format={fmtSec} def={0} size={52} color={cGlide} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Semitone horizon — drag Time↔ / Amount↕, scrub Glide, double-click flips polarity. Mono unlocks portamento comet.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Live — Stage Pulse ════════════════════
+
+function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = LIVE_C;
+  const mono = useFireCommandStore((s) => s.patch.mono);
+  const maxVoices = useFireCommandStore((s) => s.maxVoices);
+  const fxOn = useFireCommandStore((s) => s.routeThroughFx);
+  const octave = useFireCommandStore((s) => s.octave);
+  const masterGain = useFireCommandStore((s) => s.patch.masterGain) ?? 0.72;
+  const [voices, setVoices] = useState(0);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      if (document.hidden || now - last < 120) return;
+      last = now;
+      let n = 0;
+      try {
+        n = getEngine().fireCommand.getActiveVoiceCount();
+      } catch {
+        n = 0;
+      }
+      setVoices((prev) => (prev === n ? prev : n));
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const live = voices > 0 || fxOn;
+
+  return (
+    <Section
+      title="Live Controls"
+      color={c}
+      collapseKey="performance"
+      chipHosted={chipHosted}
+      statusLine={`${mono ? "Mono" : "Poly"} · ${voices}/${maxVoices} voices · out ${Math.round(masterGain * 100)}%`}
+      right={
+        <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
+          {voices}/{maxVoices}
+        </span>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mix
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: LIVE_C_GLOW }}>
+            Stage Pulse
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {mono ? "MONO" : "POLY"} · OCT {octave} · {fxOn ? "FX" : "DRY"} · OUT {Math.round(masterGain * 100)}%
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <LiveQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? LIVE_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {voices > 0 ? "Live" : mono ? "Mono" : "Ready"}
+          </div>
+        </div>
+      </div>
+
+      <LiveStageViz />
+      <LiveCharacterStrip />
+      <LiveVoiceStrip />
+      <LiveOctaveStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <LiveMeter
+          label="Load"
+          value={voices / Math.max(1, maxVoices)}
+          color={LIVE_C_HOT}
+          format={() => `${voices}/${maxVoices}`}
+        />
+        <LiveMeter
+          label="Oct"
+          value={octave / 8}
+          color={LIVE_C_OCT}
+          format={() => String(octave)}
+        />
+        <LiveMeter
+          label="Mode"
+          value={mono ? 0.35 : 1}
+          color={mono ? LIVE_C_HOT : LIVE_C_POLY}
+          format={() => (mono ? "MONO" : "POLY")}
+        />
+        <LiveMeter
+          label="FX"
+          value={fxOn ? 1 : 0}
+          color={LIVE_C_FX}
+          format={() => (fxOn ? "ON" : "DRY")}
+        />
+        <LiveMeter
+          label="Master"
+          value={masterGain / 1.2}
+          color={LIVE_C_MST}
+          format={() => `${Math.round(masterGain * 100)}%`}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-evenly gap-2.5">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-widest" style={{ color: `${c}88` }}>
+            Octave
+          </span>
+          <Stepper onClick={() => useFireCommandStore.getState().shiftOctave(-1)}>−</Stepper>
+          <div className="w-6 text-center font-mono text-sm" style={{ color: LIVE_C_GLOW }}>
+            {octave}
+          </div>
+          <Stepper onClick={() => useFireCommandStore.getState().shiftOctave(1)}>+</Stepper>
+        </div>
+        <Seg<"poly" | "mono">
+          value={mono ? "mono" : "poly"}
+          onChange={(v) => useFireCommandStore.getState().setParam("mono", v === "mono")}
+          options={[{ id: "poly", label: "Poly" }, { id: "mono", label: "Mono" }]}
+          color={c}
+        />
+        <button
+          onClick={() => useFireCommandStore.getState().setRouteThroughFx(!fxOn)}
+          className="rounded-lg border px-3 py-1.5 text-xs font-semibold transition"
+          style={
+            fxOn
+              ? {
+                  borderColor: `${LIVE_C_FX}70`,
+                  background: `${LIVE_C_FX}22`,
+                  color: LIVE_C_GLOW,
+                  boxShadow: `0 0 16px ${LIVE_C_FX}33`,
+                }
+              : { borderColor: "rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.7)" }
+          }
+          title="Run the synth through the program's EQ/FX chain, or play it raw."
+        >
+          {fxOn ? "● Kill-Chain FX" : "FX: OFF (raw)"}
+        </button>
+        <FParamKnob paramKey="masterGain" label="Master" min={0} max={1.2} format={fmtPct} def={0.72} size={48} color={LIVE_C_MST} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Stage pulse — radar toggles Mono/Poly, keys set voice cap, right edge FX, rail Master, sides Octave.
+        Double-click Cease Fire. Characters stamp a live setup.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Scope — Lumen Trace ════════════════════
+
+
+function ScopePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = SCOPE_C;
+  const masterGain = useFireCommandStore((s) => s.patch.masterGain) ?? 0.72;
+  const pathOn = useFireCommandStore((s) => s.patch.pathScope !== false);
+  const [viz, setViz] = useState<ScopeVizState>(SCOPE_DEFAULT_VIZ);
+  const [view, setView] = useState<ScopeViewMode>("all");
+  const onVizChange = useCallback((patch: Partial<ScopeVizState>) => {
+    setViz((v) => ({ ...v, ...patch }));
+  }, []);
+  const live = pathOn && masterGain > 0.02;
+
+  return (
+    <Section
+      title="Output · Scope"
+      color={c}
+      collapseKey="output"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      statusLine={!pathOn ? "Bypassed" : `On · out ${Math.round(masterGain * 100)}%`}
+      right={<ScopeVoiceBadge />}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mix
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: SCOPE_C_GLOW }}>
+            Lumen Trace
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!pathOn
+                ? "bypass"
+                : `×${viz.zoom.toFixed(1)} · trail ${viz.phosphor} · out ${Math.round(masterGain * 100)}%${viz.freeze ? " · FREEZE" : ""}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <ScopeQuickActions viz={viz} onVizChange={onVizChange} />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? SCOPE_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!pathOn ? "Bypass" : viz.freeze ? "Frozen" : "Live"}
+          </div>
+        </div>
+      </div>
+
+      <div className={pathOn ? undefined : "opacity-40 grayscale"}>
+        {!pathOn && (
+          <div className="mb-2 text-center text-[10px] uppercase tracking-widest text-white/40">
+            Scope bypassed on Signal Path
+          </div>
+        )}
+
+        {(view === "all" || view === "master") && (
+          <ScopeStageViz viz={viz} onVizChange={onVizChange} />
+        )}
+
+        <ScopeViewStrip mode={view} onChange={setView} />
+        <ScopeZoomStrip zoom={viz.zoom} onChange={(z) => onVizChange({ zoom: z })} />
+
+        <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+          <ScopeMeter label="Zoom" value={(viz.zoom - 0.4) / 2.6} color={c} format={() => `×${viz.zoom.toFixed(1)}`} />
+          <ScopeMeter label="Trail" value={(viz.phosphor - 1) / 7} color={SCOPE_C_HOT} format={() => `${viz.phosphor}`} />
+          <ScopeMeter label="Master" value={masterGain / 1.2} color={SCOPE_C_MST} format={() => `${Math.round(masterGain * 100)}%`} />
+        </div>
+
+        {(view === "all" || view === "oscs") && (
+          <div className="mb-2 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div
+              className="rounded-xl border p-2"
+              style={{
+                borderColor: `${SCOPE_C_A}33`,
+                background: `linear-gradient(180deg, ${SCOPE_C_A}14, rgba(0,0,0,0.45))`,
+                boxShadow: `0 0 16px ${SCOPE_C_A}12`,
+              }}
+            >
+              <ScopeOscWave group="a" color={SCOPE_C_A} />
+            </div>
+            <div
+              className="rounded-xl border p-2"
+              style={{
+                borderColor: `${SCOPE_C_B}33`,
+                background: `linear-gradient(180deg, ${SCOPE_C_B}14, rgba(0,0,0,0.45))`,
+                boxShadow: `0 0 16px ${SCOPE_C_B}12`,
+              }}
+            >
+              <ScopeOscWave group="b" color={SCOPE_C_B} />
+            </div>
+            <div
+              className="rounded-xl border p-2"
+              style={{
+                borderColor: `${SCOPE_C_C}33`,
+                background: `linear-gradient(180deg, ${SCOPE_C_C}14, rgba(0,0,0,0.45))`,
+                boxShadow: `0 0 16px ${SCOPE_C_C}12`,
+              }}
+            >
+              <ScopeOscWave group="c" color={SCOPE_C_C} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="masterGain" label="Master" min={0} max={1.2} format={fmtPct} def={0.72} size={56} color={SCOPE_C_MST} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Lumen trace — drag ↕ zoom / ↔ phosphor on the CRT, freeze with double-click. Osc stacks follow live morph.
+        Master scales the phosphor amplitude · post-synth · pre Kill-Chain.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Air — Sky Shelf ════════════════════
+
+
+function AirPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = AIR_C;
+  const low = useFireCommandStore((s) => s.patch.airLow) ?? 0;
+  const high = useFireCommandStore((s) => s.patch.airHigh) ?? 0;
+  const amt = useFireCommandStore((s) => s.patch.airAmount) ?? 0;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["air"] !== false);
+  const m = airMetrics(enabled ? low : 0, enabled ? high : 0, enabled ? amt : 0);
+  const live = enabled && amt > 0.03 && (Math.abs(low) > 0.04 || Math.abs(high) > 0.04);
+
+  return (
+    <Section
+      title="Air"
+      color={c}
+      collapseKey="air"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      statusLine={!enabled ? "Off" : live ? `On · ${Math.round(amt * 100)}% amount` : "On · idle"}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mix
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: AIR_C_GLOW }}>
+            Sky Shelf
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : `L${m.lowDb >= 0 ? "+" : ""}${m.lowDb.toFixed(1)} · H${m.highDb >= 0 ? "+" : ""}${m.highDb.toFixed(1)} · A${Math.round(amt * 100)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <AirQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? AIR_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!enabled ? "Bypass" : airStageLabel(low, high, amt)}
+          </div>
+        </div>
+      </div>
+
+      <AirStageViz />
+      <AirCharacterStrip />
+      <AirAmountStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <AirMeter
+          label="Low"
+          value={low}
+          bipolar
+          color={AIR_C_LOW}
+          format={() => `${m.lowDb >= 0 ? "+" : ""}${m.lowDb.toFixed(1)}`}
+        />
+        <AirMeter
+          label="High"
+          value={high}
+          bipolar
+          color={AIR_C_HIGH}
+          format={() => `${m.highDb >= 0 ? "+" : ""}${m.highDb.toFixed(1)}`}
+        />
+        <AirMeter
+          label="Amt"
+          value={amt}
+          color={AIR_C_AMT}
+          format={() => `${Math.round(amt * 100)}%`}
+        />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="airLow" label="Low" min={-1} max={1} bipolar format={fmtBi} def={0} size={50} color={AIR_C_LOW} />
+        <FParamKnob paramKey="airHigh" label="High" min={-1} max={1} bipolar format={fmtBi} def={0} size={50} color={AIR_C_HIGH} />
+        <FParamKnob paramKey="airAmount" label="Amount" min={0} max={1} format={fmtPct} def={0} size={56} color={AIR_C_AMT} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Sky shelf — left ↕ Low (180 Hz), right ↕ High (6.5 kHz), bottom Amount. Double-click cycles characters.
+        Gain = shelf × amount (±12 / ±10 dB).
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Glue — Press Anvil ════════════════════
+
+
+function GluePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = GLUE_C;
+  const punch = useFireCommandStore((s) => s.patch.punch) ?? 0;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["glue"] !== false);
+  const m = glueMetrics(enabled ? punch : 0);
+  const live = enabled && punch > 0.03;
+
+  return (
+    <Section
+      title="Glue"
+      color={c}
+      collapseKey="glue"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      statusLine={!enabled ? "Off" : `On · ${Math.round(punch * 100)}% press`}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mix
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: GLUE_C_GLOW }}>
+            Press Anvil
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : `${Math.round(punch * 100)}% · ${m.threshDb.toFixed(0)}dB · ${m.ratio.toFixed(1)}:1`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <GlueQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? GLUE_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!enabled ? "Bypass" : glueStageLabel(punch)}
+          </div>
+        </div>
+      </div>
+
+      <GlueStageViz />
+      <GlueCharacterStrip />
+      <GlueSnapStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <GlueMeter label="Punch" value={punch} color={c} format={() => `${Math.round(punch * 100)}%`} />
+        <GlueMeter
+          label="Thr"
+          value={Math.min(1, Math.abs(m.threshDb) / 30)}
+          color={GLUE_C_THR}
+          format={() => `${m.threshDb.toFixed(0)}`}
+        />
+        <GlueMeter
+          label="Ratio"
+          value={Math.min(1, (m.ratio - 1) / 7)}
+          color={GLUE_C_RAT}
+          format={() => `${m.ratio.toFixed(1)}:1`}
+        />
+        <GlueMeter
+          label="GR"
+          value={Math.min(1, m.grDb / 14)}
+          color={GLUE_C_GR}
+          format={() => `−${m.grDb.toFixed(1)}`}
+        />
+        <GlueMeter
+          label="Mkup"
+          value={Math.min(1, m.makeupDb / 2.3)}
+          color={GLUE_C_MK}
+          format={() => `+${m.makeupDb.toFixed(1)}`}
+        />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="punch" label="Punch" min={0} max={1} format={fmtPct} def={0} size={56} color={c} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Press anvil — drag ↕ on the pad, stamp a character, scrub snaps. Double-click cycles Off → Soft → Bus → Crush → Slam.
+        Thr −30·p · Ratio 1+7p · Makeup +0…2.3 dB.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Width — Side Horizon ════════════════════
+
+
+function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = WIDTH_C;
+  const w = useFireCommandStore((s) => s.patch.stereoWidth) ?? 1;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["width"] !== false);
+  const { mid, side, corr } = widthMidSide(enabled ? w : 1);
+  const live = enabled && Math.abs(w - 1) > 0.03;
+
+  return (
+    <Section
+      title="Width"
+      color={c}
+      collapseKey="width"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      statusLine={!enabled ? "Off" : `On · ${Math.round(w * 100)}% wide`}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mix
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: WIDTH_C_GLOW }}>
+            Side Horizon
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass · unity"
+                : `${Math.round(w * 100)}% · M${Math.round(mid * 100)} · S${Math.round(side * 100)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <WidthQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? WIDTH_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!enabled ? "Bypass" : widthStageLabel(w)}
+          </div>
+        </div>
+      </div>
+
+      <WidthStageViz />
+      <WidthCharacterStrip />
+      <WidthSnapStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <WidthMeter label="Width" value={w / WIDTH_MAX} color={c} format={() => `${Math.round(w * 100)}%`} />
+        <WidthMeter label="Mid" value={mid} color={WIDTH_C_MID} format={() => `${Math.round(mid * 100)}`} />
+        <WidthMeter label="Side" value={side} color={WIDTH_C_SIDE} format={() => `${Math.round(side * 100)}`} />
+        <WidthMeter label="Corr" value={corr} color={WIDTH_C_CORR} format={() => corr.toFixed(2)} />
+      </div>
+
+      <div className="flex items-center justify-evenly gap-1">
+        <FParamKnob paramKey="stereoWidth" label="Stereo" min={0} max={1.4} format={fmtPct} def={1} size={56} color={c} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Side horizon — drag ↔ on the pad, stamp a character, scrub snaps. Double-click cycles Mono → Unity → Wide → Hyper.
+        M/S: L′ = M + w·S · R′ = M − w·S.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Reverb — Halo Vault ════════════════════
+
+const REVERB_CHARS = [
+  { id: "dry", label: "Dry", size: 2.2, damp: 0.45, pre: 0.02, diff: 0.7, mix: 0 },
+  { id: "room", label: "Room", size: 0.8, damp: 0.55, pre: 0.01, diff: 0.5, mix: 0.35 },
+  { id: "hall", label: "Hall", size: 3.2, damp: 0.4, pre: 0.04, diff: 0.75, mix: 0.45 },
+  { id: "plate", label: "Plate", size: 1.6, damp: 0.25, pre: 0.015, diff: 0.85, mix: 0.4 },
+  { id: "cave", label: "Cave", size: 5.2, damp: 0.65, pre: 0.08, diff: 0.9, mix: 0.55 },
+  { id: "tight", label: "Tight", size: 0.5, damp: 0.7, pre: 0.005, diff: 0.35, mix: 0.28 },
+  { id: "lush", label: "Lush", size: 4.0, damp: 0.3, pre: 0.06, diff: 0.95, mix: 0.6 },
+] as const;
+
+const REVERB_SIZES = [
+  { label: "0.5", v: 0.5 },
+  { label: "1s", v: 1 },
+  { label: "2.2", v: 2.2 },
+  { label: "3.5", v: 3.5 },
+  { label: "5s", v: 5 },
+] as const;
+
+const REVERB_MIXES = [
+  { label: "0", v: 0 },
+  { label: "25", v: 0.25 },
+  { label: "50", v: 0.5 },
+  { label: "75", v: 0.75 },
+  { label: "100", v: 1 },
+] as const;
+
+const REVERB_MIX_CYCLE = [0, 0.5, 1] as const;
+
+function revNear(a: number, b: number, eps = 0.06) {
+  return Math.abs(a - b) < eps;
+}
+
+function revNearSize(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.3, a) / Math.max(0.3, b))) < 0.2;
+}
+
+function ReverbCharacterStrip() {
+  const size = useFireCommandStore((s) => s.patch.reverbSize) ?? 2.2;
+  const damp = useFireCommandStore((s) => s.patch.reverbDamp) ?? 0.45;
+  const mix = useFireCommandStore((s) => s.patch.reverbMix) ?? 0;
+  const diff = useFireCommandStore((s) => s.patch.reverbDiffusion) ?? 0.7;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.reverb;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Vault
+      </span>
+      {REVERB_CHARS.map((p) => {
+        const on =
+          (p.id === "dry" && mix < 0.03) ||
+          (p.id !== "dry" &&
+            revNearSize(size, p.size) &&
+            revNear(damp, p.damp) &&
+            revNear(diff, p.diff, 0.12) &&
+            revNear(mix, p.mix));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("reverbSize", p.size);
+              setParam("reverbDamp", p.damp);
+              setParam("reverbPredelay", p.pre);
+              setParam("reverbDiffusion", p.diff);
+              setParam("reverbMix", p.mix);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReverbSizeStrip() {
+  const size = useFireCommandStore((s) => s.patch.reverbSize) ?? 2.2;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.reverb;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Size
+      </span>
+      {REVERB_SIZES.map((p) => {
+        const on = revNearSize(size, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("reverbSize", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.58)}99`,
+                    background: `${bandShade(FC.fx, 0.58)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtSec(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReverbMixStrip() {
+  const mix = useFireCommandStore((s) => s.patch.reverbMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.reverb;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Mix
+      </span>
+      {REVERB_MIXES.map((p) => {
+        const on = revNear(mix, p.v, 0.04);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("reverbMix", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.9)}99`,
+                    background: `${bandShade(FC.fx, 0.9)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtPct(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReverbQuickActions() {
+  const size = useFireCommandStore((s) => s.patch.reverbSize) ?? 2.2;
+  const damp = useFireCommandStore((s) => s.patch.reverbDamp) ?? 0.45;
+  const pre = useFireCommandStore((s) => s.patch.reverbPredelay) ?? 0.02;
+  const diff = useFireCommandStore((s) => s.patch.reverbDiffusion) ?? 0.7;
+  const mix = useFireCommandStore((s) => s.patch.reverbMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ size: 2.2, damp: 0.4, pre: 0.04, diff: 0.75, mix: 0.45 });
+  const c = FC.reverb;
+  const idle = mix < 0.03;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("reverbSize", savedRef.current.size);
+            setParam("reverbDamp", savedRef.current.damp);
+            setParam("reverbPredelay", savedRef.current.pre);
+            setParam("reverbDiffusion", savedRef.current.diff);
+            setParam("reverbMix", savedRef.current.mix);
+          } else {
+            savedRef.current = { size, damp, pre, diff, mix };
+            setParam("reverbMix", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore vault" : "Bypass mix"}
+      >
+        {idle ? "Bloom" : "Dry"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          let best = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < REVERB_MIX_CYCLE.length; i++) {
+            const d = Math.abs(REVERB_MIX_CYCLE[i]! - mix);
+            if (d < bestD) {
+              bestD = d;
+              best = i;
+            }
+          }
+          setParam("reverbMix", REVERB_MIX_CYCLE[(best + 1) % REVERB_MIX_CYCLE.length]!);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: bandShade(FC.fx, 0.92), background: `${c}22` }}
+        title="Cycle mix 0 → 50 → 100"
+      >
+        Mix↻
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("reverbSize", 3.2);
+          setParam("reverbDamp", 0.4);
+          setParam("reverbPredelay", 0.04);
+          setParam("reverbDiffusion", 0.75);
+          setParam("reverbMix", 0.45);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.fx, 0.9), background: `${c}1c` }}
+        title="Hall bloom"
+      >
+        Hall
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("reverbSize", 2.2);
+          setParam("reverbDamp", 0.45);
+          setParam("reverbPredelay", 0.02);
+          setParam("reverbDiffusion", 0.7);
+          setParam("reverbMix", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset reverb defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function ReverbModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function ReverbPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.reverb;
+  const cSize = bandShade(FC.fx, 0.58);
+  const cDamp = bandShade(FC.fx, 0.68);
+  const cPre = bandShade(FC.fx, 0.78);
+  const cDiff = bandShade(FC.fx, 0.84);
+  const cMix = bandShade(FC.fx, 0.9);
+  const size = useFireCommandStore((s) => s.patch.reverbSize) ?? 2.2;
+  const damp = useFireCommandStore((s) => s.patch.reverbDamp) ?? 0.45;
+  const pre = useFireCommandStore((s) => s.patch.reverbPredelay) ?? 0.02;
+  const diff = useFireCommandStore((s) => s.patch.reverbDiffusion) ?? 0.7;
+  const mix = useFireCommandStore((s) => s.patch.reverbMix) ?? 0;
+  const live = mix > 0.02;
+  const sizeN = Math.log(Math.max(0.3, size) / 0.3) / Math.log(6 / 0.3);
+
+  return (
+    <Section title="Reverb" color={c} collapseKey="fx.reverb" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · FX
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
+            Halo Vault
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${size.toFixed(1)}s · d${Math.round(damp * 100)} · Δ${Math.round(diff * 100)} · M${Math.round(mix * 100)}`
+                : `${size.toFixed(1)}s · dry`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <ReverbQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.fx, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!live ? "Dry" : size > 4 ? "Hall" : size < 1 ? "Room" : "Vault"}
+          </div>
+        </div>
+      </div>
+
+      <ReverbStageViz />
+      <ReverbCharacterStrip />
+      <ReverbSizeStrip />
+      <ReverbMixStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2 flex-wrap">
+        <ReverbModMeter label="Size" value={sizeN} color={cSize} format={() => fmtSec(size)} />
+        <ReverbModMeter label="Damp" value={damp} color={cDamp} format={() => fmtPct(damp)} />
+        <ReverbModMeter label="Pre" value={pre / 0.2} color={cPre} format={() => fmtSec(pre)} />
+        <ReverbModMeter label="Diff" value={diff} color={cDiff} format={() => fmtPct(diff)} />
+        <ReverbModMeter label="Mix" value={mix} color={cMix} format={() => fmtPct(mix)} />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="reverbSize" label="Size" min={0.3} max={6} curve="log" format={fmtSec} def={2.2} size={50} color={cSize} />
+        <FParamKnob paramKey="reverbDamp" label="Damp" min={0} max={1} format={fmtPct} def={0.45} size={50} color={cDamp} />
+        <FParamKnob paramKey="reverbPredelay" label="Pre" min={0} max={0.2} format={fmtSec} def={0.02} size={50} color={cPre} />
+        <FParamKnob paramKey="reverbDiffusion" label="Diff" min={0} max={1} format={fmtPct} def={0.7} size={50} color={cDiff} />
+        <FParamKnob paramKey="reverbMix" label="Mix" min={0} max={1} format={fmtPct} def={0} size={50} color={cMix} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Halo vault — drag Size↔ / Damp↕, top Pre, right Diff, scrub Mix. Double-click cycles wet. IR bloom responds to every twist.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Delay — Ping Cascade ════════════════════
+
+const DELAY_CHARS = [
+  { id: "idle", label: "Idle", time: 0.28, fbk: 0.3, mix: 0 },
+  { id: "slap", label: "Slap", time: 0.06, fbk: 0.15, mix: 0.35 },
+  { id: "echo", label: "Echo", time: 0.28, fbk: 0.4, mix: 0.45 },
+  { id: "dub", label: "Dub", time: 0.45, fbk: 0.72, mix: 0.55 },
+  { id: "bounce", label: "Bounce", time: 0.22, fbk: 0.55, mix: 0.5 },
+  { id: "long", label: "Long", time: 0.85, fbk: 0.5, mix: 0.4 },
+  { id: "infinite", label: "∞", time: 0.35, fbk: 0.88, mix: 0.6 },
+] as const;
+
+const DELAY_TIMES = [
+  { label: "50ms", v: 0.05 },
+  { label: "125", v: 0.125 },
+  { label: "250", v: 0.25 },
+  { label: "375", v: 0.375 },
+  { label: "500", v: 0.5 },
+  { label: "1s", v: 1 },
+] as const;
+
+const DELAY_MIXES = [
+  { label: "0", v: 0 },
+  { label: "25", v: 0.25 },
+  { label: "50", v: 0.5 },
+  { label: "75", v: 0.75 },
+  { label: "100", v: 1 },
+] as const;
+
+const DELAY_MIX_CYCLE = [0, 0.5, 1] as const;
+const DELAY_FBK_MAX = 0.92;
+
+function delayNear(a: number, b: number, eps = 0.06) {
+  return Math.abs(a - b) < eps;
+}
+
+function delayNearTime(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.01, a) / Math.max(0.01, b))) < 0.18;
+}
+
+function DelayCharacterStrip() {
+  const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
+  const fbk = useFireCommandStore((s) => s.patch.delayFeedback) ?? 0.3;
+  const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.delay;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Cascade
+      </span>
+      {DELAY_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && mix < 0.03) ||
+          (p.id !== "idle" && delayNearTime(time, p.time) && delayNear(fbk, p.fbk) && delayNear(mix, p.mix));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("delayTime", p.time);
+              setParam("delayFeedback", p.fbk);
+              setParam("delayMix", p.mix);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DelayTimeStrip() {
+  const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.delay;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Time
+      </span>
+      {DELAY_TIMES.map((p) => {
+        const on = delayNearTime(time, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("delayTime", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.58)}99`,
+                    background: `${bandShade(FC.fx, 0.58)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtSec(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DelayMixStrip() {
+  const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.delay;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Mix
+      </span>
+      {DELAY_MIXES.map((p) => {
+        const on = delayNear(mix, p.v, 0.04);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("delayMix", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.86)}99`,
+                    background: `${bandShade(FC.fx, 0.86)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtPct(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DelayQuickActions() {
+  const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
+  const fbk = useFireCommandStore((s) => s.patch.delayFeedback) ?? 0.3;
+  const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ time: 0.28, fbk: 0.4, mix: 0.45 });
+  const c = FC.delay;
+  const idle = mix < 0.03;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("delayTime", savedRef.current.time);
+            setParam("delayFeedback", savedRef.current.fbk);
+            setParam("delayMix", savedRef.current.mix);
+          } else {
+            savedRef.current = { time, fbk, mix };
+            setParam("delayMix", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore cascade" : "Bypass mix"}
+      >
+        {idle ? "Bounce" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          let best = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < DELAY_MIX_CYCLE.length; i++) {
+            const d = Math.abs(DELAY_MIX_CYCLE[i]! - mix);
+            if (d < bestD) {
+              bestD = d;
+              best = i;
+            }
+          }
+          setParam("delayMix", DELAY_MIX_CYCLE[(best + 1) % DELAY_MIX_CYCLE.length]!);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: bandShade(FC.fx, 0.92), background: `${c}22` }}
+        title="Cycle mix 0 → 50 → 100"
+      >
+        Mix↻
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("delayTime", 0.28);
+          setParam("delayFeedback", 0.45);
+          setParam("delayMix", 0.5);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.fx, 0.9), background: `${c}1c` }}
+        title="Classic ping-pong echo"
+      >
+        Echo
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("delayTime", 0.28);
+          setParam("delayFeedback", 0.3);
+          setParam("delayMix", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset delay defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function DelayModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.delay;
+  const cTime = bandShade(FC.fx, 0.58);
+  const cFbk = bandShade(FC.fx, 0.72);
+  const cMix = bandShade(FC.fx, 0.86);
+  const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
+  const fbk = useFireCommandStore((s) => s.patch.delayFeedback) ?? 0.3;
+  const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
+  const live = mix > 0.02;
+  const timeN = Math.log(Math.max(0.01, time) / 0.01) / Math.log(1.5 / 0.01);
+  const fbkN = fbk / DELAY_FBK_MAX;
+
+  return (
+    <Section title="Delay (Ping-Pong)" color={c} collapseKey="fx.delay" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · FX
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
+            Ping Cascade
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${fmtSec(time)} · FB${Math.round(fbk * 100)} · M${Math.round(mix * 100)}`
+                : `${fmtSec(time)} · idle`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <DelayQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.fx, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!live ? "Idle" : fbk > 0.7 ? "∞" : time < 0.08 ? "Slap" : "Ping"}
+          </div>
+        </div>
+      </div>
+
+      <DelayStageViz />
+      <DelayCharacterStrip />
+      <DelayTimeStrip />
+      <DelayMixStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <DelayModMeter label="Time" value={timeN} color={cTime} format={() => fmtSec(time)} />
+        <DelayModMeter label="Fbk" value={fbkN} color={cFbk} format={() => fmtPct(fbk)} />
+        <DelayModMeter label="Mix" value={mix} color={cMix} format={() => fmtPct(mix)} />
+        <DelayModMeter
+          label="R"
+          value={timeN}
+          color={bandShade(FC.fx, 0.8)}
+          format={() => fmtSec(time * 1.5)}
+        />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="delayTime" label="Time" min={0.01} max={1.5} curve="log" format={fmtSec} def={0.28} size={52} color={cTime} />
+        <FParamKnob paramKey="delayFeedback" label="Fbk" min={0} max={0.92} format={fmtPct} def={0.3} size={52} color={cFbk} />
+        <FParamKnob paramKey="delayMix" label="Mix" min={0} max={1} format={fmtPct} def={0} size={52} color={cMix} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Ping cascade — drag Time↔ / Feedback↕, scrub Mix, double-click cycles wet. R lane runs 1.5× for stereo bounce.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Chorus — Ensemble Drift ════════════════════
+
+const CHORUS_CHARS = [
+  { id: "idle", label: "Idle", rate: 0.6, depth: 0.4, mix: 0 },
+  { id: "soft", label: "Soft", rate: 0.35, depth: 0.28, mix: 0.3 },
+  { id: "classic", label: "Classic", rate: 0.6, depth: 0.45, mix: 0.5 },
+  { id: "wide", label: "Wide", rate: 0.8, depth: 0.75, mix: 0.55 },
+  { id: "slow", label: "Slow", rate: 0.12, depth: 0.55, mix: 0.48 },
+  { id: "shimmer", label: "Shimmer", rate: 2.4, depth: 0.5, mix: 0.45 },
+  { id: "thick", label: "Thick", rate: 0.5, depth: 0.9, mix: 0.7 },
+] as const;
+
+const CHORUS_RATES = [
+  { label: "0.1", v: 0.1 },
+  { label: "0.3", v: 0.3 },
+  { label: "0.6", v: 0.6 },
+  { label: "1", v: 1 },
+  { label: "2", v: 2 },
+  { label: "4", v: 4 },
+] as const;
+
+const CHORUS_MIXES = [
+  { label: "0", v: 0 },
+  { label: "25", v: 0.25 },
+  { label: "50", v: 0.5 },
+  { label: "75", v: 0.75 },
+  { label: "100", v: 1 },
+] as const;
+
+const CHORUS_MIX_CYCLE = [0, 0.5, 1] as const;
+
+function chorusNear(a: number, b: number, eps = 0.06) {
+  return Math.abs(a - b) < eps;
+}
+
+function chorusNearRate(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.05, a) / Math.max(0.05, b))) < 0.2;
+}
+
+function ChorusCharacterStrip() {
+  const rate = useFireCommandStore((s) => s.patch.chorusRate) ?? 0.6;
+  const depth = useFireCommandStore((s) => s.patch.chorusDepth) ?? 0.4;
+  const mix = useFireCommandStore((s) => s.patch.chorusMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.chorus;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Drift
+      </span>
+      {CHORUS_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && mix < 0.03) ||
+          (p.id !== "idle" && chorusNearRate(rate, p.rate) && chorusNear(depth, p.depth) && chorusNear(mix, p.mix));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("chorusRate", p.rate);
+              setParam("chorusDepth", p.depth);
+              setParam("chorusMix", p.mix);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChorusRateStrip() {
+  const rate = useFireCommandStore((s) => s.patch.chorusRate) ?? 0.6;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.chorus;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Rate
+      </span>
+      {CHORUS_RATES.map((p) => {
+        const on = chorusNearRate(rate, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("chorusRate", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.55)}99`,
+                    background: `${bandShade(FC.fx, 0.55)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtHzRate(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChorusMixStrip() {
+  const mix = useFireCommandStore((s) => s.patch.chorusMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.chorus;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Mix
+      </span>
+      {CHORUS_MIXES.map((p) => {
+        const on = chorusNear(mix, p.v, 0.04);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("chorusMix", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.84)}99`,
+                    background: `${bandShade(FC.fx, 0.84)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtPct(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChorusQuickActions() {
+  const rate = useFireCommandStore((s) => s.patch.chorusRate) ?? 0.6;
+  const depth = useFireCommandStore((s) => s.patch.chorusDepth) ?? 0.4;
+  const mix = useFireCommandStore((s) => s.patch.chorusMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ rate: 0.6, depth: 0.45, mix: 0.5 });
+  const c = FC.chorus;
+  const idle = mix < 0.03;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("chorusRate", savedRef.current.rate);
+            setParam("chorusDepth", savedRef.current.depth);
+            setParam("chorusMix", savedRef.current.mix);
+          } else {
+            savedRef.current = { rate, depth, mix };
+            setParam("chorusMix", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore ensemble" : "Bypass mix"}
+      >
+        {idle ? "Bloom" : "Mute"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          let best = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < CHORUS_MIX_CYCLE.length; i++) {
+            const d = Math.abs(CHORUS_MIX_CYCLE[i]! - mix);
+            if (d < bestD) {
+              bestD = d;
+              best = i;
+            }
+          }
+          setParam("chorusMix", CHORUS_MIX_CYCLE[(best + 1) % CHORUS_MIX_CYCLE.length]!);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: bandShade(FC.fx, 0.92), background: `${c}22` }}
+        title="Cycle mix 0 → 50 → 100"
+      >
+        Mix↻
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("chorusRate", 0.6);
+          setParam("chorusDepth", 0.45);
+          setParam("chorusMix", 0.5);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.fx, 0.9), background: `${c}1c` }}
+        title="Classic ensemble"
+      >
+        Classic
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("chorusRate", 0.6);
+          setParam("chorusDepth", 0.4);
+          setParam("chorusMix", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset chorus defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function ChorusModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function ChorusPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.chorus;
+  const cRate = bandShade(FC.fx, 0.55);
+  const cDepth = bandShade(FC.fx, 0.7);
+  const cMix = bandShade(FC.fx, 0.84);
+  const rate = useFireCommandStore((s) => s.patch.chorusRate) ?? 0.6;
+  const depth = useFireCommandStore((s) => s.patch.chorusDepth) ?? 0.4;
+  const mix = useFireCommandStore((s) => s.patch.chorusMix) ?? 0;
+  const live = mix > 0.02;
+  const rateN = Math.log(Math.max(0.05, rate) / 0.05) / Math.log(8 / 0.05);
+
+  return (
+    <Section title="Chorus" color={c} collapseKey="fx.chorus" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · FX
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
+            Ensemble Drift
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${fmtHzRate(rate)} · D${Math.round(depth * 100)} · M${Math.round(mix * 100)}`
+                : `${fmtHzRate(rate)} · bypass`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <ChorusQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.fx, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!live ? "Bypass" : rate > 3 ? "Wide" : rate < 0.25 ? "Slow" : "Ensemble"}
+          </div>
+        </div>
+      </div>
+
+      <ChorusStageViz />
+      <ChorusCharacterStrip />
+      <ChorusRateStrip />
+      <ChorusMixStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <ChorusModMeter label="Rate" value={rateN} color={cRate} format={() => fmtHzRate(rate)} />
+        <ChorusModMeter label="Depth" value={depth} color={cDepth} format={() => fmtPct(depth)} />
+        <ChorusModMeter label="Mix" value={mix} color={cMix} format={() => fmtPct(mix)} />
+        <ChorusModMeter
+          label="Spread"
+          value={depth * mix}
+          color={bandShade(FC.fx, 0.76)}
+          format={() => fmtPct(depth * mix)}
+        />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="chorusRate" label="Rate" min={0.05} max={8} curve="log" format={fmtHzRate} def={0.6} size={52} color={cRate} />
+        <FParamKnob paramKey="chorusDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.4} size={52} color={cDepth} />
+        <FParamKnob paramKey="chorusMix" label="Mix" min={0} max={1} format={fmtPct} def={0} size={52} color={cMix} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Ensemble drift — drag Rate↔ / Depth↕, scrub Mix, double-click cycles wet. R LFO runs 1.18× for stereo bloom.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Phaser — Sweep Veil ════════════════════
+
+const PHASER_CHARS = [
+  { id: "idle", label: "Idle", rate: 0.4, depth: 0.6, mix: 0 },
+  { id: "slow", label: "Slow", rate: 0.12, depth: 0.75, mix: 0.5 },
+  { id: "classic", label: "Classic", rate: 0.4, depth: 0.65, mix: 0.55 },
+  { id: "deep", label: "Deep", rate: 0.22, depth: 1, mix: 0.7 },
+  { id: "jet", label: "Jet", rate: 3.2, depth: 0.85, mix: 0.6 },
+  { id: "subtle", label: "Subtle", rate: 0.55, depth: 0.35, mix: 0.28 },
+  { id: "wild", label: "Wild", rate: 7.5, depth: 0.9, mix: 0.65 },
+] as const;
+
+const PHASER_RATES = [
+  { label: "0.1", v: 0.1 },
+  { label: "0.4", v: 0.4 },
+  { label: "1", v: 1 },
+  { label: "2", v: 2 },
+  { label: "4", v: 4 },
+  { label: "8", v: 8 },
+] as const;
+
+const PHASER_MIXES = [
+  { label: "0", v: 0 },
+  { label: "25", v: 0.25 },
+  { label: "50", v: 0.5 },
+  { label: "75", v: 0.75 },
+  { label: "100", v: 1 },
+] as const;
+
+const PHASER_MIX_CYCLE = [0, 0.5, 1] as const;
+
+function phaserNear(a: number, b: number, eps = 0.06) {
+  return Math.abs(a - b) < eps;
+}
+
+function phaserNearRate(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(0.02, a) / Math.max(0.02, b))) < 0.2;
+}
+
+function PhaserCharacterStrip() {
+  const rate = useFireCommandStore((s) => s.patch.phaserRate) ?? 0.4;
+  const depth = useFireCommandStore((s) => s.patch.phaserDepth) ?? 0.6;
+  const mix = useFireCommandStore((s) => s.patch.phaserMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.phaser;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Veil
+      </span>
+      {PHASER_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && mix < 0.03) ||
+          (p.id !== "idle" && phaserNearRate(rate, p.rate) && phaserNear(depth, p.depth) && phaserNear(mix, p.mix));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("phaserRate", p.rate);
+              setParam("phaserDepth", p.depth);
+              setParam("phaserMix", p.mix);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PhaserRateStrip() {
+  const rate = useFireCommandStore((s) => s.patch.phaserRate) ?? 0.4;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.phaser;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Rate
+      </span>
+      {PHASER_RATES.map((p) => {
+        const on = phaserNearRate(rate, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("phaserRate", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.52)}99`,
+                    background: `${bandShade(FC.fx, 0.52)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtHzRate(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PhaserMixStrip() {
+  const mix = useFireCommandStore((s) => s.patch.phaserMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.phaser;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Mix
+      </span>
+      {PHASER_MIXES.map((p) => {
+        const on = phaserNear(mix, p.v, 0.04);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("phaserMix", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.82)}99`,
+                    background: `${bandShade(FC.fx, 0.82)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtPct(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PhaserQuickActions() {
+  const rate = useFireCommandStore((s) => s.patch.phaserRate) ?? 0.4;
+  const depth = useFireCommandStore((s) => s.patch.phaserDepth) ?? 0.6;
+  const mix = useFireCommandStore((s) => s.patch.phaserMix) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ rate: 0.4, depth: 0.65, mix: 0.55 });
+  const c = FC.phaser;
+  const idle = mix < 0.03;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("phaserRate", savedRef.current.rate);
+            setParam("phaserDepth", savedRef.current.depth);
+            setParam("phaserMix", savedRef.current.mix);
+          } else {
+            savedRef.current = { rate, depth, mix };
+            setParam("phaserMix", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore veil" : "Bypass mix"}
+      >
+        {idle ? "Unveil" : "Veil"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          let best = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < PHASER_MIX_CYCLE.length; i++) {
+            const d = Math.abs(PHASER_MIX_CYCLE[i]! - mix);
+            if (d < bestD) {
+              bestD = d;
+              best = i;
+            }
+          }
+          setParam("phaserMix", PHASER_MIX_CYCLE[(best + 1) % PHASER_MIX_CYCLE.length]!);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: bandShade(FC.fx, 0.92), background: `${c}22` }}
+        title="Cycle mix 0 → 50 → 100"
+      >
+        Mix↻
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("phaserRate", 0.4);
+          setParam("phaserDepth", 0.65);
+          setParam("phaserMix", 0.55);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.fx, 0.9), background: `${c}1c` }}
+        title="Classic sweep"
+      >
+        Classic
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("phaserRate", 0.4);
+          setParam("phaserDepth", 0.6);
+          setParam("phaserMix", 0);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset phaser defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function PhaserModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.phaser;
+  const cRate = bandShade(FC.fx, 0.52);
+  const cDepth = bandShade(FC.fx, 0.68);
+  const cMix = bandShade(FC.fx, 0.82);
+  const rate = useFireCommandStore((s) => s.patch.phaserRate) ?? 0.4;
+  const depth = useFireCommandStore((s) => s.patch.phaserDepth) ?? 0.6;
+  const mix = useFireCommandStore((s) => s.patch.phaserMix) ?? 0;
+  const live = mix > 0.02;
+  const rateN = Math.log(Math.max(0.02, rate) / 0.02) / Math.log(12 / 0.02);
+
+  return (
+    <Section title="Phaser" color={c} collapseKey="fx.phaser" chipHosted={chipHosted}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · FX
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
+            Sweep Veil
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${fmtHzRate(rate)} · D${Math.round(depth * 100)} · M${Math.round(mix * 100)}`
+                : `${fmtHzRate(rate)} · bypass`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <PhaserQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.fx, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!live ? "Bypass" : rate > 4 ? "Jet" : rate < 0.2 ? "Slow" : "Sweep"}
+          </div>
+        </div>
+      </div>
+
+      <PhaserStageViz />
+      <PhaserCharacterStrip />
+      <PhaserRateStrip />
+      <PhaserMixStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <PhaserModMeter label="Rate" value={rateN} color={cRate} format={() => fmtHzRate(rate)} />
+        <PhaserModMeter label="Depth" value={depth} color={cDepth} format={() => fmtPct(depth)} />
+        <PhaserModMeter label="Mix" value={mix} color={cMix} format={() => fmtPct(mix)} />
+        <PhaserModMeter
+          label="Fb"
+          value={mix * 0.55}
+          color={bandShade(FC.fx, 0.74)}
+          format={() => fmtPct(mix * 0.55)}
+        />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} size={52} color={cRate} />
+        <FParamKnob paramKey="phaserDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.6} size={52} color={cDepth} />
+        <FParamKnob paramKey="phaserMix" label="Mix" min={0} max={1} format={fmtPct} def={0} size={52} color={cMix} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Sweep veil — drag Rate↔ / Depth↕, scrub Mix, double-click cycles wet. Feedback rides with Mix.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Age — Oxide Archive ════════════════════
+
+type AgeChar = {
+  id: string;
+  label: string;
+  cass: number;
+  speed: number;
+  wow: number;
+  vhs: number;
+  bit: FireBitDepth;
+  srr: number;
+  bbd: number;
+  comp: number;
+  dust: number;
+  hiss: number;
+  hum: number;
+  print: number;
+};
+
+const AGE_CHARS: AgeChar[] = [
+  { id: "clean", label: "Clean", cass: 0, speed: 0, wow: 0, vhs: 0, bit: "off", srr: 0, bbd: 0, comp: 0, dust: 0, hiss: 0, hum: 0, print: 0 },
+  { id: "warm", label: "Warm", cass: 0.32, speed: 0, wow: 0.18, vhs: 0, bit: "off", srr: 0, bbd: 0.12, comp: 0.15, dust: 0.08, hiss: 0.1, hum: 0.08, print: 0 },
+  { id: "worn", label: "Worn", cass: 0.55, speed: -0.15, wow: 0.42, vhs: 0.15, bit: "off", srr: 0.12, bbd: 0.2, comp: 0.25, dust: 0.35, hiss: 0.28, hum: 0.22, print: 0.18 },
+  { id: "vhs", label: "VHS", cass: 0.28, speed: 0.1, wow: 0.35, vhs: 0.72, bit: "12bit", srr: 0.35, bbd: 0.15, comp: 0.2, dust: 0.4, hiss: 0.3, hum: 0.15, print: 0.1 },
+  { id: "lofi", label: "LoFi", cass: 0.4, speed: 0, wow: 0.25, vhs: 0.2, bit: "8bit", srr: 0.68, bbd: 0.3, comp: 0.35, dust: 0.25, hiss: 0.4, hum: 0.2, print: 0.15 },
+  { id: "bbd", label: "BBD", cass: 0.22, speed: 0, wow: 0.3, vhs: 0, bit: "off", srr: 0.1, bbd: 0.75, comp: 0.18, dust: 0.1, hiss: 0.15, hum: 0.12, print: 0.25 },
+  { id: "ghost", label: "Ghost", cass: 0.25, speed: -0.2, wow: 0.2, vhs: 0.18, bit: "off", srr: 0.08, bbd: 0.35, comp: 0.1, dust: 0.2, hiss: 0.35, hum: 0.45, print: 0.72 },
+  { id: "relic", label: "Relic", cass: 0.7, speed: 0.25, wow: 0.55, vhs: 0.45, bit: "12bit", srr: 0.4, bbd: 0.4, comp: 0.4, dust: 0.55, hiss: 0.45, hum: 0.4, print: 0.4 },
+];
+
+const AGE_BITS: { id: FireBitDepth; label: string }[] = [
+  { id: "off", label: "Full" },
+  { id: "12bit", label: "12b" },
+  { id: "8bit", label: "8b" },
+];
+
+const AGE_BIT_CYCLE: FireBitDepth[] = ["off", "12bit", "8bit"];
+
+function ageNear(a: number, b: number, eps = 0.08) {
+  return Math.abs(a - b) < eps;
+}
+
+function ageApplyChar(setParam: (k: keyof FirePatch, v: number | FireBitDepth) => void, p: AgeChar) {
+  setParam("cassetteGen", p.cass);
+  setParam("tapeSpeed", p.speed);
+  setParam("wowFlutter", p.wow);
+  setParam("vhsColor", p.vhs);
+  setParam("bitDepth", p.bit);
+  setParam("sampleRateReduce", p.srr);
+  setParam("bbdChorus", p.bbd);
+  setParam("analogComp", p.comp);
+  setParam("dust", p.dust);
+  setParam("hiss", p.hiss);
+  setParam("hum", p.hum);
+  setParam("printThrough", p.print);
+}
+
+function AgeCharacterStrip() {
+  const cass = useFireCommandStore((s) => s.patch.cassetteGen) ?? 0;
+  const wow = useFireCommandStore((s) => s.patch.wowFlutter) ?? 0;
+  const vhs = useFireCommandStore((s) => s.patch.vhsColor) ?? 0;
+  const bit = (useFireCommandStore((s) => s.patch.bitDepth) ?? "off") as FireBitDepth;
+  const bbd = useFireCommandStore((s) => s.patch.bbdChorus) ?? 0;
+  const print = useFireCommandStore((s) => s.patch.printThrough) ?? 0;
+  const srr = useFireCommandStore((s) => s.patch.sampleRateReduce) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.vintage;
+  const heat = Math.max(cass, wow, vhs, bbd, print, srr, bit !== "off" ? 0.3 : 0);
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Archive
+      </span>
+      {AGE_CHARS.map((p) => {
+        const on =
+          (p.id === "clean" && heat < 0.04) ||
+          (p.id !== "clean" &&
+            ageNear(cass, p.cass) &&
+            ageNear(wow, p.wow) &&
+            ageNear(vhs, p.vhs) &&
+            bit === p.bit &&
+            ageNear(bbd, p.bbd, 0.12) &&
+            ageNear(print, p.print, 0.12));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, p)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AgeBitStrip() {
+  const bit = (useFireCommandStore((s) => s.patch.bitDepth) ?? "off") as FireBitDepth;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.vintage;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Bits
+      </span>
+      {AGE_BITS.map((m) => {
+        const on = bit === m.id;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setParam("bitDepth", m.id)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.72)}99`,
+                    background: `${bandShade(FC.fx, 0.72)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={m.label}
+          >
+            {m.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AgeBedStrip() {
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const dust = useFireCommandStore((s) => s.patch.dust) ?? 0;
+  const hiss = useFireCommandStore((s) => s.patch.hiss) ?? 0;
+  const hum = useFireCommandStore((s) => s.patch.hum) ?? 0;
+  const print = useFireCommandStore((s) => s.patch.printThrough) ?? 0;
+  const c = FC.vintage;
+  const beds = [
+    { id: "dust", label: "Dust", v: 0.45, cur: dust, key: "dust" as const },
+    { id: "hiss", label: "Hiss", v: 0.4, cur: hiss, key: "hiss" as const },
+    { id: "hum", label: "Hum", v: 0.4, cur: hum, key: "hum" as const },
+    { id: "print", label: "Print", v: 0.5, cur: print, key: "printThrough" as const },
+    { id: "clear", label: "Clear", v: 0, cur: Math.max(dust, hiss, hum, print), key: null },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Beds
+      </span>
+      {beds.map((b) => {
+        const on = b.key === null ? b.cur < 0.04 : ageNear(b.cur, b.v, 0.1) && b.cur > 0.08;
+        return (
+          <button
+            key={b.id}
+            type="button"
+            onClick={() => {
+              if (b.key === null) {
+                setParam("dust", 0);
+                setParam("hiss", 0);
+                setParam("hum", 0);
+                setParam("printThrough", 0);
+              } else {
+                setParam(b.key, b.v);
+              }
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.82)}99`,
+                    background: `${bandShade(FC.fx, 0.82)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={b.label}
+          >
+            {b.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AgeQuickActions() {
+  const cass = useFireCommandStore((s) => s.patch.cassetteGen) ?? 0;
+  const speed = useFireCommandStore((s) => s.patch.tapeSpeed) ?? 0;
+  const wow = useFireCommandStore((s) => s.patch.wowFlutter) ?? 0;
+  const vhs = useFireCommandStore((s) => s.patch.vhsColor) ?? 0;
+  const bit = (useFireCommandStore((s) => s.patch.bitDepth) ?? "off") as FireBitDepth;
+  const srr = useFireCommandStore((s) => s.patch.sampleRateReduce) ?? 0;
+  const bbd = useFireCommandStore((s) => s.patch.bbdChorus) ?? 0;
+  const comp = useFireCommandStore((s) => s.patch.analogComp) ?? 0;
+  const dust = useFireCommandStore((s) => s.patch.dust) ?? 0;
+  const hiss = useFireCommandStore((s) => s.patch.hiss) ?? 0;
+  const hum = useFireCommandStore((s) => s.patch.hum) ?? 0;
+  const print = useFireCommandStore((s) => s.patch.printThrough) ?? 0;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef<AgeChar>({
+    id: "saved", label: "Saved",
+    cass: 0.45, speed: 0, wow: 0.3, vhs: 0.2, bit: "off", srr: 0.15, bbd: 0.2, comp: 0.2,
+    dust: 0.25, hiss: 0.2, hum: 0.15, print: 0.1,
+  });
+  const c = FC.vintage;
+  const idle = Math.max(cass, wow, vhs, bbd, dust, hiss, hum, print, srr, comp, Math.abs(speed), bit !== "off" ? 0.3 : 0) < 0.04;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, savedRef.current);
+          } else {
+            savedRef.current = {
+              id: "saved", label: "Saved",
+              cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print,
+            };
+            ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, AGE_CHARS[0]!);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore archive" : "Clear aging"}
+      >
+        {idle ? "Awaken" : "Sleep"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const i = AGE_BIT_CYCLE.indexOf(bit);
+          setParam("bitDepth", AGE_BIT_CYCLE[(i + 1) % AGE_BIT_CYCLE.length]!);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: bandShade(FC.fx, 0.92), background: `${c}22` }}
+        title="Cycle bit depth"
+      >
+        Bits
+      </button>
+      <button
+        type="button"
+        onClick={() => ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, AGE_CHARS.find((x) => x.id === "worn")!)}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.fx, 0.9), background: `${c}1c` }}
+        title="Stamp worn tape"
+      >
+        Stamp
+      </button>
+      <button
+        type="button"
+        onClick={() => ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, AGE_CHARS[0]!)}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset age stage"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function AgeModMeter({
+  label,
+  value,
+  color,
+  format,
+  bipolar,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+  bipolar?: boolean;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        {bipolar ? (
+          <>
+            <div className="absolute left-1/2 top-0 h-full w-px bg-white/20" />
+            <div
+              className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+              style={{
+                left: value >= 0 ? "50%" : `${50 - t * 50}%`,
+                width: `${t * 50}%`,
+                background: `linear-gradient(90deg, ${color}55, ${color})`,
+                boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+              }}
+            />
+          </>
+        ) : (
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+            style={{
+              width: `${t * 100}%`,
+              background: `linear-gradient(90deg, ${color}55, ${color})`,
+              boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+            }}
+          />
+        )}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function AgePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.vintage;
+  const cCass = bandShade(FC.fx, 0.38);
+  const cSpeed = bandShade(FC.fx, 0.45);
+  const cWow = bandShade(FC.fx, 0.5);
+  const cVhs = bandShade(FC.fx, 0.58);
+  const cSrr = bandShade(FC.fx, 0.64);
+  const cBbd = bandShade(FC.fx, 0.7);
+  const cComp = bandShade(FC.fx, 0.74);
+  const cDust = bandShade(FC.fx, 0.78);
+  const cHiss = bandShade(FC.fx, 0.82);
+  const cHum = bandShade(FC.fx, 0.86);
+  const cPrint = bandShade(FC.fx, 0.9);
+
+  const cass = useFireCommandStore((s) => s.patch.cassetteGen) ?? 0;
+  const speed = useFireCommandStore((s) => s.patch.tapeSpeed) ?? 0;
+  const wow = useFireCommandStore((s) => s.patch.wowFlutter) ?? 0;
+  const vhs = useFireCommandStore((s) => s.patch.vhsColor) ?? 0;
+  const bit = (useFireCommandStore((s) => s.patch.bitDepth) ?? "off") as FireBitDepth;
+  const srr = useFireCommandStore((s) => s.patch.sampleRateReduce) ?? 0;
+  const bbd = useFireCommandStore((s) => s.patch.bbdChorus) ?? 0;
+  const comp = useFireCommandStore((s) => s.patch.analogComp) ?? 0;
+  const dust = useFireCommandStore((s) => s.patch.dust) ?? 0;
+  const hiss = useFireCommandStore((s) => s.patch.hiss) ?? 0;
+  const hum = useFireCommandStore((s) => s.patch.hum) ?? 0;
+  const print = useFireCommandStore((s) => s.patch.printThrough) ?? 0;
+  const beds = Math.max(dust, hiss, hum, print);
+  const live = Math.max(cass, wow, vhs, beds, srr, bbd, comp, Math.abs(speed), bit !== "off" ? 0.35 : 0) > 0.03;
+
+  return (
+    <Section
+      title="Vintage Age"
+      color={c}
+      collapseKey="fx.vintage"
+      chipHosted={chipHosted}
+      right={
+        <FSeg<FireBitDepth>
+          paramKey="bitDepth"
+          color={c}
+          options={AGE_BITS}
+        />
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · FX
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
+            Oxide Archive
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${bit === "off" ? "full" : bit} · C${Math.round(cass * 100)} · W${Math.round(wow * 100)}${vhs > 0.05 ? ` · V${Math.round(vhs * 100)}` : ""}`
+                : `${bit === "off" ? "full" : bit} · clean`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <AgeQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.fx, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!live ? "Clean" : bit !== "off" ? bit : vhs > 0.4 ? "VHS" : bbd > 0.45 ? "BBD" : "Aged"}
+          </div>
+        </div>
+      </div>
+
+      <AgeStageViz />
+      <AgeCharacterStrip />
+      <AgeBitStrip />
+      <AgeBedStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2 flex-wrap">
+        <AgeModMeter label="Cass" value={cass} color={cCass} format={() => fmtPct(cass)} />
+        <AgeModMeter label="Speed" value={speed} color={cSpeed} bipolar format={() => fmtBi(speed)} />
+        <AgeModMeter label="Wow" value={wow} color={cWow} format={() => fmtPct(wow)} />
+        <AgeModMeter label="VHS" value={vhs} color={cVhs} format={() => fmtPct(vhs)} />
+        <AgeModMeter label="Beds" value={beds} color={cDust} format={() => fmtPct(beds)} />
+        <AgeModMeter
+          label="Bits"
+          value={bit === "off" ? 0 : bit === "12bit" ? 0.5 : 1}
+          color={bandShade(FC.fx, 0.72)}
+          format={() => (bit === "off" ? "full" : bit.replace("bit", "b"))}
+        />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="cassetteGen" label="Cass" min={0} max={1} format={fmtPct} def={0} size={46} color={cCass} />
+        <FParamKnob paramKey="tapeSpeed" label="Speed" min={-1} max={1} bipolar format={fmtBi} def={0} size={46} color={cSpeed} />
+        <FParamKnob paramKey="wowFlutter" label="Wow" min={0} max={1} format={fmtPct} def={0} size={46} color={cWow} />
+        <FParamKnob paramKey="vhsColor" label="VHS" min={0} max={1} format={fmtPct} def={0} size={46} color={cVhs} />
+      </div>
+      <div className="mt-1 flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="sampleRateReduce" label="SR↓" min={0} max={1} format={fmtPct} def={0} size={44} color={cSrr} />
+        <FParamKnob paramKey="bbdChorus" label="BBD" min={0} max={1} format={fmtPct} def={0} size={44} color={cBbd} />
+        <FParamKnob paramKey="analogComp" label="Comp" min={0} max={1} format={fmtPct} def={0} size={44} color={cComp} />
+        <FParamKnob paramKey="dust" label="Dust" min={0} max={1} format={fmtPct} def={0} size={44} color={cDust} />
+        <FParamKnob paramKey="hiss" label="Hiss" min={0} max={1} format={fmtPct} def={0} size={44} color={cHiss} />
+        <FParamKnob paramKey="hum" label="Hum" min={0} max={1} format={fmtPct} def={0} size={44} color={cHum} />
+        <FParamKnob paramKey="printThrough" label="Print" min={0} max={1} format={fmtPct} def={0} size={44} color={cPrint} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Oxide archive — drag Cass↔ / Wow↕, scrub Speed, double-click cycles bits. Every twist ages the chamber.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Drive — Shape Crucible ════════════════════
+
+const DRIVE_CHARS = [
+  { id: "clean", label: "Clean", drive: 0, mode: "soft" as DriveMode, crush: 0, tone: 15000 },
+  { id: "warm", label: "Warm", drive: 0.28, mode: "soft" as DriveMode, crush: 0, tone: 11000 },
+  { id: "tube", label: "Tube", drive: 0.55, mode: "tube" as DriveMode, crush: 0.08, tone: 8500 },
+  { id: "fold", label: "Fold", drive: 0.62, mode: "fold" as DriveMode, crush: 0, tone: 14000 },
+  { id: "hard", label: "Hard", drive: 0.72, mode: "hard" as DriveMode, crush: 0.12, tone: 7500 },
+  { id: "fuzz", label: "Fuzz", drive: 0.88, mode: "fuzz" as DriveMode, crush: 0.22, tone: 5500 },
+  { id: "crush", label: "Crush", drive: 0.22, mode: "soft" as DriveMode, crush: 0.78, tone: 9000 },
+  { id: "lofi", label: "LoFi", drive: 0.45, mode: "tube" as DriveMode, crush: 0.58, tone: 4200 },
+] as const;
+
+const DRIVE_MODES: { id: DriveMode; label: string }[] = [
+  { id: "soft", label: "Soft" },
+  { id: "tube", label: "Tube" },
+  { id: "fold", label: "Fold" },
+  { id: "hard", label: "Hard" },
+  { id: "fuzz", label: "Fuzz" },
+];
+
+const DRIVE_TONES = [
+  { label: "2k", v: 2000 },
+  { label: "4k", v: 4000 },
+  { label: "8k", v: 8000 },
+  { label: "12k", v: 12000 },
+  { label: "15k", v: 15000 },
+  { label: "18k", v: 18000 },
+] as const;
+
+const DRIVE_MODE_CYCLE: DriveMode[] = ["soft", "tube", "fold", "hard", "fuzz"];
+
+function driveNear(a: number, b: number, eps = 0.06) {
+  return Math.abs(a - b) < eps;
+}
+
+function driveNearTone(a: number, b: number) {
+  return Math.abs(Math.log2(Math.max(1000, a) / Math.max(1000, b))) < 0.18;
+}
+
+function DriveCharacterStrip() {
+  const drive = useFireCommandStore((s) => s.patch.drive) ?? 0;
+  const mode = (useFireCommandStore((s) => s.patch.driveMode) ?? "soft") as DriveMode;
+  const crush = useFireCommandStore((s) => s.patch.crush) ?? 0;
+  const tone = useFireCommandStore((s) => s.patch.tone) ?? 15000;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.drive;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Crucible
+      </span>
+      {DRIVE_CHARS.map((p) => {
+        const on =
+          (p.id === "clean" && drive < 0.03 && crush < 0.03) ||
+          (p.id !== "clean" &&
+            driveNear(drive, p.drive) &&
+            mode === p.mode &&
+            driveNear(crush, p.crush) &&
+            driveNearTone(tone, p.tone));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("drive", p.drive);
+              setParam("driveMode", p.mode);
+              setParam("crush", p.crush);
+              setParam("tone", p.tone);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DriveModeStrip() {
+  const mode = (useFireCommandStore((s) => s.patch.driveMode) ?? "soft") as DriveMode;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.drive;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Shape
+      </span>
+      {DRIVE_MODES.map((m) => {
+        const on = mode === m.id;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setParam("driveMode", m.id)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.72)}99`,
+                    background: `${bandShade(FC.fx, 0.72)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={`${m.label} transfer`}
+          >
+            {m.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DriveToneStrip() {
+  const tone = useFireCommandStore((s) => s.patch.tone) ?? 15000;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.drive;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Tone
+      </span>
+      {DRIVE_TONES.map((p) => {
+        const on = driveNearTone(tone, p.v);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("tone", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.85)}99`,
+                    background: `${bandShade(FC.fx, 0.85)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtHz(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DriveQuickActions() {
+  const drive = useFireCommandStore((s) => s.patch.drive) ?? 0;
+  const mode = (useFireCommandStore((s) => s.patch.driveMode) ?? "soft") as DriveMode;
+  const crush = useFireCommandStore((s) => s.patch.crush) ?? 0;
+  const tone = useFireCommandStore((s) => s.patch.tone) ?? 15000;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ drive: 0.45, mode: "tube" as DriveMode, crush: 0.1, tone: 9000 });
+  const c = FC.drive;
+  const idle = drive < 0.03 && crush < 0.03;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("drive", savedRef.current.drive);
+            setParam("driveMode", savedRef.current.mode);
+            setParam("crush", savedRef.current.crush);
+            setParam("tone", savedRef.current.tone);
+          } else {
+            savedRef.current = { drive, mode, crush, tone };
+            setParam("drive", 0);
+            setParam("crush", 0);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore last forge" : "Bypass drive + crush"}
+      >
+        {idle ? "Ignite" : "Cool"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const i = DRIVE_MODE_CYCLE.indexOf(mode);
+          setParam("driveMode", DRIVE_MODE_CYCLE[(i + 1) % DRIVE_MODE_CYCLE.length]!);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{
+          borderColor: `${c}66`,
+          color: bandShade(FC.fx, 0.92),
+          background: `${c}22`,
+        }}
+        title="Cycle transfer curve"
+      >
+        Cycle
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("drive", 0.58);
+          setParam("driveMode", "tube");
+          setParam("crush", 0.1);
+          setParam("tone", 8000);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.fx, 0.9), background: `${c}1c` }}
+        title="Warm tube forge"
+      >
+        Forge
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("drive", 0);
+          setParam("driveMode", "soft");
+          setParam("crush", 0);
+          setParam("tone", 15000);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset drive stage"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function DriveModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function DrivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = FC.drive;
+  const cDrv = bandShade(FC.fx, 0.5);
+  const cCrush = bandShade(FC.fx, 0.72);
+  const cTone = bandShade(FC.fx, 0.85);
+  const drive = useFireCommandStore((s) => s.patch.drive) ?? 0;
+  const mode = (useFireCommandStore((s) => s.patch.driveMode) ?? "soft") as DriveMode;
+  const crush = useFireCommandStore((s) => s.patch.crush) ?? 0;
+  const tone = useFireCommandStore((s) => s.patch.tone) ?? 15000;
+  const live = drive > 0.02 || crush > 0.02;
+  const toneN = Math.log(Math.max(1000, tone) / 1000) / Math.log(18000 / 1000);
+
+  return (
+    <Section
+      title="Drive"
+      color={c}
+      collapseKey="fx.drive"
+      chipHosted={chipHosted}
+      right={
+        <FSeg<DriveMode>
+          paramKey="driveMode"
+          color={c}
+          options={DRIVE_MODES}
+        />
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · FX
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
+            Shape Crucible
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${mode} · D${Math.round(drive * 100)} · C${Math.round(crush * 100)} · ${fmtHz(tone)}`
+                : `${mode} · clean`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <DriveQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.fx, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? (crush > drive ? "Crush" : mode) : "Clean"}
+          </div>
+        </div>
+      </div>
+
+      <DriveStageViz />
+      <DriveCharacterStrip />
+      <DriveModeStrip />
+      <DriveToneStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <DriveModMeter label="Drive" value={drive} color={cDrv} format={() => fmtPct(drive)} />
+        <DriveModMeter label="Crush" value={crush} color={cCrush} format={() => fmtPct(crush)} />
+        <DriveModMeter label="Tone" value={toneN} color={cTone} format={() => fmtHz(tone)} />
+        <DriveModMeter
+          label="Shape"
+          value={live ? 0.35 + DRIVE_MODE_CYCLE.indexOf(mode) * 0.15 : 0}
+          color={bandShade(FC.fx, 0.62)}
+          format={() => (live ? mode : "clean")}
+        />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob paramKey="drive" label="Drive" min={0} max={1} format={fmtPct} def={0} size={52} color={cDrv} />
+        <FParamKnob paramKey="crush" label="Crush" min={0} max={1} format={fmtPct} def={0} size={52} color={cCrush} />
+        <FParamKnob paramKey="tone" label="Tone" min={1000} max={18000} curve="log" format={fmtHz} def={15000} size={52} color={cTone} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Violet crucible — drag Drive↔ / Crush↕, scrub Tone, double-click cycles the transfer. Every twist reshapes the forge.
+      </div>
+    </Section>
+  );
+}
+
+// ════════════════════ Macros — Helm Quartet ════════════════════
+
+function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = MACRO_C;
+  const m1 = useFireCommandStore((s) => s.patch.macro1) ?? 0;
+  const m2 = useFireCommandStore((s) => s.patch.macro2) ?? 0;
+  const m3 = useFireCommandStore((s) => s.patch.macro3) ?? 0;
+  const m4 = useFireCommandStore((s) => s.patch.macro4) ?? 0;
+  const matrix = useFireCommandStore((s) => s.patch.modMatrix) ?? [];
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["macros"] !== false);
+  const vals = [m1, m2, m3, m4];
+  const energy = Math.max(...vals);
+  const wired = MACRO_KEYS.map((key) =>
+    matrix.filter((r) => r.source === key && r.dest !== "none").map((r) => r.dest),
+  );
+  const routeCount = wired.reduce((n, r) => n + r.length, 0);
+  const live = enabled && energy > 0.03;
+
+  return (
+    <Section title="Macros" color={c} collapseKey="macros" defaultCollapsed chipHosted={chipHosted} statusLine={!enabled ? "Off" : `On · energy ${Math.round(energy * 100)} · ${routeCount} route${routeCount === 1 ? "" : "s"}`}>
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Perf
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: MACRO_C_GLOW }}>
+            Helm Quartet
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : `Σ${Math.round(energy * 100)} · ${routeCount} route${routeCount === 1 ? "" : "s"} · ${macroStageLabel(vals)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <MacroQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? MACRO_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {!enabled ? "Bypass" : macroStageLabel(vals)}
+          </div>
+        </div>
+      </div>
+
+      <MacroStageViz />
+      <MacroCharacterStrip />
+      <MacroSnapStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        {MACRO_KEYS.map((key, i) => (
+          <MacroMeter key={key} label={`M${i + 1}`} value={vals[i]!} color={MACRO_HELM_COLORS[i]!} />
+        ))}
+      </div>
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {MACRO_KEYS.map((key, i) => {
-          const dests = wired(key);
+          const dests = wired[i]!;
+          const color = MACRO_HELM_COLORS[i]!;
           return (
             <div
               key={key}
-              className="flex flex-col items-center gap-1.5 rounded-xl border border-white/[0.06] bg-black/25 px-2 py-2.5"
-              style={{ borderColor: `${MACRO_COLORS[i]}22` }}
+              className="flex flex-col items-center gap-1.5 rounded-xl border bg-black/25 px-2 py-2.5 transition"
+              style={{
+                borderColor: `${color}${vals[i]! > 0.05 ? "55" : "22"}`,
+                boxShadow: vals[i]! > 0.08 ? `0 0 16px ${color}22` : undefined,
+              }}
             >
               <FParamKnob
                 paramKey={key}
@@ -2149,12 +10859,15 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
                 max={1}
                 format={fmtPct}
                 def={0}
-                color={MACRO_COLORS[i]}
+                color={color}
                 size={52}
               />
-              <div className="min-h-[14px] text-center text-[9px] leading-tight text-dim">
+              <div className="min-h-[14px] text-center text-[9px] leading-tight">
                 {dests.length ? (
-                  <span style={{ color: `${MACRO_COLORS[i]}cc` }}>{dests.slice(0, 2).join(" · ")}{dests.length > 2 ? "…" : ""}</span>
+                  <span style={{ color: `${color}cc` }}>
+                    {dests.slice(0, 2).join(" · ")}
+                    {dests.length > 2 ? "…" : ""}
+                  </span>
                 ) : (
                   <span className="text-white/25">unpatched</span>
                 )}
@@ -2163,363 +10876,222 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           );
         })}
       </div>
-      <div className="mt-2 text-center text-[10px] text-dim">
-        Performance cluster — twist the knobs; cards above show live level and matrix destinations.
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Helm quartet — drag ↕ each column, stamp a character, snap all four. Double-click cycles shapes.
+        Levels feed the mod matrix · Bypass zeros every macro source.
       </div>
     </Section>
   );
 }
 
-/** Named gate patterns — classic trance/electro chop shapes. */
-const GATE_PRESETS: { name: string; steps: number[] }[] = [
-  { name: "Offbeat", steps: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0] },
-  { name: "Four Floor", steps: [1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0] },
-  { name: "Gallop", steps: [1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1] },
-  { name: "3-3-2", steps: [1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0] },
-  { name: "Stutter", steps: [1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0] },
-  { name: "Sparse", steps: [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0] },
-  { name: "Long-Short", steps: [1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0] },
-];
-
-/** Trance Gate personality: ice shutter field — enhanced silhouette with playhead bloom, particles, and frequency bars. */
-function GateChopViz({
-  pattern, steps, on, playStep, depth, smooth,
-}: {
-  pattern: number[];
-  steps: number;
-  on: boolean;
-  playStep: number;
-  depth: number;
-  smooth: number;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const stateRef = useRef({ pattern, steps, on, playStep, depth, smooth });
-  stateRef.current = { pattern, steps, on, playStep, depth, smooth };
-  const particlesRef = useRef<{ x: number; y: number; vx: number; vy: number; life: number }[]>([]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const wrap = wrapRef.current;
-    if (!canvas || !wrap) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    let raf = 0;
-    let last = 0;
-    const size = { w: 400, h: 96 };
-
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      size.h = 96;
-      canvas.width = Math.floor(size.w * dpr);
-      canvas.height = Math.floor(size.h * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${size.h}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-
-    const draw = (t: number) => {
-      raf = requestAnimationFrame(draw);
-      if (document.hidden || t - last < 22) return;
-      last = t;
-      const s = stateRef.current;
-      const { w: W, h: H } = size;
-      ctx.clearRect(0, 0, W, H);
-
-      // Ice depth field with breathing hue
-      const hueShift = 195 + Math.sin(t / 3500) * 15;
-      const breathe = 0.9 + 0.1 * Math.sin(t / 700);
-      const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, `hsla(${hueShift}, 75%, 48%, ${(0.12 + (s.on ? 0.08 : 0)) * breathe})`);
-      bg.addColorStop(0.5, "rgba(4,12,20,0.6)");
-      bg.addColorStop(1, `hsla(${hueShift + 25}, 65%, 42%, ${(0.08 + (s.on ? 0.04 : 0))})`);
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, H);
-
-      const n = Math.max(2, Math.min(16, Math.round(s.steps)));
-      const padX = 12;
-      const usable = W - padX * 2;
-      const stepW = usable / n;
-      const floor = H - 10;
-      const ceil = 14;
-      const ampH = floor - ceil;
-      const closed = 1 - s.depth;
-
-      // Softened step heights (smooth blurs edges)
-      const heights: number[] = [];
-      for (let i = 0; i < n; i++) {
-        const open = (s.pattern[i] ?? 0) > 0.5 ? 1 : closed;
-        heights.push(open);
-      }
-      if (s.smooth > 0.01) {
-        const blur = Math.max(1, Math.round(s.smooth * 3));
-        const soft = heights.slice();
-        for (let i = 0; i < n; i++) {
-          let acc = 0, w = 0;
-          for (let k = -blur; k <= blur; k++) {
-            const j = (i + k + n) % n;
-            const wt = 1 - Math.abs(k) / (blur + 1);
-            acc += heights[j] * wt;
-            w += wt;
-          }
-          soft[i] = acc / w;
-        }
-        for (let i = 0; i < n; i++) heights[i] = soft[i];
-      }
-
-      // Frequency bars (horizontal layers behind shutters)
-      if (s.on) {
-        for (let layer = 0; layer < 5; layer++) {
-          const layerY = ceil + layer * ((ampH - 10) / 4);
-          const layerH = 2;
-          const sweep = ((t / 400 + layer * 0.2) % 1);
-          ctx.fillStyle = `hsla(${hueShift}, 70%, 60%, ${0.08 * breathe})`;
-          ctx.fillRect(padX, layerY, usable * sweep, layerH);
-        }
-      }
-
-      // Multi-layer silhouette fill with depth
-      for (let layer = 2; layer >= 0; layer--) {
-        ctx.beginPath();
-        ctx.moveTo(padX, floor);
-        for (let i = 0; i < n; i++) {
-          const x0 = padX + i * stepW;
-          const y = floor - heights[i] * ampH * (1 - layer * 0.05);
-          ctx.lineTo(x0, y);
-          ctx.lineTo(x0 + stepW, y);
-        }
-        ctx.lineTo(padX + usable, floor);
-        ctx.closePath();
-        const fill = ctx.createLinearGradient(0, ceil, 0, floor);
-        fill.addColorStop(0, `hsla(${hueShift}, 80%, 65%, ${(s.on ? 0.45 : 0.15) * breathe * (1 - layer * 0.15)})`);
-        fill.addColorStop(0.6, `hsla(${hueShift}, 70%, 50%, ${(s.on ? 0.15 : 0.05) * (1 - layer * 0.1)})`);
-        fill.addColorStop(1, `hsla(${hueShift}, 65%, 40%, 0.02)`);
-        ctx.fillStyle = fill;
-        ctx.fill();
-      }
-
-      // Top contour with enhanced glow
-      ctx.beginPath();
-      for (let i = 0; i < n; i++) {
-        const x0 = padX + i * stepW;
-        const y = floor - heights[i] * ampH;
-        if (i === 0) ctx.moveTo(x0, y);
-        ctx.lineTo(x0, y);
-        ctx.lineTo(x0 + stepW, y);
-      }
-      ctx.strokeStyle = s.on ? `hsla(${hueShift}, 95%, 75%, ${0.9 * breathe})` : `hsla(${hueShift}, 60%, 60%, 0.4)`;
-      ctx.lineWidth = 2.5;
-      ctx.shadowBlur = s.on ? 12 + breathe * 4 : 0;
-      ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Step ticks with emphasis on beats
-      for (let i = 0; i <= n; i++) {
-        const x = padX + i * stepW;
-        const isBeat = i % 4 === 0;
-        ctx.strokeStyle = isBeat ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)";
-        ctx.lineWidth = isBeat ? 1.5 : 1;
-        ctx.beginPath();
-        ctx.moveTo(x, ceil - 2);
-        ctx.lineTo(x, floor + 2);
-        ctx.stroke();
-      }
-
-      // Ice particles (when active)
-      if (s.on) {
-        const particles = particlesRef.current;
-        if (Math.random() < 0.3) {
-          particles.push({
-            x: padX + Math.random() * usable,
-            y: ceil + Math.random() * ampH,
-            vx: (Math.random() - 0.5) * 0.5,
-            vy: -0.3 - Math.random() * 0.6,
-            life: 1,
-          });
-        }
-        for (let i = particles.length - 1; i >= 0; i--) {
-          const pt = particles[i];
-          pt.x += pt.vx;
-          pt.y += pt.vy;
-          pt.life -= 0.012;
-          if (pt.life <= 0) {
-            particles.splice(i, 1);
-            continue;
-          }
-          ctx.fillStyle = `hsla(${hueShift}, 80%, 85%, ${pt.life * 0.5})`;
-          ctx.shadowBlur = 3;
-          ctx.shadowColor = `hsl(${hueShift}, 70%, 70%)`;
-          ctx.fillRect(pt.x, pt.y, 2, 2);
-        }
-        ctx.shadowBlur = 0;
-      }
-
-      // Playhead beam with bloom
-      if (s.on && s.playStep >= 0 && s.playStep < n) {
-        const x = padX + s.playStep * stepW + stepW / 2;
-        
-        // Vertical beam gradient
-        const beam = ctx.createLinearGradient(x, 0, x, H);
-        beam.addColorStop(0, "rgba(220,245,255,0)");
-        beam.addColorStop(0.35, `rgba(180,235,255,${0.6 * breathe})`);
-        beam.addColorStop(0.65, `rgba(120,210,255,${0.5 * breathe})`);
-        beam.addColorStop(1, "rgba(98,182,255,0)");
-        ctx.fillStyle = beam;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
-        ctx.fillRect(x - 3, 0, 6, H);
-        ctx.shadowBlur = 0;
-
-        // Radial bloom at crest
-        const y = floor - heights[s.playStep] * ampH;
-        const pulse = 0.6 + 0.4 * Math.sin(t / 70);
-        const bloom = ctx.createRadialGradient(x, y, 0, x, y, 18 + pulse * 10);
-        bloom.addColorStop(0, `hsla(${hueShift}, 90%, 85%, ${0.75 * pulse})`);
-        bloom.addColorStop(0.5, `hsla(${hueShift}, 80%, 70%, ${0.35 * pulse})`);
-        bloom.addColorStop(1, "rgba(98,182,255,0)");
-        ctx.fillStyle = bloom;
-        ctx.fillRect(x - 28, y - 28, 56, 56);
-
-        // Pulse rings
-        for (let ring = 0; ring < 2; ring++) {
-          const ringPhase = (t / 120 + ring * 0.5) % 1;
-          const ringR = 6 + ringPhase * (12 + pulse * 8);
-          const ringAlpha = (0.6 - ringPhase * 0.5) * pulse;
-          ctx.strokeStyle = `rgba(220,245,255,${ringAlpha})`;
-          ctx.lineWidth = 2 - ringPhase;
-          ctx.shadowBlur = 6;
-          ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
-          ctx.beginPath();
-          ctx.arc(x, y, ringR, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-        ctx.shadowBlur = 0;
-
-        // Core gem
-        ctx.fillStyle = "#fff";
-        ctx.shadowBlur = 14;
-        ctx.shadowColor = `hsl(${hueShift}, 80%, 70%)`;
-        ctx.beginPath();
-        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
-
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = s.on ? `hsla(${hueShift}, 80%, 75%, 0.75)` : "rgba(150,210,255,0.4)";
-      ctx.fillText(s.on ? "ICE SHUTTER LIVE" : "STANDBY", 12, H - 8);
-      ctx.textAlign = "right";
-      ctx.fillText(`${n} STEPS`, W - 12, H - 8);
-    };
-
-    raf = requestAnimationFrame(draw);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  }, []);
-
-  return (
-    <div
-      ref={wrapRef}
-      className="relative mb-3 overflow-hidden rounded-md border border-cyan/25 bg-[#050a10]/90 shadow-[inset_0_0_0_1px_rgba(98,182,255,0.06),inset_0_0_28px_rgba(0,0,0,0.55),0_6px_18px_rgba(0,0,0,0.3)]"
-    >
-      <canvas ref={canvasRef} className="block w-full" style={{ height: 96 }} aria-hidden />
-      <span className="pointer-events-none absolute inset-x-3 top-1 h-px bg-cyan/35" />
-      <span className="pointer-events-none absolute inset-x-3 bottom-1 h-px bg-cyan/35" />
-    </div>
-  );
-}
+// ════════════════════ Gate — Rhythm Shutter ════════════════════
 
 function GatePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = GATE_C;
   const on = useFireCommandStore((s) => s.patch.gateOn);
   const pattern = useFireCommandStore((s) => s.patch.gatePattern);
   const steps = useFireCommandStore((s) => s.patch.gateSteps);
   const depth = useFireCommandStore((s) => s.patch.gateDepth);
   const smooth = useFireCommandStore((s) => s.patch.gateSmooth ?? 0);
-  const setParam = useFireCommandStore((s) => s.setParam);
+  const rate = useFireCommandStore((s) => s.patch.gateRate) ?? 8;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["gate"] !== false);
   const setGateStep = useFireCommandStore((s) => s.setGateStep);
-  const [playStep, setPlayStep] = useState(-1);
-  useEffect(() => {
-    if (!on) { setPlayStep(-1); return; }
-    const id = window.setInterval(() => {
-      setPlayStep(getEngine().fireCommand.getGateStep());
-    }, 45);
-    return () => window.clearInterval(id);
-  }, [on]);
-  const setPattern = (p: number[]) => setParam("gatePattern", p.slice(0, 16));
-  const shift = (dir: 1 | -1) => {
-    const n = pattern.length;
-    setPattern(pattern.map((_, i) => pattern[(i - dir + n) % n]));
-  };
-  return (
-    <Section title="Trance Gate" color={FC.gate} collapseKey="gate" defaultCollapsed chipHosted={chipHosted} right={
-      <button
-        onClick={() => setParam("gateOn", !on)}
-        className={`rounded-lg border px-3 py-1 text-xs font-semibold transition ${on ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_14px_rgb(98_182_255/0.35)]" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
-      >{on ? "● CHOP" : "ARM"}</button>
-    }>
-      <GateChopViz pattern={pattern} steps={steps} on={on} playStep={playStep} depth={depth} smooth={smooth} />
+  const padRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const playStepRef = useRef(-1);
 
-      {/* Preset strip — even chips */}
-      <div className="mb-2.5 grid grid-cols-4 gap-1 sm:grid-cols-7">
-        {GATE_PRESETS.map((g) => (
-          <button
-            key={g.name}
-            onClick={() => setPattern([...g.steps])}
-            className="h-7 truncate rounded-md border border-white/10 bg-white/[0.03] px-1 text-[9px] font-medium uppercase tracking-wide text-white/55 transition hover:border-cyan/40 hover:bg-cyan/10 hover:text-cyan"
-            title={g.name}
-          >{g.name}</button>
-        ))}
+  useEffect(() => {
+    const clearPlay = () => {
+      const prev = playStepRef.current;
+      if (prev >= 0) {
+        const el = padRefs.current[prev];
+        if (el) el.dataset.play = "0";
+      }
+      playStepRef.current = -1;
+    };
+    if (!on || !enabled) {
+      clearPlay();
+      return;
+    }
+    const id = window.setInterval(() => {
+      let step = -1;
+      try {
+        step = getEngine().fireCommand.getGateStep();
+      } catch {
+        step = -1;
+      }
+      if (step === playStepRef.current) return;
+      const prev = playStepRef.current;
+      if (prev >= 0) {
+        const el = padRefs.current[prev];
+        if (el) el.dataset.play = "0";
+      }
+      playStepRef.current = step;
+      if (step >= 0) {
+        const el = padRefs.current[step];
+        if (el) el.dataset.play = "1";
+      }
+    }, 40);
+    return () => {
+      window.clearInterval(id);
+      clearPlay();
+    };
+  }, [on, enabled]);
+
+  const n = Math.max(2, Math.min(16, Math.round(steps)));
+  const openCount = pattern.slice(0, n).filter((v) => v > 0.5).length;
+  const live = on && enabled;
+  const stage = gateStageLabel(on, enabled, depth, rate);
+  const rateN = Math.log(Math.max(0.5, rate) / 0.5) / Math.log(24 / 0.5);
+  const stepsN = (n - 2) / 14;
+
+  return (
+    <Section
+      title="Trance Gate"
+      color={c}
+      collapseKey="gate"
+      defaultCollapsed
+      chipHosted={chipHosted}
+      statusLine={!enabled ? "Off" : on ? `On · ${openCount}/${n} steps open` : "Armed · idle"}
+      right={
+        <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
+          {openCount}/{n}
+        </span>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Perf
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: GATE_C_GLOW }}>
+            Rhythm Shutter
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : `${n}st · ${rate.toFixed(1)}Hz · D${Math.round(depth * 100)} · S${Math.round(smooth * 100)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <GateQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? GATE_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {stage}
+          </div>
+        </div>
       </div>
 
-      {/* Step pads — tall, even */}
-      <div className="mb-3 grid gap-1" style={{ gridTemplateColumns: `repeat(${Math.max(2, Math.min(16, Math.round(steps)))}, minmax(0, 1fr))` }}>
-        {pattern.slice(0, Math.max(2, Math.min(16, Math.round(steps)))).map((v, i) => {
+      <GateStageViz />
+      <GateCharacterStrip />
+      <GateRateStrip />
+      <GateDepthStrip />
+      <GateStepsStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <GateMeter label="Rate" value={rateN} color={GATE_C_RATE} format={() => `${rate.toFixed(1)}Hz`} />
+        <GateMeter label="Depth" value={depth} color={GATE_C_DEPTH} format={() => `${Math.round(depth * 100)}%`} />
+        <GateMeter label="Steps" value={stepsN} color={GATE_C_STEPS} format={() => `${n}`} />
+        <GateMeter label="Smooth" value={smooth} color={GATE_C_SMOOTH} format={() => `${Math.round(smooth * 100)}%`} />
+        <GateMeter label="Open" value={openCount / Math.max(1, n)} color={GATE_C_GLOW} format={() => `${openCount}/${n}`} />
+      </div>
+
+      {/* Step pads — magenta shutter grid. Playhead via data-play (no React 25fps). */}
+      <div
+        className="mb-3 grid gap-1"
+        style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
+      >
+        {pattern.slice(0, n).map((v, i) => {
           const lit = v > 0.5;
-          const isPlay = on && i === playStep;
+          const isBeat = i % 4 === 0;
           return (
             <button
               key={i}
+              type="button"
+              ref={(el) => { padRefs.current[i] = el; }}
+              data-play="0"
+              data-lit={lit ? "1" : "0"}
               onClick={() => setGateStep(i, !lit)}
-              className="relative h-12 rounded-lg border transition"
+              className="relative h-12 rounded-lg border transition gate-step-pad"
               style={{
-                borderColor: isPlay ? "#fff" : lit ? `${ICE}99` : "rgba(255,255,255,0.1)",
+                borderColor: lit ? `${c}99` : isBeat ? `${c}33` : "rgba(255,255,255,0.1)",
                 background: lit
-                  ? isPlay
-                    ? `linear-gradient(180deg, ${ICE}88, ${ICE}33)`
-                    : `linear-gradient(180deg, ${ICE}44, ${ICE}14)`
+                  ? `linear-gradient(180deg, ${c}55, ${c}18)`
                   : "rgba(255,255,255,0.03)",
-                boxShadow: isPlay ? `0 0 16px ${ICE}66, inset 0 0 12px ${ICE}44` : lit ? `inset 0 0 10px ${ICE}33` : "none",
+                boxShadow: lit ? `inset 0 0 12px ${c}44` : "none",
+                // CSS vars for the playhead highlight without re-rendering.
+                ["--gate-c" as string]: c,
               }}
-              title={`Step ${i + 1}`}
+              title={`Step ${i + 1}${lit ? " · open" : " · closed"}`}
             >
-              <span className="absolute bottom-1 left-0 right-0 text-center text-[8px] font-mono text-white/35">{i + 1}</span>
+              <span
+                className="absolute bottom-1 left-0 right-0 text-center text-[8px] font-mono"
+                style={{ color: lit ? `${GATE_C_GLOW}aa` : "rgba(255,255,255,0.3)" }}
+              >
+                {i + 1}
+              </span>
             </button>
           );
         })}
       </div>
+      <style>{`
+        .gate-step-pad[data-play="1"] {
+          border-color: #fff !important;
+          background: linear-gradient(180deg, color-mix(in srgb, var(--gate-c) 60%, transparent), color-mix(in srgb, var(--gate-c) 27%, transparent)) !important;
+          box-shadow: 0 0 18px color-mix(in srgb, var(--gate-c) 47%, transparent), inset 0 0 14px color-mix(in srgb, var(--gate-c) 33%, transparent) !important;
+        }
+      `}</style>
 
-      {/* Toolbox + knobs — symmetric rails */}
-      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 items-center">
-        <div className="flex flex-col gap-1">
-          <button onClick={() => shift(-1)} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Rotate left">◂ Shift</button>
-          <button onClick={() => shift(1)} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Rotate right">Shift ▸</button>
-          <button onClick={() => setPattern(pattern.map((v) => (v > 0.5 ? 0 : 1)))} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Invert">Invert</button>
-          <button onClick={() => setPattern(Array.from({ length: 16 }, () => (Math.random() < 0.55 ? 1 : 0)))} className="h-7 rounded-md border border-white/12 bg-white/[0.03] px-2.5 text-[10px] text-white/65 transition hover:bg-white/8" title="Random">Rand</button>
-        </div>
-        <div className="flex items-center justify-evenly gap-2">
-          <FParamKnob paramKey="gateRate" label="Rate" min={0.5} max={24} curve="log" format={fmtHzRate} def={8} color={ICE} />
-          <FParamKnob paramKey="gateDepth" label="Depth" min={0} max={1} format={fmtPct} def={1} color={ICE} />
-          <FParamKnob paramKey="gateSteps" label="Steps" min={2} max={16} integer format={fmtInt} def={16} color={ICE} />
-          <FParamKnob paramKey="gateSmooth" label="Smooth" min={0} max={1} format={fmtPct} def={0} color={ICE} />
-        </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {(
+          [
+            { key: "gateRate" as const, label: "Rate", min: 0.5, max: 24, curve: "log" as const, format: fmtHzRate, def: 8, color: GATE_C_RATE, int: false },
+            { key: "gateDepth" as const, label: "Depth", min: 0, max: 1, curve: undefined, format: fmtPct, def: 1, color: GATE_C_DEPTH, int: false },
+            { key: "gateSteps" as const, label: "Steps", min: 2, max: 16, curve: undefined, format: fmtInt, def: 16, color: GATE_C_STEPS, int: true },
+            { key: "gateSmooth" as const, label: "Smooth", min: 0, max: 1, curve: undefined, format: fmtPct, def: 0, color: GATE_C_SMOOTH, int: false },
+          ] as const
+        ).map((k) => (
+          <div
+            key={k.key}
+            className="flex flex-col items-center gap-1.5 rounded-xl border bg-black/25 px-2 py-2.5 transition"
+            style={{
+              borderColor: `${k.color}44`,
+              boxShadow: live ? `0 0 14px ${k.color}18` : undefined,
+            }}
+          >
+            <FParamKnob
+              paramKey={k.key}
+              label={k.label}
+              min={k.min}
+              max={k.max}
+              curve={k.curve}
+              integer={k.int || undefined}
+              format={k.format}
+              def={k.def}
+              color={k.color}
+              size={52}
+            />
+          </div>
+        ))}
       </div>
-      <div className="mt-2 text-center text-[10px] text-dim">
-        Ice chop field — silhouette is your amplitude. Smooth melts edges into a pump; playhead rides the crest.
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Rhythm shutter — click steps, scrub depth (top) and rate (bottom). Double-click cycles chops.
+        Smooth melts edges into a pump · playhead rides the crest.
       </div>
     </Section>
   );
@@ -2537,7 +11109,213 @@ const MOD_DEST_OPTS: { id: ModDest; label: string }[] = [
   { id: "levelA", label: "Level A" }, { id: "levelB", label: "Level B" }, { id: "levelC", label: "Level C" },
   { id: "fm", label: "FM Amount" }, { id: "pan", label: "Pan" }, { id: "volume", label: "Volume" }, { id: "reverb", label: "Reverb" }, { id: "delay", label: "Delay" },
 ];
-const SELECT_CLS = "bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-xs text-white/85 focus:outline-none focus:border-[#7cf6b0]/60 cursor-pointer";
+const SELECT_CLS = "bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-xs text-white/85 focus:outline-none cursor-pointer";
+
+type MtxPreset = { source: ModSource; dest: ModDest; amount: number };
+
+const MTX_CHARS: { id: string; label: string; routes: MtxPreset[] }[] = [
+  { id: "idle", label: "Idle", routes: [] },
+  { id: "trem", label: "Trem", routes: [{ source: "lfo1", dest: "volume", amount: 0.4 }] },
+  { id: "wah", label: "Wah", routes: [{ source: "lfo1", dest: "cutoff", amount: 0.55 }] },
+  {
+    id: "morph",
+    label: "Morph",
+    routes: [
+      { source: "modenv", dest: "wtA", amount: 0.6 },
+      { source: "lfo2", dest: "wtB", amount: 0.35 },
+    ],
+  },
+  {
+    id: "vel",
+    label: "Vel",
+    routes: [
+      { source: "velocity", dest: "cutoff", amount: 0.45 },
+      { source: "velocity", dest: "levelA", amount: 0.3 },
+    ],
+  },
+  {
+    id: "macro",
+    label: "Macro",
+    routes: [
+      { source: "macro1", dest: "cutoff", amount: 0.7 },
+      { source: "macro1", dest: "fm", amount: 0.4 },
+    ],
+  },
+  {
+    id: "stereo",
+    label: "Stereo",
+    routes: [{ source: "lfo2", dest: "pan", amount: 0.55 }],
+  },
+  {
+    id: "chaos",
+    label: "Chaos",
+    routes: [
+      { source: "random", dest: "pitch", amount: 0.18 },
+      { source: "random", dest: "cutoff", amount: 0.35 },
+      { source: "lfo1", dest: "resonance", amount: 0.25 },
+    ],
+  },
+];
+
+function applyMtxRoutes(setModRoute: (i: number, p: Partial<ModRoute>) => void, routes: MtxPreset[]) {
+  for (let i = 0; i < 12; i++) {
+    const r = routes[i];
+    if (r) setModRoute(i, { source: r.source, dest: r.dest, amount: r.amount });
+    else setModRoute(i, { source: "none", dest: "none", amount: 0 });
+  }
+}
+
+function MtxCharacterStrip() {
+  const matrix = useFireCommandStore((s) => s.patch.modMatrix);
+  const setModRoute = useFireCommandStore((s) => s.setModRoute);
+  const c = FC.matrix;
+  const used = matrix.filter((r) => r.source !== "none" && r.dest !== "none");
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Weave
+      </span>
+      {MTX_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && used.length === 0) ||
+          (p.id !== "idle" &&
+            p.routes.length > 0 &&
+            p.routes.every((want) =>
+              used.some((r) => r.source === want.source && r.dest === want.dest && Math.abs(r.amount - want.amount) < 0.12),
+            ) &&
+            used.length === p.routes.length);
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => applyMtxRoutes(setModRoute, p.routes)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function MtxQuickActions() {
+  const matrix = useFireCommandStore((s) => s.patch.modMatrix);
+  const setModRoute = useFireCommandStore((s) => s.setModRoute);
+  const savedRef = useRef<ModRoute[]>([]);
+  const c = FC.matrix;
+  const used = matrix.filter((r) => r.source !== "none" && r.dest !== "none");
+  const idle = used.length === 0;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            if (savedRef.current.length) {
+              savedRef.current.forEach((r, i) => setModRoute(i, r));
+            } else {
+              applyMtxRoutes(setModRoute, MTX_CHARS.find((x) => x.id === "morph")!.routes);
+            }
+          } else {
+            savedRef.current = matrix.map((r) => ({ ...r }));
+            applyMtxRoutes(setModRoute, []);
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.mod, 0.96) : bandShade(FC.mod, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Restore weave" : "Clear all cables"}
+      >
+        {idle ? "Wake" : "Clear"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          matrix.forEach((r, i) => {
+            if (r.source !== "none" && r.dest !== "none") setModRoute(i, { amount: -r.amount });
+          });
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.9), background: `${c}1c` }}
+        title="Flip polarity of all live amounts"
+      >
+        Flip
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          applyMtxRoutes(
+            setModRoute,
+            MTX_CHARS.find((x) => x.id === "wah")!.routes.concat(MTX_CHARS.find((x) => x.id === "stereo")!.routes),
+          )
+        }
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.9), background: `${c}1c` }}
+        title="Wah + stereo weave"
+      >
+        Loom
+      </button>
+      <button
+        type="button"
+        onClick={() => applyMtxRoutes(setModRoute, [])}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset matrix empty"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function MtxModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
 
 function ModMatrixPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const matrix = useFireCommandStore((s) => s.patch.modMatrix);
@@ -2549,27 +11327,82 @@ function ModMatrixPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
     setView(v);
     try { localStorage.setItem("fire.matrixView", v); } catch { /* ignore */ }
   };
+  const c = FC.matrix;
+  const used = matrix.filter((r) => r.source !== "none" && r.dest !== "none");
+  const live = used.length > 0;
+  const avgMag = used.length ? used.reduce((a, r) => a + Math.abs(r.amount), 0) / used.length : 0;
+  const posN = used.filter((r) => r.amount >= 0).length;
+  const negN = used.filter((r) => r.amount < 0).length;
+
   return (
     <Section
       title="Modulation Matrix"
-      color={FC.matrix}
+      color={c}
       collapseKey="matrix"
-      defaultCollapsed
       chipHosted={chipHosted}
       right={
         <Seg<"grid" | "list">
           value={view}
           onChange={pickView}
           options={[{ id: "grid", label: "⊞ Bay" }, { id: "list", label: "☰ Slots" }]}
-          color={FC.matrix}
+          color={c}
         />
       }
     >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mod
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.96) }}>
+            Patch Loom
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live ? `${used.length}/12 cables · avg ${Math.round(avgMag * 100)}%` : "12 slots · idle"}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <MtxQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.mod, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? `${used.length} Live` : "Idle"}
+          </div>
+        </div>
+      </div>
+
+      <MtxCharacterStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <MtxModMeter label="Cables" value={used.length / 12} color={c} format={() => `${used.length}/12`} />
+        <MtxModMeter label="Depth" value={avgMag} color={bandShade(FC.mod, 0.78)} />
+        <MtxModMeter label="+" value={posN / Math.max(1, used.length)} color={bandShade(FC.mod, 0.88)} format={() => String(posN)} />
+        <MtxModMeter label={"\u2212"} value={negN / Math.max(1, used.length)} color={bandShade(FC.mod, 0.42)} format={() => String(negN)} />
+      </div>
+
       {view === "grid" ? (
         <ModPatchGrid />
       ) : (
         <ModMatrixRows matrix={matrix} setModRoute={setModRoute} />
       )}
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Mod loom — patch cells in the bay, scrub depth on cables/slots, Flip inverts polarity. Vel / Key / Mod Env are per-note.
+      </div>
     </Section>
   );
 }
@@ -2581,18 +11414,31 @@ function ModMatrixRows({
   matrix: ModRoute[];
   setModRoute: (index: number, partial: Partial<ModRoute>) => void;
 }) {
+  const c = FC.matrix;
+  const cPos = bandShade(FC.mod, 0.88);
+  const cNeg = bandShade(FC.mod, 0.42);
   return (
     <>
+      <MatrixStageViz />
       <div className="space-y-1.5">
         {matrix.map((r, i) => {
           const active = r.source !== "none" && r.dest !== "none";
+          const col = !active ? "rgba(255,255,255,0.3)" : r.amount >= 0 ? cPos : cNeg;
           return (
-            <div key={i} className="flex items-center gap-2">
-              <span className="text-[10px] font-mono text-dim w-4 text-center">{i + 1}</span>
+            <div
+              key={i}
+              className="flex items-center gap-2 rounded-lg border px-1.5 py-1"
+              style={{
+                borderColor: active ? `${col}44` : "rgba(255,255,255,0.06)",
+                background: active ? `${col}12` : "rgba(0,0,0,0.25)",
+              }}
+            >
+              <span className="text-[10px] font-mono w-4 text-center" style={{ color: active ? col : "rgba(255,255,255,0.3)" }}>{i + 1}</span>
               <select
                 value={r.source}
                 onChange={(e) => setModRoute(i, { source: e.target.value as ModSource })}
                 className={`${SELECT_CLS} min-w-[104px]`}
+                style={{ borderColor: active ? `${c}44` : undefined }}
               >
                 {MOD_SOURCE_OPTS.map((o) => <option key={o.id} value={o.id} className="bg-ink">{o.label}</option>)}
               </select>
@@ -2601,6 +11447,7 @@ function ModMatrixRows({
                 value={r.dest}
                 onChange={(e) => setModRoute(i, { dest: e.target.value as ModDest })}
                 className={`${SELECT_CLS} min-w-[116px]`}
+                style={{ borderColor: active ? `${c}44` : undefined }}
               >
                 {MOD_DEST_OPTS.map((o) => <option key={o.id} value={o.id} className="bg-ink">{o.label}</option>)}
               </select>
@@ -2610,21 +11457,194 @@ function ModMatrixRows({
                 onChange={(e) => setModRoute(i, { amount: Number(e.target.value) })}
                 disabled={!active}
                 className="w-24 sm:w-36 cursor-pointer"
-                style={{ accentColor: GRN, opacity: active ? 1 : 0.4 }}
+                style={{ accentColor: col, opacity: active ? 1 : 0.4 }}
               />
-              <span className="text-[10px] font-mono w-10 text-right" style={{ color: active ? GRN : "rgba(255,255,255,0.3)" }}>{fmtBi(r.amount)}</span>
+              <span className="text-[10px] font-mono w-10 text-right" style={{ color: col }}>{fmtBi(r.amount)}</span>
             </div>
           );
         })}
       </div>
-      <div className="mt-2 text-[10px] text-dim">{matrix.length} slots · pick a source &amp; destination, then dial bipolar depth. Velocity / Key Track / Mod Env are per-note.</div>
     </>
   );
 }
 
-// ════════════════════ arp panel ════════════════════
+// ════════════════════ arp panel — Cascade Orbit ════════════════════
 
-function ArpPanel({ arp, setArp, chipHosted = false }: { arp: ArpSettings; setArp: (p: Partial<ArpSettings>) => void; chipHosted?: boolean }) {
+const ARP_CHARS = [
+  { id: "idle", label: "Idle", enabled: false, mode: "up" as const, bpm: 120, division: "1/16" as const, octaves: 1, gate: 0.6, swing: 0, ratchet: 0, accent: 0, accentEvery: 4, hold: false },
+  { id: "pulse", label: "Pulse", enabled: true, mode: "up" as const, bpm: 128, division: "1/16" as const, octaves: 1, gate: 0.45, swing: 0, ratchet: 0, accent: 0.4, accentEvery: 4, hold: true },
+  { id: "cascade", label: "Cascade", enabled: true, mode: "updown" as const, bpm: 110, division: "1/16" as const, octaves: 2, gate: 0.55, swing: 0.08, ratchet: 0, accent: 0.25, accentEvery: 4, hold: true },
+  { id: "swing", label: "Swing", enabled: true, mode: "up" as const, bpm: 96, division: "1/8" as const, octaves: 1, gate: 0.5, swing: 0.22, ratchet: 0, accent: 0.35, accentEvery: 2, hold: true },
+  { id: "ratchet", label: "Ratchet", enabled: true, mode: "up" as const, bpm: 140, division: "1/16" as const, octaves: 1, gate: 0.35, swing: 0, ratchet: 0.7, accent: 0.2, accentEvery: 4, hold: true },
+  { id: "pedal", label: "Pedal", enabled: true, mode: "pedal" as const, bpm: 120, division: "1/16" as const, octaves: 2, gate: 0.6, swing: 0, ratchet: 0, accent: 0.5, accentEvery: 2, hold: true },
+  { id: "chaos", label: "Chaos", enabled: true, mode: "random" as const, bpm: 132, division: "1/16" as const, octaves: 3, gate: 0.4, swing: 0.12, ratchet: 0.35, accent: 0.45, accentEvery: 3, hold: true },
+] as const;
+
+function ArpCharacterStrip({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSettings>) => void }) {
+  const c = FC.arp;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Orbit
+      </span>
+      {ARP_CHARS.map((p) => {
+        const on =
+          (p.id === "idle" && !arp.enabled) ||
+          (p.id !== "idle" && arp.enabled && arp.mode === p.mode && Math.abs(arp.bpm - p.bpm) < 8 && Math.abs((arp.swing ?? 0) - p.swing) < 0.05);
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() =>
+              setArp({
+                enabled: p.enabled,
+                mode: p.mode,
+                bpm: p.bpm,
+                division: p.division,
+                octaves: p.octaves,
+                gate: p.gate,
+                swing: p.swing,
+                ratchet: p.ratchet,
+                accent: p.accent,
+                accentEvery: p.accentEvery,
+                hold: p.hold,
+              })
+            }
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.mod, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ArpQuickActions({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partial<ArpSettings>) => void }) {
+  const savedRef = useRef<Partial<ArpSettings> | null>(null);
+  const c = FC.arp;
+  const idle = !arp.enabled;
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            if (savedRef.current) setArp({ ...savedRef.current, enabled: true });
+            else setArp({ enabled: true, hold: true, mode: "up", bpm: 128, division: "1/16", gate: 0.5 });
+          } else {
+            savedRef.current = { ...arp };
+            setArp({ enabled: false });
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.mod, 0.96) : bandShade(FC.mod, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Arm arpeggiator" : "Disarm"}
+      >
+        {idle ? "Arm" : "Park"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setArp({ hold: !arp.hold })}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{
+          borderColor: arp.hold ? `${c}88` : `${c}44`,
+          color: arp.hold ? bandShade(FC.mod, 0.96) : `${c}bb`,
+          background: arp.hold ? `${c}38` : `${c}14`,
+          boxShadow: arp.hold ? `0 0 12px ${c}44` : undefined,
+        }}
+        title="Latch held notes"
+      >
+        {arp.hold ? "Hold" : "Latch"}
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          setArp({
+            enabled: true,
+            hold: true,
+            mode: "updown",
+            bpm: 120,
+            division: "1/16",
+            octaves: 2,
+            gate: 0.55,
+            swing: 0.1,
+            accent: 0.35,
+            accentEvery: 4,
+            ratchet: 0,
+          })
+        }
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.mod, 0.9), background: `${c}1c` }}
+        title="Musical cascade preset"
+      >
+        Cascade
+      </button>
+      <button
+        type="button"
+        onClick={() => setArp({ ...DEFAULT_ARP })}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset arp defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function ArpModMeter({
+  label,
+  value,
+  color,
+  format,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+}) {
+  const t = Math.min(1, Math.abs(value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+          style={{
+            width: `${t * 100}%`,
+            background: `linear-gradient(90deg, ${color}55, ${color})`,
+            boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+          }}
+        />
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function ArpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const arp = useFireCommandStore((s) => s.arp);
+  const setArp = useFireCommandStore((s) => s.setArp);
   const modes: { id: ArpMode; label: string }[] = [
     { id: "up", label: "Up" }, { id: "down", label: "Dn" },
     { id: "updown", label: "Up/Dn" }, { id: "downup", label: "Dn/Up" },
@@ -2632,49 +11652,129 @@ function ArpPanel({ arp, setArp, chipHosted = false }: { arp: ArpSettings; setAr
     { id: "pedal", label: "Pedal" }, { id: "random", label: "Rnd" },
     { id: "walk", label: "Walk" }, { id: "asplayed", label: "Play" },
   ];
-  const chip = (active: boolean) =>
-    `rounded-md border text-[10px] font-medium uppercase tracking-wide transition ${
-      active
-        ? "border-[#5eb0ff]/70 bg-[#5eb0ff]/20 text-[#d6ecff] shadow-[0_0_10px_rgb(94_176_255/0.25)]"
-        : "border-white/10 bg-white/[0.03] text-white/50 hover:border-white/20 hover:bg-white/[0.06] hover:text-white/80"
-    }`;
-  return (
-    <Section title="Arpeggiator" color={FC.arp} collapseKey="arp" defaultCollapsed chipHosted={chipHosted} right={
-      <button
-        onClick={() => setArp({ hold: !arp.hold })}
-        className={`rounded-lg border px-3 py-1 text-xs font-medium transition ${arp.hold ? "border-cyan/60 bg-cyan/15 text-cyan shadow-[0_0_12px_rgb(34_211_238/0.25)]" : "border-white/15 bg-white/5 text-white/60 hover:bg-white/10"}`}
-        title="Latch — keep arpeggiating after you let go"
-      >{arp.hold ? "● Hold" : "Hold"}</button>
-    }>
-      <ArpViz arp={arp} />
+  const c = FC.arp;
+  const cBpm = bandShade(FC.mod, 0.62);
+  const cGate = bandShade(FC.mod, 0.8);
+  const cSwing = bandShade(FC.mod, 0.88);
+  const live = arp.enabled;
+  const bpmN = Math.log(Math.max(40, arp.bpm) / 40) / Math.log(300 / 40);
+  const gateN = (arp.gate - 0.1) / 0.9;
+  const swingN = (arp.swing ?? 0) / 0.33;
 
-      {/* Symmetric 3-column rails: left arm/div · center modes/knobs · right oct/every */}
-      <div className="grid grid-cols-[7.5rem_minmax(0,1fr)_7.5rem] gap-x-3 gap-y-3 items-center">
-        {/* Row 1 left — arm */}
+  return (
+    <Section
+      title="Arpeggiator"
+      color={c}
+      collapseKey="arp"
+      chipHosted={chipHosted}
+      right={
         <button
+          type="button"
+          onClick={() => setArp({ hold: !arp.hold })}
+          className="rounded-lg border px-3 py-1 text-xs font-medium transition"
+          style={
+            arp.hold
+              ? { borderColor: `${c}88`, background: `${c}28`, color: bandShade(FC.mod, 0.96), boxShadow: `0 0 12px ${c}40` }
+              : { borderColor: "rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)" }
+          }
+          title="Latch — keep arpeggiating after you let go"
+        >
+          {arp.hold ? "● Hold" : "Hold"}
+        </button>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Mod
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.96) }}>
+            Cascade Orbit
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${arp.mode} · ${arp.bpm} · ${arp.division} · ${arp.octaves}º`
+                : `${arp.mode} · standby`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <ArpQuickActions arp={arp} setArp={setArp} />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.mod, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? (arp.hold ? "Hold" : "Armed") : "Off"}
+          </div>
+        </div>
+      </div>
+
+      <ArpStageViz />
+      <ArpCharacterStrip arp={arp} setArp={setArp} />
+
+      <div className="mb-2 flex items-center justify-center gap-2 flex-wrap">
+        <ArpModMeter label="BPM" value={bpmN} color={cBpm} format={() => String(Math.round(arp.bpm))} />
+        <ArpModMeter label="Gate" value={gateN} color={cGate} />
+        <ArpModMeter label="Swing" value={swingN} color={cSwing} format={() => `${Math.round((arp.swing ?? 0) * 300)}%`} />
+        <ArpModMeter label="Ratch" value={arp.ratchet ?? 0} color={bandShade(FC.mod, 0.72)} />
+        <ArpModMeter label="Acc" value={arp.accent ?? 0} color={bandShade(FC.mod, 0.92)} />
+      </div>
+
+      <div className="grid grid-cols-[7.5rem_minmax(0,1fr)_7.5rem] gap-x-3 gap-y-3 items-center">
+        <button
+          type="button"
           onClick={() => setArp({ enabled: !arp.enabled })}
-          className={`relative h-10 overflow-hidden rounded-xl border px-2 text-[11px] font-semibold tracking-wide transition ${
+          className="relative h-10 overflow-hidden rounded-xl border px-2 text-[11px] font-semibold tracking-wide transition"
+          style={
             arp.enabled
-              ? "border-[#5eb0ff]/80 bg-gradient-to-b from-[#5eb0ff]/30 to-[#5eb0ff]/10 text-[#d6ecff] shadow-[0_0_22px_rgb(94_176_255/0.35)]"
-              : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-          }`}
+              ? {
+                  borderColor: `${c}99`,
+                  background: `linear-gradient(180deg, ${c}40, ${c}18)`,
+                  color: bandShade(FC.mod, 0.98),
+                  boxShadow: `0 0 22px ${c}55`,
+                }
+              : { borderColor: "rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.7)" }
+          }
         >
           {arp.enabled && (
-            <span className="pointer-events-none absolute inset-0 animate-pulse bg-[radial-gradient(circle_at_30%_40%,rgba(214,236,255,0.18),transparent_60%)]" />
+            <span className="pointer-events-none absolute inset-0 animate-pulse" style={{ background: `radial-gradient(circle at 30% 40%, ${c}40, transparent 60%)` }} />
           )}
           <span className="relative">{arp.enabled ? "● ARMED" : "ARM"}</span>
         </button>
 
-        {/* Row 1 center — modes evenly spaced */}
         <div className="grid grid-cols-5 gap-1.5 sm:grid-cols-10">
           {modes.map((m) => {
             const active = arp.mode === m.id;
             return (
               <button
                 key={m.id}
+                type="button"
                 onClick={() => setArp({ mode: m.id })}
                 title={m.label}
-                className={`flex h-10 flex-col items-center justify-center gap-0.5 px-0.5 ${chip(active)}`}
+                className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-md border px-0.5 text-[10px] font-medium uppercase tracking-wide transition"
+                style={
+                  active
+                    ? {
+                        borderColor: `${c}99`,
+                        background: `${c}30`,
+                        color: bandShade(FC.mod, 0.96),
+                        boxShadow: `0 0 10px ${c}40`,
+                      }
+                    : { borderColor: "rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.5)" }
+                }
               >
                 <ArpModeGlyph mode={m.id} active={active} />
                 <span className="hidden text-[8px] leading-none xl:inline">{m.label}</span>
@@ -2683,37 +11783,42 @@ function ArpPanel({ arp, setArp, chipHosted = false }: { arp: ArpSettings; setAr
           })}
         </div>
 
-        {/* Row 1 right — octaves */}
-        <div className="flex h-10 items-stretch rounded-lg border border-white/10 bg-black/20 p-0.5" title="Octave span">
+        <div className="flex h-10 items-stretch rounded-lg border p-0.5" style={{ borderColor: `${c}22`, background: "rgba(0,0,0,0.25)" }} title="Octave span">
           {[1, 2, 3, 4].map((o) => (
             <button
               key={o}
+              type="button"
               onClick={() => setArp({ octaves: o })}
-              className={`flex-1 rounded-md text-xs font-semibold transition ${
+              className="flex-1 rounded-md text-xs font-semibold transition"
+              style={
                 arp.octaves === o
-                  ? "bg-[#5eb0ff]/25 text-[#d6ecff]"
-                  : "text-white/45 hover:bg-white/5 hover:text-white/80"
-              }`}
-            >{o}º</button>
+                  ? { background: `${c}35`, color: bandShade(FC.mod, 0.96) }
+                  : { color: "rgba(255,255,255,0.45)" }
+              }
+            >
+              {o}º
+            </button>
           ))}
         </div>
 
-        {/* Row 2 left — divisions */}
         <div className="grid grid-cols-2 gap-1">
           {(["1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"] as ArpDivision[]).map((d) => (
             <button
               key={d}
+              type="button"
               onClick={() => setArp({ division: d })}
-              className={`h-7 rounded-md border font-mono text-[10px] transition ${
+              className="h-7 rounded-md border font-mono text-[10px] transition"
+              style={
                 arp.division === d
-                  ? "border-[#5eb0ff]/60 bg-[#5eb0ff]/15 text-[#d6ecff]"
-                  : "border-white/10 bg-white/[0.03] text-white/50 hover:bg-white/5"
-              }`}
-            >{d}</button>
+                  ? { borderColor: `${c}88`, background: `${c}28`, color: bandShade(FC.mod, 0.96) }
+                  : { borderColor: "rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.5)" }
+              }
+            >
+              {d}
+            </button>
           ))}
         </div>
 
-        {/* Row 2 center — knobs evenly spaced */}
         <div className="flex items-center justify-evenly gap-1 px-1">
           <KnobMini label="Tempo" value={arp.bpm} min={40} max={300} integer format={fmtBpm} onChange={(v) => setArp({ bpm: Math.round(v) })} />
           <KnobMini label="Gate" value={arp.gate} min={0.1} max={1} format={fmtPct} onChange={(v) => setArp({ gate: v })} />
@@ -2722,27 +11827,30 @@ function ArpPanel({ arp, setArp, chipHosted = false }: { arp: ArpSettings; setAr
           <KnobMini label="Accent" value={arp.accent ?? 0} min={0} max={1} format={fmtPct} onChange={(v) => setArp({ accent: v })} />
         </div>
 
-        {/* Row 2 right — accent every (mirrors octave rail) */}
         <div className="flex flex-col items-stretch gap-0.5" title="Velocity accents every N steps">
-          <div className="flex h-7 items-stretch rounded-md border border-white/10 bg-black/20 p-0.5">
+          <div className="flex h-7 items-stretch rounded-md border p-0.5" style={{ borderColor: `${c}22`, background: "rgba(0,0,0,0.25)" }}>
             {[2, 3, 4, 6, 8].map((n) => (
               <button
                 key={n}
+                type="button"
                 onClick={() => setArp({ accentEvery: n })}
-                className={`flex-1 rounded text-[10px] font-semibold transition ${
+                className="flex-1 rounded text-[10px] font-semibold transition"
+                style={
                   (arp.accentEvery ?? 4) === n
-                    ? "bg-[#ffcf5c]/25 text-[#ffcf5c]"
-                    : "text-white/40 hover:text-white/70"
-                }`}
-              >{n}</button>
+                    ? { background: `${bandShade(FC.mod, 0.92)}35`, color: bandShade(FC.mod, 0.96) }
+                    : { color: "rgba(255,255,255,0.4)" }
+                }
+              >
+                {n}
+              </button>
             ))}
           </div>
-          <span className="text-center text-[9px] uppercase tracking-wide text-dim">Every</span>
+          <span className="text-center text-[9px] uppercase tracking-wide" style={{ color: `${c}77` }}>Every</span>
         </div>
       </div>
 
-      <div className="mt-2.5 text-center text-[10px] text-dim leading-relaxed">
-        Contour = note path · gold tips = accents · columns = gate · odd steps swing · reticle blooms on hits
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Cascade orbit — drag BPM↔ / Gate↕, scrub Swing, top click Arms, double-click cycles mode. Hold a chord to feed the path.
       </div>
     </Section>
   );
@@ -2765,12 +11873,87 @@ function loadKbdOctaves(): KbdOctaves {
   return 2;
 }
 
-function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => void }) {
+/**
+ * Per-CC MPK readouts, isolated so controller knob twists re-render these
+ * two leaves instead of the whole keybed.
+ */
+function MpkTelemetry({ enabled }: { enabled: boolean }) {
+  const lastKnob = useFireMidiFocusStore((s) => s.lastKnobLabel);
+  const lastCc = useFireMidiFocusStore((s) => s.lastCc);
+  const knobsBound = useFireMidiFocusStore((s) => s.knobsBound);
+  const knobSet = useFireMidiFocusStore((s) => s.knobSet);
+  return (
+    <>
+      {lastKnob && (
+        <span className="ml-2 text-[10px] font-mono text-white/70">· {lastKnob}</span>
+      )}
+      {enabled && !knobSet && (
+        <span className="ml-2 text-[10px] font-mono text-amber-200/80">
+          learn {knobsBound}/8{lastCc != null ? ` · CC${lastCc}` : ""}
+        </span>
+      )}
+      {enabled && knobSet && lastCc != null && (
+        <span className="ml-2 text-[9px] font-mono text-white/40">CC{lastCc}</span>
+      )}
+    </>
+  );
+}
+
+/** One knob-cell name — tints while it is the last-touched MPK knob. */
+function MpkKnobName({ label, color }: { label: string | null; color?: string }) {
+  const hot = useFireMidiFocusStore((s) => !!label && s.lastKnobLabel === label);
+  return (
+    <div
+      className={`truncate text-[9px] font-semibold ${label ? "text-white/80" : "text-white/20"}`}
+      style={hot && label ? { color } : undefined}
+    >
+      {label ?? "—"}
+    </div>
+  );
+}
+
+function Keyboard({
+  octave,
+  onMinimize,
+  onCycleMode,
+  flush = false,
+  midiLabel,
+  midiHot = false,
+  midiNote = null,
+  onRescanMidi,
+}: {
+  octave: number;
+  onMinimize: () => void;
+  onCycleMode?: () => void;
+  flush?: boolean;
+  midiLabel?: string;
+  midiHot?: boolean;
+  midiNote?: number | null;
+  onRescanMidi?: () => void;
+}) {
   const heldNotes = useFireCommandStore((s) => s.heldNotes);
   const arpOrder = useFireCommandStore((s) => s.arpOrder);
   const arpCurrent = useFireCommandStore((s) => s.arpCurrent);
   const arpEnabled = useFireCommandStore((s) => s.arp.enabled);
   const setOctave = useFireCommandStore((s) => s.setOctave);
+  const kbdVelGain = useFireCommandStore((s) => s.kbdVelGain);
+  const kbdVelCurve = useFireCommandStore((s) => s.kbdVelCurve);
+  const kbdDelayMs = useFireCommandStore((s) => s.kbdDelayMs);
+  const kbdAttackMs = useFireCommandStore((s) => s.kbdAttackMs);
+  const setKbdVelGain = useFireCommandStore((s) => s.setKbdVelGain);
+  const setKbdVelCurve = useFireCommandStore((s) => s.setKbdVelCurve);
+  const setKbdDelayMs = useFireCommandStore((s) => s.setKbdDelayMs);
+  const setKbdAttackMs = useFireCommandStore((s) => s.setKbdAttackMs);
+  const focusEnabled = useFireMidiFocusStore((s) => s.enabled);
+  const focusIndex = useFireMidiFocusStore((s) => s.index);
+  const focusBank = useFireMidiFocusStore((s) => s.bankPage);
+  // lastKnob* / lastCc / knobsBound live in MpkTelemetry + MpkKnobName —
+  // subscribing here re-rendered the entire keybed on every controller CC.
+  const cycleNext = useFireMidiFocusStore((s) => s.cycleNext);
+  const cyclePrev = useFireMidiFocusStore((s) => s.cyclePrev);
+  const toggleBank = useFireMidiFocusStore((s) => s.toggleBank);
+  const setFocusEnabled = useFireMidiFocusStore((s) => s.setEnabled);
+  const relearnKnobs = useFireMidiFocusStore((s) => s.relearnKnobs);
   const [octaves, setOctaves] = useState<KbdOctaves>(loadKbdOctaves);
   const [hoverMidi, setHoverMidi] = useState<number | null>(null);
   const litSet = new Set(arpEnabled ? arpOrder : heldNotes);
@@ -2805,6 +11988,11 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
   const whiteW = 100 / totalWhites;
   const endOct = octave + octaves - 1;
   const keyH = octaves >= 4 ? "h-36" : octaves === 3 ? "h-[9.5rem]" : "h-40";
+
+  const focusMod = focusModuleAt(focusIndex);
+  const focusMeta = FIRE_MODULE_BY_ID.get(focusMod.id);
+  const focusPages = focusPageCount(focusMod);
+  const focusKnobs = focusPageKnobs(focusMod, focusBank);
 
   const keyVisual = (midi: number, black: boolean): React.CSSProperties => {
     const lit = litSet.has(midi);
@@ -2841,9 +12029,7 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
     return style;
   };
 
-  return (
-    <div className="sticky bottom-0 z-10 pt-2">
-      <GlassPanel intense className="relative overflow-hidden p-3">
+  const kbdWash = (
         <div
           className="pointer-events-none absolute inset-0 opacity-70"
           style={{
@@ -2851,10 +12037,62 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
               "radial-gradient(ellipse 80% 60% at 15% 0%, rgba(255,106,61,0.12), transparent 55%), radial-gradient(ellipse 50% 40% at 85% 100%, rgba(98,182,255,0.08), transparent 50%)",
           }}
         />
+  );
+
+  const kbdInner = (
+    <>
+        {kbdWash}
         <div className="relative flex items-center justify-between mb-2.5 px-1 gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <div className="text-[10px] uppercase tracking-[0.3em] text-white/55 font-semibold">Keyboard</div>
             <span className="hidden sm:inline text-[9px] text-white/30">live · velocity · qwerty</span>
+            {midiLabel && (
+              <span
+                className="inline-flex items-center gap-1.5 max-w-[18rem] truncate rounded-md border px-1.5 py-0.5 text-[9px] font-semibold transition"
+                style={
+                  midiHot
+                    ? {
+                        color: "#ffd9c9",
+                        borderColor: "rgba(255,106,61,0.55)",
+                        background: "rgba(255,106,61,0.18)",
+                        boxShadow: "0 0 12px rgba(255,106,61,0.35)",
+                      }
+                    : {
+                        color: "rgba(255,255,255,0.45)",
+                        borderColor: "rgba(255,255,255,0.1)",
+                        background: "rgba(0,0,0,0.25)",
+                      }
+                }
+                title={
+                  "USB MIDI keys play Synth A. On an Akai MPK Mini, Octave − / + shifts the keybed on the device. If no device shows, Rescan after plugging in (Electron needs MIDI permission — restart the app once after this update)."
+                }
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{
+                    background: midiHot ? "#ff6a3d" : midiLabel.startsWith("No") || midiLabel.includes("unsupported") || midiLabel.includes("error") ? "rgba(255,80,80,0.7)" : "#6ee7b7",
+                    boxShadow: midiHot ? "0 0 8px #ff6a3d" : undefined,
+                  }}
+                />
+                <span className="truncate">{midiLabel}</span>
+                {midiHot && midiNote != null && (
+                  <span className="font-mono tabular-nums opacity-80">{noteName(midiNote)}</span>
+                )}
+                {onRescanMidi && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRescanMidi();
+                    }}
+                    className="shrink-0 rounded px-1 py-0.5 text-[8px] font-black uppercase tracking-wider text-white/55 hover:text-white hover:bg-white/10 transition"
+                    title="Re-scan USB MIDI inputs"
+                  >
+                    Rescan
+                  </button>
+                )}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2 flex-wrap" title="Scroll range (Z/X) · span on screen">
             <span className="text-[9px] font-mono text-white/50">C{Math.max(0, octave)}</span>
@@ -2891,16 +12129,190 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
               ))}
               <span className="self-center px-1.5 text-[8px] uppercase tracking-wider text-white/30">oct</span>
             </div>
+            <div
+              className="flex items-center gap-2 flex-wrap rounded-lg border border-white/10 bg-black/40 px-2 py-1"
+              title="Live MIDI / keyboard feel — does not change the saved patch Amp Attack"
+            >
+              <label className="flex items-center gap-1.5 text-[9px] text-white/45" title="Boost soft USB key velocities">
+                <span className="uppercase tracking-wider text-white/35 font-semibold">Vel</span>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={2.5}
+                  step={0.05}
+                  value={kbdVelGain}
+                  onChange={(e) => setKbdVelGain(Number(e.target.value))}
+                  className="w-16 h-1.5 cursor-pointer"
+                  style={{ accentColor: FIRE }}
+                  aria-label="Live velocity gain"
+                />
+                <span className="font-mono tabular-nums text-white/55 w-8">{kbdVelGain.toFixed(2)}×</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-[9px] text-white/45" title="Curve: lower expands soft hits, higher favors hard hits">
+                <span className="uppercase tracking-wider text-white/35 font-semibold">Curve</span>
+                <input
+                  type="range"
+                  min={0.35}
+                  max={1.8}
+                  step={0.05}
+                  value={kbdVelCurve}
+                  onChange={(e) => setKbdVelCurve(Number(e.target.value))}
+                  className="w-14 h-1.5 cursor-pointer"
+                  style={{ accentColor: FIRE }}
+                  aria-label="Live velocity curve"
+                />
+                <span className="font-mono tabular-nums text-white/55 w-7">{kbdVelCurve.toFixed(2)}</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-[9px] text-white/45" title="Tightens live amp attack (keyboard / MIDI only)">
+                <span className="uppercase tracking-wider text-white/35 font-semibold">Atk</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={80}
+                  step={1}
+                  value={kbdAttackMs}
+                  onChange={(e) => setKbdAttackMs(Number(e.target.value))}
+                  className="w-14 h-1.5 cursor-pointer"
+                  style={{ accentColor: FIRE }}
+                  aria-label="Live attack milliseconds"
+                />
+                <span className="font-mono tabular-nums text-white/55 w-8">{Math.round(kbdAttackMs)}ms</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-[9px] text-white/45" title="Adds schedule delay after the key press (0 = ASAP)">
+                <span className="uppercase tracking-wider text-white/35 font-semibold">Delay</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={50}
+                  step={1}
+                  value={kbdDelayMs}
+                  onChange={(e) => setKbdDelayMs(Number(e.target.value))}
+                  className="w-14 h-1.5 cursor-pointer"
+                  style={{ accentColor: FIRE }}
+                  aria-label="Live note delay milliseconds"
+                />
+                <span className="font-mono tabular-nums text-white/55 w-8">{Math.round(kbdDelayMs)}ms</span>
+              </label>
+            </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="text-[10px] text-white/35 hidden xl:block">Strike low = loud · computer keys play too</div>
+            <div className="text-[10px] text-white/35 hidden xl:block">Strike low = loud · Vel/Atk fix soft MIDI lag</div>
             <button
-              onClick={onMinimize}
+              onClick={onCycleMode ?? onMinimize}
               className="rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 px-2.5 py-1 text-xs text-white/70 transition"
+              title="Cycle keyboard: Full → Strip → Hidden"
             >
-              ▼ Hide
+              ▼ Size
             </button>
           </div>
+        </div>
+
+        {/* MPK Focus — Signal Path source + knob page */}
+        <div
+          className="relative mb-2.5 flex flex-col gap-1.5 rounded-lg border px-2 py-1.5"
+          style={{
+            borderColor: focusEnabled ? `${focusMeta?.color ?? FIRE}55` : "rgba(255,255,255,0.08)",
+            background: focusEnabled
+              ? `linear-gradient(90deg, ${focusMeta?.color ?? FIRE}22, rgba(0,0,0,0.35) 45%)`
+              : "rgba(0,0,0,0.25)",
+          }}
+        >
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setFocusEnabled(!focusEnabled)}
+              className={`shrink-0 rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition ${
+                focusEnabled
+                  ? "border-white/25 bg-white/15 text-white"
+                  : "border-white/10 text-white/40 hover:text-white/70"
+              }`}
+              title="MPK Focus — when on, controller knobs drive this Signal Path module and PROG/pads step through the ring"
+            >
+              MPK Focus {focusEnabled ? "On" : "Off"}
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="text-[8px] font-black uppercase tracking-[0.22em] text-white/40">
+                Prog {focusIndex + 1}/{FIRE_FOCUS_COUNT}
+                <span className="ml-1.5 font-semibold tracking-normal text-white/55">
+                  {focusMeta?.bandTitle ?? "Signal Path"}
+                </span>
+              </div>
+              <div className="truncate text-[12px] font-semibold" style={{ color: focusMeta?.color ?? FIRE }}>
+                {focusMeta?.title ?? focusMod.id}
+                {focusPages > 1 && (
+                  <span className="ml-2 text-[10px] font-bold text-white/50">
+                    Bank {String.fromCharCode(65 + focusBank)}
+                  </span>
+                )}
+                <MpkTelemetry enabled={focusEnabled} />
+              </div>
+              {focusEnabled && (
+                <div className="text-[8px] text-white/35 mt-0.5">
+                  Pads cycle PROG (prev/next/bank) · keys still play ·{" "}
+                  <button
+                    type="button"
+                    onClick={() => relearnKnobs()}
+                    className="underline decoration-white/30 hover:text-white/70"
+                  >
+                    re-bind knobs
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => cyclePrev()}
+                disabled={!focusEnabled}
+                className="rounded-md border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-bold text-white/70 hover:bg-white/10 disabled:opacity-30 transition"
+                title="Previous source"
+              >
+                ◀
+              </button>
+              <button
+                type="button"
+                onClick={() => cycleNext()}
+                disabled={!focusEnabled}
+                className="rounded-md border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-white/90 hover:bg-white/10 disabled:opacity-30 transition"
+                style={{ borderColor: `${focusMeta?.color ?? FIRE}66`, background: `${focusMeta?.color ?? FIRE}28` }}
+                title="Next Signal Path source (also: Program Change / CC 113)"
+              >
+                Prog
+              </button>
+              <button
+                type="button"
+                onClick={() => cycleNext()}
+                disabled={!focusEnabled}
+                className="rounded-md border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-bold text-white/70 hover:bg-white/10 disabled:opacity-30 transition"
+                title="Next source"
+              >
+                ▶
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleBank()}
+                disabled={!focusEnabled || focusPages <= 1}
+                className="rounded-md border border-white/15 bg-black/30 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white/75 hover:bg-white/10 disabled:opacity-30 transition"
+                title="BANK A/B — next knob page when this module has more than 8 knobs (CC 114)"
+              >
+                Bank {String.fromCharCode(65 + focusBank)}
+              </button>
+            </div>
+          </div>
+          {focusEnabled && (
+            <div className="grid grid-cols-8 gap-1">
+              {focusKnobs.map((knob, i) => (
+                <div
+                  key={`fk${i}`}
+                  className="min-w-0 rounded-md border border-white/8 bg-black/30 px-1 py-0.5 text-center"
+                  title={knob ? `K${i + 1} → ${knob.label}` : `K${i + 1} unused on this bank`}
+                >
+                  <div className="text-[7px] font-black uppercase tracking-wider text-white/35">K{i + 1}</div>
+                  <MpkKnobName label={knob?.label ?? null} color={focusMeta?.color} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div
@@ -2996,7 +12408,20 @@ function Keyboard({ octave, onMinimize }: { octave: number; onMinimize: () => vo
             )}
           </div>
         </div>
-      </GlassPanel>
+    </>
+  );
+
+  return (
+    <div className={`shrink-0 z-10 max-h-[min(42vh,420px)] overflow-y-auto overscroll-y-contain ${flush ? "rounded-b-2xl" : "pt-2"}`}>
+      {flush ? (
+        <div className="relative overflow-hidden p-3 rounded-b-2xl bg-gradient-to-b from-white/[0.03] to-black/40">
+          {kbdInner}
+        </div>
+      ) : (
+        <GlassPanel intense className="relative overflow-hidden p-3">
+          {kbdInner}
+        </GlassPanel>
+      )}
     </div>
   );
 }
@@ -3020,225 +12445,1337 @@ function FParamKnob({
 }
 
 /**
- * Harmonizer module — scale-locked companion notes on live input.
+ * Harmonizer module — Kin Halo · scale-locked companion notes on live input.
  * Follows the sequencer's Root/Scale controls; sequenced notes are untouched.
  */
 function HarmonyPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = HARM_C;
+  const mode = useFireCommandStore((s) => s.patch.harmonyMode) ?? "off";
+  const level = useFireCommandStore((s) => s.patch.harmonyLevel) ?? 0.6;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["harmony"] !== false);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const meta = HARMONY_MODES.find((m) => m.id === mode) ?? HARMONY_MODES[0]!;
+  const voices = harmonyVoiceCount(mode);
+  const live = enabled && mode !== "off" && level > 0.02;
+  const stage = harmStageLabel(mode, enabled, level);
+
   return (
     <Section
       title="Harmony"
-      color={FC.harmony}
+      color={c}
       collapseKey="harmony"
       chipHosted={chipHosted}
       defaultCollapsed
       right={
-        <FSeg<HarmonyMode>
-          paramKey="harmonyMode"
-          color={FC.harmony}
-          options={[
-            { id: "off", label: "Off" },
-            { id: "third", label: "3rd" },
-            { id: "fifth", label: "5th" },
-            { id: "octave", label: "Oct" },
-            { id: "triad", label: "Triad" },
-          ]}
-        />
+        <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
+          {meta.short} · {Math.round(level * 100)}%
+        </span>
       }
     >
-      <HarmonyStageViz />
-      <div className="flex items-center justify-evenly gap-1">
-        <FParamKnob paramKey="harmonyLevel" label="Level" min={0} max={1} format={fmtPct} def={0.6} color={FC.harmony} />
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Perf
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: HARM_C_GLOW }}>
+            Kin Halo
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : mode === "off"
+                  ? "silent"
+                  : `${meta.intervals} · ${voices}v · L${Math.round(level * 100)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <HarmQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? HARM_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {stage}
+          </div>
+        </div>
       </div>
-      <div className="mt-1.5 text-center text-[10px] text-dim">Live companions · uses Patterns root + scale</div>
+
+      <HarmonyStageViz />
+      <HarmCharacterStrip />
+      <HarmModeStrip />
+      <HarmLevelStrip />
+      <HarmScaleBadge />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <HarmMeter
+          label="Mode"
+          value={mode === "off" ? 0 : mode === "third" ? 0.25 : mode === "fifth" ? 0.5 : mode === "octave" ? 0.75 : 1}
+          color={HARM_C_MODE}
+          format={() => meta.short}
+        />
+        <HarmMeter label="Level" value={level} color={HARM_C_LEVEL} format={() => `${Math.round(level * 100)}%`} />
+        <HarmMeter
+          label="Voices"
+          value={(voices - 1) / 2}
+          color={HARM_C_ROOT}
+          format={() => `${voices}v`}
+        />
+        <HarmMeter
+          label="Kin"
+          value={live ? level * (voices / 3) : 0}
+          color={HARM_C_GLOW}
+          format={() => (live ? meta.intervals : "—")}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1.2fr_minmax(0,1fr)] items-stretch">
+        <div
+          className="flex flex-col justify-center gap-2 rounded-xl border bg-black/25 px-3 py-2.5"
+          style={{ borderColor: `${HARM_C_MODE}44` }}
+        >
+          <div className="text-[7px] font-black uppercase tracking-wider text-center" style={{ color: `${HARM_C_MODE}aa` }}>
+            Interval
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-1">
+            {HARMONY_MODES.map((m) => {
+              const on = mode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setParam("harmonyMode", m.id)}
+                  className="min-w-[3.2rem] rounded-lg border px-2 py-1.5 text-[10px] font-bold transition"
+                  style={
+                    on
+                      ? {
+                          borderColor: `${c}99`,
+                          background: `linear-gradient(180deg, ${c}55, ${c}22)`,
+                          color: HARM_C_GLOW,
+                          boxShadow: `0 0 14px ${c}44`,
+                        }
+                      : {
+                          borderColor: "rgba(255,255,255,0.1)",
+                          color: "rgba(255,255,255,0.45)",
+                          background: "rgba(0,0,0,0.3)",
+                        }
+                  }
+                  title={m.intervals}
+                >
+                  {m.short}
+                  <div className="mt-0.5 text-[8px] font-mono font-normal opacity-70">{m.intervals}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div
+          className="flex flex-col items-center gap-1.5 rounded-xl border bg-black/25 px-2 py-2.5 transition"
+          style={{
+            borderColor: `${HARM_C_LEVEL}44`,
+            boxShadow: live ? `0 0 14px ${HARM_C_LEVEL}18` : undefined,
+          }}
+        >
+          <FParamKnob
+            paramKey="harmonyLevel"
+            label="Level"
+            min={0}
+            max={1}
+            format={fmtPct}
+            def={0.6}
+            color={HARM_C_LEVEL}
+            size={56}
+          />
+        </div>
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Kin halo — click the constellation to cycle modes, scrub the level rail. Companions follow Patterns root + scale · live input only.
+      </div>
     </Section>
   );
 }
 
 function ScalePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = SCALE_C;
+  const lock = useFireCommandStore((s) => s.patch.scaleLock);
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["scale"] !== false);
   const scaleRoot = useFireSequencerStore((s) => s.scaleRoot);
   const scaleId = useFireSequencerStore((s) => s.scaleId);
-  const label = SCALES.find((s) => s.id === scaleId)?.label ?? scaleId;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const setScaleRoot = useFireSequencerStore((s) => s.setScaleRoot);
+  const setScaleId = useFireSequencerStore((s) => s.setScaleId);
+  const meta = scaleMeta(scaleId);
+  const rootPc = ((scaleRoot % 12) + 12) % 12;
+  const rootName = NOTE_NAMES[rootPc] ?? "?";
+  const degCount = scaleId === "off" ? 12 : meta.steps.length;
+  const live = enabled && lock && scaleId !== "off";
+  const stage = scaleStageLabel(lock, enabled, scaleId);
+  const modeIdx = Math.max(0, SCALES.findIndex((s) => s.id === scaleId));
+
   return (
-    <Section title="Scale Lock" color={FC.scale} collapseKey="scale" chipHosted={chipHosted} defaultCollapsed>
-      <ScaleStageViz />
-      <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
-        <BoolToggle paramKey="scaleLock" label="Lock" color={FC.scale} />
+    <Section
+      title="Scale Lock"
+      color={c}
+      collapseKey="scale"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={
+        <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
+          {rootName} · {meta.label}
+        </span>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Perf
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: SCALE_C_GLOW }}>
+            Key Lattice
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : !lock
+                  ? "open"
+                  : `${rootName} ${meta.label} · ${degCount}°`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <ScaleQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? SCALE_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {stage}
+          </div>
+        </div>
       </div>
-      <div className="mt-1.5 text-center text-[10px] text-dim">
-        Uses Patterns scale root · {NOTE_NAMES[scaleRoot % 12]} {label}
+
+      <ScaleStageViz />
+      <ScaleCharacterStrip />
+      <ScaleRootStrip />
+      <ScaleModeStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <ScaleMeter label="Root" value={rootPc / 11} color={SCALE_C_ROOT} format={() => rootName} />
+        <ScaleMeter
+          label="Mode"
+          value={modeIdx / Math.max(1, SCALES.length - 1)}
+          color={SCALE_C_MODE}
+          format={() => (meta.id === "off" ? "Chr" : meta.label.slice(0, 6))}
+        />
+        <ScaleMeter label="Degrees" value={degCount / 12} color={SCALE_C_GLOW} format={() => `${degCount}°`} />
+        <ScaleMeter label="Lock" value={enabled && lock ? 1 : 0} color={SCALE_C_LOCK} format={() => (lock && enabled ? "ON" : "OFF")} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1.4fr_minmax(0,1fr)] items-stretch mb-1">
+        <div
+          className="rounded-xl border bg-black/25 px-2.5 py-2.5"
+          style={{ borderColor: `${SCALE_C_MODE}44` }}
+        >
+          <div className="mb-1.5 text-center text-[7px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C_MODE}aa` }}>
+            Pitch Cage
+          </div>
+          <div className="grid grid-cols-12 gap-0.5">
+            {NOTE_NAMES.map((name, i) => {
+              const deg = (i - rootPc + 12) % 12;
+              const inS = scaleId === "off" || meta.steps.includes(deg);
+              const isRoot = i === rootPc;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setScaleRoot(i)}
+                  className="relative h-10 rounded-md border text-[9px] font-bold transition"
+                  style={{
+                    borderColor: isRoot ? "#fff" : inS && lock ? `${c}88` : "rgba(255,255,255,0.08)",
+                    background: isRoot
+                      ? `linear-gradient(180deg, ${c}99, ${c}44)`
+                      : inS && lock
+                        ? `linear-gradient(180deg, ${c}44, ${c}14)`
+                        : "rgba(255,255,255,0.03)",
+                    color: isRoot || (inS && lock) ? SCALE_C_GLOW : "rgba(255,255,255,0.3)",
+                    boxShadow: isRoot ? `0 0 12px ${c}55` : undefined,
+                    opacity: lock && !inS && meta.id !== "off" ? 0.35 : 1,
+                  }}
+                  title={`${name}${isRoot ? " · root" : inS ? " · in scale" : " · out"}`}
+                >
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border bg-black/25 px-3 py-2.5"
+          style={{
+            borderColor: `${SCALE_C_LOCK}44`,
+            boxShadow: live ? `0 0 14px ${SCALE_C_LOCK}18` : undefined,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setParam("scaleLock", !lock)}
+            className="w-full rounded-lg border px-3 py-2.5 text-[11px] font-black uppercase tracking-wider transition"
+            style={
+              lock
+                ? {
+                    borderColor: `${c}99`,
+                    background: `linear-gradient(180deg, ${c}55, ${c}22)`,
+                    color: SCALE_C_GLOW,
+                    boxShadow: `0 0 16px ${c}44`,
+                  }
+                : {
+                    borderColor: "rgba(255,255,255,0.15)",
+                    background: "rgba(0,0,0,0.35)",
+                    color: "rgba(255,255,255,0.5)",
+                  }
+            }
+          >
+            {lock ? "● Locked" : "Open"}
+          </button>
+          <div className="flex flex-wrap justify-center gap-1">
+            {SCALES.filter((s) => s.id !== "off").slice(0, 4).map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setScaleId(m.id)}
+                className="rounded border px-1.5 py-0.5 text-[8px] font-bold"
+                style={
+                  scaleId === m.id
+                    ? { borderColor: `${c}88`, color: SCALE_C_GLOW, background: `${c}28` }
+                    : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)" }
+                }
+              >
+                {m.label.slice(0, 4)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Key lattice — click keys for root, top strip cycles scale, bottom toggles lock. Live input snaps when locked · Patterns share this root + mode.
       </div>
     </Section>
   );
 }
 
 function ChordPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = CHORD_C;
+  const on = useFireCommandStore((s) => s.patch.chordMemoryOn);
   const intervals = useFireCommandStore((s) => s.patch.chordIntervals);
-  const learnChordFromHeld = useFireCommandStore((s) => s.learnChordFromHeld);
-  const ivs = intervals ?? [0, 4, 7];
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["chord"] !== false);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const ivs = normalizeChordIvs(intervals);
+  const label = chordPresetLabel(ivs);
+  const live = enabled && on;
+  const stage = chordStageLabel(on, enabled, ivs);
+  const span = Math.max(1, Math.max(...ivs.map(Math.abs)));
+
   return (
-    <Section title="Chord Memory" color={FC.chord} collapseKey="chord" chipHosted={chipHosted} defaultCollapsed>
-      <ChordStageViz />
-      <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
-        <BoolToggle paramKey="chordMemoryOn" label="Memory" color={FC.chord} />
-        <button
-          onClick={() => learnChordFromHeld()}
-          className="h-6 px-2.5 rounded-md text-[10px] font-bold border border-white/15 bg-white/5 text-white/70 hover:bg-white/10 transition"
-          title="Learn chord intervals from currently held notes"
-        >
-          Learn from held
-        </button>
+    <Section
+      title="Chord Memory"
+      color={c}
+      collapseKey="chord"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={
+        <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
+          {label} · {ivs.length}v
+        </span>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Perf
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: CHORD_C_GLOW }}>
+            Stack Vault
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : !on
+                  ? "idle"
+                  : `${label} · ${ivs.map((n) => (n === 0 ? "0" : `+${n}`)).join(" ")}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <ChordQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? CHORD_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {stage}
+          </div>
+        </div>
       </div>
-      <div className="mt-1.5 text-center text-[10px] text-dim font-mono">
-        Intervals · {ivs.map((n) => (n > 0 ? `+${n}` : `${n}`)).join(" ")}
+
+      <ChordStageViz />
+      <ChordCharacterStrip />
+      <ChordDegreeStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <ChordMeter label="Voices" value={(ivs.length - 1) / 5} color={CHORD_C_VOICE} format={() => `${ivs.length}v`} />
+        <ChordMeter label="Span" value={Math.min(1, span / 19)} color={CHORD_C_HOT} format={() => `${span}st`} />
+        <ChordMeter label="Shape" value={live ? 1 : 0.2} color={CHORD_C_ROOT} format={() => label} />
+        <ChordMeter label="Arm" value={live ? 1 : 0} color={CHORD_C_ARM} format={() => (live ? "ON" : "OFF")} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1.3fr_minmax(0,1fr)] items-stretch mb-1">
+        <div
+          className="rounded-xl border bg-black/25 px-2.5 py-2.5"
+          style={{ borderColor: `${CHORD_C_VOICE}44` }}
+        >
+          <div className="mb-1.5 text-center text-[7px] font-black uppercase tracking-wider" style={{ color: `${CHORD_C_VOICE}aa` }}>
+            Interval Stack
+          </div>
+          <div className="flex flex-col gap-1">
+            {ivs.map((iv, i) => {
+              const isRoot = iv === 0;
+              return (
+                <div key={`${iv}-${i}`} className="flex items-center gap-2">
+                  <span
+                    className="w-10 shrink-0 text-right font-mono text-[10px] font-bold"
+                    style={{ color: isRoot ? CHORD_C_ROOT : CHORD_C_VOICE }}
+                  >
+                    {isRoot ? "ROOT" : `+${iv}`}
+                  </span>
+                  <div className="relative h-3 flex-1 overflow-hidden rounded-full bg-black/50 border border-white/10">
+                    <div
+                      className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-100"
+                      style={{
+                        width: `${(Math.abs(iv) / Math.max(12, span)) * 100}%`,
+                        minWidth: isRoot ? 8 : undefined,
+                        background: `linear-gradient(90deg, ${isRoot ? CHORD_C_ROOT : CHORD_C_VOICE}66, ${c})`,
+                        boxShadow: live ? `0 0 8px ${c}66` : undefined,
+                      }}
+                    />
+                  </div>
+                  {!isRoot && (
+                    <div className="flex shrink-0 gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = ivs.slice();
+                          next[i] = Math.max(1, iv - 1);
+                          setParam("chordIntervals", normalizeChordIvs(next));
+                        }}
+                        className="h-6 w-6 rounded border text-[10px] font-bold"
+                        style={{ borderColor: `${c}44`, color: CHORD_C_GLOW, background: `${c}18` }}
+                        title="−1 semitone"
+                      >
+                        −
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = ivs.slice();
+                          next[i] = Math.min(24, iv + 1);
+                          setParam("chordIntervals", normalizeChordIvs(next));
+                        }}
+                        className="h-6 w-6 rounded border text-[10px] font-bold"
+                        style={{ borderColor: `${c}44`, color: CHORD_C_GLOW, background: `${c}18` }}
+                        title="+1 semitone"
+                      >
+                        +
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = ivs.filter((_, j) => j !== i);
+                          setParam("chordIntervals", normalizeChordIvs(next.length ? next : [0, 4, 7]));
+                        }}
+                        className="h-6 w-6 rounded border text-[10px] font-bold"
+                        style={{ borderColor: `${c}44`, color: "rgba(255,180,200,0.7)", background: "rgba(0,0,0,0.3)" }}
+                        title="Remove voice"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border bg-black/25 px-3 py-2.5"
+          style={{
+            borderColor: `${CHORD_C_ARM}44`,
+            boxShadow: live ? `0 0 14px ${CHORD_C_ARM}18` : undefined,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setParam("chordMemoryOn", !on)}
+            className="w-full rounded-lg border px-3 py-2.5 text-[11px] font-black uppercase tracking-wider transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `linear-gradient(180deg, ${c}55, ${c}22)`,
+                    color: CHORD_C_GLOW,
+                    boxShadow: `0 0 16px ${c}44`,
+                  }
+                : {
+                    borderColor: "rgba(255,255,255,0.15)",
+                    background: "rgba(0,0,0,0.35)",
+                    color: "rgba(255,255,255,0.5)",
+                  }
+            }
+          >
+            {on ? "● Armed" : "Idle"}
+          </button>
+          <div className="flex flex-wrap justify-center gap-1">
+            {CHORD_PRESETS.slice(0, 6).map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  setParam("chordIntervals", [...p.ivs]);
+                  setParam("chordMemoryOn", true);
+                }}
+                className="rounded border px-1.5 py-0.5 text-[8px] font-bold"
+                style={
+                  chordPresetLabel(ivs) === p.short
+                    ? { borderColor: `${c}88`, color: CHORD_C_GLOW, background: `${c}28` }
+                    : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)" }
+                }
+              >
+                {p.short}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Stack vault — scrub voice bars to set intervals, top cycles voicings, bottom arms memory. Learn captures held notes · every key fires the stack.
       </div>
     </Section>
   );
 }
 
 function HumanPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = HUMAN_C;
+  const on = useFireCommandStore((s) => s.patch.humanizeOn);
+  const timing = useFireCommandStore((s) => s.patch.humanizeTiming) ?? 0.25;
+  const vel = useFireCommandStore((s) => s.patch.humanizeVelocity) ?? 0.2;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["human"] !== false);
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const energy = (timing + vel) * 0.5;
+  const live = enabled && on && energy > 0.02;
+  const stage = humanStageLabel(on, enabled, timing, vel);
+  const char = humanCharMatch(timing, vel, on);
+
   return (
-    <Section title="Humanize" color={FC.human} collapseKey="human" chipHosted={chipHosted} defaultCollapsed>
-      <HumanStageViz />
-      <div className="flex flex-wrap items-center justify-evenly gap-2 mb-2">
-        <BoolToggle paramKey="humanizeOn" label="Human" color={FC.human} />
+    <Section
+      title="Humanize"
+      color={c}
+      collapseKey="human"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={
+        <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
+          T{Math.round(timing * 100)} · V{Math.round(vel * 100)}
+        </span>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Perf
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: HUMAN_C_GLOW }}>
+            Feel Grain
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled
+                ? "bypass"
+                : !on
+                  ? "grid"
+                  : `${char?.label ?? "Custom"} · T${Math.round(timing * 100)} V${Math.round(vel * 100)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <HumanQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? HUMAN_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {stage}
+          </div>
+        </div>
       </div>
-      <div className="flex items-center justify-evenly gap-1">
-        <FParamKnob paramKey="humanizeTiming" label="Timing" min={0} max={1} format={fmtPct} def={0.25} color={FC.human} />
-        <FParamKnob paramKey="humanizeVelocity" label="Vel" min={0} max={1} format={fmtPct} def={0.2} color={FC.human} />
+
+      <HumanStageViz />
+      <HumanCharacterStrip />
+      <HumanTimingStrip />
+      <HumanVelStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <HumanMeter label="Timing" value={timing} color={HUMAN_C_TIME} format={() => `${Math.round(timing * 100)}%`} />
+        <HumanMeter label="Vel" value={vel} color={HUMAN_C_VEL} format={() => `${Math.round(vel * 100)}%`} />
+        <HumanMeter label="Feel" value={live ? energy : 0} color={HUMAN_C_GLOW} format={() => (live ? `${Math.round(energy * 100)}` : "0")} />
+        <HumanMeter label="Arm" value={live ? 1 : 0} color={HUMAN_C_ARM} format={() => (live ? "ON" : "OFF")} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-stretch mb-1">
+        <div
+          className="flex flex-col items-center gap-1.5 rounded-xl border bg-black/25 px-2 py-2.5 transition"
+          style={{
+            borderColor: `${HUMAN_C_TIME}44`,
+            boxShadow: live && timing > 0.05 ? `0 0 14px ${HUMAN_C_TIME}18` : undefined,
+          }}
+        >
+          <FParamKnob
+            paramKey="humanizeTiming"
+            label="Timing"
+            min={0}
+            max={1}
+            format={fmtPct}
+            def={0.25}
+            color={HUMAN_C_TIME}
+            size={52}
+          />
+        </div>
+        <div
+          className="flex flex-col items-center gap-1.5 rounded-xl border bg-black/25 px-2 py-2.5 transition"
+          style={{
+            borderColor: `${HUMAN_C_VEL}44`,
+            boxShadow: live && vel > 0.05 ? `0 0 14px ${HUMAN_C_VEL}18` : undefined,
+          }}
+        >
+          <FParamKnob
+            paramKey="humanizeVelocity"
+            label="Velocity"
+            min={0}
+            max={1}
+            format={fmtPct}
+            def={0.2}
+            color={HUMAN_C_VEL}
+            size={52}
+          />
+        </div>
+        <div
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border bg-black/25 px-3 py-2.5"
+          style={{
+            borderColor: `${HUMAN_C_ARM}44`,
+            boxShadow: live ? `0 0 14px ${HUMAN_C_ARM}18` : undefined,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setParam("humanizeOn", !on)}
+            className="w-full rounded-lg border px-3 py-2.5 text-[11px] font-black uppercase tracking-wider transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `linear-gradient(180deg, ${c}55, ${c}22)`,
+                    color: HUMAN_C_GLOW,
+                    boxShadow: `0 0 16px ${c}44`,
+                  }
+                : {
+                    borderColor: "rgba(255,255,255,0.15)",
+                    background: "rgba(0,0,0,0.35)",
+                    color: "rgba(255,255,255,0.5)",
+                  }
+            }
+          >
+            {on ? "● Feel" : "Grid"}
+          </button>
+        </div>
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Feel grain — drag the pad (X timing · Y velocity), top cycles characters, bottom arms feel. Timing jitters pattern playback · velocity colors live hits · Bake writes into notes.
       </div>
     </Section>
   );
 }
 
 function ScenesPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
+  const c = SCENES_C;
   const scenes = useFireCommandStore((s) => s.scenes);
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["scenes"] !== false);
   const captureScene = useFireCommandStore((s) => s.captureScene);
   const recallScene = useFireCommandStore((s) => s.recallScene);
   const clearScene = useFireCommandStore((s) => s.clearScene);
+  const [mode, setMode] = useState<SceneMode>("recall");
+  const [activeSlot, setActiveSlot] = useState(0);
+  const occ = occupiedCount(scenes);
+  const energy = avgSceneEnergy(scenes);
+  const live = enabled && occ > 0;
+  const stage = sceneStageLabel(occ, mode, enabled);
+  const modeMeta = SCENE_MODES.find((m) => m.id === mode) ?? SCENE_MODES[0]!;
+
+  const act = (i: number) => {
+    setActiveSlot(i);
+    if (mode === "capture") captureScene(i);
+    else if (mode === "recall") {
+      if (scenes[i]) recallScene(i);
+    } else if (scenes[i]) clearScene(i);
+  };
+
   return (
-    <Section title="Scenes" color={FC.scenes} collapseKey="scenes" chipHosted={chipHosted} defaultCollapsed>
-      <ScenesStageViz />
-      <div className="mt-2 grid grid-cols-4 gap-1.5 sm:grid-cols-8">
+    <Section
+      title="Scenes"
+      color={c}
+      collapseKey="scenes"
+      chipHosted={chipHosted}
+      defaultCollapsed
+      right={
+        <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
+          {occ}/{SCENE_SLOTS}
+        </span>
+      }
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · Perf
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: SCENES_C_GLOW }}>
+            Orbit Vault
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {!enabled ? "bypass" : `${modeMeta.short} · ${occ}/${SCENE_SLOTS} saved · energy ${Math.round(energy * 100)}`}
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 flex-wrap justify-end">
+          <ScenesQuickActions mode={mode} onModeChange={setMode} onActiveSlot={setActiveSlot} />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? SCENES_C_GLOW : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {stage}
+          </div>
+        </div>
+      </div>
+
+      <ScenesStageViz
+        mode={mode}
+        onModeChange={setMode}
+        activeSlot={activeSlot}
+        onActiveSlot={setActiveSlot}
+      />
+      <ScenesModeStrip mode={mode} onModeChange={setMode} />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <ScenesMeter label="Slots" value={occ / SCENE_SLOTS} color={SCENES_C_FILL} format={() => `${occ}/${SCENE_SLOTS}`} />
+        <ScenesMeter label="Energy" value={energy} color={SCENES_C_HOT} format={() => `${Math.round(energy * 100)}`} />
+        <ScenesMeter
+          label="Mode"
+          value={mode === "capture" ? 0.33 : mode === "recall" ? 0.66 : 1}
+          color={SCENES_C_MODE}
+          format={() => modeMeta.short}
+        />
+        <ScenesMeter label="Active" value={(activeSlot + 1) / SCENE_SLOTS} color={SCENES_C_GLOW} format={() => `${activeSlot + 1}`} />
+      </div>
+
+      <div className="mt-1 grid grid-cols-4 gap-1.5 sm:grid-cols-8">
         {Array.from({ length: SCENE_SLOTS }, (_, i) => {
-          const filled = !!scenes[i];
+          const snap = scenes[i];
+          const filled = !!snap;
+          const fp = sceneFingerprint(snap);
+          const focused = activeSlot === i;
           return (
             <div
               key={i}
-              className="flex flex-col gap-0.5 rounded-lg border border-white/10 bg-black/25 p-1"
-              style={filled ? { borderColor: `${FC.scenes}55` } : undefined}
+              className="flex flex-col gap-0.5 rounded-xl border p-1.5 transition"
+              style={{
+                borderColor: focused ? `${c}99` : filled ? `${c}55` : "rgba(255,255,255,0.1)",
+                background: filled
+                  ? `linear-gradient(180deg, ${c}${Math.round(20 + fp.energy * 30).toString(16).padStart(2, "0")}, ${c}0c)`
+                  : "rgba(0,0,0,0.25)",
+                boxShadow: focused ? `0 0 14px ${c}44` : filled ? `0 0 8px ${c}18` : undefined,
+              }}
             >
-              <div className="text-center text-[9px] font-mono text-white/45">{i + 1}</div>
               <button
-                onClick={() => captureScene(i)}
-                className="rounded px-1 py-0.5 text-[9px] font-semibold border border-white/15 bg-white/5 hover:bg-white/10 text-white/75 transition"
-                title={`Capture patch to scene ${i + 1}`}
+                type="button"
+                onClick={() => act(i)}
+                className="relative h-9 rounded-lg border text-[11px] font-black transition"
+                style={{
+                  borderColor: filled ? `${c}77` : "rgba(255,255,255,0.08)",
+                  background: filled
+                    ? `radial-gradient(circle at 50% 40%, ${SCENES_C_GLOW}55, ${c}22)`
+                    : "rgba(255,255,255,0.03)",
+                  color: filled ? SCENES_C_GLOW : SCENES_C_EMPTY,
+                }}
+                title={
+                  mode === "capture"
+                    ? `Capture to slot ${i + 1}`
+                    : mode === "recall"
+                      ? filled
+                        ? `Recall slot ${i + 1}`
+                        : `Empty · ${i + 1}`
+                      : filled
+                        ? `Clear slot ${i + 1}`
+                        : `Empty · ${i + 1}`
+                }
               >
-                Capture
+                {i + 1}
+                {filled && (
+                  <span
+                    className="absolute bottom-0.5 left-1 right-1 h-0.5 rounded-full"
+                    style={{
+                      background: `linear-gradient(90deg, ${c}33, ${c})`,
+                      width: `${Math.max(20, fp.energy * 100)}%`,
+                      margin: "0 auto",
+                    }}
+                  />
+                )}
               </button>
-              <button
-                onClick={() => recallScene(i)}
-                disabled={!filled}
-                className={`rounded px-1 py-0.5 text-[9px] font-semibold border transition ${
-                  filled
-                    ? "border-[#ffcf5c]/55 bg-[#ffcf5c]/15 text-[#ffe4a0] hover:bg-[#ffcf5c]/25"
-                    : "border-white/8 text-white/25 cursor-default"
-                }`}
-                title={`Recall scene ${i + 1}`}
-              >
-                Recall
-              </button>
-              <button
-                onClick={() => clearScene(i)}
-                disabled={!filled}
-                className="rounded px-1 py-0.5 text-[9px] font-semibold border border-white/10 text-white/40 hover:text-rose-200 disabled:opacity-30 transition"
-                title={`Clear scene ${i + 1}`}
-              >
-                Clear
-              </button>
+              <div className="flex gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("capture");
+                    setActiveSlot(i);
+                    captureScene(i);
+                  }}
+                  className="flex-1 rounded px-0.5 py-0.5 text-[8px] font-bold border transition"
+                  style={{ borderColor: `${c}33`, color: SCENES_C_GLOW, background: `${c}14` }}
+                  title={`Capture → ${i + 1}`}
+                >
+                  Cap
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!filled) return;
+                    setMode("recall");
+                    setActiveSlot(i);
+                    recallScene(i);
+                  }}
+                  disabled={!filled}
+                  className="flex-1 rounded px-0.5 py-0.5 text-[8px] font-bold border transition disabled:opacity-25"
+                  style={{
+                    borderColor: filled ? `${c}66` : "rgba(255,255,255,0.08)",
+                    color: filled ? SCENES_C_GLOW : "rgba(255,255,255,0.25)",
+                    background: filled ? `${c}28` : "transparent",
+                  }}
+                  title={`Recall ${i + 1}`}
+                >
+                  Rec
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!filled) return;
+                    setMode("clear");
+                    setActiveSlot(i);
+                    clearScene(i);
+                  }}
+                  disabled={!filled}
+                  className="flex-1 rounded px-0.5 py-0.5 text-[8px] font-bold border transition disabled:opacity-25"
+                  style={{ borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,200,220,0.55)" }}
+                  title={`Clear ${i + 1}`}
+                >
+                  ×
+                </button>
+              </div>
             </div>
           );
         })}
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Orbit vault — click nodes to {mode}, top cycles Capture/Recall/Clear, bottom fills the next empty slot. Each gem fingerprints the stored patch.
       </div>
     </Section>
   );
 }
 
 /**
- * Spectral FX panel (v1.7) — the STFT worklet between reverb and autopan.
- * The amount knob means something different per mode, so the label follows.
+ * Spectral — Bin Lattice panel (STFT worklet between reverb and autopan).
+ * Amount meaning follows mode: Hold / Time / Thresh / Shift.
  */
-const SPECTRAL_VIOLET = FC.spectral;
+
+const SPECTRAL_CHARS = [
+  { id: "off", label: "Off", mode: "off" as SpectralMode, amount: 0.6, mix: 0.5 },
+  { id: "freeze", label: "Freeze", mode: "freeze" as SpectralMode, amount: 0.85, mix: 0.7 },
+  { id: "smear", label: "Smear", mode: "smear" as SpectralMode, amount: 0.65, mix: 0.55 },
+  { id: "gate", label: "Gate", mode: "gate" as SpectralMode, amount: 0.45, mix: 0.6 },
+  { id: "shift", label: "Shift+", mode: "shift" as SpectralMode, amount: 0.75, mix: 0.55 },
+  { id: "shiftDown", label: "Shift−", mode: "shift" as SpectralMode, amount: 0.25, mix: 0.55 },
+  { id: "wash", label: "Wash", mode: "smear" as SpectralMode, amount: 0.9, mix: 0.8 },
+] as const;
+
+const SPECTRAL_MODES: { id: SpectralMode; label: string }[] = [
+  { id: "off", label: "Off" },
+  { id: "freeze", label: "Freeze" },
+  { id: "smear", label: "Smear" },
+  { id: "gate", label: "Gate" },
+  { id: "shift", label: "Shift" },
+];
+
+const SPECTRAL_MODE_CYCLE: SpectralMode[] = ["off", "freeze", "smear", "gate", "shift"];
+const SPECTRAL_MIXES = [
+  { label: "0", v: 0 },
+  { label: "25", v: 0.25 },
+  { label: "50", v: 0.5 },
+  { label: "75", v: 0.75 },
+  { label: "100", v: 1 },
+] as const;
+
+function spectralNear(a: number, b: number, eps = 0.06) {
+  return Math.abs(a - b) < eps;
+}
+
+function spectralAmountLabel(mode: SpectralMode) {
+  return mode === "freeze" ? "Hold" : mode === "smear" ? "Time" : mode === "gate" ? "Thresh" : mode === "shift" ? "Shift" : "Amount";
+}
+
+function spectralFmtAmount(mode: SpectralMode, v: number) {
+  if (mode === "shift") return `${v < 0.5 ? "−" : "+"}${Math.round(Math.abs(v * 2 - 1) * 100)}%`;
+  return fmtPct(v);
+}
+
+function SpectralCharacterStrip() {
+  const mode = (useFireCommandStore((s) => s.patch.spectralMode) ?? "off") as SpectralMode;
+  const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
+  const mix = useFireCommandStore((s) => s.patch.spectralMix) ?? 0.5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.spectral;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Lattice
+      </span>
+      {SPECTRAL_CHARS.map((p) => {
+        const on =
+          (p.id === "off" && mode === "off") ||
+          (p.id !== "off" &&
+            mode === p.mode &&
+            spectralNear(amount, p.amount) &&
+            spectralNear(mix, p.mix));
+        return (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              setParam("spectralMode", p.mode);
+              setParam("spectralAmount", p.amount);
+              setParam("spectralMix", p.mix);
+            }}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 10px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={p.label}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SpectralModeStrip() {
+  const mode = (useFireCommandStore((s) => s.patch.spectralMode) ?? "off") as SpectralMode;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.spectral;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Mode
+      </span>
+      {SPECTRAL_MODES.map((m) => {
+        const on = mode === m.id;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setParam("spectralMode", m.id)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.78)}99`,
+                    background: `${bandShade(FC.fx, 0.78)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={m.label}
+          >
+            {m.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SpectralMixStrip() {
+  const mix = useFireCommandStore((s) => s.patch.spectralMix) ?? 0.5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.spectral;
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        Mix
+      </span>
+      {SPECTRAL_MIXES.map((p) => {
+        const on = spectralNear(mix, p.v, 0.04);
+        return (
+          <button
+            key={p.label}
+            type="button"
+            onClick={() => setParam("spectralMix", p.v)}
+            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            style={
+              on
+                ? {
+                    borderColor: `${bandShade(FC.fx, 0.88)}99`,
+                    background: `${bandShade(FC.fx, 0.88)}28`,
+                    color: bandShade(FC.fx, 0.96),
+                    boxShadow: `0 0 8px ${c}33`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.25)" }
+            }
+            title={fmtPct(p.v)}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SpectralQuickActions() {
+  const mode = (useFireCommandStore((s) => s.patch.spectralMode) ?? "off") as SpectralMode;
+  const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
+  const mix = useFireCommandStore((s) => s.patch.spectralMix) ?? 0.5;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const savedRef = useRef({ mode: "freeze" as SpectralMode, amount: 0.8, mix: 0.65 });
+  const c = FC.spectral;
+  const idle = mode === "off";
+  return (
+    <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => {
+          if (idle) {
+            setParam("spectralMode", savedRef.current.mode === "off" ? "freeze" : savedRef.current.mode);
+            setParam("spectralAmount", savedRef.current.amount);
+            setParam("spectralMix", savedRef.current.mix);
+          } else {
+            savedRef.current = { mode, amount, mix };
+            setParam("spectralMode", "off");
+          }
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{
+          borderColor: idle ? `${c}88` : `${c}66`,
+          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
+          background: idle ? `${c}40` : `${c}22`,
+          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
+        }}
+        title={idle ? "Arm lattice" : "Bypass spectral"}
+      >
+        {idle ? "Arm" : "Park"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const i = SPECTRAL_MODE_CYCLE.indexOf(mode);
+          setParam("spectralMode", SPECTRAL_MODE_CYCLE[(i + 1) % SPECTRAL_MODE_CYCLE.length]!);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}66`, color: bandShade(FC.fx, 0.92), background: `${c}22` }}
+        title="Cycle mode"
+      >
+        Mode↻
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("spectralMode", "freeze");
+          setParam("spectralAmount", 0.85);
+          setParam("spectralMix", 0.7);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}55`, color: bandShade(FC.fx, 0.9), background: `${c}1c` }}
+        title="Freeze hold"
+      >
+        Freeze
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("spectralMode", "off");
+          setParam("spectralAmount", 0.6);
+          setParam("spectralMix", 0.5);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
+        title="Reset spectral defaults"
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
+function SpectralModMeter({
+  label,
+  value,
+  color,
+  format,
+  bipolar,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  format?: (v: number) => string;
+  bipolar?: boolean;
+}) {
+  const t = Math.min(1, Math.abs(bipolar ? value * 2 - 1 : value));
+  const display = format ? format(value) : String(Math.round(t * 100));
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
+      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
+        {bipolar ? (
+          <>
+            <div className="absolute left-1/2 top-0 h-full w-px bg-white/20" />
+            <div
+              className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
+              style={{
+                left: value >= 0.5 ? "50%" : `${50 - t * 50}%`,
+                width: `${t * 50}%`,
+                background: `linear-gradient(90deg, ${color}55, ${color})`,
+                boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+              }}
+            />
+          </>
+        ) : (
+          <div
+            className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
+            style={{
+              width: `${t * 100}%`,
+              background: `linear-gradient(90deg, ${color}55, ${color})`,
+              boxShadow: t > 0.06 ? `0 0 8px ${color}88` : undefined,
+            }}
+          />
+        )}
+      </div>
+      <div className="font-mono text-[8px] tabular-nums" style={{ color: t > 0.04 ? color : "rgba(255,255,255,0.3)" }}>
+        {display}
+      </div>
+    </div>
+  );
+}
 
 function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
-  const mode = useFireCommandStore((s) => s.patch.spectralMode);
-  const setParam = useFireCommandStore((s) => s.setParam);
-  const m = mode ?? "off";
-  const amountLabel = m === "freeze" ? "Hold" : m === "smear" ? "Time" : m === "gate" ? "Thresh" : m === "shift" ? "Shift" : "Amount";
+  const c = FC.spectral;
+  const cAmt = bandShade(FC.fx, 0.7);
+  const cMix = bandShade(FC.fx, 0.88);
+  const mode = (useFireCommandStore((s) => s.patch.spectralMode) ?? "off") as SpectralMode;
+  const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
+  const mix = useFireCommandStore((s) => s.patch.spectralMix) ?? 0.5;
+  const live = mode !== "off";
+  const amountLabel = spectralAmountLabel(mode);
+
   return (
     <Section
       title="Spectral"
-      color={SPECTRAL_VIOLET}
+      color={c}
       collapseKey="fx.spectral"
       chipHosted={chipHosted}
       right={
         <Seg<SpectralMode>
-          value={m}
-          onChange={(v) => setParam("spectralMode", v)}
-          options={[
-            { id: "off", label: "Off" },
-            { id: "freeze", label: "Freeze" },
-            { id: "smear", label: "Smear" },
-            { id: "gate", label: "Gate" },
-            { id: "shift", label: "Shift" },
-          ]}
-          color={SPECTRAL_VIOLET}
+          value={mode}
+          onChange={(v) => useFireCommandStore.getState().setParam("spectralMode", v)}
+          options={SPECTRAL_MODES}
+          color={c}
         />
       }
     >
-      <SpectralStageViz />
-      {m === "off" ? (
-        <div className="text-center text-[10px] text-dim leading-relaxed px-1 pb-1">
-          Violet FFT bay — <span className="text-white/60">Freeze</span> holds,{" "}
-          <span className="text-white/60">Smear</span> washes,{" "}
-          <span className="text-white/60">Gate</span> keeps loudest partials,{" "}
-          <span className="text-white/60">Shift</span> slides the spectrum.
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
+        style={{
+          borderColor: live ? `${c}48` : `${c}28`,
+          background: live
+            ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
+          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+        }}
+      >
+        <div className="min-w-0">
+          <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
+            Signal Path · FX
+          </div>
+          <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
+            Bin Lattice
+            <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
+              {live
+                ? `${mode} · ${amountLabel} ${spectralFmtAmount(mode, amount)} · M${Math.round(mix * 100)}`
+                : "off · bypass"}
+            </span>
+          </div>
         </div>
-      ) : (
-        <>
-          <div className="flex items-center justify-evenly gap-1">
-            <FParamKnob
-              paramKey="spectralAmount"
-              label={amountLabel}
-              min={0} max={1}
-              bipolar={m === "shift"}
-              format={m === "shift" ? (v) => `${v < 0.5 ? "−" : "+"}${Math.round(Math.abs(v * 2 - 1) * 100)}%` : fmtPct}
-              def={m === "shift" ? 0.5 : 0.6}
-              color={SPECTRAL_VIOLET}
-            />
-            <FParamKnob paramKey="spectralMix" label="Mix" min={0} max={1} format={fmtPct} def={0.5} color={SPECTRAL_VIOLET} />
+        <div className="flex shrink-0 items-center gap-2">
+          <SpectralQuickActions />
+          <div
+            className="rounded-full px-2.5 py-0.5 text-[9px] font-black uppercase tracking-wider"
+            style={{
+              color: live ? bandShade(FC.fx, 0.98) : "rgba(255,255,255,0.35)",
+              background: live ? `${c}38` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
+              boxShadow: live ? `0 0 14px ${c}50` : undefined,
+            }}
+          >
+            {live ? mode : "Off"}
           </div>
-          <div className="mt-1.5 text-center text-[10px] text-dim">
-            Mode colors the bay — Hold freezes bins, Time smears, Thresh gates, Shift slides.
-          </div>
-        </>
-      )}
+        </div>
+      </div>
+
+      <SpectralStageViz />
+      <SpectralCharacterStrip />
+      <SpectralModeStrip />
+      <SpectralMixStrip />
+
+      <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
+        <SpectralModMeter
+          label={amountLabel}
+          value={amount}
+          color={cAmt}
+          bipolar={mode === "shift"}
+          format={() => spectralFmtAmount(mode, amount)}
+        />
+        <SpectralModMeter label="Mix" value={mix} color={cMix} format={() => fmtPct(mix)} />
+        <SpectralModMeter
+          label="Mode"
+          value={live ? 0.25 + SPECTRAL_MODE_CYCLE.indexOf(mode) * 0.2 : 0}
+          color={bandShade(FC.fx, 0.78)}
+          format={() => mode}
+        />
+      </div>
+
+      <div className="flex items-end justify-evenly gap-1 flex-wrap">
+        <FParamKnob
+          paramKey="spectralAmount"
+          label={amountLabel}
+          min={0}
+          max={1}
+          bipolar={mode === "shift"}
+          format={(v) => spectralFmtAmount(mode, v)}
+          def={mode === "shift" ? 0.5 : 0.6}
+          size={52}
+          color={cAmt}
+        />
+        <FParamKnob paramKey="spectralMix" label="Mix" min={0} max={1} format={fmtPct} def={0.5} size={52} color={cMix} />
+      </div>
+      <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
+        Bin lattice — drag Amount↔ / Mix↕, double-click cycles Off→Freeze→Smear→Gate→Shift. Hold freezes, Time smears, Thresh gates, Shift slides.
+      </div>
     </Section>
   );
 }
 
-/** Lowpass-gate switch (v1.7) — swaps the amp ADSR for a struck vactrol. */
+/** Lowpass-gate switch — swaps the amp ADSR for a struck vactrol. */
 function LpgToggle() {
   const lpgOn = useFireCommandStore((s) => s.patch.lpgOn);
   const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.pluck;
   return (
     <button
+      type="button"
       onClick={() => setParam("lpgOn", !lpgOn)}
-      className={`h-6 px-2.5 rounded-md text-[10px] font-bold border transition ${
+      className="h-6 px-2.5 rounded-md text-[10px] font-bold border transition"
+      style={
         lpgOn
-          ? "border-[#ffcf5c]/70 bg-[#ffcf5c]/15 text-[#ffe4a0]"
-          : "border-white/10 bg-white/[0.03] text-white/40 hover:text-white/70"
-      }`}
-      title="Lowpass gate (Aalto-style): notes become struck vactrol plucks — one strike drives both loudness AND brightness, so loud is bright and quiet is dark. Replaces the ADSR while on."
+          ? {
+              borderColor: `${c}70`,
+              background: `${c}22`,
+              color: bandShade(FC.tone, 0.92),
+              boxShadow: `0 0 10px ${c}40`,
+            }
+          : { borderColor: "rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.4)" }
+      }
+      title="Lowpass gate (Aalto-style): notes become struck vactrol plucks — one strike drives both loudness AND brightness. Replaces amp ADSR while on."
     >
       {lpgOn ? "● LPG" : "○ LPG"}
     </button>
@@ -3284,32 +13821,6 @@ function BoolToggle({
     >
       {on ? `● ${label}` : `○ ${label}`}
     </button>
-  );
-}
-
-/** Amp panel body: knobs only — stage viz lives above in the Section. */
-function LpgAwareAmpRow() {
-  const lpgOn = useFireCommandStore((s) => s.patch.lpgOn);
-  const pluckOn = useFireCommandStore((s) => s.patch.moduleEnable?.["pluck"] !== false);
-  // LPG knobs live on Pluck Gate; Amp only parks when Pluck is actively striking.
-  if (lpgOn && pluckOn) {
-    return (
-      <div className="mt-1.5 text-center text-[10px] text-dim">
-        Pluck Gate is on — amp ADSR is parked. Edit Decay / Color under Pluck.
-      </div>
-    );
-  }
-  return (
-    <>
-      <div className="flex items-center justify-evenly gap-1">
-        <FParamKnob paramKey="ampAttack" label="A" min={0.001} max={3} curve="log" format={fmtSec} color={GRN} />
-        <FParamKnob paramKey="ampDecay" label="D" min={0.005} max={3} curve="log" format={fmtSec} color={GRN} />
-        <FParamKnob paramKey="ampSustain" label="S" min={0} max={1} format={fmtPct} color={GRN} />
-        <FParamKnob paramKey="ampRelease" label="R" min={0.005} max={4} curve="log" format={fmtSec} color={GRN} />
-        <FParamKnob paramKey="velAmount" label="Vel" min={0} max={1} format={fmtPct} def={1} color={GRN} />
-      </div>
-      <div className="mt-1.5 text-center text-[10px] text-dim">Amp mountain — loudness contour of every note.</div>
-    </>
   );
 }
 
@@ -3366,16 +13877,30 @@ function useCollapsed(key: string | undefined, def: boolean): [boolean, () => vo
   return useFireCollapsed(key, def);
 }
 
-function Section({ title, color = FIRE, right, children, className, collapseKey, defaultCollapsed = false, chipHosted = false }: {
+function Section({ title, color = FIRE, right, children, className, collapseKey, defaultCollapsed = false, chipHosted = false, statusLine }: {
   title: string; color?: string; right?: React.ReactNode; children: React.ReactNode; className?: string;
   /** When set, the section header toggles fold state (persisted under this key). */
   collapseKey?: string; defaultCollapsed?: boolean;
   /** When true inside a FireBand, collapsed sections disappear (chips show instead). */
   chipHosted?: boolean;
+  /** Optional collapsed-card status (model, mods, lock). */
+  statusLine?: string;
 }) {
   const [collapsed, toggle] = useCollapsed(collapseKey, defaultCollapsed);
-  const { focusActive, focusId, isFocused } = useFireLayout();
+  const { focusActive, focusId, isFocused, enterFocus } = useFireLayout();
+  const accordionMode = useFireCommandStore((s) => s.accordionMode);
+  const pinnedModules = useFireCommandStore((s) => s.pinnedModules);
+  const toggleModulePin = useFireCommandStore((s) => s.toggleModulePin);
+  const toggleModuleLock = useFireCommandStore((s) => s.toggleModuleLock);
+  const locked = useFireCommandStore((s) => !!(collapseKey && s.moduleLocks[collapseKey]));
+  const atlas = collapseKey ? FIRE_MODULE_BY_ID.get(collapseKey) : undefined;
+  const labelMode = useFireCommandStore((s) => s.labelMode);
   useFireBandRegister(collapseKey, title, color, collapsed, toggle, !!chipHosted && !!collapseKey);
+
+  const displayTitle =
+    labelMode === "character" && atlas ? atlas.short
+      : labelMode === "technical" && atlas ? atlas.title
+        : title;
 
   // Focus mode: keep the soloed module forced open
   useEffect(() => {
@@ -3384,33 +13909,105 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
     }
   }, [collapseKey, collapsed, isFocused]);
 
+  const onToggle = () => {
+    if (!collapseKey) {
+      toggle();
+      return;
+    }
+    const opening = collapsed;
+    if (opening && accordionMode && !pinnedModules.includes(collapseKey)) {
+      // Smart accordion: collapse other non-pinned modules in the same band.
+      const band = atlas?.bandKey;
+      if (band) {
+        const entry = FIRE_BANDS.find((b) => b.id === band);
+        for (const mod of entry?.modules ?? []) {
+          if (mod.id === collapseKey) continue;
+          if (pinnedModules.includes(mod.id)) continue;
+          // Already collapsed — skip the storage write + event fan-out.
+          try {
+            if (window.localStorage.getItem(foldStorageKey(mod.id)) === "1") continue;
+          } catch { /* storage unavailable — fold anyway */ }
+          writeFold(mod.id, true);
+        }
+      }
+    }
+    toggle();
+  };
+
   // Hide non-focused modules while focus mode is on
   if (focusActive && collapseKey && focusId !== collapseKey) return null;
 
   if (chipHosted && collapseKey && collapsed && !isFocused(collapseKey)) return null;
+
+  const open = !collapsed || isFocused(collapseKey);
+  // Atlas subtitles fall back to the short name — only surface real ones.
+  const subtitle =
+    atlas?.subtitle && atlas.subtitle !== atlas.short && atlas.subtitle !== atlas.title
+      ? atlas.subtitle
+      : null;
 
   return (
     <GlassPanel
       className={`p-2.5 ${className ?? ""}`}
       data-fire-module={collapseKey || undefined}
     >
-      <div className={`flex items-center justify-between gap-2 min-w-0 ${collapsed && !isFocused(collapseKey) ? "" : "mb-2"}`}>
+      <div className={`flex items-center justify-between gap-2 min-w-0 ${open ? "mb-2" : ""}`}>
         {collapseKey ? (
           <button
-            onClick={toggle}
-            aria-expanded={!collapsed || isFocused(collapseKey)}
+            onClick={onToggle}
+            aria-expanded={open}
             className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 min-w-0"
             title={collapsed ? "Expand section" : "Collapse section"}
           >
-            <CollapseToggle collapsed={collapsed && !isFocused(collapseKey)} color={color} />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.22em] truncate" style={{ color }}>{title}</span>
+            <CollapseToggle collapsed={!open} color={color} />
+            <span className="fc-text-primary font-semibold uppercase tracking-[0.18em] truncate" style={{ color }}>{displayTitle}</span>
+            {locked && <span className="fc-lock-badge" title="Protected from Random Armory / mutation">LOCK</span>}
           </button>
         ) : (
-          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] truncate min-w-0" style={{ color }}>{title}</div>
+          <div className="fc-text-primary font-semibold uppercase tracking-[0.18em] truncate min-w-0" style={{ color }}>{displayTitle}</div>
         )}
-        {(!collapsed || isFocused(collapseKey)) && right ? <div className="shrink-0 max-w-[55%] overflow-x-auto">{right}</div> : null}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Pin / Lock / Solo only on the open card — collapsed headers stay quiet. */}
+          {collapseKey && open && (
+            <>
+              <button
+                type="button"
+                className="fc-pin-btn rounded border border-white/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/40 hover:text-white/70"
+                data-on={pinnedModules.includes(collapseKey) ? "1" : "0"}
+                title="Pin — stay open when accordion expands another module"
+                onClick={(e) => { e.stopPropagation(); toggleModulePin(collapseKey); }}
+              >
+                Pin
+              </button>
+              <button
+                type="button"
+                className="rounded border border-white/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/40 hover:text-[#f5d9a8]"
+                title="Lock against Random Armory / mutation"
+                onClick={(e) => { e.stopPropagation(); toggleModuleLock(collapseKey); }}
+              >
+                {locked ? "Unlock" : "Lock"}
+              </button>
+              {!isFocused(collapseKey) && (
+                <button
+                  type="button"
+                  className="rounded border border-white/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/40 hover:text-white/70"
+                  title="Solo this module — hide the others"
+                  onClick={(e) => { e.stopPropagation(); enterFocus(collapseKey as FireModuleId); }}
+                >
+                  Solo
+                </button>
+              )}
+            </>
+          )}
+          {open && right ? <div className="max-w-[55%] overflow-x-auto">{right}</div> : null}
+        </div>
       </div>
-      {(!collapsed || isFocused(collapseKey)) && children}
+      {!open && (statusLine || subtitle) && (
+        <div className="fc-text-secondary mt-1 truncate opacity-80">
+          {statusLine ?? subtitle}
+        </div>
+      )}
+      {open && children}
     </GlassPanel>
   );
 }
@@ -3462,11 +14059,29 @@ function parseDisplayNumber(s: string): number {
 }
 
 function Dial({
-  label, value, min, max, curve = "lin", integer = false, bipolar = false, format, def, color = FIRE, size = 40, onChange,
+  label, value, min, max, curve = "lin", integer = false, bipolar = false, format, def, color = FIRE, size = 40, onChange, modulated,
 }: {
   label: string; value: number; min: number; max: number; curve?: "lin" | "log"; integer?: boolean;
   bipolar?: boolean; format: (v: number) => string; def?: number; color?: string; size?: number; onChange: (v: number) => void;
+  /** Explicit mod-matrix indicator; also auto-detected from label ↔ dest when omitted. */
+  modulated?: boolean;
 }) {
+  const modMatrix = useFireCommandStore((s) => s.patch.modMatrix);
+  // Mod indicator: explicit prop wins; otherwise light up only for knobs whose
+  // label maps unambiguously to a matrix destination (fuzzy matches like
+  // "Amount"→volume flagged every knob, so the loose branches are gone).
+  const autoModulated = (() => {
+    if (modulated != null) return modulated;
+    const ll = label.toLowerCase();
+    const routes = modMatrix ?? [];
+    const matchDest = (...dests: string[]) =>
+      routes.some((r) => r.dest !== "none" && Math.abs(r.amount) > 0.05 && dests.includes(r.dest));
+    if (ll.includes("cutoff")) return matchDest("cutoff");
+    if (ll.includes("reso")) return matchDest("resonance");
+    if (ll === "pitch" || ll.includes("pitch ")) return matchDest("pitch");
+    if (ll === "pan") return matchDest("pan");
+    return false;
+  })();
   const knobRef = useRef<HTMLDivElement>(null);
   const startY = useRef(0);
   const startT = useRef(0);
@@ -3559,6 +14174,14 @@ function Dial({
     // Width tracks knob size so small knobs pack densely (floor keeps the
     // value/label text readable).
     <div className="group flex flex-col items-center relative" style={{ width: Math.max(size + 10, 50) }}>
+      {autoModulated && (
+        <span
+          className="fc-dial-mod-dot pointer-events-none absolute z-[1]"
+          style={{ top: 2, left: "50%", marginLeft: size / 2 - 2 }}
+          title="Modulated by the matrix"
+          aria-hidden
+        />
+      )}
       <div
         ref={knobRef}
         role="slider"

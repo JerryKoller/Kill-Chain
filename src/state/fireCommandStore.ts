@@ -20,6 +20,7 @@ import {
 } from "@/audio/dsp/FireCommandSynth";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
+import { applyLoudnessSafety, applyModuleLocks, lockedModuleCount } from "@/lib/fireModuleLocks";
 
 /**
  * fireCommandStore — single source of truth for the "Fire Command" synth.
@@ -29,6 +30,23 @@ import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/
  */
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** Map soft controller velocities into a punchier live range. */
+function shapeLiveVelocity(raw: number, gain: number, curve: number): number {
+  const x = clamp(raw, 0, 1);
+  const curved = Math.pow(x, clamp(curve, 0.35, 1.8));
+  return clamp(curved * clamp(gain, 0.5, 2.5), 0.05, 1);
+}
+
+function liveWhen(delayMs: number): number | undefined {
+  const ms = clamp(delayMs, 0, 50);
+  if (ms <= 0.05) return undefined;
+  try {
+    return getEngine().ctx.currentTime + ms / 1000;
+  } catch {
+    return undefined;
+  }
+}
 
 // ════════════════════ arpeggiator ════════════════════
 
@@ -127,12 +145,31 @@ export function buildArpSequence(order: number[], mode: ArpMode, octaves: number
 let arpTimer: ReturnType<typeof setTimeout> | null = null;
 let arpStep = 0;
 let arpWalkPos = 0; // "walk" mode: drunken index into the sequence
+/** Gate/ratchet note-off timers — must cancel on stop/panic or they retrigger. */
+const arpVoiceTimers = new Set<ReturnType<typeof setTimeout>>();
+/** Bumped on every stop so in-flight callbacks no-op. */
+let arpGen = 0;
+
+function clearArpVoiceTimers(): void {
+  for (const id of arpVoiceTimers) clearTimeout(id);
+  arpVoiceTimers.clear();
+}
+
+function armArpVoiceTimer(fn: () => void, ms: number): void {
+  const id = setTimeout(() => {
+    arpVoiceTimers.delete(id);
+    fn();
+  }, ms);
+  arpVoiceTimers.add(id);
+}
 
 function stopArpScheduler(): void {
   if (arpTimer) {
     clearTimeout(arpTimer);
     arpTimer = null;
   }
+  clearArpVoiceTimers();
+  arpGen++;
   arpStep = 0;
   arpWalkPos = 0;
 }
@@ -194,14 +231,21 @@ function startArpScheduler(
     set({ arpCurrent: midi, arpStepIndex: idx });
     const gateMs = Math.max(20, s.arp.gate * stepSec * 1000 - 8);
     const offMidi = midi;
-    setTimeout(() => fc.noteOff(offMidi), gateMs);
+    const gen = arpGen;
+    armArpVoiceTimer(() => {
+      if (gen !== arpGen) return;
+      fc.noteOff(offMidi);
+    }, gateMs);
     // Ratchet: probabilistic double-hit in the back half of the step.
     if (s.arp.ratchet > 0 && Math.random() < s.arp.ratchet) {
       const half = stepSec * 500;
-      setTimeout(() => {
-        if (!get().arp.enabled) return;
+      armArpVoiceTimer(() => {
+        if (gen !== arpGen || !get().arp.enabled) return;
         fc.noteOn(offMidi, Math.min(1, vel * 0.85));
-        setTimeout(() => fc.noteOff(offMidi), Math.max(15, gateMs * 0.4));
+        armArpVoiceTimer(() => {
+          if (gen !== arpGen) return;
+          fc.noteOff(offMidi);
+        }, Math.max(15, gateMs * 0.4));
       }, half);
     }
     arpStep++;
@@ -511,6 +555,24 @@ const LEGACY_STORAGE_KEY = "pulsefire.firecommand.v5";
 
 export type EditTarget = "a" | "b";
 
+export type FireUiDensity = "studio" | "compact" | "focus";
+export type FireKeyboardMode = "full" | "strip" | "hidden";
+export type FireLabelMode = "character" | "technical" | "both";
+
+const FIRE_KEYBOARD_MODES: FireKeyboardMode[] = ["full", "strip", "hidden"];
+const FIRE_UI_DENSITIES: FireUiDensity[] = ["studio", "compact", "focus"];
+const FIRE_LABEL_MODES: FireLabelMode[] = ["character", "technical", "both"];
+
+function isFireKeyboardMode(v: unknown): v is FireKeyboardMode {
+  return typeof v === "string" && (FIRE_KEYBOARD_MODES as string[]).includes(v);
+}
+function isFireUiDensity(v: unknown): v is FireUiDensity {
+  return typeof v === "string" && (FIRE_UI_DENSITIES as string[]).includes(v);
+}
+function isFireLabelMode(v: unknown): v is FireLabelMode {
+  return typeof v === "string" && (FIRE_LABEL_MODES as string[]).includes(v);
+}
+
 function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
   const patch = { ...DEFAULT_FIRE_PATCH, ...(raw ?? {}) };
   patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
@@ -536,13 +598,34 @@ interface PersistShape {
   editTarget: EditTarget;
   routeThroughFx: boolean;
   arp: ArpSettings;
-  keyboardMinimized: boolean;
+  keyboardMode: FireKeyboardMode;
+  fireUiDensity: FireUiDensity;
+  fireUiDensityBeforeFocus: FireUiDensity;
+  labelMode: FireLabelMode;
+  moduleLocks: Record<string, boolean>;
+  accordionMode: boolean;
+  pinnedModules: string[];
+  /**
+   * Live keyboard / MIDI playability (not patch params).
+   * Soft controllers (MPK Mini) often need gain + a concave curve.
+   */
+  kbdVelGain: number;
+  /** Power curve on incoming velocity (<1 expands soft hits). */
+  kbdVelCurve: number;
+  /** Schedule delay in ms (0 = ASAP). Useful for syncing, not for cutting lag. */
+  kbdDelayMs: number;
+  /** Live amp-attack override in ms (tight response on keyboard/MIDI). */
+  kbdAttackMs: number;
   userPresets: SavedPreset[];
   maxVoices: number;
   /** Natural-selection mutation strength, 0 (subtle) .. 1 (wild). */
   mutateAmount: number;
   /** Last kept generation — survives Keep Winner so the next breed continues the lineage. */
   mutateLineage: number;
+  /** Short genealogy trail for Natural Selection UI (generation + kept offspring). */
+  mutationGenealogy: { generation: number; kept: "a" | "b"; at: number }[];
+  /** Editable Home signal-path order (node ids). Empty = default SIGNAL_PATH. */
+  signalPathOrder: string[];
   /** Performance scene slots (partial patch snapshots). */
   scenes: (Partial<FirePatch> | null)[];
 }
@@ -560,11 +643,24 @@ function defaults(): PersistShape {
     editTarget: "a",
     routeThroughFx: true,
     arp: { ...DEFAULT_ARP },
-    keyboardMinimized: false,
+    keyboardMode: "full",
+    fireUiDensity: "studio",
+    fireUiDensityBeforeFocus: "studio",
+    labelMode: "both",
+    moduleLocks: {},
+    accordionMode: false,
+    pinnedModules: [],
+    // Soft USB pads (MPK Mini) land quiet under a linear map — lean bright by default.
+    kbdVelGain: 1.45,
+    kbdVelCurve: 0.72,
+    kbdDelayMs: 0,
+    kbdAttackMs: 6,
     userPresets: [],
     maxVoices: 12,
     mutateAmount: 0.35,
     mutateLineage: 0,
+    mutationGenealogy: [],
+    signalPathOrder: [],
     scenes: Array.from({ length: SCENE_SLOTS }, () => null),
   };
 }
@@ -574,11 +670,20 @@ function load(): PersistShape {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return defaults();
-    const parsed = JSON.parse(raw) as Partial<PersistShape> & { patch?: Partial<FirePatch> };
+    const parsed = JSON.parse(raw) as Partial<PersistShape> & {
+      patch?: Partial<FirePatch>;
+      /** Legacy — migrated to keyboardMode on load. */
+      keyboardMinimized?: boolean;
+    };
     const d = defaults();
     const patchA = normalizePatch(parsed.patchA ?? parsed.patch ?? {});
     const patchB = normalizePatch(parsed.patchB ?? d.patchB);
     const editTarget: EditTarget = parsed.editTarget === "b" ? "b" : "a";
+    const keyboardMode: FireKeyboardMode = isFireKeyboardMode(parsed.keyboardMode)
+      ? parsed.keyboardMode
+      : parsed.keyboardMinimized === true
+        ? "strip"
+        : "full";
     return {
       patch: structuredClone(editTarget === "b" ? patchB : patchA),
       patchA,
@@ -589,11 +694,51 @@ function load(): PersistShape {
       editTarget,
       routeThroughFx: typeof parsed.routeThroughFx === "boolean" ? parsed.routeThroughFx : d.routeThroughFx,
       arp: { ...d.arp, ...(parsed.arp ?? {}) },
-      keyboardMinimized: typeof parsed.keyboardMinimized === "boolean" ? parsed.keyboardMinimized : d.keyboardMinimized,
+      keyboardMode,
+      // Focus is a transient overlay mode — never boot into it. A persisted
+      // "focus" (from a crash or an old stuck-density bug) falls back to the
+      // remembered pre-Focus density, else Studio.
+      fireUiDensity: (() => {
+        const raw = isFireUiDensity(parsed.fireUiDensity) ? parsed.fireUiDensity : d.fireUiDensity;
+        if (raw !== "focus") return raw;
+        const before = isFireUiDensity(parsed.fireUiDensityBeforeFocus) ? parsed.fireUiDensityBeforeFocus : "studio";
+        return before === "focus" ? "studio" : before;
+      })(),
+      fireUiDensityBeforeFocus: (() => {
+        const before = isFireUiDensity(parsed.fireUiDensityBeforeFocus) ? parsed.fireUiDensityBeforeFocus : d.fireUiDensityBeforeFocus;
+        return before === "focus" ? "studio" : before;
+      })(),
+      labelMode: isFireLabelMode(parsed.labelMode) ? parsed.labelMode : d.labelMode,
+      moduleLocks:
+        parsed.moduleLocks && typeof parsed.moduleLocks === "object" && !Array.isArray(parsed.moduleLocks)
+          ? { ...parsed.moduleLocks }
+          : d.moduleLocks,
+      // v2 key: the first ship defaulted accordion ON, which surprised users
+      // (opening one module folded the rest). Accordion is opt-in now; only an
+      // explicit v2 choice survives reloads.
+      accordionMode: typeof (parsed as { accordionModeV2?: unknown }).accordionModeV2 === "boolean"
+        ? ((parsed as { accordionModeV2: boolean }).accordionModeV2)
+        : d.accordionMode,
+      pinnedModules: Array.isArray(parsed.pinnedModules) ? [...parsed.pinnedModules] : d.pinnedModules,
+      kbdVelGain: typeof parsed.kbdVelGain === "number" ? clamp(parsed.kbdVelGain, 0.5, 2.5) : d.kbdVelGain,
+      kbdVelCurve: typeof parsed.kbdVelCurve === "number" ? clamp(parsed.kbdVelCurve, 0.35, 1.8) : d.kbdVelCurve,
+      kbdDelayMs: typeof parsed.kbdDelayMs === "number" ? clamp(parsed.kbdDelayMs, 0, 50) : d.kbdDelayMs,
+      kbdAttackMs: typeof parsed.kbdAttackMs === "number" ? clamp(parsed.kbdAttackMs, 1, 80) : d.kbdAttackMs,
       userPresets: Array.isArray(parsed.userPresets) ? parsed.userPresets : d.userPresets,
       maxVoices: typeof parsed.maxVoices === "number" ? parsed.maxVoices : d.maxVoices,
       mutateAmount: typeof parsed.mutateAmount === "number" ? clamp(parsed.mutateAmount, 0, 1) : d.mutateAmount,
       mutateLineage: typeof parsed.mutateLineage === "number" ? Math.max(0, Math.floor(parsed.mutateLineage)) : d.mutateLineage,
+      mutationGenealogy: Array.isArray(parsed.mutationGenealogy)
+        ? parsed.mutationGenealogy
+            .filter((g): g is { generation: number; kept: "a" | "b"; at: number } =>
+              !!g && typeof g === "object"
+              && typeof (g as { generation?: unknown }).generation === "number"
+              && ((g as { kept?: unknown }).kept === "a" || (g as { kept?: unknown }).kept === "b"))
+            .slice(-12)
+        : d.mutationGenealogy,
+      signalPathOrder: Array.isArray(parsed.signalPathOrder)
+        ? parsed.signalPathOrder.filter((x): x is string => typeof x === "string")
+        : d.signalPathOrder,
       scenes: Array.isArray(parsed.scenes)
         ? Array.from({ length: SCENE_SLOTS }, (_, i) => (parsed.scenes?.[i] as Partial<FirePatch> | null) ?? null)
         : d.scenes,
@@ -617,12 +762,15 @@ export function slotsFromState(s: {
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
-function schedulePersist(state: FireCommandState): void {
+function schedulePersist(getState: () => FireCommandState): void {
   if (typeof window === "undefined") return;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
+    // Read at WRITE time — a snapshot captured at schedule time silently
+    // overwrote any field mutated during the debounce window.
+    const state = getState();
     const { patchA, patchB } = slotsFromState(state);
-    const data: PersistShape = {
+    const data: PersistShape & { accordionModeV2: boolean } = {
       patch: patchA,
       patchA,
       patchB,
@@ -632,11 +780,24 @@ function schedulePersist(state: FireCommandState): void {
       editTarget: state.editTarget,
       routeThroughFx: state.routeThroughFx,
       arp: state.arp,
-      keyboardMinimized: state.keyboardMinimized,
+      keyboardMode: state.keyboardMode,
+      fireUiDensity: state.fireUiDensity,
+      fireUiDensityBeforeFocus: state.fireUiDensityBeforeFocus,
+      labelMode: state.labelMode,
+      moduleLocks: state.moduleLocks,
+      accordionMode: state.accordionMode,
+      accordionModeV2: state.accordionMode,
+      pinnedModules: state.pinnedModules,
+      kbdVelGain: state.kbdVelGain,
+      kbdVelCurve: state.kbdVelCurve,
+      kbdDelayMs: state.kbdDelayMs,
+      kbdAttackMs: state.kbdAttackMs,
       userPresets: state.userPresets,
       maxVoices: state.maxVoices,
       mutateAmount: state.mutateAmount,
       mutateLineage: state.mutateLineage,
+      mutationGenealogy: state.mutationGenealogy,
+      signalPathOrder: state.signalPathOrder,
       scenes: state.scenes,
     };
     try {
@@ -684,6 +845,12 @@ export interface FireCommandState extends PersistShape {
   /** Deploy a random preset from the factory bank. Returns what it picked. */
   randomPreset: () => FirePreset;
   /**
+   * Random Armory deploy: pick from the factory bank (optionally one
+   * category) and load it, but keep locked modules exactly as they are.
+   * Returns null when the filtered pool is empty.
+   */
+  deployArmoryPreset: (category?: string) => FirePreset | null;
+  /**
    * Morph pad (v1.6): push a blended patch into the synth. No history entry —
    * the pad takes ONE snapshot per gesture itself. commit=true also persists.
    */
@@ -702,15 +869,37 @@ export interface FireCommandState extends PersistShape {
   panic: () => void;
   setOctave: (octave: number) => void;
   shiftOctave: (delta: number) => void;
+  /** Live keyboard velocity gain (0.5–2.5). */
+  setKbdVelGain: (v: number) => void;
+  /** Live velocity power curve (<1 expands soft hits). */
+  setKbdVelCurve: (v: number) => void;
+  /** Live note schedule delay in ms. */
+  setKbdDelayMs: (v: number) => void;
+  /** Live amp-attack override in ms. */
+  setKbdAttackMs: (v: number) => void;
   setRouteThroughFx: (on: boolean) => void;
   setArp: (patch: Partial<ArpSettings>) => void;
+  setKeyboardMode: (m: FireKeyboardMode) => void;
+  cycleKeyboardMode: () => void;
+  /** Backward-compat alias — cycles full → strip → hidden → full. */
   toggleKeyboard: () => void;
+  setFireUiDensity: (d: FireUiDensity) => void;
+  enterFireFocusDensity: () => void;
+  exitFireFocusDensity: () => void;
+  setLabelMode: (m: FireLabelMode) => void;
+  setModuleLock: (moduleId: string, locked: boolean) => void;
+  toggleModuleLock: (moduleId: string) => void;
+  setAccordionMode: (on: boolean) => void;
+  toggleModulePin: (moduleId: string) => void;
+  isModuleLocked: (moduleId: string) => boolean;
   sync: () => void;
   setModuleEnable: (moduleId: string, on: boolean) => void;
   captureScene: (slot: number) => void;
   recallScene: (slot: number) => void;
   clearScene: (slot: number) => void;
   learnChordFromHeld: () => void;
+  setSignalPathOrder: (order: string[]) => void;
+  clearMutationGenealogy: () => void;
 }
 
 const genId = (): string =>
@@ -755,11 +944,20 @@ function harmonyCompanions(midi: number, mode: HarmonyMode): number[] {
 const harmonyHeld = new Map<number, number[]>();
 /** Chord-memory extras for matching note-offs. */
 const chordHeld = new Map<number, number[]>();
+/** Input midi → sounding pitch after scale-lock (stable noteOff target). */
+const livePitchHeld = new Map<number, number>();
+
+/** Clear live performance maps + UI held state (call with any all-notes-off). */
+function clearLiveNoteMaps(): void {
+  harmonyHeld.clear();
+  chordHeld.clear();
+  livePitchHeld.clear();
+}
 
 export const SCENE_SLOTS = 8;
 
 export const useFireCommandStore = create<FireCommandState>((set, get) => {
-  const persist = () => schedulePersist(get());
+  const persist = () => schedulePersist(get);
 
   /** Commit active `patch` into committed A/B slots (active target wins). */
   const commitActive = (activePatch?: FirePatch): { patchA: FirePatch; patchB: FirePatch } => {
@@ -867,6 +1065,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         mutateLineage: 0,
       });
       const fc = getEngine().fireCommand;
+      clearLiveNoteMaps();
       fc.allNotesOff();
       fc.setPatch(patch);
       if (arp.enabled) startArpScheduler(get, set);
@@ -890,6 +1089,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory();
       const s = get();
       const patch = randomPatch();
+      applyModuleLocks(patch, s.patch, s.moduleLocks);
+      applyLoudnessSafety(patch);
       const { patchA, patchB } = commitActive(patch);
       set({
         patch,
@@ -915,6 +1116,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
           : 1;
       const a = mutatePatch(parent, s.mutateAmount);
       const b = mutatePatch(parent, s.mutateAmount);
+      applyModuleLocks(a, parent, s.moduleLocks);
+      applyModuleLocks(b, parent, s.moduleLocks);
+      applyLoudnessSafety(a);
+      applyLoudnessSafety(b);
       const next = structuredClone(a);
       const { patchA, patchB } = commitActive(next);
       set({
@@ -956,7 +1161,13 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     commitMutation: () => {
       const m = get().mutation;
       if (!m) return;
-      set({ mutation: null, mutateLineage: m.generation });
+      // Genealogy records only KEPT generations — breeds that get discarded
+      // or re-bred never enter the trail.
+      const genealogy = [
+        ...(get().mutationGenealogy ?? []).slice(-11),
+        { generation: m.generation, kept: m.listening, at: Date.now() },
+      ];
+      set({ mutation: null, mutateLineage: m.generation, mutationGenealogy: genealogy });
       persist();
     },
 
@@ -1007,6 +1218,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         mutateLineage: 0,
       });
       const fc = getEngine().fireCommand;
+      clearLiveNoteMaps();
       fc.allNotesOff();
       fc.setPatch(patch);
       if (arp.enabled) startArpScheduler(get, set);
@@ -1014,17 +1226,41 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     randomPreset: () => {
+      return get().deployArmoryPreset() ?? FIRE_PRESETS[0];
+    },
+
+    deployArmoryPreset: (category) => {
       const s = get();
       const cur = s.editTarget === "b" ? s.presetIdB : s.presetId;
-      const pool = FIRE_PRESETS.filter((p) => p.id !== cur && p.id !== "init");
-      const preset = pool[Math.floor(Math.random() * pool.length)] ?? FIRE_PRESETS[0];
+      const pool = FIRE_PRESETS.filter(
+        (p) =>
+          p.id !== cur &&
+          p.id !== "init" &&
+          (!category || category === "all" || p.category === category),
+      );
+      const preset = pool[Math.floor(Math.random() * pool.length)];
+      if (!preset) return null;
+      // Snapshot the pre-deploy patch so locked modules survive the load.
+      const lockedFrom = structuredClone(s.patch);
+      const locks = s.moduleLocks;
       get().loadPreset(preset.id);
+      if (lockedModuleCount(locks) > 0) {
+        const s2 = get();
+        const merged = structuredClone(s2.patch);
+        applyModuleLocks(merged, lockedFrom, locks);
+        const { patchA, patchB } = commitActive(merged);
+        set({ patch: merged, patchA, patchB });
+        activeEngine().setPatch(merged);
+        persist();
+      }
       return preset;
     },
 
     applyMorphPatch: (patch, commit) => {
       if (!commit) {
-        activeEngine().setPatch(patch);
+        // Scrub path: push only dirty numeric (and changed discrete) keys so we
+        // don't rebuild the whole engine graph at 60 Hz via setPatch.
+        activeEngine().applyLiveMorph(patch);
         return;
       }
       const s = get();
@@ -1073,6 +1309,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         mutateLineage: 0,
       });
       const fc = getEngine().fireCommand;
+      clearLiveNoteMaps();
       fc.allNotesOff();
       fc.setPatch(patch);
       if (arp.enabled) startArpScheduler(get, set);
@@ -1130,7 +1367,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       if (s.heldNotes.length === 0 && s.arpOrder.length === 0) {
         void import("@/lib/sourceArbiter").then(({ claimSource }) => claimSource("fire"));
       }
-      useFireSequencerStore.getState().recordNoteOn(midi, velocity);
+      const shapedVel = shapeLiveVelocity(velocity, s.kbdVelGain, s.kbdVelCurve);
+      useFireSequencerStore.getState().recordNoteOn(midi, shapedVel);
       const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
       if (s.arp.enabled && arpModuleOn) {
         const freshLatch = s.arp.hold && s.heldNotes.length === 0;
@@ -1150,20 +1388,23 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         const seq = useFireSequencerStore.getState();
         playMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
       }
+      livePitchHeld.set(midi, playMidi);
 
-      let playVel = velocity;
+      let playVel = shapedVel;
       if (modOn("human") && s.patch.humanizeOn) {
         const j = (s.patch.humanizeVelocity ?? 0.2) * 0.35;
-        playVel = clamp(velocity * (1 + (Math.random() * 2 - 1) * j), 0.05, 1);
+        playVel = clamp(shapedVel * (1 + (Math.random() * 2 - 1) * j), 0.05, 1);
       }
 
-      engine.fireCommand.noteOn(playMidi, playVel);
+      const when = liveWhen(s.kbdDelayMs);
+      const attackSec = clamp(s.kbdAttackMs, 1, 80) / 1000;
+      engine.fireCommand.noteOn(playMidi, playVel, when, attackSec);
 
       const mode = s.patch.harmonyMode ?? "off";
       if (modOn("harmony") && mode !== "off" && !harmonyHeld.has(midi)) {
         const comps = harmonyCompanions(playMidi, mode).filter((c) => c <= 127);
         const lvl = clamp(s.patch.harmonyLevel ?? 0.6, 0, 1);
-        for (const c of comps) engine.fireCommand.noteOn(c, playVel * lvl);
+        for (const c of comps) engine.fireCommand.noteOn(c, playVel * lvl, when, attackSec);
         harmonyHeld.set(midi, comps);
       }
 
@@ -1173,7 +1414,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
           .filter((iv) => iv !== 0)
           .map((iv) => playMidi + iv)
           .filter((c) => c >= 0 && c <= 127);
-        for (const c of extras) engine.fireCommand.noteOn(c, playVel * 0.85);
+        for (const c of extras) engine.fireCommand.noteOn(c, playVel * 0.85, when, attackSec);
         chordHeld.set(midi, extras);
       }
 
@@ -1191,48 +1432,74 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         return;
       }
       const engine = getEngine();
-      let offMidi = midi;
-      if (s.patch.moduleEnable?.["scale"] !== false && s.patch.scaleLock) {
-        const seq = useFireSequencerStore.getState();
-        offMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
-      }
-      engine.fireCommand.noteOff(offMidi);
-      if (offMidi !== midi) engine.fireCommand.noteOff(midi);
+      const when = liveWhen(s.kbdDelayMs);
+      const offMidi = livePitchHeld.get(midi) ?? (() => {
+        if (s.patch.moduleEnable?.["scale"] !== false && s.patch.scaleLock) {
+          const seq = useFireSequencerStore.getState();
+          return snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
+        }
+        return midi;
+      })();
+      livePitchHeld.delete(midi);
+      engine.fireCommand.noteOff(offMidi, when);
+      if (offMidi !== midi) engine.fireCommand.noteOff(midi, when);
       const comps = harmonyHeld.get(midi);
       if (comps) {
         harmonyHeld.delete(midi);
-        for (const c of comps) engine.fireCommand.noteOff(c);
+        for (const c of comps) engine.fireCommand.noteOff(c, when);
       }
       const chord = chordHeld.get(midi);
       if (chord) {
         chordHeld.delete(midi);
-        for (const c of chord) engine.fireCommand.noteOff(c);
+        for (const c of chord) engine.fireCommand.noteOff(c, when);
       }
       set({ heldNotes: s.heldNotes.filter((n) => n !== midi) });
     },
 
     panic: () => {
-      const s = get();
-      if (s.editTarget === "b") {
-        getEngine().fireCommandB.allNotesOff();
-        return;
-      }
       stopArpScheduler();
-      harmonyHeld.clear();
-      chordHeld.clear();
-      getEngine().fireCommand.allNotesOff();
+      clearLiveNoteMaps();
+      const engine = getEngine();
+      engine.fireCommand.allNotesOff();
+      engine.peekFireCommandB()?.allNotesOff();
       set({ heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
-      if (get().arp.enabled) startArpScheduler(get, set);
+      // Re-arm latch arp if still enabled (empty order parks until next note).
+      if (get().arp.enabled && get().patch.moduleEnable?.["arp"] !== false) {
+        startArpScheduler(get, set);
+      }
     },
 
     setOctave: (octave) => {
       const o = clamp(octave, 0, 8);
+      stopArpScheduler();
+      clearLiveNoteMaps();
       getEngine().fireCommand.allNotesOff();
+      getEngine().peekFireCommandB()?.allNotesOff();
       set({ octave: o, heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
+      if (get().arp.enabled && get().patch.moduleEnable?.["arp"] !== false) {
+        startArpScheduler(get, set);
+      }
       persist();
     },
 
     shiftOctave: (delta) => get().setOctave(get().octave + delta),
+
+    setKbdVelGain: (v) => {
+      set({ kbdVelGain: clamp(v, 0.5, 2.5) });
+      persist();
+    },
+    setKbdVelCurve: (v) => {
+      set({ kbdVelCurve: clamp(v, 0.35, 1.8) });
+      persist();
+    },
+    setKbdDelayMs: (v) => {
+      set({ kbdDelayMs: clamp(v, 0, 50) });
+      persist();
+    },
+    setKbdAttackMs: (v) => {
+      set({ kbdAttackMs: clamp(v, 1, 80) });
+      persist();
+    },
 
     setRouteThroughFx: (on) => {
       set({ routeThroughFx: on });
@@ -1260,10 +1527,72 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       persist();
     },
 
-    toggleKeyboard: () => {
-      set({ keyboardMinimized: !get().keyboardMinimized });
+    setKeyboardMode: (m) => {
+      set({ keyboardMode: m });
       persist();
     },
+
+    cycleKeyboardMode: () => {
+      const order: FireKeyboardMode[] = ["full", "strip", "hidden"];
+      const cur = get().keyboardMode;
+      const next = order[(order.indexOf(cur) + 1) % order.length];
+      set({ keyboardMode: next });
+      persist();
+    },
+
+    toggleKeyboard: () => get().cycleKeyboardMode(),
+
+    setFireUiDensity: (d) => {
+      set({ fireUiDensity: d });
+      persist();
+    },
+
+    enterFireFocusDensity: () => {
+      const s = get();
+      if (s.fireUiDensity === "focus") return;
+      set({ fireUiDensityBeforeFocus: s.fireUiDensity, fireUiDensity: "focus" });
+      persist();
+    },
+
+    exitFireFocusDensity: () => {
+      const s = get();
+      if (s.fireUiDensity !== "focus") return;
+      set({ fireUiDensity: s.fireUiDensityBeforeFocus });
+      persist();
+    },
+
+    setLabelMode: (m) => {
+      set({ labelMode: m });
+      persist();
+    },
+
+    setModuleLock: (moduleId, locked) => {
+      set({ moduleLocks: { ...get().moduleLocks, [moduleId]: locked } });
+      persist();
+    },
+
+    toggleModuleLock: (moduleId) => {
+      const locks = { ...get().moduleLocks };
+      locks[moduleId] = !locks[moduleId];
+      set({ moduleLocks: locks });
+      persist();
+    },
+
+    setAccordionMode: (on) => {
+      set({ accordionMode: on });
+      persist();
+    },
+
+    toggleModulePin: (moduleId) => {
+      const pins = get().pinnedModules;
+      const next = pins.includes(moduleId)
+        ? pins.filter((id) => id !== moduleId)
+        : [...pins, moduleId];
+      set({ pinnedModules: next });
+      persist();
+    },
+
+    isModuleLocked: (moduleId) => !!get().moduleLocks[moduleId],
 
     sync: () => {
       const s = get();
@@ -1350,6 +1679,16 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       get().setParam("chordIntervals", chordIntervals);
       get().setParam("chordMemoryOn", true);
     },
+
+    setSignalPathOrder: (order) => {
+      set({ signalPathOrder: [...order] });
+      persist();
+    },
+
+    clearMutationGenealogy: () => {
+      set({ mutationGenealogy: [] });
+      persist();
+    },
   };
 });
 
@@ -1357,6 +1696,8 @@ registerFireHistoryProvider("fireCommand", {
   capture: () => {
     const s = useFireCommandStore.getState();
     const { patchA, patchB } = slotsFromState(s);
+    // Omit userPresets — they are not undoable edits and cloning the full
+    // user bank on every knob coalescence is the main history cost spike.
     return {
       patch: patchA,
       patchA,
@@ -1365,7 +1706,6 @@ registerFireHistoryProvider("fireCommand", {
       presetId: s.presetId,
       presetIdB: s.presetIdB,
       editTarget: s.editTarget,
-      userPresets: s.userPresets,
       maxVoices: s.maxVoices,
     };
   },
@@ -1376,6 +1716,7 @@ registerFireHistoryProvider("fireCommand", {
     const editTarget: EditTarget = raw.editTarget === "b" ? "b" : "a";
     const patch = structuredClone(editTarget === "b" ? patchB : patchA);
     stopArpScheduler();
+    clearLiveNoteMaps();
     useFireCommandStore.setState({
       patch,
       patchA,
@@ -1384,8 +1725,9 @@ registerFireHistoryProvider("fireCommand", {
       presetId: raw.presetId ?? "init",
       presetIdB: typeof raw.presetIdB === "string" ? raw.presetIdB : "hyperspace",
       editTarget,
-      userPresets: Array.isArray(raw.userPresets) ? raw.userPresets : [],
+      // Keep the live user bank — history never owned it.
       maxVoices: typeof raw.maxVoices === "number" ? raw.maxVoices : 12,
+      heldNotes: [],
       arpOrder: [],
       arpCurrent: null,
       arpStepIndex: -1,
@@ -1404,6 +1746,6 @@ registerFireHistoryProvider("fireCommand", {
         (p) => useFireCommandStore.setState(p),
       );
     }
-    schedulePersist(s);
+    schedulePersist(useFireCommandStore.getState);
   },
 });

@@ -3,19 +3,20 @@
  * Spin the chamber, optionally lock to a category, land on a factory voice.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useFireCommandStore,
   FIRE_PRESETS,
   PRESET_CATEGORIES,
 } from "@/state/fireCommandStore";
+import { lockedModuleCount } from "@/lib/fireModuleLocks";
 import { useUIStore } from "@/state/uiStore";
 
-function DiceMark({ spinning }: { spinning: boolean }) {
+function DiceMark({ spinning, size = 22 }: { spinning: boolean; size?: number }) {
   return (
     <svg
-      width="22"
-      height="22"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       aria-hidden
@@ -43,13 +44,20 @@ function DiceMark({ spinning }: { spinning: boolean }) {
 
 const SCOPES = ["all", ...PRESET_CATEGORIES] as const;
 
-export function RandomizeCluster() {
+export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
   const presetId = useFireCommandStore((s) => s.presetId);
-  const loadPreset = useFireCommandStore((s) => s.loadPreset);
+  const moduleLocks = useFireCommandStore((s) => s.moduleLocks);
+  const lockedCount = lockedModuleCount(moduleLocks);
   const toast = useUIStore((s) => s.toast);
   const [scope, setScope] = useState<string>("all");
   const [spinning, setSpinning] = useState(false);
   const [last, setLast] = useState<{ name: string; category: string } | null>(null);
+  const timeoutsRef = useRef<number[]>([]);
+
+  useEffect(() => () => {
+    for (const id of timeoutsRef.current) window.clearTimeout(id);
+    timeoutsRef.current = [];
+  }, []);
 
   const poolSize = useMemo(() => {
     return FIRE_PRESETS.filter(
@@ -61,26 +69,81 @@ export function RandomizeCluster() {
   }, [presetId, scope]);
 
   const deploy = () => {
-    const pool = FIRE_PRESETS.filter(
-      (p) =>
-        p.id !== presetId &&
-        p.id !== "init" &&
-        (scope === "all" || p.category === scope),
-    );
-    if (pool.length === 0) {
+    if (poolSize === 0) {
       toast("Armory empty for that filter — try All");
       return;
     }
     setSpinning(true);
     // Brief spin so the dice animation can read, then land.
-    window.setTimeout(() => {
-      const preset = pool[Math.floor(Math.random() * pool.length)];
-      loadPreset(preset.id);
+    timeoutsRef.current.push(window.setTimeout(() => {
+      // Store-side deploy keeps locked modules untouched.
+      const preset = useFireCommandStore.getState().deployArmoryPreset(scope);
+      if (!preset) {
+        setSpinning(false);
+        toast("Armory empty for that filter — try All");
+        return;
+      }
       setLast({ name: preset.name, category: preset.category });
-      toast(`🎲 Deployed: ${preset.name} · ${preset.category}`);
-      window.setTimeout(() => setSpinning(false), 120);
-    }, 280);
+      toast(
+        `🎲 Deployed: ${preset.name} · ${preset.category}${
+          lockedCount > 0 ? ` · ${lockedCount} locked kept` : ""
+        }`,
+      );
+      timeoutsRef.current.push(window.setTimeout(() => setSpinning(false), 120));
+    }, 280));
   };
+
+  if (compact) {
+    return (
+      <div className="relative flex w-full flex-col justify-center gap-1.5 min-w-0 min-h-[56px]">
+        <div className="flex items-center gap-2 min-w-0 h-8">
+          <DiceMark spinning={spinning} size={18} />
+          <div className="min-w-0 flex-1">
+            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-[#ffc9b0] leading-none">
+              Random Armory
+            </div>
+            <div
+              className="text-[9px] text-white/40 truncate leading-none mt-0.5"
+              title={last ? `${last.name} · ${last.category}` : "Spin the chamber — chance draw"}
+            >
+              {spinning
+                ? "Spinning the chamber…"
+                : last
+                  ? `Hit: ${last.name}${lockedCount > 0 ? ` · ${lockedCount} locked` : ""}`
+                  : `Feel lucky? · ${poolSize} in the chamber${lockedCount > 0 ? ` · ${lockedCount} locked` : ""}`}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 min-w-0 h-8">
+          <button
+            onClick={deploy}
+            disabled={spinning}
+            className="group h-8 flex-1 min-w-0 rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.1em] text-[#ffe8dc] transition disabled:opacity-70 bg-[#ff6a3d]/28 hover:bg-[#ff6a3d]/42 ring-1 ring-[#ff6a3d]/50 shadow-[0_0_14px_rgba(255,106,61,0.2)]"
+            title="Deploy a random factory preset from the armory"
+          >
+            <span className="inline-flex items-center justify-center gap-1.5">
+              <span className={spinning ? "animate-[dice-tumble_0.65s_ease-in-out]" : "group-hover:animate-[dice-tumble_0.65s_ease-in-out]"} aria-hidden>
+                🎲
+              </span>
+              {spinning ? "Rolling…" : "Randomize"}
+            </span>
+          </button>
+          <select
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+            className="h-8 w-[5.75rem] rounded-md bg-black/35 px-1.5 text-[10px] text-white/75 outline-none ring-1 ring-white/10 shrink-0"
+            title="Limit the random draw to one preset category"
+          >
+            {SCOPES.map((c) => (
+              <option key={c} value={c}>
+                {c === "all" ? "All" : c}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -108,8 +171,8 @@ export function RandomizeCluster() {
         <div className="flex items-center gap-1.5">
           <DiceMark spinning={spinning} />
           <div className="min-w-0">
-            <div className="text-[9px] font-black uppercase tracking-[0.2em] text-[#ffd9c9] leading-none">
-              Armory Deploy
+            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-[#ffd9c9] leading-none">
+              Random Armory
             </div>
             <div className="text-[9px] text-[#ffbfa0]/50 mt-0.5 truncate">
               {last
@@ -128,7 +191,7 @@ export function RandomizeCluster() {
           title="Deploy a random factory preset from the armory (optionally filtered by category)"
         >
           <span className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,217,201,0.35),transparent_55%)] opacity-70 group-hover:opacity-100 transition" />
-          <span className="relative">{spinning ? "Deploying…" : "Randomize · Deploy"}</span>
+          <span className="relative">{spinning ? "Deploying…" : "Randomize"}</span>
         </button>
 
         <div className="flex items-center gap-1.5">
@@ -145,6 +208,12 @@ export function RandomizeCluster() {
               </option>
             ))}
           </select>
+          <span
+            className="shrink-0 text-[8px] font-mono uppercase tracking-[0.12em] text-[#ff9a6b]/75"
+            title={lockedCount > 0 ? `${lockedCount} module(s) locked from mutation/random` : "No modules locked"}
+          >
+            LOCKED {lockedCount}
+          </span>
         </div>
       </div>
 

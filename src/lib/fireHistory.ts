@@ -87,6 +87,10 @@ function restoreAll(snap: Snapshot): void {
  * mutating action, before the change. Passing the same `coalesceKey`
  * within 500 ms skips the push, so per-mousemove knob/note drags cost one
  * history entry (the pre-drag state) instead of hundreds.
+ *
+ * Capture runs via queueMicrotask when coalescing starts a new key, so the
+ * first move of a drag stays cheap on the pointer path; non-coalesced pushes
+ * still capture synchronously (needed for correctness before the mutation).
  */
 export function pushFireHistory(coalesceKey?: string): void {
   const now = performance.now();

@@ -9,15 +9,18 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
 import { ensureExpanded, jumpToModule } from "./fireNavigate";
+import { registerFireFocusBridge, useFireMidiFocusStore } from "@/state/fireMidiFocusStore";
+import { FIRE_FOCUS_RING } from "./fireKnobFocus";
 
 type FireLayoutValue = {
   focusId: FireModuleId | null;
-  enterFocus: (moduleId: FireModuleId) => void;
+  enterFocus: (moduleId: FireModuleId, opts?: { density?: boolean }) => void;
   exitFocus: () => void;
   jump: (moduleId: FireModuleId) => void;
   isFocused: (moduleId: string | undefined) => boolean;
@@ -29,37 +32,74 @@ const FireLayoutContext = createContext<FireLayoutValue | null>(null);
 
 export function FireLayoutProvider({ children }: { children: ReactNode }) {
   const [focusId, setFocusId] = useState<FireModuleId | null>(null);
+  const focusIdRef = useRef<FireModuleId | null>(null);
+  focusIdRef.current = focusId;
+
+  // Pending scroll choreography — cancelled on unmount so nothing fires late.
+  const pendingRafsRef = useRef<number[]>([]);
+  const pendingTimeoutsRef = useRef<number[]>([]);
+  useEffect(() => () => {
+    for (const id of pendingRafsRef.current) window.cancelAnimationFrame(id);
+    for (const id of pendingTimeoutsRef.current) window.clearTimeout(id);
+    pendingRafsRef.current = [];
+    pendingTimeoutsRef.current = [];
+  }, []);
 
   const jump = useCallback((moduleId: FireModuleId) => {
     jumpToModule(moduleId);
   }, []);
 
-  const enterFocus = useCallback((moduleId: FireModuleId) => {
+  const enterFocus = useCallback((moduleId: FireModuleId, opts?: { density?: boolean }) => {
     const entry = FIRE_MODULE_BY_ID.get(moduleId);
     if (!entry) return;
     ensureExpanded(entry.bandKey);
     ensureExpanded(moduleId);
     setFocusId(moduleId);
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        window.setTimeout(() => jumpToModule(moduleId), 48);
+    // Keep MPK Focus ring aligned when Solo is entered from the deck / map.
+    const ringIdx = FIRE_FOCUS_RING.findIndex((m) => m.id === moduleId);
+    if (ringIdx >= 0) {
+      useFireMidiFocusStore.setState({ index: ringIdx, bankPage: 0 });
+    }
+    // Auto-offer Focus density on explicit Solo actions. MIDI ring nav opts
+    // out — twisting PROG on an MPK must not collapse the whole console.
+    if (opts?.density !== false) {
+      void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
+        useFireCommandStore.getState().enterFireFocusDensity();
       });
-    });
+    }
+    pendingRafsRef.current.push(window.requestAnimationFrame(() => {
+      pendingRafsRef.current.push(window.requestAnimationFrame(() => {
+        pendingTimeoutsRef.current.push(window.setTimeout(() => jumpToModule(moduleId), 48));
+      }));
+    }));
   }, []);
 
   const exitFocus = useCallback(() => {
     setFocusId(null);
+    void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
+      useFireCommandStore.getState().exitFireFocusDensity();
+    });
   }, []);
 
+  // Let MPK Focus MIDI drive Solo Mode (without hijacking UI density).
+  useEffect(() => {
+    registerFireFocusBridge({
+      enterFocus: (moduleId) => enterFocus(moduleId as FireModuleId, { density: false }),
+      exitFocus,
+    });
+    return () => registerFireFocusBridge(null);
+  }, [enterFocus, exitFocus]);
+
   // Esc exits Focus / Solo mode from anywhere in Fire Command.
+  // Routes through exitFocus so the auto-entered Focus density restores too.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      setFocusId((cur) => (cur ? null : cur));
+      if (focusIdRef.current) exitFocus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [exitFocus]);
 
   const isFocused = useCallback(
     (moduleId: string | undefined) => !!focusId && !!moduleId && focusId === moduleId,

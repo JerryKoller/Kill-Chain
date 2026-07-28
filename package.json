@@ -1,6 +1,6 @@
 {
   "name": "audio-playground",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Kill Chain — a universal Windows audio engine for headphones, speakers, and home theater.",
   "author": "Jerry",
   "private": true,
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@breezystack/lamejs": "^1.2.7",
+    "@julusian/midi": "^3.7.2",
     "framer-motion": "^11.11.7",
     "music-metadata": "^11.13.0",
     "react": "^18.3.1",
@@ -58,8 +59,16 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "node_modules/@julusian/midi/**/*",
+      "node_modules/pkg-prebuilds/**/*",
+      "node_modules/node-addon-api/**/*",
+      "node_modules/tslib/**/*",
       "!**/*.map",
-      "!node_modules/**/*"
+      "!node_modules/**/{test,tests,__tests__,docs,doc,example,examples}/**"
+    ],
+    "asarUnpack": [
+      "node_modules/@julusian/midi/**/*.node",
+      "node_modules/@julusian/midi/prebuilds/**"
     ],
     "win": {
       "icon": "build/icon.ico",

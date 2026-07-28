@@ -11,9 +11,11 @@ const HOME_COLOR = "#ffbfa0";
 export function FireSynthBandTabs({
   band,
   onChange,
+  flush = false,
 }: {
   band: FireSynthBand;
   onChange: (b: FireSynthBand) => void;
+  flush?: boolean;
 }) {
   const items = [
     { id: "home" as const, label: "Home", color: HOME_COLOR, title: "Home — Signal Path and All Modules map" },
@@ -40,6 +42,7 @@ export function FireSynthBandTabs({
       hint={active.hint}
       hintDetail={active.detail}
       size="sm"
+      flush={flush}
     />
   );
 }

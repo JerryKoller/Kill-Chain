@@ -7,11 +7,11 @@ import { useEffect, useState } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
 
-function HelixMark({ active }: { active: boolean }) {
+function HelixMark({ active, size = 22 }: { active: boolean; size?: number }) {
   return (
     <svg
-      width="22"
-      height="22"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       aria-hidden
@@ -55,10 +55,12 @@ function pressureLabel(amount: number): string {
   return "Cambrian burst";
 }
 
-export function MutateCluster() {
+export function MutateCluster({ compact = false }: { compact?: boolean }) {
   const mutation = useFireCommandStore((s) => s.mutation);
   const lineage = useFireCommandStore((s) => s.mutateLineage);
   const amount = useFireCommandStore((s) => s.mutateAmount);
+  const genealogy = useFireCommandStore((s) => s.mutationGenealogy);
+  const clearGenealogy = useFireCommandStore((s) => s.clearMutationGenealogy);
   const toast = useUIStore((s) => s.toast);
   const act = useFireCommandStore.getState;
   const [flash, setFlash] = useState(false);
@@ -71,6 +73,7 @@ export function MutateCluster() {
   }, [mutation?.generation]);
 
   const displayGen = mutation?.generation ?? (lineage > 0 ? lineage : null);
+  const trail = (genealogy ?? []).slice(-4);
 
   const breed = () => {
     act().mutate();
@@ -81,6 +84,114 @@ export function MutateCluster() {
         : "🧬 Two mutations bred — A is playing. Tap B to compare, Keep to evolve.",
     );
   };
+
+  const genealogyTrail = trail.length > 0 && (
+    <div className="flex items-center gap-1 min-w-0 flex-wrap">
+      {trail.map((g) => (
+        <span
+          key={`${g.generation}-${g.at}`}
+          className="rounded px-1 py-0.5 text-[8px] font-mono uppercase tracking-wider text-emerald-200/70 bg-emerald-400/10 ring-1 ring-emerald-400/25"
+          title={`Gen ${g.generation} kept ${g.kept.toUpperCase()}`}
+        >
+          Gen{g.generation}→{g.kept.toUpperCase()}
+        </span>
+      ))}
+      {typeof clearGenealogy === "function" && (
+        <button
+          type="button"
+          onClick={() => clearGenealogy()}
+          className="rounded px-1 py-0.5 text-[8px] uppercase tracking-wider text-white/35 hover:text-white/70 ring-1 ring-white/10"
+          title="Clear mutation genealogy trail"
+        >
+          Clear
+        </button>
+      )}
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <div className="relative flex w-full flex-col justify-center gap-1.5 min-w-0 min-h-[56px]">
+        <div className="flex items-center gap-2 min-w-0 h-8">
+          <HelixMark active={!!mutation || flash} size={18} />
+          <div className="min-w-0 flex-1">
+            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-200/90 leading-none">
+              Natural Selection
+            </div>
+            <div className="text-[9px] text-white/40 truncate leading-none mt-0.5">
+              {mutation
+                ? `Gen ${mutation.generation} live — pick a survivor`
+                : `${pressureLabel(amount)} · ${Math.round(amount * 100)}% · evolve or die`}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 min-w-0 h-8">
+          <button
+            onClick={breed}
+            className={`h-8 px-3 rounded-md text-[10px] font-black uppercase tracking-[0.1em] transition shrink-0 ${
+              mutation
+                ? "bg-emerald-400/30 text-emerald-50 ring-1 ring-emerald-300/55 shadow-[0_0_14px_rgba(52,211,153,0.22)]"
+                : "bg-emerald-500/18 text-emerald-100 hover:bg-emerald-500/28 ring-1 ring-emerald-400/40"
+            }`}
+            title="Breed two offspring of the current sound"
+          >
+            {mutation ? "Breed" : "Mutate"}
+          </button>
+          <span className="text-[8px] uppercase tracking-wider text-white/30 shrink-0">Mild</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={amount}
+            onChange={(e) => act().setMutateAmount(Number(e.target.value))}
+            className="min-w-0 flex-1 h-1.5 cursor-pointer accent-emerald-400"
+            aria-label="Mutation pressure"
+            title={`Mutation pressure: ${Math.round(amount * 100)}%`}
+          />
+          <span className="text-[8px] uppercase tracking-wider text-white/30 shrink-0">Wild</span>
+          {mutation && (
+            <div className="flex items-center gap-1 shrink-0 pl-1.5 ml-0.5 border-l border-white/10">
+              {(["a", "b"] as const).map((w) => (
+                <button
+                  key={w}
+                  onClick={() => act().auditionMutation(w)}
+                  className={`h-8 w-8 rounded-md text-[10px] font-black ${
+                    mutation.listening === w
+                      ? "bg-emerald-400/35 text-emerald-50 ring-1 ring-emerald-200/60"
+                      : "bg-black/30 text-white/45 ring-1 ring-white/10 hover:text-white/80"
+                  }`}
+                  title={`Audition ${w.toUpperCase()}`}
+                >
+                  {w.toUpperCase()}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  act().commitMutation();
+                  toast(`✓ Kept ${mutation.listening.toUpperCase()} — lineage Gen ${mutation.generation}.`);
+                }}
+                className="h-8 px-2 rounded-md text-[9px] font-black uppercase text-lime-100 bg-lime-400/20 ring-1 ring-lime-300/50"
+                title="Keep winner"
+              >
+                Keep
+              </button>
+              <button
+                onClick={() => {
+                  act().discardMutation();
+                  toast("↩ Round discarded — parent patch restored");
+                }}
+                className="h-8 w-8 rounded-md text-[10px] text-white/45 hover:text-white/80 bg-black/25 ring-1 ring-white/10"
+                title="Discard round — restore the parent patch"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -114,6 +225,8 @@ export function MutateCluster() {
               </div>
             </div>
           </div>
+
+          {genealogyTrail}
 
           <button
             onClick={breed}
@@ -198,7 +311,7 @@ export function MutateCluster() {
                   toast("↩ Round discarded — parent patch restored");
                 }}
                 className="h-7 rounded-lg border border-white/12 bg-white/[0.04] hover:bg-white/10 px-1.5 text-[8px] uppercase tracking-[0.08em] text-white/50 hover:text-white/80 transition"
-                title="Discard both offspring and restore the parent"
+                title="Discard round — restore the parent patch"
               >
                 Extinct
               </button>

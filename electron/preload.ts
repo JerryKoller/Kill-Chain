@@ -191,6 +191,37 @@ const bridge = {
       webgl: string;
     }> => ipcRenderer.invoke("system:gpuInfo"),
   },
+
+  /**
+   * Native WinMM MIDI (main process). Prefer this over Web MIDI on Windows —
+   * same stack FL Studio uses; survives Chromium WinRT hangs / empty lists.
+   */
+  midi: {
+    list: (): Promise<{
+      ok: boolean;
+      inputs: { id: string; name: string; port: number }[];
+      started: boolean;
+      error: string | null;
+    }> => ipcRenderer.invoke("midi:list"),
+    start: (): Promise<{
+      ok: boolean;
+      inputs: { id: string; name: string; port: number }[];
+      started: boolean;
+      error: string | null;
+    }> => ipcRenderer.invoke("midi:start"),
+    stop: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("midi:stop"),
+    rescan: (): Promise<{
+      ok: boolean;
+      inputs: { id: string; name: string; port: number }[];
+      started: boolean;
+      error: string | null;
+    }> => ipcRenderer.invoke("midi:rescan"),
+    onMessage: (cb: (msg: { id: string; name: string; bytes: number[] }) => void) => {
+      const handler = (_e: unknown, msg: { id: string; name: string; bytes: number[] }) => cb(msg);
+      ipcRenderer.on("midi:message", handler);
+      return () => ipcRenderer.removeListener("midi:message", handler);
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld("playground", bridge);

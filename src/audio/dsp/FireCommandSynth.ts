@@ -561,6 +561,8 @@ class Voice {
   releasing = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
+  /** Optional live keyboard attack override (seconds). */
+  private liveAttackSec: number | null = null;
 
   constructor(
     private readonly synth: FireCommandSynth,
@@ -575,9 +577,13 @@ class Voice {
     velocity: number,
     /** Optional future start time (ctx clock) for sample-accurate sequencing. */
     when?: number,
+    liveAttackSec?: number,
   ) {
     this.midi = midi;
     this.velocity = velocity;
+    this.liveAttackSec = liveAttackSec != null && Number.isFinite(liveAttackSec)
+      ? Math.max(0.001, liveAttackSec)
+      : null;
     this.baseFreq = midiToFreq(midi);
     this.unisonCount = Math.round(clamp(p.unison, 1, MAX_UNISON));
     this.uNorm = 1 / Math.sqrt(this.unisonCount);
@@ -863,9 +869,12 @@ class Voice {
     } else {
       const jitter = clamp(p.envVariance ?? 0, 0, 1);
       const j = (base: number) => Math.max(0.001, base * (1 + (Math.random() * 2 - 1) * jitter * 0.95));
-      const ampAtk = j(p.ampAttack);
+      // Live keyboard attack override (tight feel) — sequencer notes leave this null.
+      const ampAtk = this.liveAttackSec != null ? this.liveAttackSec : j(p.ampAttack);
       const ampDec = j(p.ampDecay);
-      const filtAtk = j(p.filtAttack);
+      const filtAtk = this.liveAttackSec != null
+        ? Math.min(j(p.filtAttack), Math.max(0.002, this.liveAttackSec * 1.25))
+        : j(p.filtAttack);
       const filtDec = j(p.filtDecay);
       this.ampEnv.offset.cancelScheduledValues(t);
       this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
@@ -949,8 +958,18 @@ class Voice {
     this.ampEnv.offset.cancelScheduledValues(t);
     this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
     this.ampEnv.offset.setTargetAtTime(0, t, 0.006);
+    // Audio-clock hard stop so background-tab timer throttling can't leave
+    // stolen oscillators rendering for seconds as zombies.
+    const hardAt = t + 0.045;
+    const srcs: AudioScheduledSourceNode[] = [
+      ...this.allOscs(), this.sub, this.fmOsc, this.noise,
+      this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
+    ];
+    for (const n of srcs) {
+      try { n.stop(hardAt); } catch { /* already stopped / not started */ }
+    }
     if (this.endTimer) clearTimeout(this.endTimer);
-    this.endTimer = setTimeout(() => this.forceStop(), 40);
+    this.endTimer = setTimeout(() => this.forceStop(), 50);
   }
 
   forceStop(): void {
@@ -1217,6 +1236,10 @@ export class FireCommandSynth {
   private irTimer: ReturnType<typeof setTimeout> | null = null;
   private lastIrKey = "";
   private lastPredelay = -1;
+  private lastDriveKey = "";
+  private lastCrushBits = -1;
+  private lastSpectralMsg = "";
+  private lastBusVoiceSyncKey = "";
   private sh1Step = -1; private sh1Val = 0;
   private sh2Step = -1; private sh2Val = 0;
   private mtxRandStep = -1; private mtxRandVal = 0;
@@ -1766,11 +1789,21 @@ export class FireCommandSynth {
 
     if (p.lfo1Wave === "sample-hold") {
       const step = Math.floor(now * clamp(p.lfo1Rate, 0.01, 40));
-      if (step !== this.sh1Step) { this.sh1Step = step; this.sh1Val = Math.random() * 2 - 1; this.lfo1.sh.offset.setValueAtTime(this.sh1Val, now); }
+      if (step !== this.sh1Step) {
+        this.sh1Step = step;
+        this.sh1Val = Math.random() * 2 - 1;
+        this.lfo1.sh.offset.cancelScheduledValues(now);
+        this.lfo1.sh.offset.setValueAtTime(this.sh1Val, now);
+      }
     }
     if (p.lfo2Wave === "sample-hold") {
       const step = Math.floor(now * clamp(p.lfo2Rate, 0.01, 40));
-      if (step !== this.sh2Step) { this.sh2Step = step; this.sh2Val = Math.random() * 2 - 1; this.lfo2.sh.offset.setValueAtTime(this.sh2Val, now); }
+      if (step !== this.sh2Step) {
+        this.sh2Step = step;
+        this.sh2Val = Math.random() * 2 - 1;
+        this.lfo2.sh.offset.cancelScheduledValues(now);
+        this.lfo2.sh.offset.setValueAtTime(this.sh2Val, now);
+      }
     }
     // Matrix random source — a stepped sample/hold independent of the LFOs.
     const rstep = Math.floor(now * 6);
@@ -1977,8 +2010,9 @@ export class FireCommandSynth {
   }
 
   // ── notes ──
-  /** `when` (ctx clock) enables sample-accurate sequencing; omit for live play. */
-  noteOn(midi: number, velocity = 0.9, when?: number): void {
+  /** `when` (ctx clock) enables sample-accurate sequencing; omit for live play.
+   *  `liveAttackSec` tightens amp/filter attack for keyboard / MIDI only. */
+  noteOn(midi: number, velocity = 0.9, when?: number, liveAttackSec?: number): void {
     this.startModTimer();
     const p = this.patch;
     const t = Math.max(this.ctx.currentTime, when ?? this.ctx.currentTime);
@@ -1995,9 +2029,16 @@ export class FireCommandSynth {
     }
     const cap = this.effectiveMaxVoices(p);
     while (this.voices.size >= cap) this.stealOldest();
+    // Re-trigger of the same MIDI must release the previous voice or it orphans.
+    const prev = this.held.get(midi);
+    if (prev && !p.mono) {
+      this.held.delete(midi);
+      prev.fastRelease();
+    }
     const voice = new Voice(
       this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
       this.bankFor(p.oscATable), this.bankFor(p.oscBTable), this.bankFor(p.oscCTable), p, midi, velocity, when,
+      liveAttackSec,
     );
     this.voices.add(voice);
     this.held.set(midi, voice);
@@ -2099,13 +2140,14 @@ export class FireCommandSynth {
       if (!oldest || v.startedAt < oldest.startedAt) oldest = v;
     }
     if (!oldest) for (const v of this.voices) if (!oldest || v.startedAt < oldest.startedAt) oldest = v;
-    if (oldest) oldest.fastRelease();
-    // fastRelease schedules removal; nudge the set so the while-loop can exit
-    // even before the timer fires by removing it from held tracking.
-    if (oldest) {
-      for (const [k, vv] of this.held) if (vv === oldest) this.held.delete(k);
-      this.voices.delete(oldest);
-    }
+    if (!oldest) return;
+    for (const [k, vv] of this.held) if (vv === oldest) this.held.delete(k);
+    // Remove from the poly set immediately so steal loops can exit; fastRelease
+    // now also schedules AudioParam/source stop() on the audio clock so
+    // wall-clock timer throttling can't leave zombies rendering.
+    this.voices.delete(oldest);
+    oldest.fastRelease();
+    this.updatePolyGain();
   }
 
   // ── patch ──
@@ -2116,6 +2158,10 @@ export class FireCommandSynth {
     // with legacy-exact behavior instead of undefined params.
     this.patch = { ...DEFAULT_FIRE_PATCH, ...p };
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
+    this.lastDriveKey = "";
+    this.lastCrushBits = -1;
+    this.lastSpectralMsg = "";
+    this.lastBusVoiceSyncKey = "";
     this.recomputeMatrix();
     this.applyBusParams(this.patch);
     this.applyLfoParams(this.patch);
@@ -2131,6 +2177,56 @@ export class FireCommandSynth {
       v.applyFm(this.patch);
       v.applyUnisonSpread(this.patch);
       v.clearMod();
+    }
+  }
+
+  /**
+   * Morph-pad scrub: update engine from a blended patch without the full
+   * setPatch rebuild (wavetable banks / matrix digest / every-frame alloc).
+   * Batches into a single bus+voice refresh instead of N× set() storms.
+   */
+  applyLiveMorph(next: FirePatch): void {
+    this.startModTimer();
+    const cur = this.patch;
+    const merged: FirePatch = { ...cur };
+    let changed = false;
+    let tablesChanged = false;
+    const keys = Object.keys(DEFAULT_FIRE_PATCH) as (keyof FirePatch)[];
+    for (const key of keys) {
+      const a = cur[key];
+      const b = next[key];
+      if (a === b) continue;
+      if (typeof a === "number" && typeof b === "number") {
+        if (Math.abs(a - b) < 1e-5) continue;
+        (merged as unknown as Record<string, unknown>)[key as string] = b;
+        changed = true;
+        continue;
+      }
+      // Skip object fields (modMatrix, moduleEnable, gatePattern…) during scrub —
+      // morph snaps those from the nearest corner only on commit via setPatch.
+      if (b !== null && typeof b === "object") continue;
+      (merged as unknown as Record<string, unknown>)[key as string] = b;
+      changed = true;
+      if (key === "oscATable" || key === "oscBTable" || key === "oscCTable" || key === "subWave") {
+        tablesChanged = true;
+      }
+    }
+    if (!changed) return;
+    this.patch = merged;
+    this.applyBusParams(merged);
+    this.applyLfoParams(merged);
+    for (const v of this.voices) {
+      if (tablesChanged) {
+        if (merged.oscATable !== cur.oscATable) v.setBankA(this.bankFor(merged.oscATable));
+        if (merged.oscBTable !== cur.oscBTable) v.setBankB(this.bankFor(merged.oscBTable));
+        if (merged.oscCTable !== cur.oscCTable) v.setBankC(this.bankFor(merged.oscCTable));
+        if (merged.subWave !== cur.subWave) v.setSubWave(merged.subWave);
+      }
+      v.setOscLevels(merged);
+      v.setFilterLive(merged);
+      v.applyFm(merged);
+      v.applyUnisonSpread(merged);
+      v.applyTuning(merged, this.ctx.currentTime, false);
     }
   }
 
@@ -2225,10 +2321,18 @@ export class FireCommandSynth {
 
     const driveAmt = pathDrive ? p.drive : 0;
     const crushAmt = pathDrive ? clamp(p.crush, 0, 1) : 0;
-    this.driveShaper.curve = makeDriveCurve(driveAmt, p.driveMode);
+    const driveKey = `${p.driveMode}|${driveAmt.toFixed(3)}`;
+    if (driveKey !== this.lastDriveKey) {
+      this.driveShaper.curve = makeDriveCurve(driveAmt, p.driveMode);
+      this.lastDriveKey = driveKey;
+    }
     this.drivePre.gain.setTargetAtTime((1 + driveAmt * 1.2) / DRIVE_RANGE, t, 0.02);
     this.drivePost.gain.setTargetAtTime(1 / (1 + driveAmt * 0.7), t, 0.02);
-    this.crushShaper.curve = makeCrushCurve(16 - crushAmt * 13);
+    const crushBits = 16 - crushAmt * 13;
+    if (Math.abs(crushBits - this.lastCrushBits) > 0.02) {
+      this.crushShaper.curve = makeCrushCurve(crushBits);
+      this.lastCrushBits = crushBits;
+    }
     this.crushDry.gain.setTargetAtTime(1 - crushAmt, t, 0.02);
     this.crushWet.gain.setTargetAtTime(crushAmt, t, 0.02);
 
@@ -2313,11 +2417,28 @@ export class FireCommandSynth {
 
     this.updateReverbConvolver(p, pathFx && reverbOn);
 
-    for (const v of this.voices) {
-      v.setOscLevels(p);
-      v.setFilterLive(p);
-      v.applyFm(p);
-      v.applyUnisonSpread(p);
+    // Voice re-sync is only needed when path/module toggles change what
+    // oscillators hear — pure bus knobs (master/delay/reverb…) must not
+    // walk every live voice on every set().
+    const voiceSyncKey = [
+      p.pathOsc === false ? "0" : "1",
+      p.moduleEnable?.["osc.a"] === false ? "0" : "1",
+      p.moduleEnable?.["osc.b"] === false ? "0" : "1",
+      p.moduleEnable?.["osc.c"] === false ? "0" : "1",
+      p.moduleEnable?.["sub"] === false ? "0" : "1",
+      p.moduleEnable?.["noise"] === false ? "0" : "1",
+      p.moduleEnable?.["filter"] === false ? "0" : "1",
+      p.moduleEnable?.["fm"] === false ? "0" : "1",
+      p.moduleEnable?.["mixer.unison"] === false ? "0" : "1",
+    ].join("");
+    if (voiceSyncKey !== this.lastBusVoiceSyncKey) {
+      this.lastBusVoiceSyncKey = voiceSyncKey;
+      for (const v of this.voices) {
+        v.setOscLevels(p);
+        v.setFilterLive(p);
+        v.applyFm(p);
+        v.applyUnisonSpread(p);
+      }
     }
 
     const spectralOn = pathFx && on("fx.spectral");
@@ -2404,12 +2525,16 @@ export class FireCommandSynth {
     const on = active && this.spectralState === "ready" && this.spectralNode !== null;
     this.spectralDry.gain.setTargetAtTime(on ? 0 : 1, t, 0.03);
     this.spectralSend.gain.setTargetAtTime(on ? 1 : 0, t, 0.03);
-    this.spectralNode?.port.postMessage({
-      mode,
-      amount: clamp(p.spectralAmount ?? 0.6, 0, 1),
-      mix,
-      bypass: !on,
-    });
+    const msgKey = `${mode}|${(p.spectralAmount ?? 0.6).toFixed(3)}|${mix.toFixed(3)}|${on ? 1 : 0}`;
+    if (msgKey !== this.lastSpectralMsg) {
+      this.lastSpectralMsg = msgKey;
+      this.spectralNode?.port.postMessage({
+        mode,
+        amount: clamp(p.spectralAmount ?? 0.6, 0, 1),
+        mix,
+        bypass: !on,
+      });
+    }
   }
 
   private applyLfoParams(p: FirePatch): void {

@@ -22,8 +22,9 @@ import {
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
+import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FIRE_BANDS, type FireBandId } from "./fireModuleAtlas";
-import { ensureExpanded, setBandModulesFolded } from "./fireNavigate";
+import { ensureExpanded, setBandModulesFolded, writeFold } from "./fireNavigate";
 import { useFireLayout } from "./FireLayoutContext";
 import { FireBandLabel } from "./FireSegTabs";
 
@@ -116,6 +117,8 @@ export function FireBand({
   children,
   /** When false (band tab mode), skip fold chrome — the tab already selected the category. */
   foldable = true,
+  /** Sit inside the Synth console — no outer GlassPanel card. */
+  flush = false,
 }: {
   title: string;
   color: string;
@@ -124,6 +127,7 @@ export function FireBand({
   hint?: string;
   children: ReactNode;
   foldable?: boolean;
+  flush?: boolean;
 }) {
   const [bandCollapsed, toggleBand] = useFireCollapsed(bandKey, foldable ? defaultCollapsed : false);
   const [mods, setMods] = useState<Record<string, BandModuleMeta>>({});
@@ -177,100 +181,129 @@ export function FireBand({
 
   const showBody = !foldable || holdsFocus || !bandCollapsed;
 
+  const inner = (
+    <>
+      <div className={`flex items-center justify-between gap-2 ${showBody ? "mb-2" : ""}`}>
+        {foldable ? (
+          <button
+            type="button"
+            onClick={toggleBand}
+            aria-expanded={showBody}
+            className="flex items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            title={showBody ? `Collapse ${title}` : `Expand ${title}`}
+          >
+            <CollapseToggle collapsed={!showBody} color={color} />
+            <span
+              className="text-[12px] font-semibold uppercase tracking-[0.22em]"
+              style={{ color }}
+            >
+              {title}
+            </span>
+            {hint && (
+              <span className="hidden sm:inline text-[9px] normal-case tracking-normal text-white/30">
+                · {hint}
+              </span>
+            )}
+            {holdsFocus && (
+              <span
+                className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                style={{ borderColor: `${color}66`, color, background: `${color}18` }}
+              >
+                Solo
+              </span>
+            )}
+          </button>
+        ) : (
+          <div className="min-w-0 flex-1">
+            <FireBandLabel
+              title={title}
+              color={color}
+              hint={hint}
+              right={
+                holdsFocus ? (
+                  <span
+                    className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                    style={{ borderColor: `${color}66`, color, background: `${color}18` }}
+                  >
+                    Solo
+                  </span>
+                ) : undefined
+              }
+            />
+          </div>
+        )}
+        {showBody && list.length > 0 && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {!foldable && (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    if (e.shiftKey) {
+                      const pinned = useFireCommandStore.getState().pinnedModules;
+                      const band = FIRE_BANDS.find((b) => b.id === bandKey);
+                      if (!band) return;
+                      for (const mod of band.modules) {
+                        const keepOpen =
+                          pinned.includes(mod.id) || (!!focusId && mod.id === focusId);
+                        writeFold(mod.id, !keepOpen);
+                      }
+                      return;
+                    }
+                    setBandModulesFolded(bandKey, false);
+                  }}
+                  className="rounded-md border border-white/12 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/55 hover:bg-white/[0.08] hover:text-white/80 transition"
+                  title="Expand all (Shift: pinned or soloed only)"
+                >
+                  Expand all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBandModulesFolded(bandKey, true)}
+                  className="rounded-md border border-white/12 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/55 hover:bg-white/[0.08] hover:text-white/80 transition"
+                  title="Collapse all modules to chips"
+                >
+                  Collapse all
+                </button>
+              </>
+            )}
+            <span className="text-[9px] font-mono text-white/30">
+              {openCount}/{list.length} open
+            </span>
+          </div>
+        )}
+      </div>
+
+      {showBody && (
+        <>
+          {!holdsFocus && <ChipGrid modules={collapsedList} />}
+          <div className={openStackClass()}>
+            {children}
+          </div>
+        </>
+      )}
+    </>
+  );
+
   return (
     <BandContext.Provider value={ctx}>
-      <GlassPanel
-        intense
-        className="p-2.5"
-        data-fire-band={bandKey as FireBandId}
-      >
-        <div className={`flex items-center justify-between gap-2 ${showBody ? "mb-2" : ""}`}>
-          {foldable ? (
-            <button
-              type="button"
-              onClick={toggleBand}
-              aria-expanded={showBody}
-              className="flex items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-              title={showBody ? `Collapse ${title}` : `Expand ${title}`}
-            >
-              <CollapseToggle collapsed={!showBody} color={color} />
-              <span
-                className="text-[12px] font-semibold uppercase tracking-[0.22em]"
-                style={{ color }}
-              >
-                {title}
-              </span>
-              {hint && (
-                <span className="hidden sm:inline text-[9px] normal-case tracking-normal text-white/30">
-                  · {hint}
-                </span>
-              )}
-              {holdsFocus && (
-                <span
-                  className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
-                  style={{ borderColor: `${color}66`, color, background: `${color}18` }}
-                >
-                  Focus
-                </span>
-              )}
-            </button>
-          ) : (
-            <div className="min-w-0 flex-1">
-              <FireBandLabel
-                title={title}
-                color={color}
-                hint={hint}
-                right={
-                  holdsFocus ? (
-                    <span
-                      className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
-                      style={{ borderColor: `${color}66`, color, background: `${color}18` }}
-                    >
-                      Focus
-                    </span>
-                  ) : undefined
-                }
-              />
-            </div>
-          )}
-          {showBody && list.length > 0 && (
-            <div className="flex items-center gap-1.5 shrink-0">
-              {!foldable && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setBandModulesFolded(bandKey, false)}
-                    className="rounded-md border border-white/12 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/55 hover:bg-white/[0.08] hover:text-white/80 transition"
-                    title="Expand all modules in this band"
-                  >
-                    Expand all
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBandModulesFolded(bandKey, true)}
-                    className="rounded-md border border-white/12 bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/55 hover:bg-white/[0.08] hover:text-white/80 transition"
-                    title="Collapse all modules to chips"
-                  >
-                    Collapse all
-                  </button>
-                </>
-              )}
-              <span className="text-[9px] font-mono text-white/30">
-                {openCount}/{list.length} open
-              </span>
-            </div>
-          )}
+      {flush ? (
+        <div
+          className="relative bg-gradient-to-b from-white/[0.025] to-transparent p-2.5"
+          data-fire-band={bandKey as FireBandId}
+          style={{ boxShadow: `inset 3px 0 0 0 ${color}55` }}
+        >
+          {inner}
         </div>
-
-        {showBody && (
-          <>
-            {!holdsFocus && <ChipGrid modules={collapsedList} />}
-            <div className={openStackClass()}>
-              {children}
-            </div>
-          </>
-        )}
-      </GlassPanel>
+      ) : (
+        <GlassPanel
+          intense
+          className="p-2.5"
+          data-fire-band={bandKey as FireBandId}
+        >
+          {inner}
+        </GlassPanel>
+      )}
     </BandContext.Provider>
   );
 }

@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import http from "node:http";
 import dgram from "node:dgram";
 import os from "node:os";
+import { installNativeMidiHost, shutdownNativeMidiHost } from "./midiHost";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -65,6 +66,12 @@ ipcMain.handle("crash:openLog", async () => {
 // Chromium blocks audible autoplay by default; this opt-in must be set before
 // the app is ready.
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
+// Web MIDI on Windows 11 + MIDI Services: Chromium's WinRT MIDI backend often
+// hangs requestMIDIAccess forever (or returns an empty list). Force the
+// classic WinMM path so class-compliant controllers (e.g. Akai MPK Mini)
+// enumerate normally. Must be set before app ready.
+app.commandLine.appendSwitch("disable-features", "MidiManagerWinrt");
 
 // ──────────────── Lean harder on the hardware ────────────────
 // Push the heavy lifting onto the GPU and give V8 real headroom. All of the
@@ -1068,6 +1075,37 @@ ipcMain.handle("loopback:setMode", (_e, mode: string) => {
   return loopbackAudioMode;
 });
 
+/**
+ * Web MIDI in Electron never shows Chromium's permission prompt — without
+ * these handlers, requestMIDIAccess resolves with an empty input list.
+ * Kill-Chain is a local desktop app: grant MIDI (and keep other permissions
+ * working for system-audio capture / clipboard).
+ */
+function installMidiPermissions(): void {
+  const s = session.defaultSession;
+  const allow = (permission: string) =>
+    permission === "midi" ||
+    permission === "midiSysex" ||
+    permission === "media" ||
+    permission === "display-capture" ||
+    permission === "fullscreen" ||
+    permission === "clipboard-read" ||
+    permission === "clipboard-sanitized-write";
+
+  s.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(allow(String(permission)));
+  });
+  s.setPermissionCheckHandler((_wc, permission) => allow(String(permission)));
+  // Chromium also gates per-device MIDI after the coarse permission — without
+  // this, inputs can stay empty even when WinMM sees the controller.
+  if (typeof s.setDevicePermissionHandler === "function") {
+    s.setDevicePermissionHandler((details) => {
+      const t = String((details as { deviceType?: string }).deviceType ?? "");
+      return t === "midi" || t === "midiSysex" || t === "hid" || t === "serial" || t === "usb";
+    });
+  }
+}
+
 function installDisplayMediaHandler(): void {
   const s = session.defaultSession;
   s.setDisplayMediaRequestHandler(
@@ -1293,6 +1331,8 @@ if (!gotInstanceLock) {
 
   app.whenReady().then(() => {
     registerAudioProtocol();
+    installMidiPermissions();
+    installNativeMidiHost();
     installDisplayMediaHandler();
     installAirspaceAdblock();
     createMainWindow();
@@ -1300,6 +1340,7 @@ if (!gotInstanceLock) {
 }
 
 app.on("before-quit", () => {
+  shutdownNativeMidiHost();
   if (remoteServer) {
     try { remoteServer.close(); } catch { /* ignore */ }
     remoteServer = null;

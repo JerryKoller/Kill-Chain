@@ -97,6 +97,29 @@ declare global {
         getStats: () => Promise<SystemStats>;
         getGpuInfo: () => Promise<SystemGpuInfo>;
       };
+      /** Native WinMM MIDI bridge (Electron main). Prefer over Web MIDI on Windows. */
+      midi?: {
+        list: () => Promise<{
+          ok: boolean;
+          inputs: { id: string; name: string; port: number }[];
+          started: boolean;
+          error: string | null;
+        }>;
+        start: () => Promise<{
+          ok: boolean;
+          inputs: { id: string; name: string; port: number }[];
+          started: boolean;
+          error: string | null;
+        }>;
+        stop: () => Promise<{ ok: boolean }>;
+        rescan: () => Promise<{
+          ok: boolean;
+          inputs: { id: string; name: string; port: number }[];
+          started: boolean;
+          error: string | null;
+        }>;
+        onMessage: (cb: (msg: { id: string; name: string; bytes: number[] }) => void) => () => void;
+      };
     };
   }
 

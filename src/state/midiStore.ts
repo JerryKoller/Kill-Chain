@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useAudioStore } from "@/state/audioStore";
+import { useFireMidiFocusStore } from "@/state/fireMidiFocusStore";
 import { useUIStore } from "@/state/uiStore";
 import { isBipolar, type SoundParams } from "@/audio/types";
 
@@ -21,14 +22,22 @@ export interface MidiMapping {
 
 interface MidiState {
   available: boolean;
+  /** True after a successful requestMIDIAccess. */
+  listening: boolean;
+  /** Last access error (permission / unsupported). */
+  error: string | null;
   inputs: { id: string; name: string }[];
   mappings: MidiMapping[];
   learning: MidiTarget | null;
   lastMessage: { id: string; label: string; value: number } | null;
+  /** Last note activity for UI flash (absolute MIDI pitch). */
+  lastNote: { midi: number; vel: number; at: number } | null;
   /** Last activity timestamp per mapping id (for UI flash). */
   lastActiveAt: Record<string, number>;
 
   startListening: () => Promise<void>;
+  /** Drop cached access and re-enumerate (after plugging a controller). */
+  rescan: () => Promise<void>;
   setLearning: (target: MidiTarget | null) => void;
   removeMapping: (id: string) => void;
   clearAll: () => void;
@@ -48,39 +57,161 @@ function saveMappings(maps: MidiMapping[]): void {
   catch { /* ignore */ }
 }
 
+/** One Web MIDI access for the session — avoid stacking listeners on remount. */
+let midiAccess: MIDIAccess | null = null;
+/** Unsubscribe from native main-process MIDI messages. */
+let unsubNativeMidi: (() => void) | null = null;
+/** Running status per device (many controllers omit the status byte on subsequent notes). */
+const runningStatusByDevice = new Map<string, number>();
+
+function hasNativeMidi(): boolean {
+  return typeof window !== "undefined" && !!window.playground?.midi;
+}
+
+function refreshInputs(access: MIDIAccess): void {
+  const ins: { id: string; name: string }[] = [];
+  access.inputs.forEach((inp) => {
+    // List every port Chromium exposes; state is usually "connected".
+    const label = inp.name ?? "MIDI Input";
+    ins.push({
+      id: inp.id,
+      name: inp.state === "disconnected" ? `${label} (disconnected)` : label,
+    });
+    try {
+      // Some Chromium builds need an explicit open() before messages flow.
+      void (inp as MIDIInput & { open?: () => Promise<unknown> }).open?.();
+    } catch { /* ignore */ }
+    inp.onmidimessage = (msg) => {
+      if (msg.data) handleMessage(inp.id, msg.data);
+    };
+  });
+  useMidiStore.setState({ inputs: ins, listening: true, error: null });
+}
+
+async function startNativeMidi(): Promise<boolean> {
+  const api = window.playground?.midi;
+  if (!api) return false;
+  if (!unsubNativeMidi) {
+    unsubNativeMidi = api.onMessage((msg) => {
+      handleMessage(msg.id, msg.bytes);
+    });
+  }
+  const r = await api.start();
+  useMidiStore.setState({
+    available: true,
+    listening: r.ok || r.inputs.length > 0,
+    inputs: r.inputs.map((i) => ({ id: i.id, name: i.name })),
+    error: r.error,
+  });
+  if (r.error && r.inputs.length === 0) {
+    useUIStore.getState().toast(r.error);
+  }
+  return r.inputs.length > 0 || r.ok;
+}
+
 export const useMidiStore = create<MidiState>((set, get) => ({
-  available: typeof navigator !== "undefined" && "requestMIDIAccess" in navigator,
+  available:
+    (typeof window !== "undefined" && !!window.playground?.midi) ||
+    (typeof navigator !== "undefined" && "requestMIDIAccess" in navigator),
+  listening: false,
+  error: null,
   inputs: [],
   mappings: loadMappings(),
   learning: null,
   lastMessage: null,
+  lastNote: null,
   lastActiveAt: {},
 
   startListening: async () => {
-    if (!get().available) return;
-    try {
-      const access = await (navigator as Navigator & {
-        requestMIDIAccess?: () => Promise<MIDIAccess>;
-      }).requestMIDIAccess?.();
-      if (!access) return;
-
-      const ins: { id: string; name: string }[] = [];
-      access.inputs.forEach((inp) => {
-        ins.push({ id: inp.id, name: inp.name ?? "MIDI Input" });
-        inp.onmidimessage = (msg) => handleMessage(inp.id, msg);
-      });
-      set({ inputs: ins });
-      access.onstatechange = () => {
-        const cur: { id: string; name: string }[] = [];
-        access.inputs.forEach((inp) => {
-          cur.push({ id: inp.id, name: inp.name ?? "MIDI Input" });
-          inp.onmidimessage = (m) => handleMessage(inp.id, m);
-        });
-        set({ inputs: cur });
-      };
-    } catch (err) {
-      console.warn("[midi] requestMIDIAccess failed:", err);
+    // Prefer native WinMM (Electron) — matches FL Studio's MIDI stack on Windows.
+    if (hasNativeMidi()) {
+      try {
+        await startNativeMidi();
+        if (get().inputs.length > 0) return;
+        // Fall through to Web MIDI if native saw nothing (rare).
+      } catch (err) {
+        console.warn("[midi] native host failed:", err);
+      }
     }
+
+    if (typeof navigator === "undefined" || !("requestMIDIAccess" in navigator)) {
+      if (!get().inputs.length) {
+        set({
+          available: hasNativeMidi(),
+          error: get().error ?? "No MIDI backend available",
+        });
+      }
+      return;
+    }
+    try {
+      if (!midiAccess) {
+        const req = (navigator as Navigator & {
+          requestMIDIAccess?: (opts?: { sysex?: boolean; software?: boolean }) => Promise<MIDIAccess>;
+        }).requestMIDIAccess;
+        if (!req) {
+          if (!get().inputs.length) set({ error: "requestMIDIAccess missing" });
+          return;
+        }
+        // Prefer plain access first — `software: true` alone has been observed
+        // to confuse some Chromium/Electron builds on Windows.
+        // Also race a timeout: WinRT MIDI (before we disable it in main) can
+        // hang forever without rejecting.
+        const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+          new Promise((resolve, reject) => {
+            const t = window.setTimeout(() => reject(new Error("MIDI access timed out")), ms);
+            p.then(
+              (v) => { window.clearTimeout(t); resolve(v); },
+              (e) => { window.clearTimeout(t); reject(e); },
+            );
+          });
+        let access: MIDIAccess;
+        try {
+          access = await withTimeout(req({ sysex: false }), 5000);
+        } catch {
+          access = await withTimeout(req(), 5000);
+        }
+        midiAccess = access;
+        access.onstatechange = () => {
+          if (midiAccess) refreshInputs(midiAccess);
+        };
+      }
+      // Don't clobber a working native input list with an empty Web MIDI list.
+      if (get().inputs.length === 0) refreshInputs(midiAccess);
+      else {
+        // Still attach Web MIDI listeners as a secondary source.
+        midiAccess.inputs.forEach((inp) => {
+          inp.onmidimessage = (msg) => {
+            if (msg.data) handleMessage(inp.id, msg.data);
+          };
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("[midi] requestMIDIAccess failed:", err);
+      if (get().inputs.length === 0) {
+        set({ listening: false, error: msg, inputs: [] });
+        useUIStore.getState().toast("MIDI access failed — fully quit and relaunch Kill-Chain");
+      }
+    }
+  },
+
+  rescan: async () => {
+    runningStatusByDevice.clear();
+    midiAccess = null;
+    set({ inputs: [], listening: false, error: null, lastNote: null });
+    if (hasNativeMidi()) {
+      try {
+        await window.playground!.midi!.stop();
+      } catch { /* ignore */ }
+    }
+    await get().startListening();
+    const n = get().inputs.length;
+    const err = get().error;
+    useUIStore.getState().toast(
+      n > 0
+        ? `MIDI: ${n} input${n === 1 ? "" : "s"} found`
+        : err ?? "MIDI: no inputs — quit FL Studio / other DAWs, then Rescan",
+    );
   },
 
   setLearning: (target) => set({ learning: target }),
@@ -106,6 +237,9 @@ export const useMidiStore = create<MidiState>((set, get) => ({
 export interface MidiNoteHandler {
   noteOn: (midi: number, velocity: number) => void;
   noteOff: (midi: number) => void;
+  /** Optional: CC / button octave shifts (rare — MPK Mini does this in hardware). */
+  octaveDelta?: (delta: number) => void;
+  octaveReset?: () => void;
 }
 
 let noteHandler: MidiNoteHandler | null = null;
@@ -114,16 +248,75 @@ export function registerMidiNoteHandler(h: MidiNoteHandler | null): void {
   noteHandler = h;
 }
 
-function handleMessage(deviceId: string, msg: MIDIMessageEvent): void {
-  if (!msg.data || msg.data.length < 3) return;
-  const [statusByte, data1, data2] = msg.data;
+function handleMessage(deviceId: string, data: ArrayLike<number>): void {
+  if (!data || data.length < 1) return;
+  const bytes = Array.from(data);
+  let statusByte = bytes[0]!;
+  let data1 = 0;
+  let data2 = 0;
+
+  // Realtime messages (clock, active sensing) — ignore, keep running status.
+  if (statusByte >= 0xf8) return;
+
+  if (statusByte < 0x80) {
+    // Running status: reuse last channel voice status for this device.
+    const run = runningStatusByDevice.get(deviceId);
+    if (run === undefined) return;
+    statusByte = run;
+    data1 = bytes[0] ?? 0;
+    data2 = bytes[1] ?? 0;
+  } else if (statusByte >= 0xf0) {
+    // SysEx / song select / etc. — clear running status.
+    runningStatusByDevice.delete(deviceId);
+    return;
+  } else {
+    runningStatusByDevice.set(deviceId, statusByte);
+    data1 = bytes[1] ?? 0;
+    data2 = bytes[2] ?? 0;
+  }
+
   const status = statusByte & 0xf0;
   const channel = statusByte & 0x0f;
 
+  // Program Change → MPK Focus module jump (Prog Select / Prog Change pads).
+  if (status === 0xc0) {
+    useFireMidiFocusStore.getState().handleProgramChange(data1);
+    useMidiStore.setState({
+      lastMessage: { id: `${deviceId}:${channel}:pc:${data1}`, label: `PC ${data1}`, value: data1 / 127 },
+    });
+    return;
+  }
+
   // Forward raw notes to the live instrument (0x90 vel 0 = note-off).
+  // Focus mode steals pad-range notes for PROG / BANK navigation.
   if (noteHandler) {
-    if (status === 0x90 && data2 > 0) noteHandler.noteOn(data1, data2 / 127);
-    else if (status === 0x80 || (status === 0x90 && data2 === 0)) noteHandler.noteOff(data1);
+    if (status === 0x90 && data2 > 0) {
+      const stolen = useFireMidiFocusStore.getState().handleNoteOn(data1, data2 / 127);
+      if (!stolen) {
+        noteHandler.noteOn(data1, data2 / 127);
+        useMidiStore.setState({
+          lastNote: { midi: data1, vel: data2 / 127, at: Date.now() },
+        });
+      } else {
+        useMidiStore.setState({
+          lastMessage: {
+            id: `${deviceId}:${channel}:pad:${data1}`,
+            label: `Pad ${data1} (PROG)`,
+            value: data2 / 127,
+          },
+        });
+      }
+    } else if (status === 0x80 || (status === 0x90 && data2 === 0)) {
+      // Always release — pads may have been stolen on note-on but keys need offs.
+      noteHandler.noteOff(data1);
+    }
+
+    // Optional software octave — some controllers expose ± as CC (not MPK Mini default).
+    // Common community mappings: CC 102/103 or CC 16/17 as momentary buttons.
+    if (status === 0xb0 && data2 >= 64 && noteHandler.octaveDelta) {
+      if (data1 === 102 || data1 === 16) noteHandler.octaveDelta(-1);
+      else if (data1 === 103 || data1 === 17) noteHandler.octaveDelta(1);
+    }
   }
 
   let id = "";
@@ -133,6 +326,15 @@ function handleMessage(deviceId: string, msg: MIDIMessageEvent): void {
     id = `${deviceId}:${channel}:cc:${data1}`;
     value = data2 / 127;
     label = `CC ${data1} ch${channel + 1}`;
+
+    // Signal Path focus knobs / PROG·BANK nav take priority over learn mappings.
+    if (useFireMidiFocusStore.getState().handleCc(data1, value, data2)) {
+      useMidiStore.setState({
+        lastMessage: { id, label, value },
+        lastActiveAt: { ...useMidiStore.getState().lastActiveAt, [id]: Date.now() },
+      });
+      return;
+    }
   } else if (status === 0x90 && data2 > 0) {
     id = `${deviceId}:${channel}:note:${data1}`;
     value = data2 / 127;

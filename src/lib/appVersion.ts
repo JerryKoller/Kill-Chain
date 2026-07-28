@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.1.0";
+export const APP_VERSION = "3.2.0";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -12,19 +12,19 @@ export const PRODUCT_DESCRIPTION =
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Editable Synth B",
-    body: "Edit A | Edit B on the Synth rack — full patch editing for the second instrument. Draw B focuses the rack. Arp and QWERTY stay on Synth A.",
+    title: "Fire Command UX overhaul",
+    body: "Studio / Compact / Focus density, breadcrumb + master meter utility strip, accordion pin cards, randomize locks, Cmd+K palette, and Patch / Pattern / Scene / Project save tiers.",
   },
   {
-    title: "Pattern sound recall",
-    body: "Each pattern snapshots Synth A + B when you switch — arrangement play restores that pattern’s timbre automatically.",
+    title: "Open Fire transport",
+    body: "Unified Pattern | Arrangement | Selection play scopes, arrangement arm/meters, and clearer Mix / Perf / Layers naming across the rack.",
   },
   {
-    title: "Offline dry bounce",
-    body: "Save and Export sit on the transport. Export prefers OfflineAudioContext dry Fire bounce (realtime fallback); stems stay realtime.",
+    title: "Signal path + genealogy",
+    body: "Reorderable signal-path display, mutation genealogy for kept generations, and editable atlas labels with Short / Full / Tech modes.",
   },
   {
-    title: "Automation + drum grooves",
-    body: "Automation opens by default with a Cutoff preview. House / Trap / Break / Clear grooves and Synth Kit clear in the Drum Bay.",
+    title: "Stability pass",
+    body: "Morph Pad and meter RAF coalescing, arrangement idle guards, Focus vs Solo vs MPK Focus clarified, and module-lock respect on Armory deploy.",
   },
 ];

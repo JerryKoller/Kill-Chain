@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FIRE_FOLD_EVENT, foldStorageKey } from "./fireNavigate";
+import { FIRE_FOLD_EVENT, foldStorageKey, writeFold } from "./fireNavigate";
 
 /**
  * Per-section fold state, persisted so the layout the user arranges survives
@@ -32,14 +32,14 @@ export function useFireCollapsed(key: string | undefined, def = false): [boolean
   const toggle = useCallback(() => {
     setCollapsed((c) => {
       const next = !c;
-      if (storage) {
-        try {
-          window.localStorage.setItem(storage, next ? "1" : "0");
-        } catch { /* ignore */ }
-      }
+      // Route through writeFold so every hook instance sharing this key (and
+      // the band chip registry) hears the change — a silent local write left
+      // duplicate consumers desynced. Deferred: no event dispatch inside a
+      // React state updater (StrictMode runs updaters twice).
+      if (key) queueMicrotask(() => writeFold(key, next));
       return next;
     });
-  }, [storage]);
+  }, [key]);
 
   return [collapsed, toggle];
 }
