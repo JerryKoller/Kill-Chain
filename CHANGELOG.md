@@ -2,6 +2,32 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.2.1] — 2026-07-29 — Fire Command Stability Audit
+
+### Fixed
+- **Live A/B routing** — QWERTY / MIDI / on-screen keys play the active Edit target; ARP stays A-only
+- **Morph & scene scrub** — mid-scrub blends no longer corrupt `patchA`/`patchB`, persist, or undo
+- **Silent FX knobs** — drive bias, freeze, chorus/phaser detail, age macro, and related bus params update live again
+- **Project open while Edit B** — Synth A + ARP always load from `.kcproj` (no silent redirect to B)
+- **Sequencer bridge** — harmony/chord for A and B, per-channel humanize, delay sync follows BPM
+- **MIDI Focus vs Learn** — Focus no longer steals CCs during Learn or when a mapping already exists
+- **Scale Strict** — out-of-scale presses no longer record into the piano roll
+- **Drum hydrate** — missing sample paths clear stale kit overrides
+
+### Changed
+- **`.kcproj` v3** — saves/restores edit target, presets, FX route, scenes, octave, and voice count
+- Stage meters / telemetry follow the active Edit A/B engine
+- Spectral FFT UI shows fixed 2048 (worklet limit)
+
+## [3.2.0] — 2026-07-28 — Fire Command UX Overhaul
+
+### Added
+- Studio / Compact / Focus density, breadcrumb + master meter, Cmd+K palette, Patch / Pattern / Scene / Project save tiers
+- Unified Pattern | Arrangement | Selection play scopes
+
+### Changed
+- Reorderable signal-path display, mutation genealogy, atlas label modes
+
 ## [3.1.0] — 2026-07-27 — Fire Command Depth
 
 ### Added
