@@ -99,11 +99,11 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
         <div className="flex items-center gap-2 min-w-0 h-8">
           <DiceMark spinning={spinning} size={18} />
           <div className="min-w-0 flex-1">
-            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-[#ffc9b0] leading-none">
+            <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#ffc9b0] leading-none">
               Random Armory
             </div>
             <div
-              className="text-[9px] text-white/40 truncate leading-none mt-0.5"
+              className="text-[10px] text-white/48 truncate leading-none mt-0.5"
               title={last ? `${last.name} · ${last.category}` : "Spin the chamber — chance draw"}
             >
               {spinning
@@ -118,7 +118,7 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
           <button
             onClick={deploy}
             disabled={spinning}
-            className="group h-8 flex-1 min-w-0 rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.1em] text-[#ffe8dc] transition disabled:opacity-70 bg-[#ff6a3d]/28 hover:bg-[#ff6a3d]/42 ring-1 ring-[#ff6a3d]/50 shadow-[0_0_14px_rgba(255,106,61,0.2)]"
+            className="group h-8 flex-1 min-w-0 rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] text-[#ffe8dc] transition disabled:opacity-70 bg-[#ff6a3d]/22 hover:bg-[#ff6a3d]/35 ring-1 ring-[#ff6a3d]/45 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(255,106,61,0.65)]"
             title="Deploy a random factory preset from the armory"
           >
             <span className="inline-flex items-center justify-center gap-1.5">

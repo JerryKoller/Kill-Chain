@@ -80,10 +80,142 @@ export function applyModuleLocks(dst: FirePatch, src: FirePatch, locks: Record<s
   return dst;
 }
 
+/** True when spectral FX is actually costing STFT CPU. */
+export function spectralActive(patch: FirePatch): boolean {
+  return (patch.spectralMode ?? "off") !== "off" && (patch.spectralMix ?? 0) > 0.05;
+}
+
+/**
+ * Soft unison ceiling for live voices. Spectral STFT + ops4 + 3 osc groups
+ * at unison 16 (~48 PeriodicWaves) melts the audio + UI threads; cap before
+ * Voice construction so extreme user presets stay playable.
+ */
+export function liveUnisonCap(patch: FirePatch): number {
+  const spectralOn = spectralActive(patch);
+  const ops4 = (patch.fmEngine ?? "classic") === "ops4";
+  const groups = 2 + ((patch.oscCLevel ?? 0) > 0.0001 ? 1 : 0);
+  const heavyFx =
+    (patch.crush ?? 0) > 0.45
+    || (patch.chorusModel === "triple" || patch.chorusModel === "ensemble")
+    || (patch.reverbMix ?? 0) > 0.4
+    || (patch.phaserMix ?? 0) > 0.45;
+  let cap = 12;
+  if (ops4) cap = Math.min(cap, 8);
+  if (spectralOn) cap = Math.min(cap, 6);
+  if (spectralOn && ops4) cap = 4;
+  if (spectralOn && groups >= 3) cap = Math.min(cap, 4);
+  if (!spectralOn && !ops4 && heavyFx) cap = Math.min(cap, 8);
+  return cap;
+}
+
+/**
+ * 0..1 estimate of how hard this patch pushes CPU (voices × sources + bus FX).
+ * Used by StageViz throttle and eco FX downgrades.
+ */
+export function patchCpuPressure(patch: FirePatch, activeVoices = 1): number {
+  const uni = Math.min(Math.round(patch.unison ?? 1), liveUnisonCap(patch));
+  const groups = 2 + ((patch.oscCLevel ?? 0) > 0.0001 ? 1 : 0);
+  const sources = uni * groups + ((patch.fmEngine ?? "classic") === "ops4" ? 4 : 1) + 2;
+  const voiceLoad = (sources * Math.max(1, activeVoices)) / 72;
+  const spectral = spectralActive(patch) ? 0.35 : 0;
+  const fx =
+    ((patch.crush ?? 0) > 0.4 ? 0.08 : 0)
+    + ((patch.chorusMix ?? 0) > 0.2 ? 0.06 : 0)
+    + ((patch.phaserMix ?? 0) > 0.2 ? 0.05 : 0)
+    + ((patch.reverbMix ?? 0) > 0.25 ? 0.08 : 0)
+    + ((patch.delayMix ?? 0) > 0.2 ? 0.05 : 0);
+  return Math.max(0, Math.min(1, voiceLoad * 0.55 + spectral + fx));
+}
+
+/**
+ * Soften runaway CPU / clip settings on load / randomize.
+ * Mutates `patch`. Returns true when anything was dialed back.
+ */
+export function applyPerformanceSafety(patch: FirePatch): boolean {
+  let softened = false;
+  const cap = (cond: boolean, apply: () => void) => {
+    if (cond) {
+      apply();
+      softened = true;
+    }
+  };
+
+  const uniCap = liveUnisonCap(patch);
+  cap((patch.unison ?? 1) > uniCap, () => {
+    patch.unison = uniCap as FirePatch["unison"];
+  });
+  cap((patch.filterResonance ?? 0) > 2.2, () => {
+    patch.filterResonance = 2.2;
+  });
+  cap((patch.filterDrive ?? 0) > 0.65, () => {
+    patch.filterDrive = 0.65;
+  });
+  cap((patch.drive ?? 0) > 0.55, () => {
+    patch.drive = 0.55;
+  });
+  cap((patch.crush ?? 0) > 0.5, () => {
+    patch.crush = 0.5;
+  });
+  cap((patch.delayFeedback ?? 0) > 0.62, () => {
+    patch.delayFeedback = 0.62;
+  });
+  cap((patch.delayMix ?? 0) > 0.45, () => {
+    patch.delayMix = 0.45;
+  });
+  cap((patch.reverbMix ?? 0) > 0.5, () => {
+    patch.reverbMix = 0.5;
+  });
+  cap((patch.punch ?? 0) > 0.72, () => {
+    patch.punch = 0.72;
+  });
+  cap((patch.chipAcidMix ?? 0) > 0.75, () => {
+    patch.chipAcidMix = 0.75;
+  });
+  cap((patch.phaserStages ?? 4) > 6, () => {
+    patch.phaserStages = 6;
+  });
+  cap((patch.fmAmount ?? 0) > 0.65, () => {
+    patch.fmAmount = 0.65;
+  });
+  cap((patch.fmFeedback ?? 0) > 0.55, () => {
+    patch.fmFeedback = 0.55;
+  });
+  cap((patch.masterGain ?? 0) > 0.78, () => {
+    patch.masterGain = 0.78;
+  });
+  if (spectralActive(patch)) {
+    cap((patch.spectralMix ?? 0) > 0.45, () => {
+      patch.spectralMix = 0.45;
+    });
+  }
+  const pressure = patchCpuPressure(patch, patch.mono ? 1 : 4);
+  if (pressure > 0.55) {
+    cap(patch.fxQuality !== "eco", () => {
+      patch.fxQuality = "eco";
+    });
+    cap(
+      patch.chorusModel === "triple" || patch.chorusModel === "ensemble",
+      () => {
+        patch.chorusModel = "dual";
+      },
+    );
+  }
+
+  const oscSum = (patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0);
+  if (oscSum > 2.1) {
+    const s = 2.0 / oscSum;
+    patch.oscALevel *= s;
+    patch.oscBLevel *= s;
+    patch.oscCLevel *= s;
+    softened = true;
+  }
+  return softened;
+}
+
 /** Loudness / feedback safety ceiling after randomize or mutate. */
 export function applyLoudnessSafety(patch: FirePatch): FirePatch {
   patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.78);
-  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 10);
+  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 2.2);
   patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.65);
   patch.drive = Math.min(patch.drive ?? 0, 0.55);
   patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.62);
@@ -99,6 +231,7 @@ export function applyLoudnessSafety(patch: FirePatch): FirePatch {
     patch.oscBLevel *= s;
     patch.oscCLevel *= s;
   }
+  applyPerformanceSafety(patch);
   return patch;
 }
 

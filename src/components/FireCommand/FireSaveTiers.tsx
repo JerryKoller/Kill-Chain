@@ -1,6 +1,7 @@
 /**
  * Unified Patch / Pattern / Scene / Project save cluster.
  * No window.prompt (unsupported in Electron) — patch naming is an inline popover.
+ * History (Undo/Redo) lives beside this cluster; Open is visually distinct.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -9,8 +10,11 @@ import { useFireSequencerStore, serializePattern } from "@/state/fireSequencerSt
 import { useUIStore } from "@/state/uiStore";
 import { saveProject, openProject } from "@/lib/fireStudio";
 
-const BTN =
-  "h-8 px-2.5 rounded-md text-[10px] font-bold uppercase tracking-[0.06em] transition bg-white/[0.04] text-white/60 hover:bg-white/[0.09] hover:text-white/85 ring-1 ring-white/10 disabled:opacity-50";
+const SAVE_BTN =
+  "h-8 px-2.5 rounded-md text-[10px] font-bold uppercase tracking-[0.06em] transition bg-white/[0.04] text-white/65 hover:bg-white/[0.09] hover:text-white/90 ring-1 ring-white/10 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] cursor-pointer";
+
+const OPEN_BTN =
+  "h-8 px-2.5 rounded-md text-[10px] font-bold uppercase tracking-[0.06em] transition bg-[rgba(232,184,109,0.12)] text-[#f5d9a8] hover:bg-[rgba(232,184,109,0.2)] ring-1 ring-[rgba(232,184,109,0.35)] disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] cursor-pointer";
 
 export function FireSaveTiers() {
   const toast = useUIStore((s) => s.toast);
@@ -79,11 +83,10 @@ export function FireSaveTiers() {
   };
 
   return (
-    <div className="flex flex-col justify-center gap-1.5 shrink-0 h-full min-h-[56px]">
-      <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40 leading-none">
-        {naming ? "Save patch as" : "Save"}
+    <div className="fire-header__cluster shrink-0">
+      <div className="fire-header__cluster-label">
+        {naming ? "Save patch as" : "Save scope"}
       </div>
-      {/* Inline swap (not a popover) — the header clips overflow. */}
       {naming ? (
         <div className="flex items-center gap-1.5">
           <input
@@ -95,30 +98,33 @@ export function FireSaveTiers() {
               if (e.key === "Escape") setNaming(false);
             }}
             placeholder="Patch name"
-            className="h-8 w-36 rounded-md bg-black/45 px-2 text-[11px] text-white outline-none ring-1 ring-white/15 placeholder:text-white/30"
+            className="h-8 w-36 rounded-md bg-black/45 px-2 text-[11px] text-white outline-none ring-1 ring-white/15 placeholder:text-white/35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
+            aria-label="Patch name"
           />
-          <button type="button" className={BTN} onClick={commitPatch} title="Save patch (Enter)">
+          <button type="button" className={SAVE_BTN} onClick={commitPatch} title="Save patch (Enter)">
             Save
           </button>
-          <button type="button" className={BTN} onClick={() => setNaming(false)} title="Cancel (Esc)">
+          <button type="button" className={SAVE_BTN} onClick={() => setNaming(false)} title="Cancel (Esc)" aria-label="Cancel naming">
             ✕
           </button>
         </div>
       ) : (
-        <div className="flex items-center gap-1.5">
-          <button type="button" className={BTN} onClick={() => setNaming(true)} title="Save the current patch as a user preset">
-            Patch
-          </button>
-          <button type="button" className={BTN} onClick={savePattern} title="Export the whole pattern bank + arrangement (.kcpat)">
-            Patterns
-          </button>
-          <button type="button" className={BTN} onClick={saveScene} title={`Capture a performance scene (next free of ${SCENE_SLOTS} slots)`}>
-            Scene
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => void doProject("save")} title="Save project (.kcproj)">
-            Project
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => void doProject("open")} title="Open project (.kcproj)">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <div className="inline-flex items-center gap-1 rounded-md bg-black/25 p-0.5 ring-1 ring-white/8" role="group" aria-label="Save scope">
+            <button type="button" className={SAVE_BTN} onClick={() => setNaming(true)} title="Save the current synth patch as a user preset">
+              Patch
+            </button>
+            <button type="button" className={SAVE_BTN} onClick={savePattern} title="Export the pattern bank + arrangement (.kcpat)">
+              Patterns
+            </button>
+            <button type="button" className={SAVE_BTN} onClick={saveScene} title={`Capture a performance scene (next free of ${SCENE_SLOTS} slots)`}>
+              Scene
+            </button>
+            <button type="button" className={SAVE_BTN} disabled={busy} onClick={() => void doProject("save")} title="Save full project (.kcproj)">
+              Project
+            </button>
+          </div>
+          <button type="button" className={OPEN_BTN} disabled={busy} onClick={() => void doProject("open")} title="Open project (.kcproj)">
             Open
           </button>
         </div>

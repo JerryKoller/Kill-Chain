@@ -35,6 +35,10 @@ import {
 import { playUi } from "@/audio/uiSounds";
 import { useUIStore } from "@/state/uiStore";
 import { useRollFit, ROLL_ZOOM_MAX, ROLL_ZOOM_MIN, setRollHScroll, subscribeRollHScroll } from "./useRollFit";
+import { PatternBarsControls } from "./PatternBarsControls";
+import { ScopedPlayButton } from "./ScopedPlayButton";
+import { PatternSelect } from "./PatternSelect";
+import { EditorToolbarGroup, EditorToolbarDivider } from "./EditorShell";
 
 export const PIANO_GUTTER = 46;
 
@@ -79,6 +83,8 @@ interface DragSession {
   ghosts?: RollNote[];
   /** Note ids erased this stroke — committed once on pointer up. */
   erased?: Set<string>;
+  /** Grab offset in steps from note edge (resize) so the edge doesn't jump to the cursor. */
+  grabOffsetSteps?: number;
 }
 
 /** Ephemeral overlay while dragging — avoids store writes every pointermove. */
@@ -175,7 +181,8 @@ function detectKeyAlternatives(notes: RollNote[]): Array<{ root: number; scaleId
   return out;
 }
 const MOVE_THRESHOLD_PX = 6;
-const PLACE_TO_PAINT_SEMIS = 1;
+/** Need a clearer pitch slip before place-stretch flips into paint. */
+const PLACE_TO_PAINT_SEMIS = 3;
 /** Marquee must grow past this before it replaces the selection. */
 const MARQUEE_MIN_PX = 5;
 
@@ -767,28 +774,21 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         const grid = snapRef.current;
         const dSteps = quantizeTo(dx / cw, grid);
         const dSemis = -Math.round(dy / ROW_H);
+        const mapMidi = (base: number) => {
+          const raw = base + dSemis;
+          return clamp(scaleSnap && dSemis !== 0 ? snapPitch(raw) : raw, MIDI_BOT, MIDI_TOP);
+        };
         if (d.groupOrig) {
           for (const o of d.groupOrig.values()) {
-            const newMidi = clamp(
-              scaleSnap ? snapPitch(o.midi + dSemis) : o.midi + dSemis,
-              MIDI_BOT,
-              MIDI_TOP,
-            );
             previewRef.current.overrides.set(o.id, {
-              step: Math.max(0, quantizeTo(o.step + dSteps, grid)),
-              midi: newMidi,
+              step: Math.max(0, o.step + dSteps),
+              midi: mapMidi(o.midi),
             });
           }
         } else {
-          const rawMidi = d.orig.midi + dSemis;
-          const newMidi = clamp(
-            scaleSnap ? snapPitch(rawMidi) : rawMidi,
-            MIDI_BOT,
-            MIDI_TOP,
-          );
           previewRef.current.overrides.set(d.noteId!, {
-            step: Math.max(0, quantizeTo(d.orig.step + dSteps, grid)),
-            midi: newMidi,
+            step: Math.max(0, d.orig.step + dSteps),
+            midi: mapMidi(d.orig.midi),
           });
         }
         schedulePaint();
@@ -994,6 +994,14 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
             ? "resizeL"
             : "move";
       clearPreview();
+      const cw = cellWRef.current;
+      const cursorStep = (x - GUTTER) / cw;
+      let grabOffsetSteps = 0;
+      if (mode === "resize") {
+        grabOffsetSteps = cursorStep - (hit.note.step + hit.note.len);
+      } else if (mode === "resizeL") {
+        grabOffsetSteps = cursorStep - hit.note.step;
+      }
       dragRef.current = {
         mode,
         noteId: hit.note.id,
@@ -1002,6 +1010,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         orig: { ...hit.note },
         groupOrig,
         moved: false,
+        grabOffsetSteps,
       };
     } else if (tool === "draw") {
       // FL place: ghost at click; drag same pitch → stretch; cross pitch → paint.
@@ -1085,7 +1094,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       const pitch = clamp(Math.round(midi), MIDI_BOT, MIDI_TOP);
       const crossedPitch = Math.abs(pitch - d.startMidi) >= PLACE_TO_PAINT_SEMIS;
 
-      if (d.mode === "placeStretch" && crossedPitch) {
+      if (d.mode === "placeStretch" && crossedPitch && Math.abs(dy) > Math.abs(dx) && d.moved) {
         d.mode = "paint";
         // Reset to brush-length stamps from the origin cell onward.
         const origin = d.ghosts?.[0];
@@ -1129,6 +1138,10 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       // placeStretch — same pitch: drag right/left sets length from start.
       const g = d.ghosts?.[0];
       if (g && d.orig) {
+        if (!d.moved) {
+          canvas.style.cursor = "ew-resize";
+          return;
+        }
         const live = useFireSequencerStore.getState().notes;
         const grid = snapRef.current;
         const end = Math.max(d.orig.step + grid, step);
@@ -1156,27 +1169,23 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       const grid = snapRef.current;
       const dSteps = quantizeTo(dx / cw, grid);
       const dSemis = -Math.round(dy / ROW_H);
+      const mapMidi = (base: number) => {
+        const raw = base + dSemis;
+        // Only scale-snap when pitch actually changes — never yank a parked note.
+        return clamp(scaleSnap && dSemis !== 0 ? snapPitch(raw) : raw, MIDI_BOT, MIDI_TOP);
+      };
       if (d.groupOrig) {
         for (const o of d.groupOrig.values()) {
-          const newMidi = clamp(
-            scaleSnap ? snapPitch(o.midi + dSemis) : o.midi + dSemis,
-            MIDI_BOT,
-            MIDI_TOP,
-          );
           previewRef.current.overrides.set(o.id, {
-            step: Math.max(0, quantizeTo(o.step + dSteps, grid)),
-            midi: newMidi,
+            // Relative delta only — do not re-quantize the original step.
+            step: Math.max(0, o.step + dSteps),
+            midi: mapMidi(o.midi),
           });
         }
       } else {
-        const rawMidi = d.orig.midi + dSemis;
-        const newMidi = clamp(
-          scaleSnap ? snapPitch(rawMidi) : rawMidi,
-          MIDI_BOT,
-          MIDI_TOP,
-        );
+        const newMidi = mapMidi(d.orig.midi);
         previewRef.current.overrides.set(d.noteId!, {
-          step: Math.max(0, quantizeTo(d.orig.step + dSteps, grid)),
+          step: Math.max(0, d.orig.step + dSteps),
           midi: newMidi,
         });
         if (newMidi !== d.orig.midi && newMidi !== lastAudMidiRef.current) {
@@ -1189,7 +1198,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       armEdgeAutoScroll(e.clientX, e.clientY);
     } else if (d.mode === "resize" && d.orig) {
       const grid = snapRef.current;
-      const endStep = (x - GUTTER) / cw;
+      const endStep = (x - GUTTER) / cw - (d.grabOffsetSteps ?? 0);
       const live = useFireSequencerStore.getState().notes;
       const rawLen = snapLenTo(endStep - d.orig.step, grid);
       const len = clampLenBeforeNext(live, d.orig.midi, d.orig.step, rawLen, grid, d.noteId ?? undefined);
@@ -1198,7 +1207,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       schedulePaint();
     } else if (d.mode === "resizeL" && d.orig) {
       const grid = snapRef.current;
-      const startStep = quantizeTo((x - GUTTER) / cw, grid);
+      const startStep = quantizeTo((x - GUTTER) / cw - (d.grabOffsetSteps ?? 0), grid);
       const end = d.orig.step + d.orig.len;
       const live = useFireSequencerStore.getState().notes;
       let minStart = 0;
@@ -1585,50 +1594,65 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   return (
     <div>
       <div
-        className="mb-2 flex items-center gap-2 flex-wrap rounded-xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2"
+        className="mb-2 editor-toolbar rounded-xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent"
         title="Draw: click places, drag stretches length, drag across pitches paints · edges resize · double-click / Alt-drag / RMB erase · Shift+drag velocity"
       >
-        <div className="inline-flex rounded-lg border border-white/12 bg-black/30 p-0.5">
-          {([
-            ["draw", "Draw"],
-            ["select", "Select"],
-            ["erase", "Erase"],
-          ] as const).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setTool(id)}
-              className="px-2.5 py-1.5 text-[10px] font-bold rounded-md transition"
-              style={
-                tool === id
-                  ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0" }
-                  : { color: "rgba(255,255,255,0.4)" }
-              }
-              title={
-                id === "draw"
-                  ? "Place a note, drag to set length; drag across pitches to paint. Alt-drag erases."
-                  : id === "select"
-                    ? "Select / move — drag empty to marquee, click empty to deselect"
-                    : "Erase — left-drag deletes (right-drag always erases)"
-              }
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/30 p-0.5">
-          <span className="px-1.5 text-[9px] uppercase tracking-[0.12em] text-white/35">NOTE SNAP</span>
+        <EditorToolbarGroup>
+          <ScopedPlayButton
+            scope="pattern"
+            title="Play / pause this pattern only"
+          />
+          <PatternSelect />
+          <PatternBarsControls />
+        </EditorToolbarGroup>
+        <EditorToolbarDivider />
+        <EditorToolbarGroup label="Tool">
+          <div className="inline-flex h-8 rounded-lg border border-white/12 bg-black/30 p-0.5">
+            {([
+              ["draw", "Draw"],
+              ["select", "Select"],
+              ["erase", "Erase"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTool(id)}
+                className="h-7 px-2.5 text-[10px] font-bold rounded-md transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
+                style={
+                  tool === id
+                    ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0", boxShadow: "inset 0 0 0 1px rgba(255,106,61,0.45)" }
+                    : { color: "rgba(255,255,255,0.45)" }
+                }
+                aria-pressed={tool === id}
+                title={
+                  id === "draw"
+                    ? "Place a note, drag to set length; drag across pitches to paint. Alt-drag erases."
+                    : id === "select"
+                      ? "Select / move — drag empty to marquee, click empty to deselect"
+                      : "Erase — left-drag deletes (right-drag always erases)"
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </EditorToolbarGroup>
+        <EditorToolbarDivider />
+        <EditorToolbarGroup label="Snap">
+        <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/30 p-0.5 h-8">
+          <span className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-white/48">Snap</span>
           {SNAP_OPTIONS.map((opt) => (
             <button
               key={opt.label}
               type="button"
               onClick={() => setSnap(opt.steps)}
-              className="min-w-[28px] h-7 px-1.5 rounded-md text-[10px] font-mono transition"
+              className="min-w-[26px] h-7 px-1 rounded-md text-[10px] font-mono transition"
               style={
                 snapSteps === opt.steps
-                  ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0" }
+                  ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0", fontWeight: 700 }
                   : { color: "rgba(255,255,255,0.45)" }
               }
+              aria-pressed={snapSteps === opt.steps}
               title={
                 opt.label === "T"
                   ? "NOTE SNAP: triplet 1/8"
@@ -1645,6 +1669,9 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
             </button>
           ))}
         </div>
+        </EditorToolbarGroup>
+        <EditorToolbarDivider />
+        <EditorToolbarGroup label="Key" className="editor-toolbar__advanced">
         <div className="inline-flex rounded-lg border border-white/12 bg-black/30 p-0.5">
           {([
             ["all", "All"],
@@ -1819,13 +1846,16 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
             {playScope === "selection" ? "Looping sel" : "Loop sel"}
           </button>
         )}
-        <span className="flex-1" />
+        </EditorToolbarGroup>
+        <span className="editor-toolbar__spacer flex-1 min-w-[8px]" />
+        <EditorToolbarGroup label="View">
         <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/30 p-0.5">
           <button
             onClick={() => bumpZoom(0.85)}
             disabled={zoom <= ROLL_ZOOM_MIN}
             className="w-7 h-7 rounded-md border border-transparent text-white/60 hover:text-white hover:bg-white/8 text-[13px] leading-none transition disabled:opacity-30"
             title="Zoom out (bird's-eye — past fit)"
+            aria-label="Zoom out"
           >
             −
           </button>
@@ -1845,21 +1875,27 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
             disabled={zoom >= ROLL_ZOOM_MAX}
             className="w-7 h-7 rounded-md border border-transparent text-white/60 hover:text-white hover:bg-white/8 text-[13px] leading-none transition disabled:opacity-30"
             title="Zoom in for detail (scroll horizontally)"
+            aria-label="Zoom in"
           >
             +
           </button>
         </div>
+        </EditorToolbarGroup>
       </div>
 
       <p className="mb-2 text-[10px] text-white/35 tracking-wide">
         Move · Resize edges · Alt-drag erase · Shift-drag velocity · Draw paints across pitches
       </p>
 
-      {selectedNote && (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.08] bg-black/25 px-2.5 py-2">
-          <span className="text-[9px] uppercase tracking-[0.14em] text-white/40">
-            {selectedIds.size > 1 ? `Note (1 of ${selectedIds.size})` : "Note"}
-          </span>
+      {/* Always reserved — opening on first note used to shove the canvas mid-drag. */}
+      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.08] bg-black/25 px-2.5 py-2 min-h-[40px]">
+        <span className="text-[9px] uppercase tracking-[0.14em] text-white/40">
+          {selectedNote
+            ? (selectedIds.size > 1 ? `Note (1 of ${selectedIds.size})` : "Note")
+            : "Note"}
+        </span>
+        {selectedNote ? (
+          <>
           {([
             ["Start", "step", selectedNote.step, 0.25, totalSteps - 0.25],
             ["Len", "len", selectedNote.len, 0.25, totalSteps],
@@ -1912,8 +1948,11 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
               </label>
             ));
           })()}
-        </div>
-      )}
+          </>
+        ) : (
+          <span className="text-[10px] text-white/30">Select or place a note to edit Start · Len · Pitch · Vel</span>
+        )}
+      </div>
 
       <div
         ref={scrollRef}
@@ -1923,7 +1962,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           if (v) v.scrollLeft = left;
           setRollHScroll(left);
         }}
-        className="relative rounded-2xl border border-white/12 bg-[#0a0c12] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_0_1px_rgba(255,106,61,0.06)] overflow-auto"
+        className="relative rounded-2xl border border-white/12 bg-[#0a0c12] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_0_1px_rgba(255,106,61,0.06)] editor-scroll overflow-auto"
         style={{ height: rollH }}
       >
         <div className="relative" style={{ width: gridW, height: gridH }}>
@@ -1958,8 +1997,9 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => setVelOpen(!velOpen)}
-            className="text-[10px] uppercase tracking-[0.22em] text-white/40 hover:text-white/70 transition"
+            className="text-[10px] uppercase tracking-[0.12em] text-white/55 hover:text-white/80 transition font-bold"
             title="Velocity lane: each bar is a note's loudness — drag across to paint."
+            aria-expanded={velOpen}
           >
             {velOpen ? "▾" : "▸"} Velocity
           </button>
@@ -2001,7 +2041,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         {velOpen && (
           <div
             ref={velScrollRef}
-            className="relative mt-1.5 rounded-xl border border-white/12 bg-[#0a0c12] overflow-x-auto"
+            className="relative mt-1.5 rounded-xl border border-white/12 bg-[#0a0c12] editor-scroll overflow-x-auto"
             style={{ height: velH }}
           >
             <canvas

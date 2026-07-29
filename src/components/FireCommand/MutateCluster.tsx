@@ -239,10 +239,10 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
         <div className="flex h-8 min-w-0 items-center gap-2">
           <HelixMark active={!!mutation || flash} size={18} />
           <div className="min-w-0 flex-1">
-            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-200/90 leading-none">
+            <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-emerald-200/90 leading-none">
               Natural Selection
             </div>
-            <div className="mt-0.5 truncate text-[9px] leading-none text-white/40">
+            <div className="mt-0.5 truncate text-[10px] leading-none text-white/48">
               {mutation
                 ? `Gen ${mutation.generation} live — pick a survivor`
                 : `${pressureLabel(amount)} · ${Math.round(amount * 100)}% · evolve or die`}
@@ -252,10 +252,10 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
         <div className="flex h-8 min-w-0 items-center gap-1.5">
           <button
             onClick={breed}
-            className={`h-8 min-w-0 flex-1 overflow-hidden rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] transition ${
+            className={`h-8 min-w-0 flex-1 overflow-hidden rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-300/60 ${
               mutation
-                ? "bg-emerald-400/30 text-emerald-50 ring-1 ring-emerald-300/55 shadow-[0_0_14px_rgba(52,211,153,0.22)]"
-                : "bg-emerald-500/18 text-emerald-100 hover:bg-emerald-500/28 ring-1 ring-emerald-400/40"
+                ? "bg-emerald-400/30 text-emerald-50 ring-1 ring-emerald-300/55"
+                : "bg-emerald-500/16 text-emerald-100 hover:bg-emerald-500/26 ring-1 ring-emerald-400/35"
             }`}
             title="Breed two offspring of the current sound"
           >

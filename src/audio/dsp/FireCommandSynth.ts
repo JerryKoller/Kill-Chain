@@ -632,6 +632,35 @@ export interface FirePatch {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const midiToFreq = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 const MAX_UNISON = 16;
+/** Hard ceiling on Biquad Q — values near 30 scream and hard-clip the filter. */
+const FILTER_Q_CEIL = 3.5;
+
+/**
+ * Soft unison ceiling for live voices. Extreme user presets (unison 16 +
+ * spectral + ops4) used to spin ~48 PeriodicWaves on a single mono note.
+ */
+function liveUnisonCap(p: FirePatch): number {
+  const spectralOn = (p.spectralMode ?? "off") !== "off" && (p.spectralMix ?? 0) > 0.05;
+  const ops4 = (p.fmEngine ?? "classic") === "ops4";
+  const groups = 2 + ((p.oscCLevel ?? 0) > 0.0001 ? 1 : 0);
+  const heavyFx =
+    (p.crush ?? 0) > 0.45
+    || p.chorusModel === "triple"
+    || p.chorusModel === "ensemble"
+    || (p.reverbMix ?? 0) > 0.4
+    || (p.phaserMix ?? 0) > 0.45;
+  let cap = 12;
+  if (ops4) cap = Math.min(cap, 8);
+  if (spectralOn) cap = Math.min(cap, 6);
+  if (spectralOn && ops4) cap = 4;
+  if (spectralOn && groups >= 3) cap = Math.min(cap, 4);
+  if (!spectralOn && !ops4 && heavyFx) cap = Math.min(cap, 8);
+  return cap;
+}
+
+function liveFilterQ(base: number, extra = 0): number {
+  return clamp(base + extra, 0.0001, FILTER_Q_CEIL);
+}
 
 /**
  * Fixed headroom trim on the voice-summing bus.
@@ -948,7 +977,7 @@ class Voice {
       ? Math.max(0.001, liveAttackSec)
       : null;
     this.baseFreq = midiToFreq(midi);
-    this.unisonCount = Math.round(clamp(p.unison, 1, MAX_UNISON));
+    this.unisonCount = Math.round(clamp(Math.min(p.unison, liveUnisonCap(p)), 1, MAX_UNISON));
     this.uNorm = 1 / Math.sqrt(this.unisonCount);
     // Analog Life: persistent DNA personality + note variance.
     const seed = (p.analogDnaSeed ?? 0x73a9c412) >>> 0;
@@ -1024,7 +1053,7 @@ class Voice {
     for (let i = 1; i < slope; i++) {
       const extra = ctx.createBiquadFilter();
       extra.type = p.filterType;
-      extra.Q.value = clamp(p.filterResonance, 0.0001, 30) * 0.55;
+      extra.Q.value = liveFilterQ(p.filterResonance) * 0.55;
       this.filterExtra.push(extra);
     }
 
@@ -1042,7 +1071,7 @@ class Voice {
     node.connect(this.vca).connect(dest);
 
     this.filter.type = p.filterType;
-    this.filter.Q.value = clamp(p.filterResonance, 0.0001, 30);
+    this.filter.Q.value = liveFilterQ(p.filterResonance);
 
     this.ampEnv = ctx.createConstantSource();
     this.ampEnv.offset.value = 0;
@@ -1375,14 +1404,14 @@ class Voice {
       const base = this.baseCutoff(p);
       const couple = clamp(p.lpgResoCouple ?? 0, 0, 1);
       if (couple > 0.02) {
-        this.filter.Q.setValueAtTime(clamp(p.filterResonance + couple * 12 * velocity, 0.0001, 30), t);
+        this.filter.Q.setValueAtTime(liveFilterQ(p.filterResonance, couple * 12 * velocity), t);
       }
       const openHz = clamp(base * Math.pow(2, (1 + 2 * clamp(velocity, 0, 1)) * color * strikeAmt), 20, 18000);
       const floorHz = clamp(base * Math.pow(2, -4.5 * color), 30, 18000);
       this.filter.frequency.setValueAtTime(base, t);
       for (const extra of this.filterExtra) {
         extra.frequency.setValueAtTime(base, t);
-        extra.Q.setValueAtTime(clamp(p.filterResonance, 0.0001, 30) * 0.55, t);
+        extra.Q.setValueAtTime(liveFilterQ(p.filterResonance) * 0.55, t);
       }
       this.filterEnv.offset.cancelScheduledValues(t);
       this.filterEnv.offset.setValueAtTime(floorHz - base, t);
@@ -1440,7 +1469,7 @@ class Voice {
       for (const extra of this.filterExtra) {
         extra.type = p.filterType;
         extra.frequency.setValueAtTime(base, t);
-        extra.Q.setValueAtTime(clamp(p.filterResonance, 0.0001, 30) * 0.55, t);
+        extra.Q.setValueAtTime(liveFilterQ(p.filterResonance) * 0.55, t);
       }
       const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
       const accent = clamp(p.accentAmount ?? 0, 0, 1) * clamp(velocity, 0, 1) * (0.15 + acidMix * 0.85);
@@ -1455,12 +1484,12 @@ class Voice {
       // Dual destination: resonance follows filter envelope.
       const resoAmt = clamp(p.filterEnvResoAmount ?? 0, -1, 1);
       if (Math.abs(resoAmt) > 0.02) {
-        const qPeak = clamp(p.filterResonance + resoAmt * 14, 0.0001, 30);
+        const qPeak = liveFilterQ(p.filterResonance, resoAmt * 14);
         this.filter.Q.cancelScheduledValues(t);
-        this.filter.Q.setValueAtTime(clamp(p.filterResonance, 0.0001, 30), t);
+        this.filter.Q.setValueAtTime(liveFilterQ(p.filterResonance), t);
         this.filter.Q.linearRampToValueAtTime(qPeak, t + filtAtk);
         this.filter.Q.setTargetAtTime(
-          clamp(p.filterResonance + resoAmt * 14 * p.filtSustain, 0.0001, 30),
+          liveFilterQ(p.filterResonance, resoAmt * 14 * p.filtSustain),
           t + filtAtk,
           Math.max(0.005, filtDec / 3),
         );
@@ -1669,11 +1698,11 @@ class Voice {
         : 1;
     const cut = clamp(base * cal, 20, 20000);
     this.filter.type = p.filterType;
-    this.filter.Q.setTargetAtTime(clamp(p.filterResonance, 0.0001, 30), t, 0.02);
+    this.filter.Q.setTargetAtTime(liveFilterQ(p.filterResonance), t, 0.02);
     this.filter.frequency.setTargetAtTime(cut, t, 0.03);
     for (const extra of this.filterExtra) {
       extra.type = p.filterType;
-      extra.Q.setTargetAtTime(clamp(p.filterResonance, 0.0001, 30) * 0.55, t, 0.02);
+      extra.Q.setTargetAtTime(liveFilterQ(p.filterResonance) * 0.55, t, 0.02);
       extra.frequency.setTargetAtTime(cut, t, 0.03);
     }
     // Harmonic carve via notch / peaking near fundamental or partials.
@@ -1759,7 +1788,7 @@ class Voice {
     const base = this.baseCutoff(p);
     const hz = clamp(base * (Math.pow(2, oct) - 1), -18000, 18000);
     this.modCutoff.offset.setTargetAtTime(hz, t, 0.02);
-    if (m.aReso) this.filter.Q.setTargetAtTime(clamp(p.filterResonance + m.reso * 18, 0.0001, 30), t, 0.03);
+    if (m.aReso) this.filter.Q.setTargetAtTime(liveFilterQ(p.filterResonance, m.reso * 18), t, 0.03);
     if (m.aFm) this.fmGain.gain.setTargetAtTime(Math.max(0, (p.fmAmount + m.fm) * this.baseFreq * 6), t, 0.02);
     if (m.aLvl) {
       const oscAOn = p.moduleEnable?.["osc.a"] !== false;
@@ -2239,9 +2268,10 @@ export class FireCommandSynth {
    * this is what actually loads the audio thread.
    */
   private voiceSourceCost(p: FirePatch): number {
-    const unison = Math.round(clamp(p.unison, 1, MAX_UNISON));
+    const unison = Math.round(clamp(Math.min(p.unison, liveUnisonCap(p)), 1, MAX_UNISON));
     const groups = 2 + (p.oscCLevel > 0.0001 ? 1 : 0); // A and B always exist
-    return unison * groups + 3; // + sub + noise + FM operator
+    const fm = (p.fmEngine ?? "classic") === "ops4" ? 4 : 1;
+    return unison * groups + 2 + fm; // + sub + noise + FM weight
   }
 
   /**
@@ -2260,13 +2290,33 @@ export class FireCommandSynth {
    * sources), so existing moderate patches behave exactly as before.
    */
   private effectiveMaxVoices(p: FirePatch): number {
-    const OSC_BUDGET = 108;
+    const OSC_BUDGET = 96;
     const byBudget = Math.floor(OSC_BUDGET / this.voiceSourceCost(p));
     const chipCap = Math.round(p.chipVoiceLimit ?? 0);
     const cap = chipCap > 0 ? Math.min(this.maxVoices, chipCap) : this.maxVoices;
     // 4-op FM is heavier — steal sooner.
     const fmPenalty = (p.fmEngine ?? "classic") === "ops4" ? 0.7 : 1;
-    return clamp(Math.min(cap, Math.floor(byBudget * fmPenalty)), 2, 48);
+    // Spectral STFT is a global bus tax — leave fewer voices when it's on.
+    const spectralOn = (p.spectralMode ?? "off") !== "off" && (p.spectralMix ?? 0) > 0.05;
+    const spectralPenalty = spectralOn ? 0.55 : 1;
+    return clamp(Math.min(cap, Math.floor(byBudget * fmPenalty * spectralPenalty)), 2, 48);
+  }
+
+  /** 0..1 — how hard the current patch + active voices are hitting CPU. */
+  getCpuPressure(): number {
+    const p = this.patch;
+    const uni = Math.round(clamp(Math.min(p.unison, liveUnisonCap(p)), 1, MAX_UNISON));
+    const groups = 2 + (p.oscCLevel > 0.0001 ? 1 : 0);
+    const sources = this.voiceSourceCost(p);
+    const voiceLoad = (sources * Math.max(1, this.voices.size)) / 72;
+    const spectral = (p.spectralMode ?? "off") !== "off" && (p.spectralMix ?? 0) > 0.05 ? 0.35 : 0;
+    const fx =
+      (p.crush > 0.4 ? 0.08 : 0)
+      + (p.chorusMix > 0.2 ? 0.06 : 0)
+      + (p.phaserMix > 0.2 ? 0.05 : 0)
+      + (p.reverbMix > 0.25 ? 0.08 : 0)
+      + (p.delayMix > 0.2 ? 0.05 : 0);
+    return clamp(voiceLoad * 0.55 + spectral + fx + (uni * groups > 24 ? 0.1 : 0), 0, 1);
   }
 
   private makeLfoBank(): LfoBank {
@@ -3361,6 +3411,7 @@ export class FireCommandSynth {
     const pathAge = p.pathAge !== false && on("fx.vintage");
     const pathFx = p.pathFx !== false;
     const pathMix = p.pathMix !== false;
+    const pressure = this.getCpuPressure();
 
     this.master.gain.setTargetAtTime(pathMix ? clamp(p.masterGain, 0, 1.2) : 0, t, 0.02);
 
@@ -3368,13 +3419,16 @@ export class FireCommandSynth {
     const crushAmt = pathDrive ? clamp(p.crush, 0, 1) : 0;
     const bias = pathDrive ? (p.driveBias ?? 0) : 0;
     const sym = pathDrive ? (p.driveSymmetry ?? 0) : 0;
-    const driveKey = `${p.driveMode}|${driveAmt.toFixed(3)}|${bias.toFixed(2)}|${sym.toFixed(2)}|${p.fxQuality ?? "live"}`;
+    // Under heavy patches, force eco oversampling even if the knob says Live/High.
+    const qEff = pressure > 0.6 ? "eco" : (p.fxQuality ?? "live");
+    const driveKey = `${p.driveMode}|${driveAmt.toFixed(3)}|${bias.toFixed(2)}|${sym.toFixed(2)}|${qEff}|p${pressure > 0.6 ? 1 : 0}`;
     if (driveKey !== this.lastDriveKey) {
       this.driveShaper.curve = makeDriveCurve(driveAmt, p.driveMode, bias, sym);
-      const q = p.fxQuality ?? "live";
-      this.driveShaper.oversample = q === "eco" ? "none" : q === "live" ? "2x" : "4x";
+      this.driveShaper.oversample = qEff === "eco" ? "none" : qEff === "live" ? "2x" : "4x";
       this.lastDriveKey = driveKey;
     }
+    // Soft-clip stage is always on the master bus — drop 2× OS when hot.
+    this.softClip.oversample = pressure > 0.5 ? "none" : "2x";
     const inG = pathDrive ? clamp(p.driveInGain ?? 1, 0, 2) : 1;
     const outG = pathDrive ? clamp(p.driveOutGain ?? 1, 0, 2) : 1;
     const auto = pathDrive && (p.driveAutoGain !== false);
@@ -3536,7 +3590,7 @@ export class FireCommandSynth {
     const rRatio = mode === "bounce" ? 1.5 : mode === "dub" ? 1.35 : 1.5;
     this.dL.delayTime.setTargetAtTime(dTime, t, 0.02);
     this.dR.delayTime.setTargetAtTime(dTime * rRatio, t, 0.02);
-    let fb = clamp(p.delayFeedback, 0, 0.92);
+    let fb = clamp(p.delayFeedback, 0, 0.72);
     if (mode === "infinite") fb = Math.min(0.98, Math.max(fb, 0.92));
     if (mode === "slap") fb = Math.min(fb, 0.25);
     if (p.delayFreeze) fb = 0.97;
@@ -3747,7 +3801,9 @@ export class FireCommandSynth {
     const on = active && this.spectralState === "ready" && this.spectralNode !== null;
     this.spectralDry.gain.setTargetAtTime(on ? 0 : 1, t, 0.03);
     this.spectralSend.gain.setTargetAtTime(on ? 1 : 0, t, 0.03);
-    const msgKey = `${mode}|${(p.spectralAmount ?? 0.6).toFixed(3)}|${mix.toFixed(3)}|${on ? 1 : 0}|${(p.spectralLow ?? 0).toFixed(2)}|${(p.spectralHigh ?? 1).toFixed(2)}`;
+    // Under CPU pressure, ask the worklet for mono STFT (copy L→R) — ~½ cost.
+    const eco = on && this.getCpuPressure() > 0.55;
+    const msgKey = `${mode}|${(p.spectralAmount ?? 0.6).toFixed(3)}|${mix.toFixed(3)}|${on ? 1 : 0}|${(p.spectralLow ?? 0).toFixed(2)}|${(p.spectralHigh ?? 1).toFixed(2)}|${eco ? 1 : 0}`;
     if (msgKey !== this.lastSpectralMsg) {
       this.lastSpectralMsg = msgKey;
       this.spectralNode?.port.postMessage({
@@ -3757,6 +3813,7 @@ export class FireCommandSynth {
         bypass: !on,
         binLow: clamp(p.spectralLow ?? 0, 0, 1),
         binHigh: clamp(p.spectralHigh ?? 1, 0, 1),
+        eco,
       });
     }
   }

@@ -157,24 +157,29 @@ export function FireMasterMeter() {
   }, []);
 
   return (
-    <div className="fc-master-meter shrink-0 fc-text-secondary" title="Fire bus · post safety clip · pre Kill-Chain">
-      <span className="uppercase tracking-[0.16em] text-white/45 text-[10px] font-bold">Fire</span>
-      <div className="fc-meter-bar" title="Fire bus peak">
+    <div
+      className="fc-master-meter shrink-0"
+      title="Fire bus · post safety clip · pre Kill-Chain"
+      aria-label="Fire output meter"
+    >
+      <span className="uppercase tracking-[0.1em] text-white/55 text-[10px] font-bold">Fire</span>
+      <div className="fc-meter-bar" title="Fire bus peak level" role="meter" aria-label="Peak level">
         <div ref={fillRef} className="fc-meter-fill" style={{ width: "0%" }} />
       </div>
-      <span ref={peakRef} className="font-mono text-[10px] text-white/70">−∞</span>
-      <span ref={holdRef} className="font-mono text-[10px] text-white/40" title="Peak hold">−∞</span>
+      <span ref={peakRef} className="font-mono text-[10px] text-white/70" title="Instantaneous peak (dBFS)">−∞</span>
+      <span ref={holdRef} className="font-mono text-[10px] text-white/45" title="Peak hold (dBFS)">−∞</span>
       <span
         ref={clipRef}
         className="font-mono text-[9px] font-black tracking-wider"
-        style={{ opacity: 0.25, color: "rgba(255,255,255,0.35)" }}
-        title="Clip LED"
+        style={{ opacity: 0.28, color: "rgba(255,255,255,0.4)" }}
+        title="Clip indicator"
+        aria-label="Clip indicator"
       >
         CLIP
       </span>
-      <span ref={grRef} className="font-mono text-[10px] text-white/40">LIM −0.0</span>
-      <span ref={voicesRef} className="font-mono text-[10px] text-white/45">Voices 0/{maxVoices}</span>
-      <span ref={corrRef} className="font-mono text-[10px] text-white/35">Corr —</span>
+      <span ref={grRef} className="font-mono text-[10px] text-white/45" title="Limiter gain reduction">LIM −0.0</span>
+      <span ref={voicesRef} className="font-mono text-[10px] text-white/50" title="Active voices / max">Voices 0/{maxVoices}</span>
+      <span ref={corrRef} className="font-mono text-[10px] text-white/42" title="Stereo correlation (−1…+1)">Corr —</span>
     </div>
   );
 }

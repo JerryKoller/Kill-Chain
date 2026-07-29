@@ -10,7 +10,6 @@ import { DrumMachine } from "./DrumMachine";
 import { AutomationLane } from "./AutomationLane";
 import {
   useFireSequencerStore,
-  MAX_BARS,
   STEPS_PER_BAR,
 } from "@/state/fireSequencerStore";
 import { FIRE_PRESETS, useFireCommandStore } from "@/state/fireCommandStore";
@@ -24,24 +23,37 @@ import {
 } from "@/lib/fireStudio";
 import { RollFitProvider } from "./useRollFit";
 import { PIANO_GUTTER } from "./PianoRoll";
-import { ArrangementPlaylist, PATTERN_COLORS } from "./ArrangementPlaylist";
+import { ArrangementPlaylist } from "./ArrangementPlaylist";
 import { CollapseToggle } from "./CollapseToggle";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { PresetSearchCombobox, type PresetSearchOption } from "./PresetSearchCombobox";
+import { PatternSelect } from "./PatternSelect";
+import {
+  SEQ,
+  SEQ_CTRL,
+  SEQ_GROUP_LABEL,
+  SEQ_HINT,
+  SEQ_META,
+  SEQ_PILL,
+  SEQ_PILL_DESTRUCTIVE,
+  SEQ_PILL_DESTRUCTIVE_ARM,
+  SEQ_TITLE,
+  SeqGroup,
+  SeqSegment,
+  SeqSegmented,
+} from "./seqChrome";
+import { FullscreenEditorShell, EditorModeSwitch } from "./EditorShell";
 
-const FIRE = "#ff6a3d";
-const ICE = "#62b6ff";
-const BRASS = "#e8b86d";
-const BRASS_SOFT = "#f5d9a8";
+const FIRE = SEQ.fire;
+const ICE = SEQ.ice;
+const BRASS = SEQ.brass;
+const BRASS_SOFT = SEQ.brassSoft;
 const BRASS_GLOW = "rgba(232,184,109,0.35)";
 
 type Tab = "roll" | "drums";
 
-/** Auto-assigned pattern colors (editors chrome). */
-const SECTION_COLORS = PATTERN_COLORS;
-
 /**
- * Swing controls (v1.6): one knob when linked; unlink to give drums and the
+ * Swing controls (v1.6): one knobs when linked; unlink to give drums and the
  * sample deck their own groove separate from the melody.
  */
 function SwingControls() {
@@ -60,8 +72,8 @@ function SwingControls() {
     onChange: (v: number) => void,
     title: string,
   ) => (
-    <div className="flex items-center gap-1" title={title}>
-      <span className="text-[9px] uppercase tracking-[0.14em] text-white/40 w-8 text-right">{label}</span>
+    <div className="flex items-center gap-1.5" title={title}>
+      <span className="text-[10px] uppercase tracking-[0.08em] text-white/55 w-8 text-right">{label}</span>
       <input
         type="range"
         min={0}
@@ -70,36 +82,40 @@ function SwingControls() {
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="w-[58px] accent-[#e8b86d]"
+        aria-label={`${label} swing ${Math.round(value * 100)} percent`}
       />
-      <span className="text-[10px] font-mono text-white/50 w-7">{Math.round(value * 100)}%</span>
+      <span className="text-[11px] font-mono tabular-nums text-[rgba(245,217,168,0.85)] w-8">
+        {Math.round(value * 100)}%
+      </span>
     </div>
   );
 
   return (
-    <div className="flex items-center gap-1.5">
-      <span
-        className="text-[9px] font-black uppercase tracking-[0.18em]"
-        style={{ color: "rgba(232,184,109,0.55)" }}
-        title="Delays every off-beat 16th for groove"
-      >Swing</span>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className={SEQ_GROUP_LABEL} title="Delays every off-beat 16th for groove">
+        Swing
+      </span>
       <button
+        type="button"
         onClick={() => setSwingLinked(!swingLinked)}
-        className="h-6 px-1.5 rounded-md text-[9px] font-bold transition"
+        className={`${SEQ_CTRL} !h-7 !px-2 text-[10px]`}
         style={
           swingLinked
-            ? { color: "rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.06)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.1)" }
-            : { color: BRASS_SOFT, background: "rgba(232,184,109,0.14)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.4)" }
+            ? { color: "rgba(255,255,255,0.65)", background: "rgba(255,255,255,0.06)" }
+            : { color: BRASS_SOFT, background: "rgba(232,184,109,0.16)", borderColor: "rgba(232,184,109,0.45)" }
         }
         title={
           swingLinked
             ? "Linked: one groove for everything. Click to give drums and samples their own swing."
             : "Unlinked: melody, drums and samples each swing on their own. Click to re-link."
         }
+        aria-pressed={!swingLinked}
+        aria-label={swingLinked ? "Unlink swing groups" : "Link swing groups"}
       >
         {swingLinked ? "🔗" : "⛓️‍💥"}
       </button>
       {swingLinked ? (
-        <div className="flex items-center gap-1" title="Delays every off-beat 16th for groove (all groups)">
+        <div className="flex items-center gap-2" title="Delays every off-beat 16th for groove (all groups)">
           <input
             type="range"
             min={0}
@@ -107,14 +123,15 @@ function SwingControls() {
             step={0.02}
             value={swing}
             onChange={(e) => setSwing(Number(e.target.value))}
-            className="w-[74px] accent-[#e8b86d]"
+            className="w-[88px] accent-[#e8b86d]"
+            aria-label={`Swing ${Math.round(swing * 100)} percent`}
           />
-          <span className="text-[10px] font-mono tabular-nums" style={{ color: BRASS_SOFT, opacity: 0.7 }}>
+          <span className="text-[11px] font-mono tabular-nums text-[rgba(245,217,168,0.9)] min-w-[2.25rem]">
             {Math.round(swing * 100)}%
           </span>
         </div>
       ) : (
-        <div className="flex flex-col gap-0.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {slider("Mel", swing, setSwing, "Swing on the piano-roll notes (Synth A + B)")}
           {slider("Drm", swingDrums, setSwingDrums, "Swing on the drum kit lanes")}
           {slider("Smp", swingSamples, setSwingSamples, "Swing on the sample deck lanes")}
@@ -145,7 +162,6 @@ export const SequencerPanel = memo(function SequencerPanel({
   const noteCount = useFireSequencerStore((s) => s.notes.length);
   const togglePlay = useFireSequencerStore((s) => s.togglePlay);
   const setBpm = useFireSequencerStore((s) => s.setBpm);
-  const setBars = useFireSequencerStore((s) => s.setBars);
   const setSynthEnabled = useFireSequencerStore((s) => s.setSynthEnabled);
   const setDrumsEnabled = useFireSequencerStore((s) => s.setDrumsEnabled);
   const setSynthBEnabled = useFireSequencerStore((s) => s.setSynthBEnabled);
@@ -171,7 +187,6 @@ export const SequencerPanel = memo(function SequencerPanel({
   const setMetronome = useFireSequencerStore((s) => s.setMetronome);
   const sections = useFireSequencerStore((s) => s.sections);
   const activeSectionId = useFireSequencerStore((s) => s.activeSectionId);
-  const setActiveSection = useFireSequencerStore((s) => s.setActiveSection);
   const selectedClipId = useFireSequencerStore((s) => s.selectedClipId);
   const playlistTracks = useFireSequencerStore((s) => s.playlistTracks);
   const arrangement = useFireSequencerStore((s) => s.arrangement);
@@ -416,10 +431,10 @@ export const SequencerPanel = memo(function SequencerPanel({
   }
 
   const body = (
-    <div ref={panelRef} tabIndex={-1} className="outline-none">
+    <div ref={panelRef} tabIndex={-1} className="outline-none flex flex-col flex-1 min-h-0">
       {/* Brass transport — matches Synth-side FireMiniTransport */}
       <div
-        className={`relative overflow-hidden ${flush ? "" : "rounded-2xl mb-2.5"}`}
+        className={`relative overflow-hidden shrink-0 ${flush ? "" : "rounded-2xl mb-2.5"}`}
         style={
           flush
             ? {
@@ -459,395 +474,326 @@ export const SequencerPanel = memo(function SequencerPanel({
         />
         )}
 
-        <div className="relative z-10 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.2fr)_auto_minmax(0,1fr)] lg:items-center px-3 py-2.5">
-          <div className="flex flex-wrap items-center gap-2 min-w-0">
-            <button
-              onClick={togglePlay}
-              className="relative h-10 px-5 rounded-xl font-black text-[12px] uppercase tracking-[0.14em] transition overflow-hidden shrink-0"
-              style={
-                playing
-                  ? {
-                      color: "#1a1208",
-                      background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})`,
-                      boxShadow: `0 0 24px ${BRASS_GLOW}, inset 0 1px 0 rgba(255,255,255,0.35)`,
-                    }
-                  : {
-                      color: BRASS_SOFT,
-                      background: "rgba(232,184,109,0.12)",
-                      boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.45)",
-                    }
-              }
-              title={`Open Fire — play/stop ${playScope}`}
-            >
-              {playing && (
-                <span
-                  className="pointer-events-none absolute inset-0 opacity-60 animate-[evolve-breathe_1.8s_ease-in-out_infinite]"
-                  style={{ background: "radial-gradient(circle at 30% 40%, rgba(255,255,255,0.45), transparent 55%)" }}
-                />
-              )}
-              <span className="relative inline-flex items-center gap-2">
-                <span aria-hidden>{playing ? "■" : "▶"}</span>
-                {playing ? "Hold Fire" : "Open Fire"}
-              </span>
-            </button>
-
-            <div
-              className="inline-flex items-center rounded-lg p-0.5 shrink-0"
-              style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.18)" }}
-              role="group"
-              aria-label="Play target"
-            >
-              <span className="px-1.5 text-[8px] font-black uppercase tracking-[0.14em] text-white/35 hidden sm:inline">Target</span>
-              {([
-                { id: "pattern" as const, label: "Pattern" },
-                { id: "arrangement" as const, label: "Arrangement" },
-                { id: "selection" as const, label: "Selection" },
-              ]).map((opt) => {
-                const on = playScope === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setPlayScope(opt.id)}
-                    className="h-8 px-2 rounded-md text-[9px] font-bold uppercase tracking-[0.08em] transition"
-                    style={
-                      on
-                        ? { color: "#1a1208", background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})` }
-                        : { color: "rgba(245,217,168,0.55)", background: "transparent" }
-                    }
-                    title={`Play target: ${opt.label}`}
-                    aria-pressed={on}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              type="button"
-              onClick={toggleLoopScope}
-              className="h-8 px-2.5 rounded-md text-[9px] font-bold uppercase tracking-[0.08em] transition"
-              style={
-                playScope === "selection"
-                  ? { color: "#1a1208", background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})` }
-                  : { color: "rgba(245,217,168,0.55)", background: "rgba(0,0,0,0.25)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.1)" }
-              }
-              title={
-                hasLoopSelection
-                  ? "Loop the selected note range (toggle selection scope)"
-                  : "Pattern / arrangement always loop — select notes to loop a range"
-              }
-            >
-              Loop
-            </button>
-
-            <button
-              onClick={() => setRecording(!recording)}
-              className="h-10 px-3.5 rounded-xl font-black text-[12px] uppercase tracking-[0.1em] transition"
-              style={
-                recording
-                  ? {
-                      color: "#fecdd3",
-                      background: "rgba(244,63,94,0.28)",
-                      boxShadow: "0 0 18px rgba(244,63,94,0.4), inset 0 0 0 1px rgba(244,63,94,0.7)",
-                    }
-                  : {
-                      color: "rgba(255,255,255,0.45)",
-                      background: "rgba(0,0,0,0.25)",
-                      boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.1)",
-                    }
-              }
-              title="Arm record: while playing, everything you play lands in the piano roll"
-            >
-              ● Rec
-            </button>
-            {recording && (
-              <div className="flex flex-wrap items-center gap-1">
+        <div className="relative z-10 seq-header">
+          {/* A — Primary application header */}
+          <div className="seq-header__primary">
+            <div className="seq-header__transport">
+              <div className="seq-header__cluster">
                 <button
-                  onClick={() => setRecordMode(recordMode === "overdub" ? "replace" : "overdub")}
-                  className="h-8 px-2 rounded-lg text-[10px] font-semibold border border-rose-400/30 text-rose-100/80"
-                  title="Toggle overdub vs replace"
-                >
-                  {recordMode === "replace" ? "Replace" : "Overdub"}
-                </button>
-                <button
-                  onClick={() => setRecordCountIn((recordCountIn + 1) % 5)}
-                  className="h-8 px-2 rounded-lg text-[10px] font-semibold border border-white/12 text-white/55"
-                  title="Count-in bars"
-                >
-                  {recordCountIn === 0 ? "No count-in" : `${recordCountIn} bar count-in`}
-                </button>
-                <button
-                  onClick={() => setMetronome(!metronome)}
-                  className={`h-8 px-2 rounded-lg text-[10px] font-semibold border ${
-                    metronome ? "border-amber-400/40 text-amber-100" : "border-white/12 text-white/45"
-                  }`}
-                >
-                  Metro
-                </button>
-                <button
-                  onClick={() => setRecordQuantize(!recordQuantize)}
-                  className="h-8 px-2.5 rounded-lg text-[11px] font-semibold transition"
+                  onClick={togglePlay}
+                  className="relative h-9 px-4 rounded-lg font-black text-[12px] uppercase tracking-[0.1em] transition overflow-hidden shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] cursor-pointer"
                   style={
-                    recordQuantize
-                      ? { color: BRASS_SOFT, background: "rgba(232,184,109,0.16)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.45)" }
-                      : { color: "rgba(255,255,255,0.35)", background: "rgba(0,0,0,0.25)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)" }
+                    playing
+                      ? {
+                          color: "#1a1208",
+                          background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})`,
+                          boxShadow: `0 0 20px ${BRASS_GLOW}, inset 0 1px 0 rgba(255,255,255,0.35)`,
+                        }
+                      : {
+                          color: BRASS_SOFT,
+                          background: "rgba(232,184,109,0.12)",
+                          boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.45)",
+                        }
                   }
-                  title="Quantize captured notes to the 1/16 grid"
+                  title={`Open Fire — play/stop ${playScope}`}
+                  aria-pressed={playing}
                 >
-                  ⧗ 1/16
+                  {playing && (
+                    <span
+                      className="pointer-events-none absolute inset-0 opacity-60 animate-[evolve-breathe_1.8s_ease-in-out_infinite]"
+                      style={{ background: "radial-gradient(circle at 30% 40%, rgba(255,255,255,0.45), transparent 55%)" }}
+                    />
+                  )}
+                  <span className="relative inline-flex items-center gap-2">
+                    <span aria-hidden>{playing ? "■" : "▶"}</span>
+                    {playing ? "Hold Fire" : "Open Fire"}
+                  </span>
                 </button>
               </div>
-            )}
-            {recording && (
-              <div className="text-[9px] font-mono text-rose-200/70">
-                REC: {recordMode.toUpperCase()}
-                {recordCountIn > 0 ? ` · ${recordCountIn}-BAR COUNT-IN ON PLAY` : " · NO COUNT-IN"}
-                {" · "}
-                {recordQuantize ? "1/16 QUANTIZE" : "FREE"}
-              </div>
-            )}
 
-            <div
-              className="flex items-center gap-1.5 rounded-xl px-2.5 py-1.5"
-              style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.16)" }}
-            >
-              <span className="text-[9px] font-black uppercase tracking-[0.18em]" style={{ color: "rgba(232,184,109,0.5)" }}>BPM</span>
-              <input
-                type="number"
-                min={40}
-                max={240}
-                value={bpm}
-                onChange={(e) => setBpm(Number(e.target.value) || 128)}
-                className="w-[58px] rounded-md bg-black/40 px-1.5 py-1 text-sm font-mono text-center outline-none"
-                style={{ color: BRASS_SOFT, boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.2)" }}
-              />
-            </div>
+              <SeqGroup label="Target">
+                <SeqSegmented aria-label="Play target">
+                  {([
+                    { id: "pattern" as const, label: "Pattern" },
+                    { id: "arrangement" as const, label: "Arrangement" },
+                    { id: "selection" as const, label: "Selection" },
+                  ]).map((opt) => (
+                    <SeqSegment
+                      key={opt.id}
+                      brass
+                      active={playScope === opt.id}
+                      onClick={() => setPlayScope(opt.id)}
+                      title={`Play target: ${opt.label}`}
+                    >
+                      {opt.label}
+                    </SeqSegment>
+                  ))}
+                </SeqSegmented>
+              </SeqGroup>
 
-            <div
-              className="rounded-xl px-2 py-1"
-              style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.16)" }}
-            >
-              <SwingControls />
-            </div>
-          </div>
-
-          <div
-            className="flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-1.5"
-            style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.16)" }}
-          >
-            <span className="text-[9px] font-black uppercase tracking-[0.18em]" style={{ color: "rgba(232,184,109,0.5)" }}>Duration</span>
-            {[1, 2, 4, 8, 16, 32, 64, 96].filter((b) => b <= MAX_BARS).map((b) => (
-              <button
-                key={b}
-                onClick={() => {
-                  if (b > bars) {
-                    const mode = window.confirm(
-                      `Grow to ${b} bars.\nOK = duplicate existing content\nCancel = extend empty`,
-                    ) ? "duplicate" : "empty";
-                    useFireSequencerStore.getState().setBarsWithMode(b, mode);
-                  } else {
-                    setBars(b);
-                  }
-                }}
-                className="h-8 min-w-[2rem] px-1.5 rounded-lg text-[10px] font-mono transition"
-                style={
-                  bars === b
-                    ? { color: "#1a1208", background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})`, boxShadow: `0 0 12px ${BRASS_GLOW}` }
-                    : { color: "rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.03)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)" }
-                }
-              >{b}</button>
-            ))}
-            <label className="h-8 inline-flex items-center gap-1 px-1.5 rounded-lg text-[9px] text-white/45" title="Custom bar count (1–96)">
-              <span className="uppercase tracking-wider">Bars</span>
-              <input
-                type="number"
-                min={1}
-                max={MAX_BARS}
-                value={bars}
-                onChange={(e) => {
-                  const n = Math.round(Number(e.target.value));
-                  if (!Number.isFinite(n)) return;
-                  if (n > bars) {
-                    useFireSequencerStore.getState().setBarsWithMode(n, "empty");
-                  } else {
-                    setBars(n);
-                  }
-                }}
-                className="w-10 h-6 rounded bg-black/40 text-center font-mono text-[11px] text-white/80 outline-none"
-                style={{ boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.25)" }}
-              />
-            </label>
-            <button
-              onClick={() => {
-                const ok = useFireSequencerStore.getState().duplicatePattern();
-                if (!ok) return;
-              }}
-              disabled={bars * 2 > MAX_BARS}
-              className="h-8 px-2 rounded-lg text-[10px] font-semibold transition disabled:opacity-30"
-              style={{ color: "rgba(245,217,168,0.7)", background: "rgba(232,184,109,0.08)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.22)" }}
-              title="Double this pattern's length and repeat its contents"
-            >
-              Double length
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-end gap-1.5 min-w-0">
-            <div className="text-right hidden md:block mr-0.5">
-              <div className="text-[8px] font-black uppercase tracking-[0.2em] leading-none" style={{ color: "rgba(232,184,109,0.45)" }}>
-                Layers
-              </div>
-              <div className="text-[9px] text-white/30 mt-0.5">arm · mute</div>
-            </div>
-            <div
-              className="inline-flex items-center gap-1 rounded-xl p-1"
-              style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.16)" }}
-            >
-              {([
-                { on: synthEnabled, toggle: () => setSynthEnabled(!synthEnabled), label: "A", accent: "#ff8f6b", soft: "#ffd0c0", title: "Arm / mute Synth A" },
-                { on: synthBEnabled, toggle: () => setSynthBEnabled(!synthBEnabled), label: "B", accent: "#7dd3fc", soft: "#e0f2fe", title: "Arm / mute Synth B" },
-                { on: drumsEnabled, toggle: () => setDrumsEnabled(!drumsEnabled), label: "DRM", accent: "#bef264", soft: "#ecfccb", title: "Arm / mute drums" },
-              ] as const).map((ch) => (
+              <div className="seq-header__cluster" role="group" aria-label="Transport">
                 <button
-                  key={ch.label}
-                  onClick={ch.toggle}
-                  className="h-8 min-w-[2.75rem] px-2.5 rounded-lg text-[11px] font-black tracking-wide transition inline-flex items-center justify-center gap-1.5"
+                  type="button"
+                  onClick={toggleLoopScope}
+                  className={SEQ_CTRL}
                   style={
-                    ch.on
-                      ? { color: ch.soft, background: `${ch.accent}22`, boxShadow: `inset 0 0 0 1px ${ch.accent}66, 0 0 12px ${ch.accent}33` }
-                      : { color: "rgba(255,255,255,0.28)", background: "transparent", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)" }
+                    playScope === "selection"
+                      ? {
+                          color: "#1a1208",
+                          background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})`,
+                          borderColor: "rgba(232,184,109,0.55)",
+                          fontWeight: 700,
+                        }
+                      : undefined
                   }
-                  title={ch.title}
+                  title={
+                    hasLoopSelection
+                      ? "Loop the selected note range (toggle selection scope)"
+                      : "Pattern / arrangement always loop — select notes to loop a range"
+                  }
+                  aria-pressed={playScope === "selection"}
+                >
+                  {playScope === "selection" ? "● Loop" : "Loop"}
+                </button>
+
+                <button
+                  onClick={() => setRecording(!recording)}
+                  className="h-8 px-3 rounded-lg font-bold text-[11px] uppercase tracking-[0.08em] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-rose-400/60 cursor-pointer inline-flex items-center gap-1.5"
+                  style={
+                    recording
+                      ? {
+                          color: "#fecdd3",
+                          background: "rgba(244,63,94,0.28)",
+                          boxShadow: "0 0 14px rgba(244,63,94,0.35), inset 0 0 0 1px rgba(244,63,94,0.75)",
+                          fontWeight: 800,
+                        }
+                      : {
+                          color: "rgba(255,255,255,0.55)",
+                          background: "rgba(0,0,0,0.28)",
+                          boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.12)",
+                        }
+                  }
+                  title="Arm record: while playing, everything you play lands in the piano roll"
+                  aria-pressed={recording}
+                  aria-label={recording ? "Disarm record" : "Arm record"}
                 >
                   <span
-                    className="w-1.5 h-1.5 rounded-full shrink-0"
-                    style={{ background: ch.on ? ch.accent : "rgba(255,255,255,0.2)", boxShadow: ch.on ? `0 0 8px ${ch.accent}` : undefined }}
+                    aria-hidden
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{
+                      background: recording ? "#fb7185" : "rgba(255,255,255,0.35)",
+                      boxShadow: recording ? "0 0 8px #fb7185" : undefined,
+                    }}
                   />
-                  {ch.label}
+                  Rec
                 </button>
-              ))}
+
+                <div
+                  className="flex items-center gap-1.5 rounded-lg px-2.5 h-8"
+                  style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.2)" }}
+                >
+                  <span className={SEQ_GROUP_LABEL}>BPM</span>
+                  <input
+                    type="number"
+                    min={40}
+                    max={240}
+                    value={bpm}
+                    onChange={(e) => setBpm(Number(e.target.value) || 128)}
+                    className="w-[52px] h-6 rounded-md bg-black/40 px-1 text-[13px] font-mono text-center outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-[rgba(232,184,109,0.65)]"
+                    style={{ color: BRASS_SOFT, boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.22)" }}
+                    aria-label="Tempo BPM"
+                  />
+                </div>
+              </div>
+
+              {recording && (
+                <div className="seq-header__cluster">
+                  <button
+                    onClick={() => setRecordMode(recordMode === "overdub" ? "replace" : "overdub")}
+                    className={SEQ_CTRL}
+                    title="Toggle overdub vs replace"
+                  >
+                    {recordMode === "replace" ? "Replace" : "Overdub"}
+                  </button>
+                  <button
+                    onClick={() => setRecordCountIn((recordCountIn + 1) % 5)}
+                    className={SEQ_CTRL}
+                    title="Count-in bars"
+                  >
+                    {recordCountIn === 0 ? "No count-in" : `${recordCountIn} bar count-in`}
+                  </button>
+                  <button
+                    onClick={() => setMetronome(!metronome)}
+                    className={SEQ_CTRL}
+                    style={metronome ? { borderColor: "rgba(251,191,36,0.45)", color: "#fde68a" } : undefined}
+                    aria-pressed={metronome}
+                  >
+                    Metro
+                  </button>
+                  <button
+                    onClick={() => setRecordQuantize(!recordQuantize)}
+                    className={SEQ_CTRL}
+                    style={
+                      recordQuantize
+                        ? { color: BRASS_SOFT, background: "rgba(232,184,109,0.16)", borderColor: "rgba(232,184,109,0.45)" }
+                        : undefined
+                    }
+                    title="Quantize captured notes to the 1/16 grid"
+                    aria-pressed={recordQuantize}
+                  >
+                    ⧗ 1/16
+                  </button>
+                  <span className={`${SEQ_HINT} font-mono text-rose-200/80`}>
+                    REC · {recordMode.toUpperCase()}
+                    {recordCountIn > 0 ? ` · ${recordCountIn}b IN` : " · NO IN"}
+                    {" · "}
+                    {recordQuantize ? "1/16" : "FREE"}
+                  </span>
+                </div>
+              )}
+
+              <SwingControls />
             </div>
-            <input
-              type="range"
-              min={0}
-              max={1.2}
-              step={0.02}
-              value={drumLevel}
-              onChange={(e) => setDrumLevel(Number(e.target.value))}
-              className="w-[64px] accent-[#bef264]"
-              title="Drum layer level"
-              aria-label="Drum level"
-            />
-            {!asWorkspace && (
-              <button
-                onClick={() => setCollapsed(true)}
-                className="h-8 px-2.5 rounded-lg text-[11px] transition"
-                style={{ color: "rgba(245,217,168,0.7)", background: "rgba(232,184,109,0.08)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.22)" }}
-                title="Collapse the sequencer to a compact transport strip"
-              >▲</button>
-            )}
+
+            <div className="seq-header__layers">
+              <SeqGroup label="Layers" hint="arm · mute">
+                <div
+                  className="inline-flex items-center gap-1 rounded-lg p-1"
+                  style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.18)" }}
+                  role="group"
+                  aria-label="Layer arm / mute"
+                >
+                  {([
+                    { on: synthEnabled, toggle: () => setSynthEnabled(!synthEnabled), label: "A", accent: "#ff8f6b", soft: "#ffd0c0", title: "Synth A — click to arm or mute", name: "Synth A" },
+                    { on: synthBEnabled, toggle: () => setSynthBEnabled(!synthBEnabled), label: "B", accent: "#7dd3fc", soft: "#e0f2fe", title: "Synth B — click to arm or mute", name: "Synth B" },
+                    { on: drumsEnabled, toggle: () => setDrumsEnabled(!drumsEnabled), label: "DRM", accent: "#bef264", soft: "#ecfccb", title: "Drums — click to arm or mute", name: "Drums" },
+                  ] as const).map((ch) => (
+                    <button
+                      key={ch.label}
+                      onClick={ch.toggle}
+                      className="h-8 min-w-[2.75rem] px-2.5 rounded-md text-[11px] font-black tracking-wide transition inline-flex items-center justify-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] cursor-pointer"
+                      style={
+                        ch.on
+                          ? { color: ch.soft, background: `${ch.accent}22`, boxShadow: `inset 0 0 0 1px ${ch.accent}70, 0 0 10px ${ch.accent}28` }
+                          : { color: "rgba(255,255,255,0.38)", background: "transparent", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)" }
+                      }
+                      title={ch.title}
+                      aria-pressed={ch.on}
+                      aria-label={`${ch.name} ${ch.on ? "armed" : "muted"}`}
+                    >
+                      <span
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ background: ch.on ? ch.accent : "rgba(255,255,255,0.22)", boxShadow: ch.on ? `0 0 6px ${ch.accent}` : undefined }}
+                        aria-hidden
+                      />
+                      {ch.label}
+                    </button>
+                  ))}
+                </div>
+              </SeqGroup>
+              <input
+                type="range"
+                min={0}
+                max={1.2}
+                step={0.02}
+                value={drumLevel}
+                onChange={(e) => setDrumLevel(Number(e.target.value))}
+                className="w-[64px] accent-[#bef264]"
+                title="Drum layer level"
+                aria-label="Drum layer level"
+              />
+              {!asWorkspace && (
+                <button
+                  onClick={() => setCollapsed(true)}
+                  className={SEQ_CTRL}
+                  title="Collapse the sequencer to a compact transport strip"
+                  aria-label="Collapse sequencer"
+                >▲</button>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
       <ArrangementPlaylist flush={flush} />
 
-      {/* Editor chrome — left editor / center draw / right file */}
+      {/* D — Editor toolbar */}
       <div
         className={
           flush
-            ? "grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto_1fr] md:items-center px-2.5 py-2 bg-gradient-to-b from-white/[0.03] to-transparent"
-            : "mb-2.5 grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto_1fr] md:items-center rounded-2xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2"
+            ? "seq-editor-bar bg-gradient-to-b from-white/[0.03] to-transparent border-b border-white/[0.06]"
+            : "mb-2.5 seq-editor-bar rounded-2xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent"
         }
       >
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
+        <div className="seq-editor-bar__group !pl-1 !border-l-0">
           <button
             type="button"
             onClick={toggleEditor}
-            className="inline-flex items-center gap-1.5 h-8 px-1.5 rounded-lg border border-white/12 bg-white/[0.03] hover:bg-white/[0.06] transition"
+            className="inline-flex items-center gap-2 h-8 min-w-0 text-left hover:opacity-90 transition rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
             aria-expanded={!editorCollapsed}
             title={editorCollapsed ? "Expand piano roll / drums" : "Collapse piano roll / drums"}
+            aria-label={editorCollapsed ? "Expand editor" : "Collapse editor"}
           >
             <CollapseToggle collapsed={editorCollapsed} color={FIRE} />
-            <span className="text-[9px] font-black uppercase tracking-[0.14em] text-white/45 pr-1">
+            <span className={SEQ_TITLE}>
               {tab === "roll" ? "Piano roll" : "Drums"}
             </span>
           </button>
+        </div>
+
+        {/* Group 1: Editor type */}
+        <div className="seq-editor-bar__group">
+          <EditorModeSwitch tab={tab} onChange={setTab} noteCount={noteCount} />
+        </div>
+
+        {/* Group 2: View and pattern */}
+        <div className="seq-editor-bar__group">
           <button
             type="button"
             onClick={() => setEditorFullscreen((v) => !v)}
-            className="h-8 px-2 rounded-lg text-[10px] font-semibold border border-white/12 text-white/50 hover:text-white/85 hover:bg-white/[0.06] transition"
+            className={SEQ_PILL}
             title={editorFullscreen ? "Exit fullscreen editor (Esc)" : "Fullscreen piano roll / drums"}
           >
             {editorFullscreen ? "Exit FS" : "Fullscreen"}
           </button>
-          {(() => {
-            const idx = Math.max(0, sections.findIndex((s) => s.id === activeSectionId));
-            const sec = sections[idx];
-            const color = SECTION_COLORS[idx % SECTION_COLORS.length];
-            return (
-              <button
-                type="button"
-                onClick={() => {
-                  if (sections.length < 2) return;
-                  const next = sections[(idx + 1) % sections.length];
-                  if (next) setActiveSection(next.id);
-                }}
-                className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg border text-[11px] font-bold max-w-[10rem] transition hover:brightness-125"
-                style={{ borderColor: `${color}66`, background: `${color}12`, color }}
-                title={
-                  sections.length > 1
-                    ? "Active pattern section — click to cycle"
-                    : "Piano roll and drums edit this pattern section"
-                }
-              >
-                <span className="text-[8px] uppercase tracking-[0.16em] opacity-60 shrink-0">Pattern</span>
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-                <span className="truncate">{sec?.name ?? "?"}</span>
-                <span className="text-[8px] font-mono opacity-50">{bars} bar{bars === 1 ? "" : "s"}</span>
-              </button>
-            );
-          })()}
+          <PatternSelect />
           {(() => {
             const clip = selectedClip;
             const tr = clip ? playlistTracks[clip.track] : null;
             const sec = sections.find((s) => s.id === activeSectionId);
             const unique = clip?.unique;
             return (
-              <div className="text-[9px] font-mono text-white/40 truncate max-w-[28rem]" title="Editor breadcrumb">
-                SEQUENCER
-                {tr ? ` / ${tr.name}` : ""}
-                {sec ? ` / PATTERN ${sec.name}` : ""}
-                {unique ? " · UNIQUE" : clip ? " · LINKED" : ""}
-                {` / ${tab === "roll" ? "PIANO ROLL" : "DRUMS"}`}
+              <div className={`${SEQ_META} font-mono max-w-[16rem] hidden lg:block`} title="Editor status">
+                {tr ? `${tr.name} / ` : ""}
+                {sec ? `Pat ${sec.name}` : ""}
+                {unique ? " · Unique" : clip ? " · Linked" : ""}
+                {` / ${tab === "roll" ? "Roll" : "Drums"}`}
               </div>
             );
           })()}
           {(selectedClip?.unique || (!selectedClip?.unique && linkedN > 1)) && (
             <div
-              className="w-full md:w-auto text-[9px] font-semibold uppercase tracking-[0.12em] px-2 py-1 rounded-md border"
+              className="text-[10px] font-semibold uppercase tracking-[0.08em] px-2 h-8 inline-flex items-center rounded-lg border"
               style={
                 selectedClip?.unique
-                  ? { color: "#7ce8d5", borderColor: "rgba(124,232,213,0.35)", background: "rgba(124,232,213,0.08)" }
-                  : { color: "#ffb648", borderColor: "rgba(255,182,72,0.4)", background: "rgba(255,182,72,0.1)" }
+                  ? { color: "#7ce8d5", borderColor: "rgba(124,232,213,0.4)", background: "rgba(124,232,213,0.1)" }
+                  : { color: "#ffb648", borderColor: "rgba(255,182,72,0.45)", background: "rgba(255,182,72,0.12)" }
               }
             >
-              {selectedClip?.unique
-                ? "Editing UNIQUE clip — changes stay on this clip only"
-                : `Editing SOURCE — ${linkedN} linked clips will change`}
+              {selectedClip?.unique ? "Unique clip" : `Source · ${linkedN} linked`}
             </div>
           )}
           <div className="relative">
             <button
               type="button"
               onClick={() => setVariationsOpen((v) => !v)}
-              className={`h-8 px-2.5 rounded-lg text-[10px] font-semibold border transition ${
+              className={
                 variationsOpen
-                  ? "border-violet-400/50 bg-violet-500/15 text-violet-200"
-                  : "border-white/10 text-white/55 hover:text-white/85 hover:border-white/25"
-              }`}
+                  ? "inline-flex h-8 items-center justify-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold border border-violet-400/50 bg-violet-500/15 text-violet-200 transition shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-300/60"
+                  : SEQ_PILL
+              }
               title="Pattern variations — duplicate, mutate, simplify…"
+              aria-expanded={variationsOpen}
             >
               Variations ▾
             </button>
@@ -880,7 +826,7 @@ export const SequencerPanel = memo(function SequencerPanel({
                       {label}
                     </button>
                   ))}
-                  <div className="px-2.5 py-1 text-[9px] text-white/35 border-t border-white/8 mt-0.5">
+                  <div className="px-2.5 py-1 text-[10px] text-white/45 border-t border-white/8 mt-0.5">
                     Natural Selection lives in the mutate chrome.
                   </div>
                 </div>
@@ -890,59 +836,33 @@ export const SequencerPanel = memo(function SequencerPanel({
           <button
             type="button"
             onClick={() => setShowShortcuts((v) => !v)}
-            className={`h-8 w-8 rounded-lg text-[11px] font-bold border transition ${
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-lg text-[12px] font-bold border transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400/60 ${
               showShortcuts
                 ? "border-cyan/50 bg-cyan/10 text-cyan"
-                : "border-white/10 text-white/45 hover:text-white/75"
+                : "border-white/14 text-white/55 hover:text-white/85 hover:bg-white/[0.06]"
             }`}
             title="Keyboard shortcuts (?)"
             aria-pressed={showShortcuts}
+            aria-label="Keyboard shortcuts"
           >
             ?
           </button>
-          <div className="inline-flex rounded-lg border border-white/10 bg-black/30 p-0.5">
-            <button
-              onClick={() => setTab("roll")}
-              className="px-3 py-1.5 text-[11px] font-semibold rounded-md transition"
-              style={
-                tab === "roll"
-                  ? { background: "rgba(255,106,61,0.2)", color: "#ffbfa0" }
-                  : { color: "rgba(255,255,255,0.45)" }
-              }
-            >
-              Piano <span className="opacity-55 font-mono">{noteCount}</span>
-            </button>
-            <button
-              onClick={() => setTab("drums")}
-              className="px-3 py-1.5 text-[11px] font-semibold rounded-md transition"
-              style={
-                tab === "drums"
-                  ? { background: "rgba(155,229,100,0.2)", color: "#d3f5b0" }
-                  : { color: "rgba(255,255,255,0.45)" }
-              }
-            >
-              Drums
-            </button>
-          </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-2 min-w-0">
-          {tab === "roll" && (
-            <>
-              <div className="inline-flex rounded-lg border border-white/10 bg-black/30 p-0.5 shrink-0">
+        {tab === "roll" && (
+          <>
+            {/* Group 3: Drawing lane */}
+            <div className="seq-editor-bar__group">
+              <SeqSegmented aria-label="Draw lane">
                 {([0, 1] as const).map((ch) => (
-                  <button
+                  <SeqSegment
                     key={ch}
+                    active={activeChannel === ch}
+                    accent={ch === 0 ? FIRE : ICE}
                     onClick={() => {
                       setActiveChannel(ch);
                       setEditTarget(ch === 0 ? "a" : "b");
                     }}
-                    className="px-3 py-1.5 text-[11px] font-bold rounded-md transition"
-                    style={
-                      activeChannel === ch
-                        ? { background: "rgba(255,255,255,0.1)", color: ch === 0 ? FIRE : ICE }
-                        : { color: "rgba(255,255,255,0.4)" }
-                    }
                     title={
                       ch === 0
                         ? "Draw Synth A (orange) — also focuses the Synth rack on A"
@@ -950,9 +870,13 @@ export const SequencerPanel = memo(function SequencerPanel({
                     }
                   >
                     Draw {ch === 0 ? "A" : "B"}
-                  </button>
+                  </SeqSegment>
                 ))}
-              </div>
+              </SeqSegmented>
+            </div>
+
+            {/* Group 4: Instrument */}
+            <div className="seq-editor-bar__group">
               <PresetSearchCombobox
                 value={activeChannel === 0 ? presetId : synthBPresetId}
                 color={activeChannel === 0 ? FIRE : ICE}
@@ -970,15 +894,18 @@ export const SequencerPanel = memo(function SequencerPanel({
                 className="max-w-[16rem]"
                 minWidthClass="min-w-[12rem]"
               />
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
 
-        <div className="flex items-center justify-end gap-1.5">
+        <div className="seq-editor-bar__spacer" />
+
+        {/* Group 5: File actions */}
+        <div className="seq-editor-bar__file !border-l-0 sm:!border-l sm:border-white/10">
           <button
             type="button"
             onClick={() => void doSaveProject()}
-            className="h-8 px-3 rounded-lg text-[11px] font-semibold border border-white/10 text-white/70 hover:text-white hover:border-white/25 transition"
+            className={SEQ_PILL}
             title="Save project (.kcproj)"
           >
             Save
@@ -987,7 +914,7 @@ export const SequencerPanel = memo(function SequencerPanel({
             type="button"
             onClick={() => void doExportWav()}
             disabled={!!exporting}
-            className={`h-8 px-3 rounded-lg text-[11px] font-semibold border transition disabled:opacity-50 ${
+            className={`inline-flex h-8 items-center justify-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold border transition shrink-0 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400/60 ${
               exporting
                 ? "border-cyan/50 bg-cyan/10 text-cyan"
                 : "border-cyan/35 bg-cyan/10 text-cyan hover:border-cyan/55"
@@ -999,12 +926,13 @@ export const SequencerPanel = memo(function SequencerPanel({
           <div className="relative">
             <button
               onClick={() => setFileMenuOpen((v) => !v)}
-              className={`h-8 px-3 rounded-lg text-[11px] font-semibold border transition ${
+              className={
                 fileMenuOpen
-                  ? "border-cyan/50 bg-cyan/10 text-cyan"
-                  : "border-white/10 text-white/55 hover:text-white/85 hover:border-white/25"
-              }`}
+                  ? "inline-flex h-8 items-center justify-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold border border-cyan/50 bg-cyan/10 text-cyan transition shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-cyan-400/60"
+                  : SEQ_PILL
+              }
               title="Open project, format, stems"
+              aria-expanded={fileMenuOpen}
             >
               File ▾
             </button>
@@ -1023,7 +951,7 @@ export const SequencerPanel = memo(function SequencerPanel({
                   >Open project…</button>
                   <div className="h-px bg-white/8 my-0.5" />
                   <div className="flex items-center gap-1 px-2 py-1">
-                    <span className="text-[9px] uppercase tracking-wider text-white/35">Format</span>
+                    <span className="text-[10px] uppercase tracking-wider text-white/45">Format</span>
                     <select
                       value={exportFormat}
                       onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
@@ -1042,17 +970,16 @@ export const SequencerPanel = memo(function SequencerPanel({
               </>
             )}
           </div>
-          <button
-            onClick={doClear}
-            className={`h-8 px-2.5 rounded-lg text-[11px] border transition ${
-              confirmClear
-                ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
-                : "border-white/10 text-white/40 hover:text-rose-300 hover:border-rose-400/40"
-            }`}
-            title={`Clear ${tab === "roll" ? "notes" : "drums"}`}
-          >
-            {confirmClear ? "Confirm?" : "Clear"}
-          </button>
+          <div className="seq-editor-bar__clear">
+            <button
+              onClick={doClear}
+              className={confirmClear ? SEQ_PILL_DESTRUCTIVE_ARM : SEQ_PILL_DESTRUCTIVE}
+              title={`Clear ${tab === "roll" ? "notes" : "drums"} — click twice to confirm`}
+              aria-label={confirmClear ? `Confirm clear ${tab === "roll" ? "notes" : "drums"}` : `Clear ${tab === "roll" ? "notes" : "drums"}`}
+            >
+              {confirmClear ? "Confirm?" : "Clear"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1084,34 +1011,22 @@ export const SequencerPanel = memo(function SequencerPanel({
       ))}
 
       {editorFullscreen && (
-        <div className="fixed inset-0 z-[90] flex flex-col bg-[#06070b] p-3 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
-          <div className="flex items-center justify-between gap-2 mb-2 shrink-0">
-            <div className="text-[11px] font-black uppercase tracking-[0.16em] text-white/55">
-              {tab === "roll" ? "Piano roll" : "Drums"} · fullscreen
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setTab("roll")}
-                className={`h-8 px-2.5 rounded-lg text-[10px] font-semibold border ${
-                  tab === "roll" ? "border-orange-400/40 text-orange-100 bg-orange-500/15" : "border-white/12 text-white/45"
-                }`}
-              >Roll</button>
-              <button
-                type="button"
-                onClick={() => setTab("drums")}
-                className={`h-8 px-2.5 rounded-lg text-[10px] font-semibold border ${
-                  tab === "drums" ? "border-lime-400/40 text-lime-100 bg-lime-500/15" : "border-white/12 text-white/45"
-                }`}
-              >Drums</button>
-              <button
-                type="button"
-                onClick={() => setEditorFullscreen(false)}
-                className="h-8 px-3 rounded-lg text-[10px] font-semibold border border-white/20 text-white/80 hover:bg-white/[0.08]"
-              >Exit (Esc)</button>
-            </div>
-          </div>
-          <div className="flex-1 min-h-0 overflow-auto rounded-xl border border-white/10 bg-[#0a0c12] p-2">
+        <FullscreenEditorShell
+          title={tab === "roll" ? "Piano Roll" : "Drums"}
+          context={
+            sections.find((s) => s.id === activeSectionId)
+              ? `Pattern ${sections.find((s) => s.id === activeSectionId)?.name ?? ""} · ${bars} bar${bars === 1 ? "" : "s"}`
+              : undefined
+          }
+          onExit={() => setEditorFullscreen(false)}
+          right={
+            <>
+              <EditorModeSwitch tab={tab} onChange={setTab} noteCount={noteCount} />
+              <PatternSelect />
+            </>
+          }
+        >
+          <div className="flex-1 min-h-0 overflow-auto editor-scroll p-2">
             {tab === "roll" ? (
               <RollFitProvider totalSteps={bars * STEPS_PER_BAR} gutter={PIANO_GUTTER}>
                 <PianoRoll tall />
@@ -1121,13 +1036,13 @@ export const SequencerPanel = memo(function SequencerPanel({
               <DrumMachine />
             )}
           </div>
-        </div>
+        </FullscreenEditorShell>
       )}
     </div>
   );
 
   return flush ? (
-    <div className="relative rounded-b-2xl bg-gradient-to-b from-transparent to-black/20">
+    <div className="relative flex-1 min-h-0 flex flex-col rounded-b-2xl bg-gradient-to-b from-transparent to-black/20">
       {body}
     </div>
   ) : (

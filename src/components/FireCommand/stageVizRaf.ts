@@ -8,6 +8,7 @@
  *  - after idleGrace quiet frames, pauses painting for that entry
  *  - keeps a cheap global probe so flash / motionKey / active wake within 1 frame
  *    (the old 250ms setInterval left canvases frozen on outside-knob changes)
+ *  - under high synth CPU pressure, stretches intervals so UI stays fluid
  */
 
 export type StageVizIdleHints = {
@@ -48,6 +49,13 @@ type Entry = {
 
 const entries = new Set<Entry>();
 let pumpRaf = 0;
+/** Optional 0..1 CPU pressure from the synth — stretches paint intervals. */
+let pressureSource: (() => number) | null = null;
+
+/** Wire once from Fire Command mount so StageViz can back off under load. */
+export function setStageVizPressureSource(fn: (() => number) | null): void {
+  pressureSource = fn;
+}
 
 function isBusy(e: Entry): boolean {
   const h = e.hints();
@@ -69,6 +77,15 @@ function pump(t: number) {
   pumpRaf = requestAnimationFrame(pump);
   if (document.hidden) return;
 
+  let pressure = 0;
+  try {
+    pressure = pressureSource?.() ?? 0;
+  } catch {
+    pressure = 0;
+  }
+  // 0 → 1× interval; 1 → ~2.6× (≈17fps if base was 45fps)
+  const scale = 1 + Math.max(0, Math.min(1, pressure)) * 1.6;
+
   for (const e of entries) {
     if (e.paused) {
       // Probe every frame — param/flash changes resume without a 250ms wait.
@@ -81,7 +98,7 @@ function pump(t: number) {
       continue;
     }
 
-    if (t - e.last < e.minMs) continue;
+    if (t - e.last < e.minMs * scale) continue;
 
     const busy = isBusy(e);
     if (!busy) {

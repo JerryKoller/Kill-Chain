@@ -20,8 +20,12 @@ import {
 import { useUIStore } from "@/state/uiStore";
 import { CollapseToggle } from "./CollapseToggle";
 import { useFireCollapsed } from "./useFireCollapsed";
+import { PatternBarsControls } from "./PatternBarsControls";
+import { ScopedPlayButton } from "./ScopedPlayButton";
+import { SeqSectionRow, SEQ_PILL, SEQ } from "./seqChrome";
+import { ExitFullscreenButton } from "./EditorShell";
 
-const FIRE = "#ff6a3d";
+const FIRE = SEQ.fire;
 
 export const PATTERN_COLORS = [
   "#ff6a3d", "#62b6ff", "#9be564", "#c98bff",
@@ -35,6 +39,7 @@ const PX_PER_BAR_MAX = 220;
 const PX_PER_BAR_DEFAULT = 72;
 const RULER_H = 24;
 const LANE_H = 36;
+const LANE_H_FS = 52;
 const TRACK_LABEL_W = 168;
 
 /** FL-style arrangement snap — same step units as the piano roll (16 = 1 bar). */
@@ -61,11 +66,11 @@ function quantizeStep(raw: number, grid: number): number {
 function resolveArrSnap(snap: number, pxPerBar: number): number {
   if (snap > 0) return snap;
   if (snap === -1) {
-    // Adaptive: coarser when zoomed out
-    if (pxPerBar < 36) return 16;
-    if (pxPerBar < 56) return 8;
-    if (pxPerBar < 90) return 4;
-    if (pxPerBar < 140) return 2;
+    // Adaptive: prefer finer grids once subdivisions are readable
+    if (pxPerBar < 28) return 16;
+    if (pxPerBar < 44) return 8;
+    if (pxPerBar < 72) return 4;
+    if (pxPerBar < 120) return 2;
     return 1;
   }
   return 0.25; // Off — finest
@@ -76,7 +81,21 @@ function readArrSnap(): number {
     const v = Number(window.localStorage.getItem(ARR_SNAP_STORAGE));
     if (ARR_SNAP_OPTIONS.some((o) => o.steps === v)) return v;
   } catch { /* ignore */ }
-  return 16; // default whole bar
+  return 4; // default quarter-bar — matches visible beat grid
+}
+
+/** Soft magnetic snap: hard-locks near grid lines, gentle pull farther away. */
+function magneticSnap(raw: number, grid: number): number {
+  const g = Math.max(0.25, grid);
+  const nearest = Math.round(raw / g) * g;
+  const dist = Math.abs(raw - nearest);
+  const half = g * 0.5;
+  if (half <= 0) return Math.max(0, nearest);
+  if (dist <= half * 0.4) return Math.max(0, nearest);
+  // Ease toward the grid so scrubbing still feels continuous between lines
+  const t = 1 - dist / half;
+  const pull = 0.25 + 0.55 * t * t;
+  return Math.max(0, raw + (nearest - raw) * pull);
 }
 
 export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {}) {
@@ -114,6 +133,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const [patternsCollapsed, togglePatterns] = useFireCollapsed("seq.patterns", false);
   const [arrCollapsed, toggleArr] = useFireCollapsed("seq.arrangement", false);
   const [arrFullscreen, setArrFullscreen] = useState(false);
+  /** Session-only: patterns dock starts collapsed in fullscreen so the timeline dominates. */
+  const [fsPatternsCollapsed, setFsPatternsCollapsed] = useState(true);
 
   useEffect(() => {
     if (!arrFullscreen) return;
@@ -123,6 +144,16 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [arrFullscreen]);
+
+  useEffect(() => {
+    if (arrFullscreen) setFsPatternsCollapsed(true);
+  }, [arrFullscreen]);
+
+  const patternsDockCollapsed = arrFullscreen ? fsPatternsCollapsed : patternsCollapsed;
+  const togglePatternsDock = () => {
+    if (arrFullscreen) setFsPatternsCollapsed((v) => !v);
+    else togglePatterns();
+  };
 
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -146,8 +177,14 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   // Active window-listener detach for a clip drag — run on unmount so a drag
   // in flight when the panel closes can't leave listeners behind.
   const dragCleanupRef = useRef<(() => void) | null>(null);
+  const scrubbingRef = useRef(false);
+  const scrubCleanupRef = useRef<(() => void) | null>(null);
+  const lastSoftSeekRef = useRef(0);
 
-  useEffect(() => () => { dragCleanupRef.current?.(); }, []);
+  useEffect(() => () => {
+    dragCleanupRef.current?.();
+    scrubCleanupRef.current?.();
+  }, []);
 
   // Keep timeline highlight in sync when store clears/changes selection (section switch, undo…).
   useEffect(() => {
@@ -188,9 +225,11 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
       if (document.hidden) return;
-      // Stopped: only track the cue marker, and only at ~5 Hz — a 60 fps loop
+      // While scrubbing, the pointer handler owns the playhead — don't fight it.
+      if (scrubbingRef.current) return;
+      // Stopped: only track the cue marker, and only at ~12 Hz — a 60 fps loop
       // over an idle timeline is pure waste.
-      if (!playing && t - last < 200) return;
+      if (!playing && t - last < 80) return;
       last = t;
       setPlayheadStep((prev) => {
         const cur = getArrangementPlayheadStep();
@@ -240,7 +279,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
         : (sec?.bars ?? 1);
       const full = fullBars * STEPS_PER_BAR;
       if (clip.lengthSteps == null) return full;
-      return Math.max(1, Math.min(full, Math.round(clip.lengthSteps)));
+      return Math.max(1, Math.min(full, Math.round(clip.lengthSteps * 2) / 2));
     },
     [sections],
   );
@@ -265,7 +304,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   totalBarsRef.current = totalBars;
   const trackW = Math.max(totalBars * pxPerBar, 1);
   const lengthBars = Math.max(1, Math.ceil(arrangementEndStep / STEPS_PER_BAR));
-  const playlistH = MAX_PLAYLIST_TRACKS * LANE_H * (arrFullscreen ? 1.35 : 1);
+  const laneH = arrFullscreen ? LANE_H_FS : LANE_H;
+  const playlistH = MAX_PLAYLIST_TRACKS * laneH;
 
   useEffect(() => {
     if (arrCollapsed) return;
@@ -290,7 +330,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     const y = clientY - rect.top + el.scrollTop - RULER_H;
     const rawStep = (x / pxPerBar) * STEPS_PER_BAR;
     const step = Math.max(0, Math.min(Math.max(0, totalSteps - effectiveSnapRef.current), quantizeStep(rawStep, effectiveSnapRef.current)));
-    const track = Math.max(0, Math.min(MAX_PLAYLIST_TRACKS - 1, Math.floor(y / LANE_H)));
+    const track = Math.max(0, Math.min(MAX_PLAYLIST_TRACKS - 1, Math.floor(y / laneH)));
     return { step, track };
   };
 
@@ -477,43 +517,127 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedClip, removeClip, nudgeClip, moveClip, duplicateClip, selectClipForEdit, clearSelectedClip, toast]);
 
-  const seekFromRuler = (clientX: number) => {
-    const { step } = posFromClient(clientX, 0);
+  const seekFromRuler = (clientX: number, soft: boolean) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = clientX - rect.left + el.scrollLeft;
+    const rawStep = Math.max(0, (x / pxPerBar) * STEPS_PER_BAR);
+    const grid = effectiveSnapRef.current;
+    // Soft magnetic while dragging; hard quantize on release / click.
+    const step = soft
+      ? Math.min(Math.max(0, totalSteps - 1), magneticSnap(rawStep, grid))
+      : Math.min(Math.max(0, totalSteps - 1), quantizeStep(rawStep, grid));
+    // Paint immediately — don't wait for the idle RAF cue poll.
+    setPlayheadStep(step);
     if (playMode !== "arrangement") setPlayScope("arrangement");
-    // Seek after scope switch so arrangementCueStep is accepted.
-    seekArrangement(step);
+    if (soft) {
+      if (playing) {
+        const now = performance.now();
+        // Visual already updated; throttle live re-anchors to ~60 Hz.
+        if (now - lastSoftSeekRef.current < 16) return;
+        lastSoftSeekRef.current = now;
+      }
+      seekArrangement(step, { soft: true });
+    } else {
+      seekArrangement(step);
+    }
+  };
+
+  const beginRulerScrub = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const pointerId = e.pointerId;
+    scrubbingRef.current = true;
+    seekFromRuler(e.clientX, false);
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      seekFromRuler(ev.clientX, true);
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      detach();
+      seekFromRuler(ev.clientX, false);
+      scrubbingRef.current = false;
+    };
+    const detach = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (scrubCleanupRef.current === detach) scrubCleanupRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    scrubCleanupRef.current = detach;
   };
 
   return (
     <div
       className={
-        flush
-          ? "overflow-hidden bg-gradient-to-b from-cyan-400/[0.04] via-white/[0.02] to-transparent"
-          : "mb-2.5 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.045] to-white/[0.015] overflow-hidden"
+        arrFullscreen
+          ? "fixed left-0 right-0 bottom-0 top-9 z-[90] flex flex-col bg-[#06070b] p-2.5 gap-2 overflow-hidden shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+          : flush
+            ? "overflow-hidden bg-gradient-to-b from-cyan-400/[0.04] via-white/[0.02] to-transparent"
+            : "mb-2.5 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.045] to-white/[0.015] overflow-hidden"
       }
     >
-      {/* ── Pattern bank ── */}
-      <div className="border-b border-white/[0.06]">
-        <button
-          type="button"
-          onClick={togglePatterns}
-          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/[0.03] transition"
-          aria-expanded={!patternsCollapsed}
-          title={patternsCollapsed ? "Expand patterns" : "Collapse patterns"}
-        >
-          <CollapseToggle collapsed={patternsCollapsed} color={FIRE} title={patternsCollapsed ? "Expand" : "Collapse"} />
-          <div className="min-w-0 flex-1">
-            <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/50">Patterns</div>
-            <div className="text-[9px] text-white/30 leading-tight truncate">
-              {patternsCollapsed
-                ? `${sections.length} pattern${sections.length === 1 ? "" : "s"} · ${sections.find((s) => s.id === activeSectionId)?.name ?? "—"}`
-                : "select to edit · drag onto timeline"}
+      {arrFullscreen && (
+        <header className="editor-fs-header shrink-0 flex flex-wrap items-center gap-2 px-1 min-h-9">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <ExitFullscreenButton onClick={() => setArrFullscreen(false)} />
+            <ScopedPlayButton
+              scope="arrangement"
+              title="Play / pause arrangement only"
+            />
+            <div className="min-w-0 leading-tight">
+              <div className="text-[12px] font-black uppercase tracking-[0.1em] text-white/80 truncate">
+                Arrangement
+              </div>
+              <div className="text-[10px] text-white/50 truncate mt-0.5">
+                {arrangement.length} clip{arrangement.length === 1 ? "" : "s"}
+                {arrangement.length > 0 ? ` · ${lengthBars} bar${lengthBars === 1 ? "" : "s"}` : ""}
+                {" · "}{MAX_PLAYLIST_TRACKS} tracks
+              </div>
             </div>
           </div>
-        </button>
-        {!patternsCollapsed && (
-        <div className="flex flex-wrap items-center gap-2 px-3 pb-2.5">
-        <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5 shrink-0 ml-auto">
+            <PatternBarsControls accent={FIRE} />
+          </div>
+        </header>
+      )}
+      {/* ── Pattern bank (collapsible dock in fullscreen) ── */}
+      <div
+        className={`border-b border-white/[0.07] shrink-0 arr-patterns-dock ${
+          arrFullscreen ? "rounded-xl border border-white/10 bg-[#0a0c12]" : ""
+        }`}
+        data-expanded={arrFullscreen && !patternsDockCollapsed ? "1" : "0"}
+      >
+        <SeqSectionRow
+          collapsed={patternsDockCollapsed}
+          onToggle={togglePatternsDock}
+          title="Patterns"
+          meta={
+            patternsDockCollapsed
+              ? `${sections.length} pattern${sections.length === 1 ? "" : "s"} · ${sections.find((s) => s.id === activeSectionId)?.name ?? "—"}`
+              : "select to edit · drag onto timeline"
+          }
+          collapseControl={
+            <CollapseToggle
+              collapsed={patternsDockCollapsed}
+              color={FIRE}
+              title={patternsDockCollapsed ? "Expand patterns" : "Collapse patterns"}
+            />
+          }
+          play={
+            <ScopedPlayButton
+              scope="pattern"
+              title="Play / pause active pattern only"
+            />
+          }
+        />
+        {!patternsDockCollapsed && (
+        <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
           {sections.map((sec) => {
             const active = sec.id === activeSectionId;
             const sounding = playingPattern === sec.id;
@@ -529,13 +653,13 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     if (e.key === "Enter") commitRename(sec.id);
                     if (e.key === "Escape") setRenaming(null);
                   }}
-                  className="w-24 rounded-lg border border-[#ff6a3d]/60 bg-black/40 px-2 py-1 text-xs text-white outline-none"
+                  className="w-24 h-8 rounded-lg border border-[#ff6a3d]/60 bg-black/40 px-2 text-xs text-white outline-none"
                 />
               );
             }
             const color = colorOf(sec.id);
             return (
-              <span key={sec.id} className="group inline-flex items-center">
+              <span key={sec.id} className="group inline-flex items-center h-8">
                 <button
                   type="button"
                   draggable
@@ -560,14 +684,13 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle"
                     style={{ background: color, opacity: active ? 1 : 0.55 }}
                   />
-                  <span className="text-[8px] uppercase tracking-[0.12em] opacity-55 mr-1">Pattern</span>
                   {sec.name}
                   <span className="ml-1.5 font-mono font-normal opacity-45 text-[10px]">{sec.bars}b</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => { setRenaming(sec.id); setRenameValue(sec.name); }}
-                  className="h-8 px-1 text-[10px] border border-l-0 text-white/25 hover:text-white/70 hover:bg-white/[0.06] transition"
+                  className="h-8 px-1.5 text-[10px] border border-l-0 text-white/25 hover:text-white/70 hover:bg-white/[0.06] transition"
                   style={active ? { borderColor: `${color}b0` } : { borderColor: "rgba(255,255,255,0.1)" }}
                   title={`Rename “${sec.name}”`}
                 >✎</button>
@@ -591,7 +714,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
               else toast("Blank pattern ready — draw notes, then add it to the arrangement");
             }}
             disabled={sections.length >= MAX_SECTIONS}
-            className="h-8 px-2.5 rounded-lg text-[11px] border border-dashed border-white/20 text-white/50 hover:text-[#ffbfa0] hover:border-[#ff6a3d]/50 disabled:opacity-30 transition"
+            className={`${SEQ_PILL} border-dashed disabled:opacity-30`}
             title="Create a blank pattern (does not place it on the timeline)"
           >＋ New</button>
           <button
@@ -609,7 +732,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 : "Blank pattern ready — timeline was full on Track 1");
             }}
             disabled={sections.length >= MAX_SECTIONS || arrangement.length >= MAX_CLIPS}
-            className="h-8 px-2.5 rounded-lg text-[11px] border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 text-[#ffbfa0] hover:bg-[#ff6a3d]/18 disabled:opacity-30 transition"
+            className="inline-flex h-8 items-center px-2.5 rounded-lg text-[10px] font-semibold border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 text-[#ffbfa0] hover:bg-[#ff6a3d]/18 disabled:opacity-30 transition"
             title="Create a blank pattern and place it at the end of the arrangement"
           >＋ New + place</button>
           <button
@@ -619,34 +742,9 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
               if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
             }}
             disabled={sections.length >= MAX_SECTIONS}
-            className="h-8 px-2.5 rounded-lg text-[11px] border border-white/12 bg-white/[0.03] text-white/50 hover:text-white/80 disabled:opacity-30 transition"
+            className={`${SEQ_PILL} disabled:opacity-30`}
             title="Duplicate the pattern you're editing (bank only — not a timeline clip)"
-          >Duplicate pattern</button>
-        </div>
-
-        <div className="inline-flex rounded-lg border border-white/12 bg-black/30 p-0.5 shrink-0" role="group" aria-label="Play target">
-          <span className="px-1.5 text-[8px] font-black uppercase tracking-[0.12em] text-white/35 self-center">Target</span>
-          {([
-            { id: "pattern" as const, label: "Pattern" },
-            { id: "arrangement" as const, label: "Arr" },
-            { id: "selection" as const, label: "Sel" },
-          ]).map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              onClick={() => setPlayScope(opt.id)}
-              className="px-2.5 py-1.5 text-[10px] font-bold rounded-md transition"
-              style={
-                playScope === opt.id
-                  ? { background: "rgba(255,106,61,0.22)", color: FIRE }
-                  : { color: "rgba(255,255,255,0.4)" }
-              }
-              title={`Set Open Fire target to ${opt.label}`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
+          >Duplicate</button>
         </div>
         )}
       </div>
@@ -655,63 +753,44 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
       <div
         className={
           arrFullscreen
-            ? "fixed inset-0 z-[90] flex flex-col bg-[#06070b] p-3 overflow-auto"
+            ? "flex-1 min-h-0 flex flex-col overflow-hidden rounded-xl border border-white/10 bg-[#080a10]"
             : playMode === "arrangement" ? "bg-[#ff6a3d]/[0.04]" : ""
         }
       >
-        {arrFullscreen && (
-          <div className="flex items-center justify-between gap-2 mb-2 shrink-0 px-1">
-            <div className="text-[11px] font-black uppercase tracking-[0.16em] text-white/55">
-              Arrangement · fullscreen
-            </div>
-            <button
-              type="button"
-              onClick={() => setArrFullscreen(false)}
-              className="h-8 px-3 rounded-lg text-[10px] font-semibold border border-white/20 text-white/80 hover:bg-white/[0.08]"
-            >Exit (Esc)</button>
-          </div>
-        )}
-        <div className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-white/[0.06] ${arrFullscreen ? "rounded-xl border border-white/10 bg-[#0a0c12]" : ""}`}>
-          <button
-            type="button"
-            onClick={toggleArr}
-            className="min-w-0 flex items-center gap-2 text-left hover:opacity-90 transition"
-            aria-expanded={!arrCollapsed}
-            title={arrCollapsed ? "Expand arrangement" : "Collapse arrangement"}
-          >
-            <CollapseToggle collapsed={arrCollapsed} color={FIRE} />
-            <div className="min-w-0">
-              <div className="flex items-baseline gap-2">
-                <span className={`text-[9px] font-black uppercase tracking-[0.18em] ${playMode === "arrangement" ? "text-[#ffbfa0]" : "text-white/45"}`}>
-                  Arrangement
-                </span>
-                <span className="text-[10px] font-mono text-white/35 tabular-nums">
+        <div className={`border-b border-white/[0.07] shrink-0 ${arrFullscreen ? "bg-[#0a0c12]" : ""}`}>
+          <SeqSectionRow
+            collapsed={arrCollapsed}
+            onToggle={toggleArr}
+            title="Arrangement"
+            meta={
+              <>
+                <span className="font-mono tabular-nums">
                   {arrangement.length} clip{arrangement.length === 1 ? "" : "s"}
                   {arrangement.length > 0 ? ` · ${lengthBars} bar${lengthBars === 1 ? "" : "s"}` : ""}
                   {" · "}{MAX_PLAYLIST_TRACKS} tracks
                 </span>
-              </div>
-              {!arrCollapsed && (
-                <div className="text-[9px] text-white/30 mt-0.5">
-                  Click empty cell to place · click again to deselect · Shift+click forces place · drag clips · Del / ←→
-                </div>
-              )}
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setArrFullscreen((v) => !v)}
-            className="h-8 px-2 rounded-lg text-[10px] font-semibold border border-white/12 text-white/50 hover:text-white/85 hover:bg-white/[0.06] transition"
-            title={arrFullscreen ? "Exit fullscreen arrangement (Esc)" : "Fullscreen arrangement"}
-          >
-            {arrFullscreen ? "Exit FS" : "Fullscreen"}
-          </button>
-          {!arrCollapsed && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/10 bg-black/25 p-0.5">
-              <span className="px-1.5 text-[8px] uppercase tracking-[0.12em] text-white/35">
-                Arrange snap: {ARR_SNAP_OPTIONS.find((o) => o.steps === snapSteps)?.label ?? "?"}
-                {snapSteps === -1 ? ` → ${effectiveSnap === 16 ? "1" : effectiveSnap === 8 ? "1/2" : effectiveSnap === 4 ? "1/4" : effectiveSnap === 2 ? "1/8" : "1/16"}` : ""}
+                {!arrCollapsed ? (
+                  <span className="block mt-0.5 text-white/45">
+                    Click empty · RMB delete · Del / ←→
+                  </span>
+                ) : null}
+              </>
+            }
+            collapseControl={<CollapseToggle collapsed={arrCollapsed} color={FIRE} />}
+            play={
+              <ScopedPlayButton
+                scope="arrangement"
+                title="Play / pause arrangement only"
+              />
+            }
+            tools={
+              !arrCollapsed ? (
+              <>
+            {!arrFullscreen && <PatternBarsControls accent={FIRE} />}
+            <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/25 p-0.5 h-8">
+              <span className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-white/50">
+                Snap {ARR_SNAP_OPTIONS.find((o) => o.steps === snapSteps)?.label ?? "?"}
+                {snapSteps === -1 ? `→${effectiveSnap === 16 ? "1" : effectiveSnap === 8 ? "1/2" : effectiveSnap === 4 ? "1/4" : effectiveSnap === 2 ? "1/8" : "1/16"}` : ""}
               </span>
               {ARR_SNAP_OPTIONS.map((opt) => (
                 <button
@@ -721,8 +800,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                   className="min-w-[26px] h-7 px-1 rounded-md text-[10px] font-mono transition"
                   style={
                     snapSteps === opt.steps
-                      ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0" }
-                      : { color: "rgba(255,255,255,0.4)" }
+                      ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0", fontWeight: 700 }
+                      : { color: "rgba(255,255,255,0.45)" }
                   }
                   title={`ARRANGE SNAP: ${opt.label === "T" ? "TRIPLET 1/8" : opt.label === "Off" ? "OFF" : opt.label === "Auto" ? "ADAPTIVE" : `${opt.label} BAR`}`}
                 >
@@ -730,23 +809,25 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 </button>
               ))}
             </div>
-            <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/25 px-1.5 h-8">
+            <div className="inline-flex items-center gap-1 rounded-lg border border-white/12 bg-black/25 px-1.5 h-8">
               <button
                 type="button"
-                className="w-6 h-6 text-[12px] text-white/50 hover:text-white"
+                className="w-6 h-6 text-[12px] text-white/55 hover:text-white"
                 onClick={() => setPxPerBar((z) => clampZoom(z / 1.2))}
                 title="Zoom out"
+                aria-label="Zoom out"
               >−</button>
-              <span className="text-[9px] font-mono text-white/40 w-8 text-center tabular-nums">{Math.round(pxPerBar)}</span>
+              <span className="text-[10px] font-mono text-white/50 w-8 text-center tabular-nums">{Math.round(pxPerBar)}</span>
               <button
                 type="button"
-                className="w-6 h-6 text-[12px] text-white/50 hover:text-white"
+                className="w-6 h-6 text-[12px] text-white/55 hover:text-white"
                 onClick={() => setPxPerBar((z) => clampZoom(z * 1.2))}
                 title="Zoom in"
+                aria-label="Zoom in"
               >＋</button>
               <button
                 type="button"
-                className="h-6 px-1.5 text-[9px] font-bold uppercase tracking-wider text-white/45 hover:text-[#ffbfa0] border-l border-white/10 ml-0.5 pl-1.5"
+                className="h-6 px-1.5 text-[10px] font-bold uppercase tracking-wider text-white/50 hover:text-[#ffbfa0] border-l border-white/10 ml-0.5 pl-1.5"
                 onClick={fitZoom}
                 title="Fit timeline to module width"
               >Fit</button>
@@ -760,7 +841,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       toast("Can't nudge — track occupied");
                     }
                   }}
-                  className="h-8 px-2 rounded-lg text-[10px] font-semibold border border-white/12 text-white/55 hover:bg-white/[0.06]"
+                  className={SEQ_PILL}
                   title="Nudge left by arrange snap"
                 >←</button>
                 <button
@@ -770,7 +851,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       toast("Can't nudge — track occupied");
                     }
                   }}
-                  className="h-8 px-2 rounded-lg text-[10px] font-semibold border border-white/12 text-white/55 hover:bg-white/[0.06]"
+                  className={SEQ_PILL}
                   title="Nudge right by arrange snap"
                 >→</button>
                 <button
@@ -783,7 +864,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       selectClipForEdit(id);
                     }
                   }}
-                  className="h-8 px-2.5 rounded-lg text-[10px] font-semibold border border-white/12 text-white/55 hover:bg-white/[0.06]"
+                  className={SEQ_PILL}
                 >Dup</button>
                 <label className="h-8 inline-flex items-center gap-1 px-2 rounded-lg border border-white/12 text-[10px] text-white/50">
                   Color
@@ -803,7 +884,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     removeClip(selected.id);
                     setSelectedClip(null);
                   }}
-                  className="h-8 px-2.5 rounded-lg text-[10px] font-semibold border border-rose-400/30 text-rose-200/80 hover:bg-rose-500/15 transition"
+                  className="inline-flex h-8 items-center justify-center gap-1.5 px-2.5 rounded-lg text-[10px] font-semibold border border-rose-400/30 text-rose-200/80 hover:bg-rose-500/15 transition shrink-0"
                 >
                   Remove
                 </button>
@@ -822,7 +903,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 }}
                 title={`APPEND PATTERN ${activeName} — right-click for ×4 / after selection`}
               >
-                <span>＋ APPEND PATTERN {activeName}</span>
+                <span>＋ APPEND {activeName}</span>
                 <span className="rounded px-1.5 py-0.5 text-[9px] font-mono bg-black/35 text-white/70">
                   {activeBars}b
                 </span>
@@ -856,12 +937,24 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 </div>
               )}
             </div>
-          </div>
-          )}
+            {!arrFullscreen && (
+              <button
+                type="button"
+                onClick={() => setArrFullscreen(true)}
+                className={SEQ_PILL}
+                title="Fullscreen arrangement"
+              >
+                Fullscreen
+              </button>
+            )}
+              </>
+              ) : undefined
+            }
+          />
         </div>
 
         {!arrCollapsed && (
-        <div className="flex min-h-0">
+        <div className={`flex min-h-0 ${arrFullscreen ? "flex-1 overflow-hidden" : ""}`}>
           {/* Fixed track headers */}
           <div
             className="shrink-0 border-r border-white/[0.08] bg-black/35 flex flex-col"
@@ -902,7 +995,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 key={i}
                 className="flex items-center gap-0.5 px-1 border-b border-white/[0.04]"
                 style={{
-                  height: LANE_H,
+                  height: laneH,
                   background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent",
                   opacity: tr.mute && !tr.solo ? 0.45 : 1,
                 }}
@@ -945,8 +1038,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       setTrackRenameValue(tr.name);
                     }}
                   >
-                    <div className="text-[10px] font-semibold text-white/75 truncate leading-tight">{tr.name}</div>
-                    <div className="text-[7px] uppercase tracking-[0.12em] text-white/30 leading-tight">
+                    <div className="text-[10px] font-semibold text-white/78 truncate leading-tight" title={tr.name}>{tr.name}</div>
+                    <div className="text-[9px] uppercase tracking-[0.08em] text-white/45 leading-tight">
                       {tr.layer === "a" ? "Synth A" : tr.layer === "b" ? "Synth B" : tr.layer === "drums" ? "Drums" : tr.layer === "samples" ? "Samples" : "Track"}
                     </div>
                   </button>
@@ -971,27 +1064,32 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 <button
                   type="button"
                   onClick={() => setPlaylistTrack(i, { arm: !tr.arm })}
-                  className={`w-5 h-5 rounded text-[8px] font-black ${
-                    tr.arm ? "bg-[#ff3d4a]/45 text-[#ffd7da]" : "bg-white/[0.06] text-white/40 hover:text-white/70"
-                  }`}
-                  title={tr.arm ? "Armed — Add to end targets this lane" : "Arm — make this the target lane for new clips"}
+                  className="arr-track-btn"
+                  data-on={tr.arm ? "1" : "0"}
+                  data-kind="arm"
+                  title={tr.arm ? "Disarm record — this lane is the Add-to-end target" : "Arm record — make this the target lane for new clips"}
+                  aria-label={tr.arm ? `Disarm ${tr.name}` : `Arm ${tr.name}`}
                   aria-pressed={tr.arm}
                 >R</button>
                 <button
                   type="button"
                   onClick={() => setPlaylistTrack(i, { mute: !tr.mute, solo: tr.mute ? tr.solo : false })}
-                  className={`w-5 h-5 rounded text-[8px] font-black ${
-                    tr.mute ? "bg-white/25 text-white/90" : "bg-white/[0.06] text-white/40 hover:text-white/70"
-                  }`}
-                  title={tr.mute ? "Unmute" : "Mute"}
+                  className="arr-track-btn"
+                  data-on={tr.mute ? "1" : "0"}
+                  data-kind="mute"
+                  title={tr.mute ? "Unmute track" : "Mute track"}
+                  aria-label={tr.mute ? `Unmute ${tr.name}` : `Mute ${tr.name}`}
+                  aria-pressed={tr.mute}
                 >M</button>
                 <button
                   type="button"
                   onClick={() => setPlaylistTrack(i, { solo: !tr.solo, mute: tr.solo ? tr.mute : false })}
-                  className={`w-5 h-5 rounded text-[8px] font-black ${
-                    tr.solo ? "bg-amber-400/35 text-amber-100" : "bg-white/[0.06] text-white/40 hover:text-white/70"
-                  }`}
-                  title={tr.solo ? "Unsolo" : "Solo"}
+                  className="arr-track-btn"
+                  data-on={tr.solo ? "1" : "0"}
+                  data-kind="solo"
+                  title={tr.solo ? "Unsolo track" : "Solo track"}
+                  aria-label={tr.solo ? `Unsolo ${tr.name}` : `Solo ${tr.name}`}
+                  aria-pressed={tr.solo}
                 >S</button>
                 <input
                   type="color"
@@ -1007,8 +1105,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
 
           <div
             ref={scrollRef}
-            className="relative flex-1 overflow-auto"
-            style={{ maxHeight: RULER_H + playlistH }}
+            className={`relative flex-1 editor-scroll overflow-auto ${arrFullscreen ? "min-h-0" : ""}`}
+            style={arrFullscreen ? undefined : { maxHeight: RULER_H + playlistH }}
             onDragOver={(e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "copy";
@@ -1025,19 +1123,11 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
             }}
           >
             <div className="relative min-w-full" style={{ width: trackW, height: RULER_H + playlistH }}>
-              {/* Bar ruler — click to scrub */}
+              {/* Bar ruler — click / drag to scrub */}
               <div
-                className="absolute inset-x-0 top-0 border-b border-white/[0.08] bg-black/40 cursor-ew-resize z-20"
+                className="absolute inset-x-0 top-0 border-b border-white/[0.08] bg-black/40 cursor-ew-resize z-20 touch-none"
                 style={{ height: RULER_H }}
-                onPointerDown={(e) => {
-                  if (e.button !== 0) return;
-                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                  seekFromRuler(e.clientX);
-                }}
-                onPointerMove={(e) => {
-                  if (!(e.buttons & 1)) return;
-                  seekFromRuler(e.clientX);
-                }}
+                onPointerDown={beginRulerScrub}
                 title="Click / drag to scrub arrangement playhead"
               >
                 {Array.from({ length: Math.ceil(totalBars) }, (_, b) => (
@@ -1047,10 +1137,11 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     style={{
                       left: b * pxPerBar,
                       width: pxPerBar,
-                      borderColor: b % 4 === 0 ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
+                      borderColor: b % 4 === 0 ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.08)",
+                      background: b % 2 === 0 ? "rgba(255,255,255,0.015)" : "transparent",
                     }}
                   >
-                    <span className={`pl-1 text-[9px] font-mono leading-[24px] ${b % 4 === 0 ? "text-white/55 font-semibold" : "text-white/25"}`}>
+                    <span className={`pl-1.5 text-[10px] font-mono leading-[24px] ${b % 4 === 0 ? "text-white/65 font-semibold" : "text-white/40"}`}>
                       {b + 1}
                     </span>
                   </div>
@@ -1111,8 +1202,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     key={track}
                     className="absolute inset-x-0 border-b border-white/[0.04]"
                     style={{
-                      top: track * LANE_H,
-                      height: LANE_H,
+                      top: track * laneH,
+                      height: laneH,
                       background: track % 2 === 0 ? "rgba(255,255,255,0.018)" : "transparent",
                     }}
                     onClick={(e) => {
@@ -1145,9 +1236,9 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     className="absolute pointer-events-none z-20 rounded-sm"
                     style={{
                       left: (dropHover.step / STEPS_PER_BAR) * pxPerBar + 1,
-                      top: dropHover.track * LANE_H + 2,
+                      top: dropHover.track * laneH + 2,
                       width: Math.max(pxPerBar * dropHover.bars - 2, pxPerBar * 0.4),
-                      height: LANE_H - 4,
+                      height: laneH - 4,
                       background: `${activeColor}33`,
                       border: `1px dashed ${activeColor}`,
                     }}
@@ -1159,9 +1250,9 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     className="absolute pointer-events-none z-25 rounded-md border border-dashed opacity-80"
                     style={{
                       left: (clipGhost.step / STEPS_PER_BAR) * pxPerBar + 2,
-                      top: clipGhost.track * LANE_H + 3,
+                      top: clipGhost.track * laneH + 3,
                       width: Math.max(pxPerBar * 0.55, clipGhost.bars * pxPerBar - 3),
-                      height: LANE_H - 6,
+                      height: laneH - 6,
                       borderColor: clipGhost.color,
                       background: `${clipGhost.color}44`,
                     }}
@@ -1192,6 +1283,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       fullBars={clip.unique ? (clip.local?.bars ?? sec?.bars ?? 1) : (sec?.bars ?? 1)}
                       color={color}
                       pxPerBar={pxPerBar}
+                      laneH={laneH}
                       snapSteps={effectiveSnap}
                       sounding={playingClips.has(clip.id)}
                       selected={selectedClip === clip.id}
@@ -1233,6 +1325,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                         removeClip(clip.id);
                         if (selectedClip === clip.id) setSelectedClip(null);
                         setClipMenu(null);
+                        toast(`Removed clip “${displayName}”`);
                       }}
                       onTrim={(steps) => trimClip(clip.id, steps)}
                       onDragStart={(e) => beginClipDrag(e, clip, color, bars)}
@@ -1278,6 +1371,7 @@ function TimelineClip({
   fullBars,
   color,
   pxPerBar,
+  laneH,
   snapSteps,
   sounding,
   selected,
@@ -1302,6 +1396,7 @@ function TimelineClip({
   fullBars: number;
   color: string;
   pxPerBar: number;
+  laneH: number;
   snapSteps: number;
   sounding: boolean;
   selected: boolean;
@@ -1319,42 +1414,46 @@ function TimelineClip({
 }) {
   const track = clampTrack(clip.track ?? 0);
   const left = (clip.startStep / STEPS_PER_BAR) * pxPerBar;
-  const width = Math.max(pxPerBar * 0.35, bars * pxPerBar - 3);
+  // Allow true 1/16-bar clips — old 0.35·bar floor made 1/4 look identical to ~1/3.
+  const width = Math.max(pxPerBar / 16, bars * pxPerBar - 2);
   const startBar = Math.floor(clip.startStep / STEPS_PER_BAR) + 1;
-  const top = track * LANE_H + 3;
+  const top = track * laneH + 3;
   const unique = !!clip.unique;
   const badge = unique ? "UNIQUE" : "LINKED";
   // Active window-listener detach for a trim drag — run on unmount.
   const trimCleanupRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => () => { trimCleanupRef.current?.(); }, []);
+  useEffect(() => () => {
+    trimCleanupRef.current?.();
+  }, []);
 
+  const audibleSteps = Math.max(1, bars * STEPS_PER_BAR);
   const spark = useMemo(() => {
     const notes = notePreview ?? [];
     if (notes.length === 0) return null;
-    const w = 40;
-    const h = 10;
-    const maxStep = Math.max(1, ...notes.map((n) => n.step + n.len));
-    const minMidi = Math.min(...notes.map((n) => n.midi));
-    const maxMidi = Math.max(...notes.map((n) => n.midi));
+    const h = Math.max(10, laneH - 22);
+    const visible = notes.filter((n) => n.step < audibleSteps).slice(0, 96);
+    if (visible.length === 0) return null;
+    const minMidi = Math.min(...visible.map((n) => n.midi));
+    const maxMidi = Math.max(...visible.map((n) => n.midi));
     const span = Math.max(1, maxMidi - minMidi);
-    return notes.slice(0, 48).map((n, i) => {
-      const x = (n.step / maxStep) * w;
+    return visible.map((n, i) => {
+      const x = (n.step / audibleSteps) * 100;
       const yw = ((n.midi - minMidi) / span) * (h - 2);
-      const ww = Math.max(1, (n.len / maxStep) * w);
+      const ww = Math.max(0.8, (n.len / audibleSteps) * 100);
       return (
         <rect
           key={i}
-          x={x}
+          x={`${x}%`}
           y={h - 2 - yw}
-          width={ww}
-          height={2}
-          fill="rgba(255,255,255,0.55)"
-          opacity={0.35 + n.vel * 0.55}
+          width={`${ww}%`}
+          height={2.5}
+          fill="rgba(255,255,255,0.7)"
+          opacity={0.4 + n.vel * 0.55}
         />
       );
     });
-  }, [notePreview]);
+  }, [notePreview, audibleSteps, laneH]);
 
   return (
     <div
@@ -1362,6 +1461,13 @@ function TimelineClip({
       onPointerDown={(e) => {
         const t = e.target as HTMLElement;
         if (t.dataset.trim || t.closest("button") || t.closest("[data-menu]")) return;
+        // Piano-roll style: right-click deletes immediately.
+        if (e.button === 2) {
+          e.preventDefault();
+          e.stopPropagation();
+          onRemove();
+          return;
+        }
         onDragStart(e);
       }}
       onClick={(e) => {
@@ -1371,7 +1477,6 @@ function TimelineClip({
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        onMenu();
       }}
       className={`group absolute rounded-md border cursor-grab active:cursor-grabbing select-none overflow-visible transition z-[15] touch-none ${
         selected ? "ring-2 ring-white/55" : ""
@@ -1380,40 +1485,48 @@ function TimelineClip({
         left: left + 2,
         top,
         width,
-        height: LANE_H - 6,
+        height: laneH - 6,
         borderColor: sounding || selected ? color : `${color}77`,
         background: `linear-gradient(165deg, ${color}${sounding ? "55" : "38"}, ${color}${sounding ? "28" : "16"})`,
         boxShadow: sounding
           ? `0 0 12px ${color}66, inset 0 1px 0 rgba(255,255,255,0.12)`
           : "inset 0 1px 0 rgba(255,255,255,0.08)",
       }}
-      title={`PATTERN ${name} · ${badge} · ${bars % 1 === 0 ? `${bars}b` : `${bars.toFixed(1)}b`} · T${track + 1} — right-click for clip actions`}
+      title={`PATTERN ${name} · ${badge} · ${bars % 1 === 0 ? `${bars}b` : `${bars.toFixed(2)}b`} · T${track + 1} — right-click to delete · ⋯ for more`}
     >
-      <div className="h-full flex flex-col justify-center px-1.5 min-w-0 pr-5 pointer-events-none overflow-hidden">
+      <div className="absolute inset-0 rounded-md overflow-hidden pointer-events-none">
+        {spark && (
+          <svg
+            className="absolute inset-x-0 bottom-0 opacity-90"
+            width="100%"
+            height={Math.max(10, laneH - 22)}
+            preserveAspectRatio="none"
+            aria-hidden
+          >
+            {spark}
+          </svg>
+        )}
+      </div>
+      <div className="relative h-full flex flex-col justify-start pt-0.5 px-1.5 min-w-0 pr-5 pointer-events-none overflow-hidden z-[1]">
         <div className="flex items-center gap-1 min-w-0">
           <div
-            className="text-[10px] font-bold truncate leading-tight"
+            className="text-[10px] font-bold truncate leading-tight drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]"
             style={{ color: sounding ? "#fff" : color }}
           >
             {name}
           </div>
           <span
             className={`shrink-0 text-[7px] font-black uppercase tracking-wide px-1 rounded ${
-              unique ? "bg-violet-400/30 text-violet-100" : "bg-white/10 text-white/55"
+              unique ? "bg-violet-400/30 text-violet-100" : "bg-black/35 text-white/55"
             }`}
           >
             {unique ? "UNIQUE" : "LINKED"}
           </span>
         </div>
         <div className="flex items-center gap-1.5 mt-0.5">
-          <div className="text-[8px] font-mono text-white/45 truncate">
-            {bars % 1 === 0 ? `${bars}b` : `${bars.toFixed(1)}b`} · @{startBar}
+          <div className="text-[8px] font-mono text-white/55 truncate drop-shadow-[0_1px_1px_rgba(0,0,0,0.7)]">
+            {bars % 1 === 0 ? `${bars}b` : `${bars.toFixed(2)}b`} · @{startBar}
           </div>
-          {spark && (
-            <svg width="40" height="10" className="shrink-0 opacity-80" aria-hidden>
-              {spark}
-            </svg>
-          )}
           {hasAutomation && (
             <span className="w-1.5 h-1.5 rounded-full bg-amber-300/80 shrink-0" title="Has automation" />
           )}
@@ -1422,7 +1535,7 @@ function TimelineClip({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onMenu(); }}
-        className="absolute top-0.5 right-0.5 flex items-center justify-center w-4 h-4 text-[9px] rounded bg-black/50 text-white/60 hover:text-white"
+        className="absolute top-0.5 right-0.5 flex items-center justify-center w-4 h-4 text-[9px] rounded bg-black/50 text-white/60 hover:text-white z-[2]"
         title="Clip actions"
       >⋯</button>
       {menuOpen && (
@@ -1454,7 +1567,7 @@ function TimelineClip({
       )}
       <div
         data-trim="1"
-        className="absolute top-0 bottom-0 right-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/25"
+        className="absolute top-0 bottom-0 right-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/25 z-[3]"
         title="Drag to trim length (follows snap)"
         onPointerDown={(e) => {
           e.stopPropagation();
@@ -1463,13 +1576,16 @@ function TimelineClip({
           const startLen = bars * STEPS_PER_BAR;
           const maxLen = fullBars * STEPS_PER_BAR;
           const grid = Math.max(0.25, snapSteps);
+          // Trim can always resolve to 1/4 bar (or finer if snap is finer).
+          const trimGrid = Math.min(grid, STEPS_PER_BAR / 4);
+          const minLen = Math.max(1, trimGrid);
           const el = e.currentTarget;
           el.setPointerCapture(e.pointerId);
           const onMove = (ev: PointerEvent) => {
             const dx = ev.clientX - startX;
             const dSteps = (dx / pxPerBar) * STEPS_PER_BAR;
-            const next = Math.max(grid, Math.min(maxLen, startLen + dSteps));
-            const snapped = Math.max(grid, quantizeStep(next, grid));
+            const next = Math.max(minLen, Math.min(maxLen, startLen + dSteps));
+            const snapped = Math.max(minLen, quantizeStep(next, trimGrid));
             onTrim(snapped);
           };
           const onUp = () => {

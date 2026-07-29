@@ -126,6 +126,7 @@ class SpectralProcessor extends AudioWorkletProcessor {
     this.amount = 0.6;
     this.mix = 0.5;
     this.bypass = true;
+    this.eco = false;
     this.binLow = 0;
     this.binHigh = 1;
     this.ch = [new ChannelState(), new ChannelState()];
@@ -144,6 +145,7 @@ class SpectralProcessor extends AudioWorkletProcessor {
       if (typeof d.mix === "number") this.mix = d.mix;
       if (typeof d.binLow === "number") this.binLow = Math.min(1, Math.max(0, d.binLow));
       if (typeof d.binHigh === "number") this.binHigh = Math.min(1, Math.max(0, d.binHigh));
+      if (typeof d.eco === "boolean") this.eco = d.eco;
       if (typeof d.bypass === "boolean") {
         if (d.bypass && !this.bypass) for (const c of this.ch) c.reset();
         this.bypass = d.bypass;
@@ -161,6 +163,23 @@ class SpectralProcessor extends AudioWorkletProcessor {
         const src = input[c] || input[0];
         if (src) output[c].set(src);
       }
+      return true;
+    }
+    // Eco: one STFT on a mid sum, copy to both outs — ~½ the FFT work.
+    if (this.eco && nCh >= 1) {
+      const l = input[0] || null;
+      const r = input[1] || l;
+      const n = output[0].length;
+      const mid = this._ecoMid || (this._ecoMid = new Float32Array(128));
+      if (mid.length < n) this._ecoMid = new Float32Array(n);
+      const m = this._ecoMid;
+      for (let i = 0; i < n; i++) {
+        const a = l ? l[i] : 0;
+        const b = r ? r[i] : a;
+        m[i] = (a + b) * 0.5;
+      }
+      this.runChannel(this.ch[0], m, output[0]);
+      if (nCh > 1) output[1].set(output[0]);
       return true;
     }
     for (let c = 0; c < nCh; c++) {

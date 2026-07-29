@@ -1,7 +1,6 @@
 /**
- * FireBreadcrumb — the console utility strip.
- * Left: SYNTH / SOURCE / OSCILLATOR A hierarchy path.
- * Right: master meter (slot) · density · label mode · accordion · exit.
+ * FireBreadcrumb — global application utility strip.
+ * LEFT: location breadcrumb · CENTER: Fire meter · RIGHT: presentation controls
  */
 
 import type { ReactNode } from "react";
@@ -18,7 +17,6 @@ export function FireBreadcrumb({
 }: {
   workspace: FireWorkspace;
   synthBand: FireSynthBand;
-  /** Inline master-meter slot (rendered in the right control cluster). */
   meter?: ReactNode;
 }) {
   const { focusId, exitFocus, focusActive } = useFireLayout();
@@ -40,7 +38,7 @@ export function FireBreadcrumb({
   let objectLabel: string | null = null;
   if (mod) {
     if (labelMode === "character") objectLabel = mod.short;
-    else objectLabel = mod.title; // technical + both — canonical name leads
+    else objectLabel = mod.title;
   }
 
   const labelModes: { id: FireLabelMode; label: string; hint: string }[] = [
@@ -50,67 +48,77 @@ export function FireBreadcrumb({
   ];
 
   return (
-    <div className="fc-utility-strip shrink-0">
-      <div className="fc-breadcrumb">
-        <span>{modeLabel}</span>
-        <span className="fc-crumb-sep" aria-hidden>/</span>
-        <span>{sectionLabel}</span>
-        {objectLabel && (
-          <>
-            <span className="fc-crumb-sep" aria-hidden>/</span>
-            <strong>{objectLabel}</strong>
-            {labelMode === "both" && mod && mod.short !== mod.title && (
-              <span className="fc-text-telemetry normal-case tracking-normal">· {mod.short}</span>
-            )}
-          </>
-        )}
+    <div className="fc-utility-strip shrink-0" role="navigation" aria-label="Application status">
+      <div className="fc-utility-strip__left">
+        <div className="fc-breadcrumb" aria-label={`Location: ${modeLabel} / ${sectionLabel}`}>
+          <span>{modeLabel}</span>
+          <span className="fc-crumb-sep" aria-hidden>/</span>
+          <span>{sectionLabel}</span>
+          {objectLabel && (
+            <>
+              <span className="fc-crumb-sep" aria-hidden>/</span>
+              <strong>{objectLabel}</strong>
+              {labelMode === "both" && mod && mod.short !== mod.title && (
+                <span className="fc-text-telemetry normal-case tracking-normal">· {mod.short}</span>
+              )}
+            </>
+          )}
+        </div>
       </div>
-      <div className="ml-auto flex items-center gap-2.5 flex-wrap">
+
+      <div className="fc-utility-strip__center">
         {meter}
-        {meter && <span className="fc-strip-divider" aria-hidden />}
-        <FireDensityToggle />
-        <span className="fc-strip-divider" aria-hidden />
-        <div className="fc-density-toggle" role="group" aria-label="Module label mode">
-          {labelModes.map((m) => (
+      </div>
+
+      <div className="fc-utility-strip__right">
+        <div className="fc-utility-strip__pres" role="group" aria-label="Workspace presentation">
+          <FireDensityToggle />
+          <span className="fc-strip-divider" aria-hidden />
+          <div className="fc-density-toggle" role="radiogroup" aria-label="Module label mode">
+            {labelModes.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                role="radio"
+                aria-checked={labelMode === m.id}
+                data-on={labelMode === m.id ? "1" : "0"}
+                onClick={() => setLabelMode(m.id)}
+                title={`Labels · ${m.hint}`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <span className="fc-strip-divider" aria-hidden />
+          <div className="fc-density-toggle" role="group" aria-label="Accordion mode">
             <button
-              key={m.id}
               type="button"
-              data-on={labelMode === m.id ? "1" : "0"}
-              onClick={() => setLabelMode(m.id)}
-              title={`Labels · ${m.hint}`}
+              data-on={accordionMode ? "1" : "0"}
+              onClick={() => setAccordionMode(!accordionMode)}
+              aria-pressed={accordionMode}
+              title={
+                accordionMode
+                  ? "Accordion on — opening a module folds the others (pinned stay). Click to turn off."
+                  : "Accordion off — modules open independently. Click to turn on."
+              }
             >
-              {m.label}
+              Accordion
             </button>
-          ))}
+          </div>
+          {(focusActive || density === "focus") && (
+            <button
+              type="button"
+              className="rounded-md border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 px-2 h-7 text-[10px] font-bold uppercase tracking-[0.08em] text-[#ffbfa0] hover:bg-[#ff6a3d]/20 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
+              onClick={() => {
+                exitFocus();
+                if (density === "focus") exitDensity();
+              }}
+              title={focusActive ? "Exit Δ Focus — show all modules" : "Exit Focus density — restore chrome"}
+            >
+              {focusActive ? "Exit Δ" : "Exit Focus"}
+            </button>
+          )}
         </div>
-        <div className="fc-density-toggle" role="group" aria-label="Accordion mode">
-          <button
-            type="button"
-            data-on={accordionMode ? "1" : "0"}
-            onClick={() => setAccordionMode(!accordionMode)}
-            aria-pressed={accordionMode}
-            title={
-              accordionMode
-                ? "Accordion on — opening a module folds the others (pinned stay). Click to turn off."
-                : "Accordion off — modules open independently. Click to turn on."
-            }
-          >
-            Accordion
-          </button>
-        </div>
-        {(focusActive || density === "focus") && (
-          <button
-            type="button"
-            className="rounded-md border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-[#ffbfa0] hover:bg-[#ff6a3d]/20 transition"
-            onClick={() => {
-              exitFocus();
-              if (density === "focus") exitDensity();
-            }}
-            title={focusActive ? "Exit Δ Focus — show all modules" : "Exit Focus density — restore chrome"}
-          >
-            {focusActive ? "Exit Δ" : "Exit Focus"}
-          </button>
-        )}
       </div>
     </div>
   );
@@ -125,11 +133,13 @@ export function FireDensityToggle() {
     { id: "focus" as const, label: "Focus", hint: "Work area only" },
   ];
   return (
-    <div className="fc-density-toggle" role="group" aria-label="Interface density">
+    <div className="fc-density-toggle" role="radiogroup" aria-label="Interface density">
       {modes.map((m) => (
         <button
           key={m.id}
           type="button"
+          role="radio"
+          aria-checked={density === m.id}
           data-on={density === m.id ? "1" : "0"}
           onClick={() => setDensity(m.id)}
           title={`${m.label} density — ${m.hint}`}

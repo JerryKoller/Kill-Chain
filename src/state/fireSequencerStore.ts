@@ -2247,8 +2247,9 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   setRecordMode: (mode: "overdub" | "replace") => void;
   setRecordCountIn: (bars: number) => void;
   setMetronome: (on: boolean) => void;
-  /** Scrub arrangement playhead. Works while stopped or playing. */
-  seekArrangement: (absoluteStep: number) => void;
+  /** Scrub arrangement playhead. Works while stopped or playing.
+   *  `soft: true` re-anchors without cutting voices (fluid drag scrub). */
+  seekArrangement: (absoluteStep: number, opts?: { soft?: boolean }) => void;
   setPlayMode: (mode: PlayMode) => void;
   setPlayScope: (scope: PlayScope) => void;
   setSelectionRange: (start: number, end: number) => void;
@@ -3377,7 +3378,6 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const secs = sectionsWithActive(s);
       const sec = secs.find((x) => x.id === clip.patternId);
       if (!sec) return;
-      pushFireHistory();
       const fullBars = clip.unique && clip.local?.bars != null
         ? Math.max(1, clip.local.bars)
         : Math.max(1, sec.bars);
@@ -3385,6 +3385,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const nextLen = lengthSteps == null
         ? undefined
         : clamp(snapToStep(lengthSteps), 1, full);
+      pushFireHistory("trimClip");
       set({
         arrangement: s.arrangement.map((c) =>
           c.id === id
@@ -3758,13 +3759,13 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
-    seekArrangement: (absoluteStep) => {
+    seekArrangement: (absoluteStep, opts) => {
       const s = get();
       if (s.playMode !== "arrangement") return;
       const { map, total } = computeSongMap(s);
       songMap = map;
       songTotal = total;
-      const step = clamp(snapToStep(absoluteStep), 0, Math.max(0, total - STEPS_PER_BAR));
+      const step = clamp(snapToStep(absoluteStep), 0, Math.max(0, total - 1));
       arrangementCueStep = step;
       if (!s.playing) return;
       const ctx = getEngine().ctx;
@@ -3772,9 +3773,13 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       // Re-anchor so the live playhead jumps without stopping transport.
       loopStartTime = ctx.currentTime - step * dur;
       nextStep = step;
-      const engine = getEngine();
-      engine.fireCommand.allNotesOff();
-      engine.peekFireCommandB()?.allNotesOff();
+      // Soft scrub: keep notes ringing while dragging the ruler. Hard seek
+      // (click / pointer-up) cuts hanging voices so the new position is clean.
+      if (!opts?.soft) {
+        const engine = getEngine();
+        engine.fireCommand.allNotesOff();
+        engine.peekFireCommandB()?.allNotesOff();
+      }
     },
 
     setPlayMode: (mode) => {

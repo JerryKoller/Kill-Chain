@@ -1,6 +1,6 @@
 /**
- * Lit collapse chevron used across Fire Command section headers.
- * Bigger + accent-colored so it reads on dark glass panels.
+ * Quiet expand/collapse chevron for section headers.
+ * Square + muted — never reads as a transport / play control.
  */
 
 export function CollapseToggle({
@@ -14,21 +14,21 @@ export function CollapseToggle({
 }) {
   return (
     <span
-      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-[11px] font-bold leading-none transition"
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[12px] leading-none transition duration-150"
       style={{
-        borderColor: `${color}77`,
-        color,
-        background: collapsed
-          ? `linear-gradient(160deg, ${color}22, ${color}0a)`
-          : `linear-gradient(160deg, ${color}38, ${color}14)`,
-        boxShadow: collapsed
-          ? `0 0 8px ${color}28, inset 0 0 6px ${color}12`
-          : `0 0 14px ${color}44, inset 0 0 8px ${color}18`,
+        color: "rgba(255,255,255,0.62)",
+        background: "rgba(255,255,255,0.045)",
+        boxShadow: `inset 0 0 0 1px rgba(255,255,255,0.14), 0 0 0 1px ${color}14`,
       }}
       title={title}
       aria-hidden
     >
-      {collapsed ? "▸" : "▾"}
+      <span
+        className="inline-block transition-transform duration-150"
+        style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
+      >
+        ▾
+      </span>
     </span>
   );
 }

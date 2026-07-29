@@ -23,6 +23,7 @@ import { useFireSequencerStore, NOTE_NAMES, SCALES } from "@/state/fireSequencer
 import { useMidiStore, registerMidiNoteHandler } from "@/state/midiStore";
 import { useFireMidiFocusStore, bootFireMidiFocus } from "@/state/fireMidiFocusStore";
 import { focusPageKnobs, focusModuleAt, focusPageCount, FIRE_FOCUS_COUNT } from "./fireKnobFocus";
+import { setStageVizPressureSource } from "./stageVizRaf";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
 import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode } from "@/audio/dsp/FireCommandSynth";
 import { matrixArcsForParam, countRoutesFrom, MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
@@ -326,26 +327,36 @@ function StudioBay({ compact = false }: { compact?: boolean }) {
   const redoDepth = useFireHistoryStore((s) => s.redoDepth);
   if (compact) {
     const btn = (on: boolean) =>
-      `h-8 px-2.5 rounded-md text-[10px] font-bold uppercase tracking-[0.06em] transition inline-flex items-center gap-1.5 ${
+      `h-8 px-2.5 rounded-md text-[10px] font-bold uppercase tracking-[0.06em] transition inline-flex items-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] ${
         on
-          ? "bg-white/[0.09] text-white/90 hover:bg-white/[0.14] ring-1 ring-white/15"
-          : "bg-white/[0.03] text-white/25 cursor-default ring-1 ring-white/6"
+          ? "bg-white/[0.09] text-white/90 hover:bg-white/[0.14] ring-1 ring-white/15 cursor-pointer"
+          : "bg-white/[0.03] text-white/28 cursor-not-allowed ring-1 ring-white/6"
       }`;
     return (
-      <div className="flex flex-col justify-center gap-1.5 shrink-0 h-full min-h-[56px]">
-        <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40 leading-none">
-          Studio
-        </div>
+      <div className="fire-header__cluster shrink-0">
+        <div className="fire-header__cluster-label">History</div>
         <div className="flex items-center gap-1.5">
-          <button onClick={() => undoFire()} disabled={undoDepth === 0} className={btn(undoDepth > 0)} title="Undo (Ctrl+Z)">
+          <button
+            onClick={() => undoFire()}
+            disabled={undoDepth === 0}
+            className={btn(undoDepth > 0)}
+            title={`Undo (Ctrl+Z) — ${undoDepth} step${undoDepth === 1 ? "" : "s"}`}
+            aria-label={`Undo, ${undoDepth} available`}
+          >
             <span aria-hidden>↶</span>
             Undo
-            <span className="font-mono tabular-nums text-[9px] opacity-50">{undoDepth}</span>
+            <span className="fc-history-badge" data-empty={undoDepth === 0 ? "1" : "0"}>{undoDepth}</span>
           </button>
-          <button onClick={() => redoFire()} disabled={redoDepth === 0} className={btn(redoDepth > 0)} title="Redo (Ctrl+Y)">
+          <button
+            onClick={() => redoFire()}
+            disabled={redoDepth === 0}
+            className={btn(redoDepth > 0)}
+            title={`Redo (Ctrl+Y) — ${redoDepth} step${redoDepth === 1 ? "" : "s"}`}
+            aria-label={`Redo, ${redoDepth} available`}
+          >
             <span aria-hidden>↷</span>
             Redo
-            <span className="font-mono tabular-nums text-[9px] opacity-50">{redoDepth}</span>
+            <span className="fc-history-badge" data-empty={redoDepth === 0 ? "1" : "0"}>{redoDepth}</span>
           </button>
         </div>
       </div>
@@ -360,9 +371,9 @@ function StudioBay({ compact = false }: { compact?: boolean }) {
   return (
     <div className="relative z-0 flex min-w-0 flex-col justify-center gap-2 overflow-hidden rounded-2xl border border-white/[0.09] bg-gradient-to-b from-white/[0.04] to-transparent px-2.5 py-2 min-h-[88px]">
       <div className="flex items-center gap-2 w-full">
-        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-white/40">Studio</span>
-        <span className="text-[9px] text-white/25">undo · redo</span>
-        <span className="ml-auto font-mono text-[9px] text-white/30 tabular-nums">
+        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-white/48">History</span>
+        <span className="text-[10px] text-white/38">undo · redo</span>
+        <span className="ml-auto font-mono text-[10px] text-white/40 tabular-nums">
           {undoDepth}/{redoDepth}
         </span>
       </div>
@@ -381,7 +392,6 @@ function StudioBay({ compact = false }: { compact?: boolean }) {
         >↷ Redo</button>
       </div>
       <div className="grid grid-cols-2 gap-1.5 w-full">
-        {/* Neutral history bars — coral/sky here read as Snapshot A/B. */}
         <div className="h-1 overflow-hidden rounded-full bg-white/[0.06]" title={`${undoDepth} undo steps`}>
           <div
             className="h-full rounded-full bg-white/45 transition-[width] duration-200"
@@ -500,7 +510,17 @@ export function FireCommandView() {
     useFireSequencerStore.getState().syncFireMixer();
     // Warm the AudioContext so the first MIDI hit isn't waiting on resume().
     void getEngine().resume();
-    return () => useFireCommandStore.getState().panic();
+    setStageVizPressureSource(() => {
+      try {
+        return activeFireEngine().getCpuPressure();
+      } catch {
+        return 0;
+      }
+    });
+    return () => {
+      setStageVizPressureSource(null);
+      useFireCommandStore.getState().panic();
+    };
   }, []);
 
   // USB MIDI keyboard (e.g. Akai MPK Mini) → active edit target (A or B).
@@ -591,6 +611,7 @@ export function FireCommandView() {
     >
       <div
         className="fire-console relative rounded-2xl flex-1 min-h-0 flex flex-col overflow-hidden"
+        data-workspace={workspace}
         style={{
           border: "1px solid rgba(255,255,255,0.1)",
           background:
@@ -601,65 +622,29 @@ export function FireCommandView() {
       >
       <FireBreadcrumb workspace={workspace} synthBand={synthBand} meter={<FireMasterMeter />} />
       {/* Modules scroll; keyboard stays pinned to the console footer. */}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain min-h-[120px]">
-      {/* One continuous command rail — fire → green gradient, soft zone seps */}
-      <div
-        className="fire-header relative overflow-hidden rounded-t-2xl"
-        style={undefined}
-      >
-        {/* Master wash: red left → amber mid → green right */}
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "linear-gradient(105deg, #2a100c 0%, #1a1210 18%, #121412 52%, #0c1612 78%, #0a1614 100%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "linear-gradient(90deg, rgba(255,106,61,0.22) 0%, rgba(255,140,80,0.1) 28%, rgba(180,160,90,0.05) 50%, rgba(80,180,120,0.1) 72%, rgba(52,211,153,0.2) 100%)",
-          }}
-        />
-        {/* Soft bloom accents */}
-        <div
-          className="pointer-events-none absolute -left-8 top-1/2 h-28 w-28 -translate-y-1/2 rounded-full blur-3xl opacity-50"
-          style={{ background: "rgba(255,106,61,0.45)" }}
-        />
-        <div
-          className="pointer-events-none absolute -right-6 top-1/2 h-28 w-36 -translate-y-1/2 rounded-full blur-3xl opacity-40"
-          style={{ background: "rgba(52,211,153,0.4)" }}
-        />
-        {/* Specular sheen */}
-        <div
-          className="pointer-events-none absolute inset-x-0 top-0 h-px"
-          style={{ background: "linear-gradient(90deg, rgba(255,160,100,0.35), rgba(255,255,255,0.12), rgba(120,230,180,0.3))" }}
-        />
-        {/* Soft handoff into the next zone (violet workspace / brass transport) */}
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-10"
-          style={{
-            background:
-              "linear-gradient(180deg, transparent 0%, rgba(167,139,250,0.08) 55%, rgba(12,12,16,0.35) 100%)",
-          }}
-        />
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain min-h-[120px] flex flex-col">
+      {/* Global creative controls — restrained identity wash */}
+      <div className="fire-header relative overflow-hidden rounded-t-2xl shrink-0">
+        <div className="fire-header__wash" />
+        <div className="fire-header__tint" />
+        <div className="fire-header__edge-fire" aria-hidden />
+        <div className="fire-header__edge-mutate" aria-hidden />
+        <div className="fire-header__sheen" />
 
-        {/* Always allow wrapping — shrink-0 cluster contents overlap when the
-            row is forced onto one line at sub-1600px widths. */}
-        <div className="relative z-10 flex flex-wrap items-stretch gap-x-0 gap-y-1.5 px-1.5 py-2.5">
-          {/* Brand */}
-          <div className="flex items-center gap-2.5 px-3 py-1 shrink-0 min-h-[60px]">
+        <div className="fire-header__rail">
+          {/* Identity */}
+          <div className="fire-header__cluster fire-header__brand shrink-0">
             <div
-              className="w-11 h-11 rounded-xl grid place-items-center shrink-0 animate-[evolve-breathe_4.5s_ease-in-out_infinite]"
+              className="w-9 h-9 rounded-lg grid place-items-center shrink-0"
               style={{
-                background: "linear-gradient(145deg, rgba(255,106,61,0.32), rgba(10,10,10,0.92))",
-                boxShadow: "0 0 26px rgba(255,106,61,0.35), inset 0 0 14px rgba(255,106,61,0.14)",
-                border: "1px solid rgba(255,106,61,0.45)",
+                background: "linear-gradient(145deg, rgba(255,106,61,0.28), rgba(10,10,10,0.92))",
+                boxShadow: "0 0 16px rgba(255,106,61,0.22), inset 0 0 10px rgba(255,106,61,0.1)",
+                border: "1px solid rgba(255,106,61,0.4)",
               }}
               title="Fire Command MK IV — weapons free"
+              aria-hidden
             >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
                 <circle cx="12" cy="12" r="8" stroke="#ff6a3d" strokeWidth="1.4" opacity="0.95" />
                 <circle cx="12" cy="12" r="3.4" stroke="#ffcf5c" strokeWidth="1.2" opacity="0.9" />
                 <circle cx="12" cy="12" r="1" fill="#ff6a3d" />
@@ -667,41 +652,41 @@ export function FireCommandView() {
               </svg>
             </div>
             <div className="min-w-0 leading-none">
-              <div className="fire-title text-[16px] font-black tracking-[0.1em]">FIRE COMMAND</div>
-              <div className="mt-1.5 flex items-center gap-1.5">
+              <div className="fire-title text-[14px] font-black tracking-[0.08em]">FIRE COMMAND</div>
+              <div className="mt-1 flex items-center gap-1.5">
                 <span
-                  className="text-[9px] font-black tracking-[0.22em] px-1.5 py-0.5 rounded"
-                  style={{ color: "#ffcf5c", background: "rgba(255,207,92,0.12)", boxShadow: "inset 0 0 0 1px rgba(255,207,92,0.35)" }}
+                  className="text-[9px] font-bold tracking-[0.12em] px-1.5 py-0.5 rounded"
+                  style={{ color: "#ffcf5c", background: "rgba(255,207,92,0.1)", boxShadow: "inset 0 0 0 1px rgba(255,207,92,0.3)" }}
                 >
                   MK IV
                 </span>
-                <span className="text-[8px] uppercase tracking-[0.16em] text-[#ff9a6b]/70">weapons free</span>
+                <span className="text-[9px] uppercase tracking-[0.1em] text-[#ff9a6b]/75">weapons free</span>
               </div>
             </div>
           </div>
 
           <CommandRailSep />
 
-          {/* Patch — row1 tools, row2 preset strip (aligned) */}
-          <div className="flex flex-col justify-center gap-1.5 px-3 py-1 flex-[1.2] basis-[19rem] min-w-[19rem] min-h-[60px]">
-            <div className="flex items-center gap-1.5 min-w-0 min-h-[2rem] flex-wrap">
-              <div className="text-[9px] font-black uppercase tracking-[0.18em] text-white/40 leading-none shrink-0">
-                Snapshot
-              </div>
-              <div className="inline-flex h-8 rounded-md bg-black/35 p-0.5 shrink-0 ring-1 ring-white/10 fc-snapshot-toggle">
+          {/* Snapshot + reset */}
+          <div className="fire-header__cluster flex-[1.2] basis-[17rem] min-w-[17rem]">
+            <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+              <span className="fire-header__cluster-label shrink-0">Snapshot</span>
+              <div className="inline-flex h-8 rounded-md bg-black/35 p-0.5 shrink-0 ring-1 ring-white/10 fc-snapshot-toggle" role="radiogroup" aria-label="Edit snapshot">
                 {(["a", "b"] as const).map((t) => (
                   <button
                     key={t}
                     type="button"
+                    role="radio"
+                    aria-checked={editTarget === t}
                     onClick={() => setEditTarget(t)}
-                    className="h-full min-w-[30px] px-2.5 text-[10px] font-black uppercase tracking-[0.1em] rounded transition"
+                    className="h-full min-w-[30px] px-2.5 text-[10px] font-black uppercase tracking-[0.08em] rounded transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
                     style={
                       editTarget === t
                         ? {
                             background: t === "b" ? "rgba(98,182,255,0.28)" : "rgba(255,106,61,0.32)",
                             color: t === "b" ? "#b8dcff" : "#ffbfa0",
                           }
-                        : { color: "rgba(255,255,255,0.35)" }
+                        : { color: "rgba(255,255,255,0.4)" }
                     }
                     title={t === "a" ? "Snapshot A — edit Synth A patch" : "Snapshot B — edit Synth B patch"}
                   >
@@ -709,18 +694,16 @@ export function FireCommandView() {
                   </button>
                 ))}
               </div>
-              {/* Neutral chrome — the violet accent belonged to the Synth
-                  workspace tab and made two unrelated violet CTAs. */}
               <button
                 onClick={() => setCharacterBrowserOpen(true)}
-                className="h-8 px-2.5 rounded-md text-[10px] font-semibold transition bg-white/[0.05] text-white/75 hover:bg-white/10 ring-1 ring-white/12 shrink-0"
+                className="h-8 px-2.5 rounded-md text-[10px] font-semibold transition bg-white/[0.05] text-white/75 hover:bg-white/10 ring-1 ring-white/12 shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
                 title="Characters — genesis character cards / starting personalities"
               >
                 Characters
               </button>
               <button
                 onClick={() => loadPreset("init")}
-                className="h-8 px-2.5 rounded-md text-[10px] text-white/70 transition bg-white/[0.04] hover:bg-white/10 ring-1 ring-white/10 shrink-0"
+                className="h-8 px-2.5 rounded-md text-[10px] text-white/70 transition bg-white/[0.04] hover:bg-white/10 ring-1 ring-white/10 shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
                 title="Reset to Init patch"
               >
                 ↺ Init
@@ -743,7 +726,7 @@ export function FireCommandView() {
                     setTimeout(() => setConfirmDefaults(false), 2400);
                   }
                 }}
-                className={`h-8 px-2.5 rounded-md text-[10px] font-semibold transition shrink-0 ring-1 ${
+                className={`h-8 px-2.5 rounded-md text-[10px] font-semibold transition shrink-0 ring-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-rose-400/60 ${
                   confirmDefaults
                     ? "bg-rose-500/20 text-rose-200 ring-rose-400/70"
                     : "bg-rose-500/5 text-rose-200/80 hover:bg-rose-500/10 ring-rose-400/30"
@@ -756,7 +739,7 @@ export function FireCommandView() {
             <div className="flex items-center gap-1 min-w-0 h-8">
               <button
                 onClick={() => cyclePreset(-1)}
-                className="w-8 h-8 shrink-0 rounded-md bg-white/[0.04] hover:bg-white/10 text-white/65 text-xs leading-none transition ring-1 ring-white/10"
+                className="w-8 h-8 shrink-0 rounded-md bg-white/[0.04] hover:bg-white/10 text-white/65 text-xs leading-none transition ring-1 ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
                 title="Previous preset"
                 aria-label="Previous preset"
               >
@@ -764,16 +747,16 @@ export function FireCommandView() {
               </button>
               <button
                 onClick={() => setBrowserOpen(true)}
-                className="flex items-center gap-2 rounded-md bg-black/40 hover:bg-black/55 px-2.5 h-8 transition min-w-0 flex-1 ring-1 ring-white/10 hover:ring-white/20"
+                className="flex items-center gap-2 rounded-md bg-black/40 hover:bg-black/55 px-2.5 h-8 transition min-w-0 flex-1 ring-1 ring-white/10 hover:ring-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
                 title="Open the preset library"
               >
-                <span className="text-sm leading-none shrink-0" style={{ color: FIRE }}>♪</span>
+                <span className="text-sm leading-none shrink-0" style={{ color: FIRE }} aria-hidden>♪</span>
                 <span className="text-[12px] font-semibold text-white truncate">{currentName}</span>
-                <span className="ml-auto text-[9px] uppercase tracking-[0.14em] text-white/40 shrink-0">Browse</span>
+                <span className="ml-auto text-[9px] uppercase tracking-[0.1em] text-white/45 shrink-0">Browse ▾</span>
               </button>
               <button
                 onClick={() => cyclePreset(1)}
-                className="w-8 h-8 shrink-0 rounded-md bg-white/[0.04] hover:bg-white/10 text-white/65 text-xs leading-none transition ring-1 ring-white/10"
+                className="w-8 h-8 shrink-0 rounded-md bg-white/[0.04] hover:bg-white/10 text-white/65 text-xs leading-none transition ring-1 ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
                 title="Next preset"
                 aria-label="Next preset"
               >
@@ -785,22 +768,23 @@ export function FireCommandView() {
           <CommandRailSep />
 
           {/* Random Armory */}
-          <div className="fc-chrome-armory flex items-stretch px-3 py-1 flex-1 basis-[14rem] min-w-[14rem] min-h-[60px]">
+          <div className="fc-chrome-armory fire-header__cluster flex-1 basis-[13rem] min-w-[13rem]">
             <RandomizeCluster compact />
           </div>
 
           <CommandRailSep />
 
           {/* Natural Selection */}
-          <div className="fc-chrome-mutate flex items-stretch px-3 py-1 flex-1 basis-[14rem] min-w-[14rem] min-h-[60px]">
+          <div className="fc-chrome-mutate fire-header__cluster flex-1 basis-[13rem] min-w-[13rem]">
             <MutateCluster compact />
           </div>
 
           <CommandRailSep />
 
-          {/* Studio — labeled Undo / Redo + save tiers */}
-          <div className="fc-chrome-studio flex items-stretch px-3 py-1 shrink-0 min-h-[60px] gap-3">
+          {/* History + Save */}
+          <div className="fc-chrome-studio flex items-stretch px-1 py-0.5 shrink-0 gap-2">
             <StudioBay compact />
+            <span className="hidden lg:block w-px self-stretch my-1.5 bg-white/10" aria-hidden />
             <FireSaveTiers />
           </div>
         </div>
@@ -815,7 +799,9 @@ export function FireCommandView() {
       <FireWorkspaceTabs workspace={workspace} onChange={setWorkspace} flush={flush} />
 
       {workspace === "sequencer" ? (
-        <SequencerPanel flush={flush} />
+        <div className="flex-1 min-h-0 flex flex-col min-w-0">
+          <SequencerPanel flush={flush} />
+        </div>
       ) : (
       <>
       {/* Synth chrome — transport + band tabs flush into the console */}

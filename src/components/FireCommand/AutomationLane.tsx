@@ -656,7 +656,7 @@ export function AutomationLane() {
         <div
           ref={scrollRef}
           onScroll={(e) => setRollHScroll(e.currentTarget.scrollLeft)}
-          className="mt-1.5 rounded-xl border border-white/12 bg-[#0a0c12] overflow-x-auto"
+          className="mt-1.5 rounded-xl border border-white/12 bg-[#0a0c12] editor-scroll overflow-x-auto"
         >
           <div
             className="flex items-center gap-2 px-2.5 py-1 border-b border-white/[0.06] bg-black/30"

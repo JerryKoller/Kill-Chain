@@ -25,6 +25,11 @@ import {
 } from "./drumClarity";
 import { getEngine } from "@/audio/AudioEngine";
 import { useUIStore } from "@/state/uiStore";
+import { PatternBarsControls } from "./PatternBarsControls";
+import { ScopedPlayButton } from "./ScopedPlayButton";
+import { PatternSelect } from "./PatternSelect";
+import { EditorToolbarGroup, EditorToolbarDivider } from "./EditorShell";
+import { SEQ_PILL_DESTRUCTIVE } from "./seqChrome";
 
 const LABEL_W = 92;
 const TOOLS_W = 96;
@@ -238,18 +243,31 @@ export function DrumMachine() {
 
   return (
     <div className="select-none w-full min-w-0 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-[#12151c] via-[#0c0e14] to-[#090b10] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-      <div className="flex flex-wrap items-center gap-2 mb-2">
-        <div>
-          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-amber-200/85">Drum Bay</div>
-          <div className="text-[9px] text-white/45 mt-0.5 font-mono">
-            {bars} bar{bars === 1 ? "" : "s"} · {totalSteps} steps · {beatReadout}
+      <div className="editor-toolbar mb-2 rounded-xl border border-white/[0.06] bg-black/20 px-1 py-1">
+        <EditorToolbarGroup>
+          <ScopedPlayButton
+            scope="pattern"
+            accent="#fbbf24"
+            title="Play / pause this pattern only"
+          />
+          <PatternSelect accent="#fbbf24" />
+          <div className="min-w-0">
+            <div className="text-[11px] font-black uppercase tracking-[0.1em] text-amber-200/90">Drum Bay</div>
+            <div className="text-[10px] text-white/50 mt-0.5 font-mono truncate">
+              {bars} bar{bars === 1 ? "" : "s"} · {totalSteps} steps · {beatReadout}
+            </div>
           </div>
-        </div>
-        <label className="flex items-center gap-1 text-[9px] text-white/55 cursor-pointer">
-          <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} className="accent-amber-400" />
-          Follow
-        </label>
-        <div className="flex-1" />
+        </EditorToolbarGroup>
+        <EditorToolbarDivider />
+        <EditorToolbarGroup label="Length">
+          <PatternBarsControls accent="#fbbf24" />
+          <label className="flex items-center gap-1.5 text-[10px] text-white/60 cursor-pointer h-8 px-1.5 rounded-md hover:bg-white/[0.04]">
+            <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} className="accent-amber-400" />
+            Follow
+          </label>
+        </EditorToolbarGroup>
+        <span className="flex-1 min-w-[8px]" />
+        <EditorToolbarGroup>
         <div className="relative">
           <button
             type="button"
@@ -259,7 +277,7 @@ export function DrumMachine() {
               setFillOpen(true);
             }}
             onContextMenu={(e) => { e.preventDefault(); setFillOpen((v) => !v); }}
-            className="px-3 py-1.5 rounded-xl border border-amber-400/45 bg-amber-400/10 text-amber-200 text-[10px] font-bold uppercase tracking-[0.14em] hover:bg-amber-400/20 transition shadow-[0_0_16px_rgb(251_191_36/0.15)]"
+            className="h-8 px-2.5 rounded-lg border border-amber-400/45 bg-amber-400/10 text-amber-200 text-[10px] font-bold uppercase tracking-[0.08em] hover:bg-amber-400/20 transition"
             title="Fill last bar — right-click for intensity / personality"
           >
             Fill last bar
@@ -304,66 +322,71 @@ export function DrumMachine() {
             </div>
           )}
         </div>
+        </EditorToolbarGroup>
       </div>
 
-      {/* Pattern vs Kit */}
-      <div className="mb-2.5 flex flex-wrap items-center gap-2">
-        <span className="text-[8px] font-black uppercase tracking-[0.18em] text-white/40">Pattern</span>
-        {([
-          ["house", "House"],
-          ["trap", "Trap"],
-          ["break", "Break"],
-        ] as const).map(([id, label]) => (
+      {/* Pattern presets vs Kit */}
+      <div className="mb-2.5 editor-toolbar">
+        <EditorToolbarGroup label="Pattern presets">
+          {([
+            ["house", "House"],
+            ["trap", "Trap"],
+            ["break", "Break"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => {
+                useFireSequencerStore.getState().applyDrumGroove(id);
+                toast(`${label} pattern generated (locked lanes kept)`);
+              }}
+              className="h-8 px-2.5 rounded-lg border border-white/12 bg-white/[0.04] text-[10px] font-bold uppercase tracking-[0.06em] text-white/70 hover:text-amber-200 hover:border-amber-400/40 transition"
+              title={`Generate a ${label} groove pattern — re-click for a related variant. Respects lane locks.`}
+            >
+              {label}
+            </button>
+          ))}
           <button
-            key={id}
             type="button"
             onClick={() => {
-              useFireSequencerStore.getState().applyDrumGroove(id);
-              toast(`${label} pattern generated (locked lanes kept)`);
+              useFireSequencerStore.getState().applyDrumGroove("clear");
+              toast("Cleared unlocked lanes (locks kept)");
             }}
-            className="px-2 py-1 rounded-lg border border-white/12 bg-white/[0.04] text-[9px] font-bold uppercase tracking-wider text-white/65 hover:text-amber-200 hover:border-amber-400/40 transition"
-            title={`Generate a ${label} pattern — re-click for a related variant. Respects lane locks.`}
+            className={SEQ_PILL_DESTRUCTIVE}
+            title="Clear unlocked drum steps — locked lanes are kept"
           >
-            {label}
+            Clear
           </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => {
-            useFireSequencerStore.getState().applyDrumGroove("clear");
-            toast("Cleared unlocked lanes (locks kept)");
-          }}
-          className="px-2 py-1 rounded-lg border border-rose-400/35 bg-rose-500/10 text-[9px] font-bold uppercase tracking-wider text-rose-200/85 hover:bg-rose-500/20 transition"
-          title="Clear unlocked drum steps — locked lanes are kept"
-        >
-          Clear
-        </button>
-        <span className="mx-1 h-4 w-px bg-white/10" />
-        <span className="text-[8px] font-black uppercase tracking-[0.18em] text-white/40">Kit</span>
-        <button
-          type="button"
-          onClick={() => {
-            useFireSequencerStore.getState().clearDrumKitSamples();
-            toast("Synth Kit — lane samples cleared");
-          }}
-          className="px-2 py-1 rounded-lg border border-amber-400/35 bg-amber-400/10 text-[9px] font-bold uppercase tracking-wider text-amber-200/90 hover:bg-amber-400/20 transition"
-          title="Clear drum-lane sample overrides — back to Synth Kit"
-        >
-          Synth Kit
-        </button>
-        <div className="flex flex-wrap gap-1 ml-auto">
+        </EditorToolbarGroup>
+        <EditorToolbarDivider />
+        <EditorToolbarGroup label="Kit">
+          <button
+            type="button"
+            onClick={() => {
+              useFireSequencerStore.getState().clearDrumKitSamples();
+              toast("Synth Kit — lane samples cleared");
+            }}
+            className="h-8 px-2.5 rounded-lg border border-amber-400/35 bg-amber-400/10 text-[10px] font-bold uppercase tracking-[0.06em] text-amber-200/90 hover:bg-amber-400/20 transition"
+            title="Clear drum-lane sample overrides — back to Synth Kit"
+          >
+            Synth Kit
+          </button>
+        </EditorToolbarGroup>
+        <EditorToolbarDivider />
+        <EditorToolbarGroup label="Transform">
           {(["rotate", "reverse", "invert"] as const).map((op) => (
             <button
               key={op}
               type="button"
               onClick={() => useFireSequencerStore.getState().transformAllDrums(op)}
-              className="rounded border border-white/12 px-1.5 py-0.5 text-[8px] uppercase text-white/50 hover:text-white/80"
+              className="h-8 px-2 rounded-lg border border-white/12 text-[10px] uppercase text-white/55 hover:text-white/85 hover:bg-white/[0.05] transition"
               title={`${op} all unlocked lanes`}
+              aria-label={`${op} unlocked drum lanes`}
             >
               {op}
             </button>
           ))}
-        </div>
+        </EditorToolbarGroup>
       </div>
 
       {fillPreview && (
@@ -398,7 +421,7 @@ export function DrumMachine() {
             <div className="relative">
               <div
                 className="grid gap-[3px]"
-                style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(0, 1fr))` }}
+                style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(var(--drum-step-min, 18px), var(--drum-step-max, 36px)))`, justifyContent: "start" }}
               >
                 {Array.from({ length: totalSteps }, (_, s) => {
                   const q = s % 4 === 0;
@@ -723,7 +746,7 @@ const DrumRow = memo(function DrumRow({
         </button>
         <div
           className="grid gap-[3px] min-w-0"
-          style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(var(--drum-step-min, 18px), var(--drum-step-max, 36px)))`, justifyContent: "start" }}
         >
           {Array.from({ length: totalSteps }, (_, s) => {
             const cell = coerceDrumStep(steps[s]);
@@ -788,20 +811,24 @@ const DrumRow = memo(function DrumRow({
           <button
             type="button"
             onClick={() => setMix(laneId, { muted: !mix.muted })}
-            className={`w-6 h-6 grid place-items-center rounded-md border text-[9px] font-bold transition ${
-              mix.muted ? "border-rose-400/50 text-rose-200 bg-rose-500/20" : "border-white/15 text-white/55 hover:text-white/80"
-            }`}
-            title="Mute"
+            className="arr-track-btn"
+            data-on={mix.muted ? "1" : "0"}
+            data-kind="mute"
+            title={mix.muted ? "Unmute lane" : "Mute lane"}
+            aria-label={mix.muted ? `Unmute ${name}` : `Mute ${name}`}
+            aria-pressed={mix.muted}
           >
             M
           </button>
           <button
             type="button"
             onClick={() => setMix(laneId, { solo: !mix.solo })}
-            className={`w-6 h-6 grid place-items-center rounded-md border text-[9px] font-bold transition ${
-              mix.solo ? "border-amber-400/50 text-amber-100 bg-amber-400/20" : "border-white/15 text-white/55 hover:text-white/80"
-            }`}
-            title="Solo"
+            className="arr-track-btn"
+            data-on={mix.solo ? "1" : "0"}
+            data-kind="solo"
+            title={mix.solo ? "Unsolo lane" : "Solo lane"}
+            aria-label={mix.solo ? `Unsolo ${name}` : `Solo ${name}`}
+            aria-pressed={mix.solo}
           >
             S
           </button>
@@ -902,22 +929,36 @@ function SampleDeck({
     >
       <div className="flex items-center gap-2 mb-2.5">
         <div>
-          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-300/85">Sample Deck</div>
-          <div className="text-[9px] text-white/40 mt-0.5">{samples.length}/{MAX_SAMPLE_LANES} racks · drag-drop or rack · same rich steps</div>
+          <div className="text-[11px] font-black uppercase tracking-[0.1em] text-fuchsia-300/90">Sample Deck</div>
+          <div className="text-[10px] text-white/48 mt-0.5">{samples.length}/{MAX_SAMPLE_LANES} racks · drag-drop or rack · same rich steps</div>
         </div>
-        <button
-          type="button"
-          onClick={() => void addSample()}
-          disabled={samples.length >= MAX_SAMPLE_LANES}
-          className="ml-auto px-3 py-1.5 rounded-xl border border-fuchsia-400/45 bg-fuchsia-500/10 text-fuchsia-200 text-[10px] font-bold uppercase tracking-[0.14em] hover:bg-fuchsia-500/20 disabled:opacity-30 transition"
-        >
-          Rack a sample
-        </button>
+        {samples.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void addSample()}
+            disabled={samples.length >= MAX_SAMPLE_LANES}
+            className="ml-auto h-8 px-3 rounded-lg border border-fuchsia-400/45 bg-fuchsia-500/10 text-fuchsia-200 text-[10px] font-bold uppercase tracking-[0.08em] hover:bg-fuchsia-500/20 disabled:opacity-30 transition"
+          >
+            Rack a sample
+          </button>
+        )}
       </div>
       {samples.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-fuchsia-400/30 bg-fuchsia-500/[0.06] px-3 py-3 text-[10px] text-fuchsia-100/75 leading-relaxed">
-          <span className="font-semibold text-fuchsia-200">Sample Deck is empty.</span>{" "}
-          Drag audio here or Rack a sample — same full-width step grid as Drum Bay.
+        <div className="sample-deck-empty">
+          <div className="text-[11px] font-black uppercase tracking-[0.1em] text-fuchsia-200/90">Sample Deck</div>
+          <div className="text-[10px] text-white/55">0/{MAX_SAMPLE_LANES} racks · empty</div>
+          <p className="text-[10px] text-white/48 max-w-sm leading-relaxed">
+            Rack one-shots onto the same step grid as Drum Bay. Drag audio here or use the button.
+          </p>
+          <button
+            type="button"
+            onClick={() => void addSample()}
+            disabled={samples.length >= MAX_SAMPLE_LANES}
+            className="h-8 px-3 rounded-lg border border-fuchsia-400/45 bg-fuchsia-500/12 text-fuchsia-100 text-[10px] font-bold uppercase tracking-[0.08em] hover:bg-fuchsia-500/22 disabled:opacity-30 transition"
+          >
+            Rack a sample
+          </button>
+          <div className="text-[10px] text-white/40">or drag audio here</div>
         </div>
       ) : (
         <div className="space-y-1">
@@ -936,7 +977,7 @@ function SampleDeck({
               </button>
               <div
                 className="grid gap-[3px] min-w-0 relative"
-                style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(0, 1fr))` }}
+                style={{ gridTemplateColumns: `repeat(${totalSteps}, minmax(var(--drum-step-min, 18px), var(--drum-step-max, 36px)))`, justifyContent: "start" }}
               >
                 {Array.from({ length: totalSteps }, (_, s) => {
                   const cell = coerceDrumStep(sl.steps[s]);

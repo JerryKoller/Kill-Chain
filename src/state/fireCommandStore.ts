@@ -22,7 +22,8 @@ import { adsrToModEnvPoints, normalizeModEnvPoints } from "@/audio/dsp/toneDiffe
 import { upsertLfoQuickRoute, inferLfoDestFromMatrix } from "@/audio/dsp/modRouting";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
-import { applyLoudnessSafety, applyModuleLocks, lockedModuleCount } from "@/lib/fireModuleLocks";
+import { applyLoudnessSafety, applyModuleLocks, applyPerformanceSafety, lockedModuleCount } from "@/lib/fireModuleLocks";
+import { useUIStore } from "@/state/uiStore";
 
 /**
  * fireCommandStore — single source of truth for the "Fire Command" synth.
@@ -923,6 +924,17 @@ function defaults(): PersistShape {
   };
 }
 
+function toastPerfGuard(): void {
+  try {
+    useUIStore.getState().toast(
+      "Heavy patch — performance guard softened unison / FX so visuals stay fluid",
+      "warn",
+    );
+  } catch {
+    /* store may not be ready during early hydrate */
+  }
+}
+
 function load(): PersistShape {
   if (typeof window === "undefined") return defaults();
   try {
@@ -1536,6 +1548,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       patch.moduleEnable = src.patch.moduleEnable
         ? { ...src.patch.moduleEnable }
         : {};
+      const softened = applyPerformanceSafety(patch);
       const s = get();
       if (s.editTarget === "b") {
         clearLiveNoteMaps();
@@ -1548,6 +1561,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         });
         getEngine().fireCommandB.setPatch(patch);
         persist();
+        if (softened) toastPerfGuard();
         return;
       }
       const arp: ArpSettings = src.arp
@@ -1572,6 +1586,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       if (arp.enabled) startArpScheduler(get, set);
       else stopArpScheduler();
       persist();
+      if (softened) toastPerfGuard();
     },
 
     resetToDefaults: () => {
@@ -1635,6 +1650,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     importPatchB: (rawPatch, presetId) => {
       pushFireHistory();
       const patch = normalizePatch(rawPatch as Partial<FirePatch>);
+      const softened = applyPerformanceSafety(patch);
       const presetIdB = presetId ?? "custom";
       const s = get();
       clearLiveNoteMaps();
@@ -1647,6 +1663,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       set(partial);
       getEngine().fireCommandB.setPatch(patch);
       persist();
+      if (softened) toastPerfGuard();
     },
 
     randomize: () => {
@@ -1765,6 +1782,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       patch.moduleEnable = (rawPatch as Partial<FirePatch>)?.moduleEnable
         ? { ...((rawPatch as Partial<FirePatch>).moduleEnable as Record<string, boolean>) }
         : {};
+      const softened = applyPerformanceSafety(patch);
       const arp: ArpSettings = rawArp && typeof rawArp === "object"
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
         : { ...DEFAULT_ARP, enabled: false };
@@ -1803,6 +1821,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       fc.setPatch(patch);
       if (arp.enabled && get().editTarget === "a") startArpScheduler(get, set);
       persist();
+      if (softened) toastPerfGuard();
     },
 
     randomPreset: () => {
@@ -1864,6 +1883,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory();
       const patch = { ...DEFAULT_FIRE_PATCH, ...rawPatch };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      const softened = applyPerformanceSafety(patch);
       const s = get();
       if (s.editTarget === "b") {
         clearLiveNoteMaps();
@@ -1876,6 +1896,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         });
         getEngine().fireCommandB.setPatch(patch);
         persist();
+        if (softened) toastPerfGuard();
         return;
       }
       const arp: ArpSettings = rawArp
@@ -1900,6 +1921,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       fc.setPatch(patch);
       if (arp.enabled) startArpScheduler(get, set);
       persist();
+      if (softened) toastPerfGuard();
     },
 
     savePreset: (name) => {

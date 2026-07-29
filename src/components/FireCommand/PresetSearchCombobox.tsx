@@ -122,25 +122,28 @@ export function PresetSearchCombobox({
           boxShadow: open ? `0 0 16px ${color}22` : undefined,
         }}
       >
-        <span className="pointer-events-none text-[10px] text-white/30" aria-hidden>⌕</span>
+        <span className="pointer-events-none text-[10px] text-white/40" aria-hidden>⌕</span>
         <input
           ref={inputRef}
-          value={open ? query : (selected?.name ?? "?")}
+          value={open ? query : (selected?.name ?? "")}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
           onFocus={onFocus}
           onKeyDown={onKeyDown}
-          placeholder={placeholder}
-          className="min-w-0 flex-1 bg-transparent text-[11px] text-white/85 outline-none placeholder:text-white/25"
-          aria-label={placeholder}
+          placeholder={placeholder || "Select instrument"}
+          className="min-w-0 flex-1 bg-transparent text-[11px] text-white/85 outline-none placeholder:text-white/40"
+          aria-label={placeholder || "Select instrument"}
           aria-expanded={open}
           aria-autocomplete="list"
           role="combobox"
           autoComplete="off"
           spellCheck={false}
         />
+        {!open && (
+          <span className="pointer-events-none text-[9px] text-white/35 shrink-0" aria-hidden>▾</span>
+        )}
         {!open && selected && (
           <span
-            className="shrink-0 rounded px-1 py-0.5 text-[8px] font-bold uppercase tracking-wider max-w-[4.5rem] truncate"
+            className="shrink-0 rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider max-w-[4.5rem] truncate"
             style={{ color, background: `${color}18` }}
             title={selected.category}
           >
