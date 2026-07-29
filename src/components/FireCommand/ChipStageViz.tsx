@@ -410,10 +410,16 @@ export function ChipStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active:
+          Math.abs((st.current.duty ?? 0.5) - 0.5) > 0.02 ||
+          !!st.current.sync ||
+          !!st.current.slide ||
+          (st.current.accent ?? 0) > 0.02 ||
+          (st.current.voices ?? 0) > 0 ||
+          st.current.noise !== "white",
         dragging: !!dragRef.current,
         particles: sparkles.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );

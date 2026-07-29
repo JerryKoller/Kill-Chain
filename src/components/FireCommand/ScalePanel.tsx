@@ -292,10 +292,86 @@ export function ScaleQuickActions() {
   );
 }
 
+export function ScaleCorrectStrip() {
+  const mode = useFireCommandStore((s) => s.patch.scaleMode) ?? (useFireCommandStore.getState().patch.scaleLock ? "soft" : "guide");
+  const followers = useFireCommandStore((s) => s.patch.scaleFollowers) ?? {
+    harmony: true,
+    chord: true,
+    arp: true,
+    pianoRoll: false,
+  };
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const modes = [
+    { id: "guide" as const, label: "Guide" },
+    { id: "soft" as const, label: "Soft" },
+    { id: "strict" as const, label: "Strict" },
+    { id: "fold" as const, label: "Fold" },
+  ];
+  return (
+    <div className="mb-2 flex flex-col items-center gap-1.5">
+      <div className="flex flex-wrap items-center justify-center gap-1">
+        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C}66` }}>
+          Correct
+        </span>
+        {modes.map((m) => {
+          const on = mode === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => {
+                setParam("scaleMode", m.id);
+                setParam("scaleLock", m.id !== "guide");
+              }}
+              className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+              style={
+                on
+                  ? { borderColor: `${SCALE_C_LOCK}99`, background: `${SCALE_C_LOCK}28`, color: SCALE_C_GLOW }
+                  : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+              }
+              title={`${m.label} correction mode`}
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-1">
+        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C}66` }}>
+          Followers
+        </span>
+        {([
+          ["harmony", "Harmony"],
+          ["chord", "Chord"],
+          ["arp", "Arp"],
+          ["pianoRoll", "Roll"],
+        ] as const).map(([k, lab]) => {
+          const on = !!followers[k];
+          return (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setParam("scaleFollowers", { ...followers, [k]: !on })}
+              className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+              style={
+                on
+                  ? { borderColor: `${SCALE_C}88`, background: `${SCALE_C}22`, color: SCALE_C_GLOW }
+                  : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
+              }
+            >
+              {lab}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function scaleStageLabel(lock: boolean, enabled: boolean, scaleId: ScaleId): string {
-  if (!enabled) return "Bypass";
-  if (!lock) return "Open";
-  if (scaleId === "off") return "Chromatic";
-  if (scaleId === "pentMinor" || scaleId === "blues") return "Tight";
-  return "Locked";
+  if (!enabled) return "Bypass — module offline";
+  if (!lock) return "Open — scale correction disabled";
+  if (scaleId === "off") return "Chromatic — scale correction disabled";
+  if (scaleId === "pentMinor" || scaleId === "blues") return "Tight — correction engaged";
+  return "Locked — correction engaged";
 }

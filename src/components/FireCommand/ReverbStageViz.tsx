@@ -1,7 +1,7 @@
 /**
  * Reverb — Halo Vault stage visualizer.
- * Size · Damp · Pre · Diff · Mix (Signal Path FX · FC.reverb).
- * Drag: Size ↔ / Damp ↕. Top: Pre. Right: Diff. Bottom: Mix.
+ * Size · Diff · Damp · Pre · Early · LowDecay · Mix (Signal Path FX · FC.reverb).
+ * Drag: Size ↔ / Diff ↕. Top: Pre. Right: Damp. Bottom: Mix.
  * Double-click: cycle mix 0→50→100.
  */
 
@@ -77,9 +77,9 @@ function useHiDpi(
   }, [wrapRef, canvasRef, cssH, sizeRef]);
 }
 
-type DragMode = "xy" | "mix" | "pre" | "diff" | null;
+type DragMode = "xy" | "mix" | "pre" | "damp" | null;
 
-type RevState = { size: number; damp: number; pre: number; diff: number; mix: number };
+type RevState = { size: number; damp: number; pre: number; diff: number; mix: number; early: number; lowDecay: number };
 
 export function ReverbStageViz() {
   const size = useFireCommandStore((s) => s.patch.reverbSize) ?? 2.2;
@@ -87,6 +87,8 @@ export function ReverbStageViz() {
   const pre = useFireCommandStore((s) => s.patch.reverbPredelay) ?? 0.02;
   const diff = useFireCommandStore((s) => s.patch.reverbDiffusion) ?? 0.7;
   const mix = useFireCommandStore((s) => s.patch.reverbMix) ?? 0;
+  const early = useFireCommandStore((s) => s.patch.reverbEarly) ?? 0.45;
+  const lowDecay = useFireCommandStore((s) => s.patch.reverbLowDecay) ?? 0.55;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -95,18 +97,18 @@ export function ReverbStageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef<RevState>({ size, damp, pre, diff, mix });
-  st.current = { size, damp, pre, diff, mix };
+  const st = useRef<RevState>({ size, damp, pre, diff, mix, early, lowDecay });
+  st.current = { size, damp, pre, diff, mix, early, lowDecay };
 
   const live = mix > 0.02;
 
   useEffect(() => {
-    const key = [size, damp, pre, diff, mix].map((v) => v.toFixed(3)).join("|");
+    const key = [size, damp, pre, diff, mix, early, lowDecay].map((v) => v.toFixed(3)).join("|");
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [size, damp, pre, diff, mix]);
+  }, [size, damp, pre, diff, mix, early, lowDecay]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -118,7 +120,7 @@ export function ReverbStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0.04, 0.92);
       const y = clamp((clientY - rect.top - H * 0.12) / Math.max(1, rect.height * 0.6), 0, 1);
       setParam("reverbSize", Math.round(logLerp((x - 0.04) / 0.88, SIZE_MIN, SIZE_MAX) * 100) / 100);
-      setParam("reverbDamp", Math.round((1 - y) * 1000) / 1000);
+      setParam("reverbDiffusion", Math.round((1 - y) * 1000) / 1000);
     },
     [setParam],
   );
@@ -145,13 +147,13 @@ export function ReverbStageViz() {
     [setParam],
   );
 
-  const applyDiff = useCallback(
+  const applyDamp = useCallback(
     (clientY: number) => {
       const wrap = wrapRef.current;
       if (!wrap) return;
       const rect = wrap.getBoundingClientRect();
       const y = clamp((clientY - rect.top) / Math.max(1, rect.height), 0.12, 0.78);
-      setParam("reverbDiffusion", Math.round((1 - (y - 0.12) / 0.66) * 1000) / 1000);
+      setParam("reverbDamp", Math.round((1 - (y - 0.12) / 0.66) * 1000) / 1000);
     },
     [setParam],
   );
@@ -176,16 +178,16 @@ export function ReverbStageViz() {
         return;
       }
       if (x > rect.width * 0.92) {
-        dragRef.current = "diff";
+        dragRef.current = "damp";
         wrap.setPointerCapture(e.pointerId);
-        applyDiff(e.clientY);
+        applyDamp(e.clientY);
         return;
       }
       dragRef.current = "xy";
       wrap.setPointerCapture(e.pointerId);
       applyXy(e.clientX, e.clientY);
     },
-    [applyXy, applyMix, applyPre, applyDiff],
+    [applyXy, applyMix, applyPre, applyDamp],
   );
 
   const onPointerMove = useCallback(
@@ -193,9 +195,9 @@ export function ReverbStageViz() {
       if (dragRef.current === "xy") applyXy(e.clientX, e.clientY);
       else if (dragRef.current === "mix") applyMix(e.clientX);
       else if (dragRef.current === "pre") applyPre(e.clientX);
-      else if (dragRef.current === "diff") applyDiff(e.clientY);
+      else if (dragRef.current === "damp") applyDamp(e.clientY);
     },
-    [applyXy, applyMix, applyPre, applyDiff],
+    [applyXy, applyMix, applyPre, applyDamp],
   );
 
   const onPointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
@@ -237,9 +239,10 @@ export function ReverbStageViz() {
 
       const sizeN = logNorm(p.size, SIZE_MIN, SIZE_MAX);
       const preN = p.pre / PRE_MAX;
+      const earlyN = clamp(p.early ?? 0.45, 0, 1);
+      const lowDec = clamp(p.lowDecay ?? 0.55, 0, 1);
       const isLive = p.mix > 0.02;
       const energy = 0.1 + p.mix * 0.42 + sizeN * 0.18 + flashRef.current * 0.22;
-      // Damp darkens / softens the halo (less bright HF shimmer)
       const bright = 1 - p.damp * 0.55;
 
       ctx.clearRect(0, 0, W, Hh);
@@ -252,14 +255,14 @@ export function ReverbStageViz() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, Hh);
 
-      // Space bloom nebula — Size expands radius
+      // Tail cloud — size expands, lowDecay fattens low end bloom
       const bloomCx = W * 0.48;
-      const bloomCy = Hh * 0.48;
-      const bloomR = (22 + p.size * 22) * (0.75 + p.mix * 0.45);
+      const bloomCy = Hh * 0.5;
+      const bloomR = (22 + p.size * 22) * (0.75 + p.mix * 0.45) * (0.85 + (1 - earlyN) * 0.35);
       const bloom = ctx.createRadialGradient(bloomCx, bloomCy, 2, bloomCx, bloomCy, bloomR);
-      bloom.addColorStop(0, hexAlpha(C_GLOW, (0.16 + p.mix * 0.22) * bright));
-      bloom.addColorStop(0.35, hexAlpha(C_HOT, (0.1 + p.mix * 0.14 + sizeN * 0.08) * bright));
-      bloom.addColorStop(0.7, hexAlpha(C_MID, 0.05 + p.mix * 0.08));
+      bloom.addColorStop(0, hexAlpha(C_GLOW, (0.1 + p.mix * 0.18) * bright * (1 - earlyN * 0.35)));
+      bloom.addColorStop(0.35, hexAlpha(C_HOT, (0.08 + p.mix * 0.12 + sizeN * 0.08 + lowDec * 0.06) * bright));
+      bloom.addColorStop(0.7, hexAlpha(C_MID, 0.05 + p.mix * 0.08 * (1 - earlyN)));
       bloom.addColorStop(1, hexAlpha(C_DEEP, 0));
       ctx.fillStyle = bloom;
       ctx.fillRect(0, 0, W, Hh);
@@ -285,96 +288,111 @@ export function ReverbStageViz() {
       ctx.textAlign = "left";
       ctx.fillText(`PRE ${Math.round(p.pre * 1000)}ms`, 14, preRailY - 6);
 
-      // Silent gap marker from inject to bloom (predelay)
-      if (p.pre > 0.005) {
-        ctx.strokeStyle = hexAlpha(C_PRE, 0.2 + p.mix * 0.25);
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        ctx.moveTo(18, bloomCy);
-        ctx.lineTo(18 + preN * 40, bloomCy);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
+      // Early / LowDecay labels
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_HOT, 0.75);
+      ctx.textAlign = "left";
+      ctx.fillText(`EARLY ${Math.round(earlyN * 100)}`, 14, Hh * 0.2);
+      ctx.fillStyle = hexAlpha(C_MID, 0.7);
+      ctx.fillText(`LOW DEC ${Math.round(lowDec * 100)}`, 14, Hh * 0.2 + 11);
 
-      // Diff vertical rail (right)
-      const diffX = W - 10;
-      const diffTop = Hh * 0.14;
-      const diffH = Hh * 0.58;
+      // Damp vertical rail (right)
+      const dampX = W - 10;
+      const dampTop = Hh * 0.14;
+      const dampH = Hh * 0.58;
       ctx.fillStyle = "rgba(255,255,255,0.04)";
-      ctx.fillRect(diffX - 3, diffTop, 5, diffH);
-      ctx.fillStyle = hexAlpha(C_DIFF, 0.35 + p.diff * 0.5);
-      const diffFillH = diffH * p.diff;
-      ctx.fillRect(diffX - 2, diffTop + diffH - diffFillH, 3, diffFillH);
+      ctx.fillRect(dampX - 3, dampTop, 5, dampH);
+      ctx.fillStyle = hexAlpha(C_DAMP, 0.35 + p.damp * 0.5);
+      const dampFillH = dampH * p.damp;
+      ctx.fillRect(dampX - 2, dampTop + dampH - dampFillH, 3, dampFillH);
       ctx.fillStyle = hexAlpha(C_GLOW, 0.9);
       ctx.beginPath();
-      ctx.arc(diffX - 0.5, diffTop + diffH - diffFillH, 2.5 + flashRef.current * 0.5, 0, Math.PI * 2);
+      ctx.arc(dampX - 0.5, dampTop + dampH - dampFillH, 2.5 + flashRef.current * 0.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.font = "700 6px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_DAMP, 0.7);
+      ctx.textAlign = "center";
+      ctx.fillText("DMP", dampX - 0.5, dampTop - 4);
 
-      // Spawn IR rings — diffusion increases spawn rate & scatter
-      const spawnEvery = Math.max(70, 340 - p.diff * 200 - p.mix * 70);
+      // Early sparks (sharp discrete hits)
+      const spawnEvery = Math.max(50, 280 - earlyN * 160 - p.mix * 60);
       if (now > nextSpawn && isLive) {
-        const n = 1 + Math.floor(p.diff * 2.5);
-        for (let k = 0; k < n; k++) {
+        const nEarly = Math.floor(1 + earlyN * 4);
+        for (let k = 0; k < nEarly; k++) {
           rings.push({
-            birth: now + k * 24 + p.pre * 400,
-            x: bloomCx + (Math.random() - 0.5) * (30 + p.diff * 70),
-            y: bloomCy + (Math.random() - 0.5) * (12 + p.diff * 28),
-            early: k === 0,
+            birth: now + k * 18 + p.pre * 400,
+            x: bloomCx + (Math.random() - 0.5) * (20 + earlyN * 40),
+            y: bloomCy + (Math.random() - 0.5) * (10 + earlyN * 18),
+            early: true,
+          });
+        }
+        // Tail cloud seeds
+        const nTail = Math.floor(1 + (1 - earlyN) * 3 + p.diff * 2);
+        for (let k = 0; k < nTail; k++) {
+          rings.push({
+            birth: now + 40 + k * 30 + p.pre * 200,
+            x: bloomCx + (Math.random() - 0.5) * (40 + p.diff * 80 + p.size * 10),
+            y: bloomCy + (Math.random() - 0.5) * (18 + p.diff * 36),
+            early: false,
           });
         }
         nextSpawn = now + spawnEvery;
-        while (rings.length > 16) rings.shift();
+        while (rings.length > 20) rings.shift();
       }
 
-      const lifeMs = 500 + p.size * 380;
+      const lifeMs = 450 + p.size * 400 * (0.7 + lowDec * 0.5);
       for (let i = rings.length - 1; i >= 0; i--) {
         const ring = rings[i]!;
-        const age = (now - ring.birth) / lifeMs;
+        const age = (now - ring.birth) / (ring.early ? lifeMs * 0.45 : lifeMs);
         if (age < 0) continue;
         if (age > 1) {
           rings.splice(i, 1);
           continue;
         }
-        const rad = 5 + age * (14 + p.size * 18) * (1 - p.damp * 0.28);
-        const alpha = (1 - age) * (0.3 + p.mix * 0.65) * bright * (1 - p.damp * 0.3);
-
-        const rg = ctx.createRadialGradient(ring.x, ring.y, rad * 0.8, ring.x, ring.y, rad * 2.2);
-        rg.addColorStop(0, hexAlpha(C_GLOW, alpha * 0.2));
-        rg.addColorStop(1, hexAlpha(C_HOT, 0));
-        ctx.fillStyle = rg;
-        ctx.beginPath();
-        ctx.ellipse(ring.x, ring.y, rad * 2, rad * (0.55 + p.diff * 0.3), 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.strokeStyle = hexAlpha(C_GLOW, alpha);
-        ctx.lineWidth = (ring.early ? 2 : 1.3) * (1 - age * 0.45);
-        ctx.shadowBlur = 6 + p.mix * 10;
-        ctx.shadowColor = C;
-        ctx.beginPath();
-        ctx.ellipse(ring.x, ring.y, rad * 1.6, rad * (0.42 + p.diff * 0.25), 0, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        if (ring.early && age < 0.12) {
-          const hit = 1 - age / 0.12;
-          ctx.strokeStyle = hexAlpha(C_GLOW, 0.75 * hit);
-          ctx.lineWidth = 2;
+        if (ring.early) {
+          // Sharp spark
+          const hit = 1 - age;
+          const sx = ring.x;
+          const sy = ring.y;
+          ctx.strokeStyle = hexAlpha(C_GLOW, 0.85 * hit * earlyN * (0.5 + p.mix));
+          ctx.lineWidth = 1.6;
+          ctx.shadowBlur = 8;
+          ctx.shadowColor = C;
           ctx.beginPath();
-          ctx.moveTo(ring.x, ring.y - 12);
-          ctx.lineTo(ring.x, ring.y + 2);
+          ctx.moveTo(sx, sy - 10 * hit);
+          ctx.lineTo(sx, sy + 4);
+          ctx.moveTo(sx - 5 * hit, sy - 2);
+          ctx.lineTo(sx + 5 * hit, sy - 2);
           ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = hexAlpha(C_HOT, 0.7 * hit);
+          ctx.beginPath();
+          ctx.arc(sx, sy, 1.5 + hit * 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // Soft tail cloud puff
+          const rad = 6 + age * (16 + p.size * 20) * (1 - p.damp * 0.28);
+          const alpha = (1 - age) * (0.22 + p.mix * 0.5) * bright * (1 - earlyN * 0.35) * (0.6 + lowDec * 0.4);
+          const rg = ctx.createRadialGradient(ring.x, ring.y, rad * 0.2, ring.x, ring.y, rad * 2.4);
+          rg.addColorStop(0, hexAlpha(C_GLOW, alpha * 0.35));
+          rg.addColorStop(0.5, hexAlpha(C_HOT, alpha * 0.15));
+          rg.addColorStop(1, hexAlpha(C_HOT, 0));
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.ellipse(ring.x, ring.y, rad * 2, rad * (0.55 + p.diff * 0.35), 0, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
 
-      // Diffusion mist
-      if (isLive && p.diff > 0.15 && Math.random() < 0.12 * p.diff * p.mix) {
+      // Diffusion mist (size↔diff coupled visually)
+      if (isLive && p.diff > 0.1 && Math.random() < 0.14 * p.diff * p.mix) {
         mist.push({
           x: bloomCx + (Math.random() - 0.5) * bloomR * 1.2,
           y: bloomCy + (Math.random() - 0.5) * bloomR * 0.7,
           vx: (Math.random() - 0.5) * (0.4 + p.diff),
           vy: (Math.random() - 0.5) * (0.4 + p.diff),
           life: 1,
-          sz: 2 + Math.random() * 3.5,
+          sz: 2 + Math.random() * 3.5 * (0.5 + sizeN),
         });
       }
       for (let i = mist.length - 1; i >= 0; i--) {
@@ -398,35 +416,9 @@ export function ReverbStageViz() {
         ctx.fill();
       }
 
-      // Diffusion grain field
-      if (isLive) {
-        const grains = Math.floor(8 + p.diff * 40);
-        for (let g = 0; g < grains; g++) {
-          const gx = ((g * 97 + now * 0.03) % (W - 24)) + 12;
-          const gy = Hh * 0.28 + ((g * 53) % (Hh * 0.4));
-          const pulse = Math.sin(now / 280 + g * 0.3) * 0.5 + 0.5;
-          ctx.fillStyle = hexAlpha(C_GLOW, (0.06 + p.diff * 0.14 * p.mix) * pulse * bright);
-          ctx.fillRect(gx, gy, 1.6, 1.6);
-        }
-      }
-
-      // IR tail shimmer — size expands orbit, damp dims
-      if (isLive && p.size > 0.4) {
-        const n = Math.floor(5 + p.size * 8);
-        for (let s = 0; s < n; s++) {
-          const sx = bloomCx + Math.sin(now / 700 + s * 0.85) * (16 + p.size * 28);
-          const sy = bloomCy + Math.cos(now / 580 + s * 0.55) * (10 + p.size * 14);
-          const sl = Math.sin(now / 220 + s) * 0.5 + 0.5;
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.35 * sl * p.mix * bright);
-          ctx.beginPath();
-          ctx.arc(sx, sy, 1.5 + sl * 1.8, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Size / Damp crosshair
+      // Size / Diff crosshair
       const hx = (0.04 + sizeN * 0.88) * W;
-      const hy = Hh * 0.12 + (1 - p.damp) * (Hh * 0.6);
+      const hy = Hh * 0.12 + (1 - p.diff) * (Hh * 0.6);
       ctx.strokeStyle = hexAlpha(C_GLOW, 0.35 + flashRef.current * 0.3);
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -476,7 +468,7 @@ export function ReverbStageViz() {
       ctx.textAlign = "right";
       const status = !isLive
         ? "DRY"
-        : `${p.size.toFixed(1)}s · d${Math.round(p.damp * 100)} · Δ${Math.round(p.diff * 100)}`;
+        : `${p.size.toFixed(1)}s · Δ${Math.round(p.diff * 100)} · E${Math.round(earlyN * 100)}`;
       ctx.fillStyle = hexAlpha(isLive ? C_HOT : C_MID, 0.88);
       ctx.fillText(status, W - 12, Hh - 2);
     
@@ -486,7 +478,7 @@ export function ReverbStageViz() {
         active: (st.current.mix ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -508,7 +500,7 @@ export function ReverbStageViz() {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
-      title="Drag: Size ↔ / Damp ↕ · Top: Pre · Right: Diff · Bottom: Mix · Double-click: cycle mix"
+      title="Drag: Size ↔ / Diff ↕ · Top: Pre · Right: Damp · Bottom: Mix · Double-click: cycle mix"
       role="img"
       aria-label="Reverb halo vault"
     >

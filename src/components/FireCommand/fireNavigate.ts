@@ -120,3 +120,10 @@ export function jumpToSynthHome(): void {
   writeFireSynthBand("home");
   scrollFireCommandTop("smooth");
 }
+
+/** Switch to a Synth band tab (Control Path rail, etc.). */
+export function jumpToSynthBand(band: FireBandId): void {
+  writeFireWorkspace("synth");
+  writeFireSynthBand(band);
+  ensureExpanded(band);
+}

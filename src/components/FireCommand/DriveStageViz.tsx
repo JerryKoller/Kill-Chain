@@ -1,7 +1,7 @@
 /**
  * Drive — Shape Crucible stage visualizer.
- * Drive · mode · crush · tone (Signal Path FX · FC.drive).
- * Drag: Drive ↔ / Crush ↕. Bottom: Tone. Double-click: cycle mode.
+ * Drive · mode · bias · symmetry · crush · tone (Signal Path FX · FC.drive).
+ * Drag: Drive ↔ · Left zone Bias ↕ · Right zone Crush ↕. Bottom: Tone. Double-click: cycle mode.
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
@@ -46,23 +46,40 @@ function logNorm(v: number, lo: number, hi: number) {
   return Math.log(clamp(v, lo, hi) / lo) / Math.log(hi / lo);
 }
 
-function xfer(x: number, mode: DriveMode, drive: number): number {
-  const k = 1 + drive * 14;
+function xfer(xIn: number, mode: DriveMode, drive: number, bias = 0, symmetry = 0): number {
+  const b = clamp(bias, -1, 1) * 0.35;
+  const sym = clamp(symmetry, -1, 1);
+  const x = xIn + b;
+  if (drive <= 0.001) return clamp(xIn, -1.2, 1.2);
   switch (mode) {
     case "tube": {
-      const y = Math.tanh(k * x * 0.8);
-      return y + 0.15 * drive * Math.tanh(3 * x) * (1 - Math.abs(y));
+      const k = 1 + drive * 7;
+      let y = x >= 0 ? Math.tanh(k * x) : Math.tanh(k * (0.55 + sym * 0.25) * x);
+      y /= Math.tanh(k) || 1;
+      return clamp(y, -1.2, 1.2);
     }
     case "fold": {
-      const y = k * x * 0.7;
-      return Math.sin(y * Math.min(2, 0.5 + drive * 2));
+      const g = 1 + drive * (5 + Math.abs(sym) * 2);
+      let y = Math.sin(x * g * Math.PI * 0.5);
+      if (sym > 0.2) y = Math.sin(y * Math.PI * (0.5 + sym * 0.4));
+      return clamp(y, -1.2, 1.2);
     }
-    case "hard":
-      return Math.max(-0.8, Math.min(0.8, k * x * 0.6)) / 0.8;
-    case "fuzz":
-      return Math.sign(x) * Math.pow(Math.min(1, Math.abs(k * x * 0.6)), 0.4);
-    default:
-      return Math.tanh(k * x * 0.7);
+    case "hard": {
+      const g = 1 + drive * 9;
+      const pos = clamp(x * g * (1 + sym * 0.3), -1, 1);
+      const neg = clamp(x * g * (1 - sym * 0.3), -1, 1);
+      return x >= 0 ? pos : neg;
+    }
+    case "fuzz": {
+      const k = 1 + drive * 22;
+      let y = Math.tanh(k * x);
+      if (sym > 0.35 && x > 0) y = Math.abs(y);
+      return clamp(y, -1.2, 1.2);
+    }
+    default: {
+      const k = 1 + drive * 8;
+      return clamp(Math.tanh(k * x) / (Math.tanh(k) || 1), -1.2, 1.2);
+    }
   }
 }
 
@@ -96,12 +113,15 @@ function useHiDpi(
 }
 
 type DragMode = "xy" | "tone" | null;
+type VertTarget = "bias" | "crush";
 
 export function DriveStageViz() {
   const drive = useFireCommandStore((s) => s.patch.drive) ?? 0;
   const mode = (useFireCommandStore((s) => s.patch.driveMode) ?? "soft") as DriveMode;
   const crush = useFireCommandStore((s) => s.patch.crush) ?? 0;
   const tone = useFireCommandStore((s) => s.patch.tone) ?? 15000;
+  const bias = useFireCommandStore((s) => s.patch.driveBias) ?? 0;
+  const symmetry = useFireCommandStore((s) => s.patch.driveSymmetry) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -109,19 +129,20 @@ export function DriveStageViz() {
   const sizeRef = useRef({ w: 420, h: H });
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
+  const vertRef = useRef<VertTarget>("crush");
   const prevKey = useRef("");
-  const st = useRef({ drive, mode, crush, tone });
-  st.current = { drive, mode, crush, tone };
+  const st = useRef({ drive, mode, crush, tone, bias, symmetry });
+  st.current = { drive, mode, crush, tone, bias, symmetry };
 
-  const live = drive > 0.02 || crush > 0.02;
+  const live = drive > 0.02 || crush > 0.02 || Math.abs(bias) > 0.02;
 
   useEffect(() => {
-    const key = `${drive.toFixed(3)}|${mode}|${crush.toFixed(3)}|${tone.toFixed(0)}`;
+    const key = `${drive.toFixed(3)}|${mode}|${crush.toFixed(3)}|${tone.toFixed(0)}|${bias.toFixed(3)}|${symmetry.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [drive, mode, crush, tone]);
+  }, [drive, mode, crush, tone, bias, symmetry]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -133,7 +154,11 @@ export function DriveStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       const y = clamp((clientY - rect.top) / Math.max(1, rect.height * 0.78), 0, 1);
       setParam("drive", Math.round(x * 1000) / 1000);
-      setParam("crush", Math.round((1 - y) * 1000) / 1000);
+      if (vertRef.current === "bias") {
+        setParam("driveBias", Math.round((1 - y * 2) * 1000) / 1000);
+      } else {
+        setParam("crush", Math.round((1 - y) * 1000) / 1000);
+      }
     },
     [setParam],
   );
@@ -161,6 +186,8 @@ export function DriveStageViz() {
         applyTone(e.clientX);
         return;
       }
+      const x = clamp((e.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+      vertRef.current = x < 0.42 ? "bias" : "crush";
       dragRef.current = "xy";
       wrap.setPointerCapture(e.pointerId);
       applyXy(e.clientX, e.clientY);
@@ -245,8 +272,20 @@ export function DriveStageViz() {
       ctx.lineTo(cx, cy + R);
       ctx.stroke();
 
-      // Identity diagonal ghost
-      ctx.strokeStyle = hexAlpha(C_MID, 0.15);
+      // Clip rails (±1)
+      ctx.strokeStyle = hexAlpha(C_HOT, 0.12 + p.drive * 0.2);
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(cx - R, cy - R);
+      ctx.lineTo(cx + R, cy - R);
+      ctx.moveTo(cx - R, cy + R);
+      ctx.lineTo(cx + R, cy + R);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Dim identity / input reference
+      ctx.strokeStyle = hexAlpha(C_MID, 0.22);
+      ctx.lineWidth = 1.2;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
       ctx.moveTo(cx - R, cy + R);
@@ -254,26 +293,65 @@ export function DriveStageViz() {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Transfer curve
+      // Clip highlight regions (where |output| saturates)
+      {
+        let clipLo: number | null = null;
+        for (let i = 0; i <= 80; i++) {
+          const x = (i / 80) * 2 - 1;
+          const y = xfer(x, p.mode, p.drive, p.bias, p.symmetry);
+          const clipped = Math.abs(y) >= 0.92;
+          if (clipped && clipLo === null) clipLo = x;
+          if ((!clipped || i === 80) && clipLo !== null) {
+            const x1 = clipLo;
+            const x2 = clipped && i === 80 ? x : (i - 1) / 80 * 2 - 1;
+            const px1 = cx + x1 * R;
+            const px2 = cx + x2 * R;
+            const band = ctx.createLinearGradient(px1, cy - R, px1, cy + R);
+            band.addColorStop(0, hexAlpha(C_HOT, 0.22 + p.drive * 0.2));
+            band.addColorStop(0.5, hexAlpha(C_HOT, 0.04));
+            band.addColorStop(1, hexAlpha(C_HOT, 0.22 + p.drive * 0.2));
+            ctx.fillStyle = band;
+            ctx.fillRect(Math.min(px1, px2), cy - R, Math.max(2, Math.abs(px2 - px1)), R * 2);
+            clipLo = clipped ? x : null;
+          }
+        }
+      }
+
+      // Bright output transfer curve
       ctx.beginPath();
       for (let i = 0; i <= 100; i++) {
         const x = (i / 100) * 2 - 1;
-        const y = xfer(x, p.mode, p.drive);
+        const y = xfer(x, p.mode, p.drive, p.bias, p.symmetry);
         const px = cx + x * R;
         const py = cy - y * R;
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.88 + flashRef.current * 0.12);
-      ctx.lineWidth = 2.4;
+      ctx.strokeStyle = hexAlpha(C_GLOW, 0.9 + flashRef.current * 0.1);
+      ctx.lineWidth = 2.5;
       ctx.shadowBlur = 10 + p.drive * 14 + flashRef.current * 10;
       ctx.shadowColor = C;
       ctx.stroke();
       ctx.shadowBlur = 0;
 
+      // Bias offset marker on input axis
+      if (Math.abs(p.bias) > 0.02) {
+        const bx = cx + clamp(p.bias, -1, 1) * R * 0.35;
+        ctx.strokeStyle = hexAlpha(C_DRV, 0.55);
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(bx, cy - R - 2);
+        ctx.lineTo(bx, cy + R + 2);
+        ctx.stroke();
+        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = hexAlpha(C_DRV, 0.75);
+        ctx.textAlign = "center";
+        ctx.fillText(`B${p.bias >= 0 ? "+" : ""}${Math.round(p.bias * 100)}`, bx, cy - R - 6);
+      }
+
       // Tracer on curve
       const trX = Math.sin(now / 400);
-      const trY = xfer(trX, p.mode, p.drive);
+      const trY = xfer(trX, p.mode, p.drive, p.bias, p.symmetry);
       ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
       ctx.shadowBlur = 12;
       ctx.shadowColor = C_HOT;
@@ -282,10 +360,27 @@ export function DriveStageViz() {
       ctx.fill();
       ctx.shadowBlur = 0;
 
+      // Dim input sample → bright output sample
+      ctx.strokeStyle = hexAlpha(C_MID, 0.35);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx + trX * R, cy - trX * R);
+      ctx.lineTo(cx + trX * R, cy - trY * R);
+      ctx.stroke();
+      ctx.fillStyle = hexAlpha(C_MID, 0.55);
+      ctx.beginPath();
+      ctx.arc(cx + trX * R, cy - trX * R, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+
       ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = hexAlpha(C_DRV, 0.8);
       ctx.textAlign = "center";
       ctx.fillText("XFER", cx, cy + R + 14);
+      if (Math.abs(p.symmetry) > 0.05) {
+        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = hexAlpha(C_MID, 0.7);
+        ctx.fillText(`SYM ${Math.round(p.symmetry * 100)}`, cx, cy + R + 24);
+      }
 
       // ── Living waveform (right) ──
       const x0 = W * 0.52;
@@ -317,7 +412,7 @@ export function DriveStageViz() {
           const steps = Math.max(2, Math.round(2 + (1 - p.crush) * 48));
           x = Math.round(x * steps) / steps;
         }
-        x = xfer(x, p.mode, p.drive);
+        x = xfer(x, p.mode, p.drive, p.bias, p.symmetry);
         // Soft tone roll-off visual: high freq ripple fades when tone is low
         const ripple = Math.sin(u * Math.PI * 18 + phase * 2) * 0.08 * toneN * p.drive;
         x = clamp(x + ripple, -1.2, 1.2);
@@ -436,7 +531,7 @@ export function DriveStageViz() {
         active: (st.current.drive ?? 0) > 0.02 || (st.current.crush ?? 0) > 0.02,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -458,7 +553,7 @@ export function DriveStageViz() {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
-      title="Drag: Drive ↔ / Crush ↕ · Bottom: Tone · Double-click: cycle mode"
+      title="Drag: Drive ↔ · Left: Bias ↕ · Right: Crush ↕ · Bottom: Tone · Double-click: cycle mode"
       role="img"
       aria-label="Drive shape crucible"
     >

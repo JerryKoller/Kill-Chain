@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, type ReactNode, type RefObject, type MutableRefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { getEngine } from "@/audio/AudioEngine";
 import type { LfoWave, LfoDest } from "@/audio/dsp/FireCommandSynth";
 import { FRAME_COUNT, frameSamples } from "@/audio/dsp/wavetables";
@@ -390,7 +390,7 @@ export function OscStageViz({ group, color }: { group: "a" | "b" | "c"; color: s
       const { w: W, h: H } = sizeRef.current;
       const p = st.current;
       let livePos = p.pos;
-      try { livePos = getEngine().fireCommand.getMorphPositions()[group]; } catch { /* */ }
+      try { livePos = activeFireEngine().getMorphPositions()[group]; } catch { /* */ }
       ensure(p.table);
       ctx.clearRect(0, 0, W, H);
       const bg = ctx.createLinearGradient(0, 0, W, H);
@@ -524,7 +524,7 @@ export function OscStageViz({ group, color }: { group: "a" | "b" | "c"; color: s
       },
       () => {
         let livePos = st.current.pos;
-        try { livePos = getEngine().fireCommand.getMorphPositions()[group]; } catch { /* */ }
+        try { livePos = activeFireEngine().getMorphPositions()[group]; } catch { /* */ }
         return {
           flash: 0,
           active: st.current.level > 0.01,

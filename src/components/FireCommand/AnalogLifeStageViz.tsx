@@ -532,10 +532,14 @@ export function AnalogLifeStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active:
+          (st.current.drift ?? 0) > 0.02 ||
+          (st.current.instab ?? 0) > 0.02 ||
+          (st.current.tune ?? 0) > 0.02 ||
+          (st.current.env ?? 0) > 0.02,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

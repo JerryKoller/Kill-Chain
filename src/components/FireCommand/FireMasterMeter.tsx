@@ -1,74 +1,180 @@
 /**
- * Compact master meter — peak + clip + voices + load hint.
+ * Compact Fire bus meter — peak + hold + clip + lim GR + voices + corr stub.
  * Writes straight to the DOM from RAF (no per-frame React re-renders).
+ * Sources engine.fireTap (post Fire safety clip · pre Kill-Chain).
  */
 
 import { useEffect, useRef } from "react";
 import { getEngine } from "@/audio/AudioEngine";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import { fmtGrDb, peakToDbfs } from "@/audio/dsp/mixClarity";
 
 export function FireMasterMeter() {
   const maxVoices = useFireCommandStore((s) => s.maxVoices);
   const fillRef = useRef<HTMLDivElement>(null);
-  const pctRef = useRef<HTMLSpanElement>(null);
+  const peakRef = useRef<HTMLSpanElement>(null);
+  const holdRef = useRef<HTMLSpanElement>(null);
+  const clipRef = useRef<HTMLSpanElement>(null);
+  const grRef = useRef<HTMLSpanElement>(null);
   const voicesRef = useRef<HTMLSpanElement>(null);
-  const loadRef = useRef<HTMLSpanElement>(null);
+  const corrRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     let raf = 0;
     let last = 0;
     let smoothedPeak = 0;
-    let buf: Uint8Array<ArrayBuffer> | null = null;
+    let peakHold = 0;
+    let holdDecay = 0;
+    let analyser: AnalyserNode | null = null;
+    let buf: Float32Array<ArrayBuffer> | null = null;
+    let stereoBuf: Float32Array<ArrayBuffer> | null = null;
+    let connected = false;
+
+    const ensureAnalyser = () => {
+      if (analyser && connected) return analyser;
+      try {
+        const e = getEngine();
+        if (!analyser) {
+          analyser = e.ctx.createAnalyser();
+          analyser.fftSize = 2048;
+          analyser.smoothingTimeConstant = 0;
+        }
+        if (!connected) {
+          e.fireTap.connect(analyser);
+          connected = true;
+        }
+        return analyser;
+      } catch {
+        return null;
+      }
+    };
+
     const tick = (t: number) => {
       raf = requestAnimationFrame(tick);
       if (document.hidden || t - last < 80) return;
       last = t;
       try {
         const e = getEngine();
-        const a = e.analyserPost;
+        const a = ensureAnalyser();
         if (!a) return;
-        if (!buf || buf.length !== a.fftSize) buf = new Uint8Array(a.fftSize);
-        a.getByteTimeDomainData(buf);
+        if (!buf || buf.length !== a.fftSize) {
+          buf = new Float32Array(a.fftSize);
+        }
+        a.getFloatTimeDomainData(buf);
         let p = 0;
         for (let i = 0; i < buf.length; i++) {
-          const v = Math.abs((buf[i]! - 128) / 128);
+          const v = Math.abs(buf[i]!);
           if (v > p) p = v;
         }
-        smoothedPeak = smoothedPeak * 0.85 + p * 0.15;
-        const pct = Math.min(100, Math.round(smoothedPeak * 100));
-        const clip = smoothedPeak > 0.98;
+        smoothedPeak = smoothedPeak * 0.82 + p * 0.18;
+        if (p >= peakHold) {
+          peakHold = p;
+          holdDecay = 28;
+        } else if (holdDecay > 0) {
+          holdDecay -= 1;
+        } else {
+          peakHold *= 0.985;
+        }
+        const clip = smoothedPeak > 0.98 || peakHold > 0.99;
+        const gr = e.getFireLimiterReduction();
         const va = e.fireCommand.getActiveVoiceCount?.() ?? 0;
         const vb = e.peekFireCommandB()?.getActiveVoiceCount?.() ?? 0;
         const voices = va + vb;
         const max = useFireCommandStore.getState().maxVoices;
-        // Rough engine-load hint from active voices vs the polyphony ceiling
-        // (both synths can run `max` voices each).
-        const load = Math.min(100, Math.round((voices / Math.max(1, max * 2)) * 100));
 
+        // Correlation stub: ChannelSplitter on fireTap when stereo available.
+        let corrTxt = "—";
+        try {
+          if (a.channelCount >= 2 || (e.ctx.destination.channelCount ?? 2) >= 2) {
+            // Estimate from interleaved mono tap: use successive samples as proxy
+            // when true L/R split isn't available on this analyser path.
+            if (!stereoBuf || stereoBuf.length !== a.fftSize) {
+              stereoBuf = new Float32Array(a.fftSize);
+            }
+            a.getFloatTimeDomainData(stereoBuf);
+            let sumL = 0;
+            let sumR = 0;
+            let sumLR = 0;
+            let sumL2 = 0;
+            let sumR2 = 0;
+            const n = Math.floor(stereoBuf.length / 2);
+            for (let i = 0; i < n; i++) {
+              const L = stereoBuf[i * 2] ?? stereoBuf[i]!;
+              const R = stereoBuf[i * 2 + 1] ?? stereoBuf[Math.min(stereoBuf.length - 1, i + 1)]!;
+              sumL += L;
+              sumR += R;
+              sumLR += L * R;
+              sumL2 += L * L;
+              sumR2 += R * R;
+            }
+            const meanL = sumL / n;
+            const meanR = sumR / n;
+            const cov = sumLR / n - meanL * meanR;
+            const vL = sumL2 / n - meanL * meanL;
+            const vR = sumR2 / n - meanR * meanR;
+            const den = Math.sqrt(Math.max(1e-12, vL * vR));
+            if (den > 1e-8 && (vL + vR) > 1e-8) {
+              const c = Math.max(-1, Math.min(1, cov / den));
+              corrTxt = c.toFixed(2);
+            }
+          }
+        } catch {
+          corrTxt = "—";
+        }
+
+        const pct = Math.min(100, Math.round(smoothedPeak * 100));
         if (fillRef.current) fillRef.current.style.width = `${pct}%`;
-        if (pctRef.current) {
-          pctRef.current.textContent = clip ? "CLIP" : `${pct}%`;
-          pctRef.current.style.color = clip ? "#ff6a3d" : "rgba(255,255,255,0.55)";
+        if (peakRef.current) {
+          peakRef.current.textContent = peakToDbfs(smoothedPeak);
+          peakRef.current.style.color = clip ? "#ff6a3d" : "rgba(255,255,255,0.7)";
+        }
+        if (holdRef.current) holdRef.current.textContent = peakToDbfs(peakHold);
+        if (clipRef.current) {
+          clipRef.current.style.opacity = clip ? "1" : "0.25";
+          clipRef.current.style.color = clip ? "#ff6a3d" : "rgba(255,255,255,0.35)";
+          clipRef.current.style.boxShadow = clip ? "0 0 8px #ff6a3d88" : "none";
+        }
+        if (grRef.current) {
+          const g = fmtGrDb(gr);
+          grRef.current.textContent = `LIM −${g}`;
+          grRef.current.style.color = Number(g) > 0.2 ? "#ffb08a" : "rgba(255,255,255,0.4)";
         }
         if (voicesRef.current) voicesRef.current.textContent = `Voices ${voices}/${max}`;
-        if (loadRef.current) loadRef.current.textContent = `Load ${load}%`;
+        if (corrRef.current) corrRef.current.textContent = `Corr ${corrTxt}`;
       } catch {
         /* engine not ready */
       }
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (analyser && connected) {
+        try {
+          getEngine().fireTap.disconnect(analyser);
+        } catch { /* */ }
+      }
+    };
   }, []);
 
   return (
-    <div className="fc-master-meter shrink-0 fc-text-secondary">
-      <span className="uppercase tracking-[0.16em] text-white/45 text-[10px] font-bold">Master</span>
-      <div className="fc-meter-bar" title="Post-chain peak">
+    <div className="fc-master-meter shrink-0 fc-text-secondary" title="Fire bus · post safety clip · pre Kill-Chain">
+      <span className="uppercase tracking-[0.16em] text-white/45 text-[10px] font-bold">Fire</span>
+      <div className="fc-meter-bar" title="Fire bus peak">
         <div ref={fillRef} className="fc-meter-fill" style={{ width: "0%" }} />
       </div>
-      <span ref={pctRef} className="font-mono text-[10px] text-white/55">0%</span>
+      <span ref={peakRef} className="font-mono text-[10px] text-white/70">−∞</span>
+      <span ref={holdRef} className="font-mono text-[10px] text-white/40" title="Peak hold">−∞</span>
+      <span
+        ref={clipRef}
+        className="font-mono text-[9px] font-black tracking-wider"
+        style={{ opacity: 0.25, color: "rgba(255,255,255,0.35)" }}
+        title="Clip LED"
+      >
+        CLIP
+      </span>
+      <span ref={grRef} className="font-mono text-[10px] text-white/40">LIM −0.0</span>
       <span ref={voicesRef} className="font-mono text-[10px] text-white/45">Voices 0/{maxVoices}</span>
-      <span ref={loadRef} className="font-mono text-[10px] text-white/35">Load 0%</span>
+      <span ref={corrRef} className="font-mono text-[10px] text-white/35">Corr —</span>
     </div>
   );
 }

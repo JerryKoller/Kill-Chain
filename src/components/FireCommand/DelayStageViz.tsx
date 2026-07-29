@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import type { DelayCascadeMode } from "@/audio/dsp/FireCommandSynth";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 
@@ -87,6 +88,7 @@ export function DelayStageViz() {
   const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
   const fbk = useFireCommandStore((s) => s.patch.delayFeedback) ?? 0.3;
   const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
+  const cascade = (useFireCommandStore((s) => s.patch.delayCascadeMode) ?? "echo") as DelayCascadeMode;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -95,18 +97,18 @@ export function DelayStageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef({ time, fbk, mix });
-  st.current = { time, fbk, mix };
+  const st = useRef({ time, fbk, mix, cascade });
+  st.current = { time, fbk, mix, cascade };
 
   const live = mix > 0.02;
 
   useEffect(() => {
-    const key = `${time.toFixed(3)}|${fbk.toFixed(3)}|${mix.toFixed(3)}`;
+    const key = `${time.toFixed(3)}|${fbk.toFixed(3)}|${mix.toFixed(3)}|${cascade}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [time, fbk, mix]);
+  }, [time, fbk, mix, cascade]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -203,13 +205,21 @@ export function DelayStageViz() {
       const PAD = 14;
       const usable = W - PAD * 2;
       const stageH = Hh * 0.72;
-      const laneL = stageH * 0.32;
-      const laneR = stageH * 0.68;
-      const timeR = p.time * 1.5;
-      const echoes = 1 + Math.round(p.fbk * 8);
-      // Spacing from delay time — longer = wider echo gaps
-      const spacing = 0.06 + timeN * 0.16;
+      const mode = p.cascade ?? "echo";
+      const rRatio = mode === "bounce" ? 1.5 : mode === "dub" ? 1.35 : 1.5;
+      const timeR = p.time * rRatio;
+      // Cascade layout: slap = tight lanes, bounce = crossed, long/infinite = wide spacing
+      const laneSpread = mode === "slap" ? 0.18 : mode === "long" || mode === "infinite" ? 0.28 : 0.22;
+      const laneL = stageH * (0.5 - laneSpread);
+      const laneR = stageH * (0.5 + laneSpread);
+      const echoes = mode === "infinite" ? 10 : mode === "slap" ? 2 : 1 + Math.round(p.fbk * 8);
+      const spacing = mode === "slap" ? 0.05 : mode === "long" || mode === "infinite" ? 0.1 + timeN * 0.2 : 0.06 + timeN * 0.16;
       const phase = (now / (480 + p.time * 1100)) % 1;
+
+      // Tap node positions (time on X, level/brightness from feedback)
+      const tapLX = PAD + timeN * usable * 0.72;
+      const tapRX = PAD + logNorm(clamp(timeR, TIME_MIN, TIME_MAX * 1.5), TIME_MIN, TIME_MAX * 1.5) * usable * 0.72;
+      const tapBright = 0.35 + fbkN * 0.65;
 
       ctx.clearRect(0, 0, W, Hh);
 
@@ -220,6 +230,12 @@ export function DelayStageViz() {
       bg.addColorStop(1, "rgba(5,2,14,0.98)");
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, Hh);
+
+      // Mode chip early
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_TIME, 0.7);
+      ctx.textAlign = "left";
+      ctx.fillText(mode.toUpperCase(), PAD, 20);
 
       // Time grid ghosts
       const gridDivs = Math.max(3, Math.round(3 + (1 - timeN) * 8));
@@ -257,8 +273,8 @@ export function DelayStageViz() {
       ctx.fillStyle = hexAlpha(C_R, 0.7);
       ctx.fillText("R", 4, laneR + 3);
 
-      // Bounce bridges between L↔R (ping-pong paths)
-      if (isLive && p.fbk > 0.08) {
+      // Bounce / dub bridges
+      if (isLive && p.fbk > 0.08 && (mode === "bounce" || mode === "dub" || mode === "echo")) {
         for (let i = 0; i < Math.min(echoes, 6); i++) {
           const u = (phase + i * spacing) % 1;
           const x = PAD + u * usable;
@@ -276,18 +292,18 @@ export function DelayStageViz() {
         }
       }
 
-      // Echo blips
+      // Echo blips along cascade
       for (let i = 0; i < echoes; i++) {
-        const life = Math.pow(Math.max(0.15, p.fbk), i * 0.55) * (0.3 + p.mix * 0.7);
+        const life = Math.pow(Math.max(0.15, mode === "infinite" ? 0.95 : p.fbk), i * 0.55) * (0.3 + p.mix * 0.7);
         const u = (phase + i * spacing) % 1;
-        const isL = i % 2 === 0;
+        const isL = mode === "bounce" ? i % 2 === 0 : i % 2 === 0;
         const y = isL ? laneL : laneR;
         const x = PAD + u * usable;
-        const r = 2.5 + life * 7 + flashRef.current * 2;
+        const r = 2.2 + life * 6 + flashRef.current * 2;
         const col = isL ? C_L : C_R;
 
         const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.2);
-        g.addColorStop(0, hexAlpha(C_GLOW, 0.85 * life));
+        g.addColorStop(0, hexAlpha(C_GLOW, 0.85 * life * tapBright));
         g.addColorStop(0.35, hexAlpha(col, 0.55 * life));
         g.addColorStop(1, hexAlpha(col, 0));
         ctx.fillStyle = g;
@@ -295,40 +311,44 @@ export function DelayStageViz() {
         ctx.arc(x, y, r * 2.2, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.9 * life);
-        ctx.shadowBlur = 8 + p.fbk * 12;
-        ctx.shadowColor = C;
-        ctx.beginPath();
-        ctx.arc(x, y, r * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Wake
-        const wakeLen = 14 + i * 5 + p.fbk * 18;
-        const wake = ctx.createLinearGradient(Math.max(PAD, x - wakeLen), y, x, y);
-        wake.addColorStop(0, hexAlpha(col, 0));
-        wake.addColorStop(1, hexAlpha(col, 0.35 * life));
-        ctx.strokeStyle = wake;
-        ctx.lineWidth = 1.5 + life * 2;
-        ctx.beginPath();
-        ctx.moveTo(Math.max(PAD, x - wakeLen), y);
-        ctx.lineTo(x, y);
-        ctx.stroke();
-
-        if (isLive && Math.random() < 0.15 * life) {
-          trails.push({
-            x: x - Math.random() * 10,
-            y: y + (Math.random() - 0.5) * 5,
-            life: life * 0.85,
-            isL,
-          });
+        if (isLive && Math.random() < 0.12 * life) {
+          trails.push({ x: x - Math.random() * 10, y: y + (Math.random() - 0.5) * 5, life: life * 0.85, isL });
         }
       }
 
+      // L/R tap nodes (time X, feedback brightness) — primary interactive markers
+      const drawTap = (x: number, y: number, col: string, label: string, tLabel: string) => {
+        const r = 7 + fbkN * 4 + flashRef.current * 2;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.4);
+        g.addColorStop(0, hexAlpha(C_GLOW, 0.9 * tapBright));
+        g.addColorStop(0.4, hexAlpha(col, 0.55 * tapBright));
+        g.addColorStop(1, hexAlpha(col, 0));
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, r * 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = hexAlpha(C_GLOW, 0.7 + flashRef.current * 0.3);
+        ctx.lineWidth = 1.8;
+        ctx.shadowBlur = 10 + fbkN * 12;
+        ctx.shadowColor = C;
+        ctx.beginPath();
+        ctx.arc(x, y, r * 0.45, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = hexAlpha(col, 0.9);
+        ctx.textAlign = "center";
+        ctx.fillText(label, x, y - r - 4);
+        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = hexAlpha(col, 0.7);
+        ctx.fillText(tLabel, x, y + r + 10);
+      };
+      drawTap(tapLX, laneL, C_L, "L", fmtTime(p.time));
+      drawTap(tapRX, laneR, C_R, "R", fmtTime(timeR));
+
       // Inject pulse
       const pulse = 0.55 + 0.45 * Math.sin(now / 180);
-      const pa = pulse * (0.35 + p.mix * 0.55);
-      ctx.fillStyle = hexAlpha(C_GLOW, pa);
+      ctx.fillStyle = hexAlpha(C_GLOW, pulse * (0.35 + p.mix * 0.55));
       ctx.shadowBlur = 10 * pulse;
       ctx.shadowColor = C;
       ctx.beginPath();
@@ -352,28 +372,7 @@ export function DelayStageViz() {
         ctx.fill();
       }
 
-      // Feedback intensity ribbon
-      if (p.fbk > 0.08) {
-        const barW = usable * 0.28 * fbkN;
-        const barX = W - PAD - barW;
-        const barY = stageH - 10;
-        const fg = ctx.createLinearGradient(barX, barY, W - PAD, barY);
-        fg.addColorStop(0, hexAlpha(C_FBK, 0));
-        fg.addColorStop(1, hexAlpha(C_GLOW, 0.45 + fbkN * 0.45));
-        ctx.fillStyle = fg;
-        ctx.fillRect(barX, barY, barW, 3);
-      }
-
-      // Time readouts (L / R = 1.5×)
-      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_L, 0.7);
-      ctx.fillText(`L ${fmtTime(p.time)}`, 10, stageH - 4);
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C_R, 0.7);
-      ctx.fillText(`R ${fmtTime(timeR)}`, W - 10, stageH - 4);
-
-      // Crosshair Time / Fbk
+      // Crosshair Time / Fbk (drag target)
       const hx = timeN * W;
       const hy = (1 - fbkN) * (Hh * 0.68);
       ctx.strokeStyle = hexAlpha(C_GLOW, 0.35 + flashRef.current * 0.3);
@@ -386,7 +385,7 @@ export function DelayStageViz() {
       ctx.stroke();
 
       // Chip
-      const chip = !isLive ? "IDLE" : p.fbk > 0.7 ? "INFINITE" : p.time < 0.08 ? "SLAP" : "PING-PONG";
+      const chip = !isLive ? "IDLE" : mode === "infinite" ? "INFINITE" : mode === "slap" ? "SLAP" : mode.toUpperCase();
       ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
       const chipW = ctx.measureText(chip).width + 12;
       const chipX = W * 0.5 - chipW * 0.5;
@@ -425,7 +424,7 @@ export function DelayStageViz() {
       ctx.textAlign = "right";
       const status = !isLive
         ? "IDLE"
-        : `${fmtTime(p.time)} · FB${Math.round(p.fbk * 100)} · M${Math.round(p.mix * 100)}`;
+        : `${fmtTime(p.time)} · FB${Math.round(p.fbk * 100)} · ${mode}`;
       ctx.fillStyle = hexAlpha(isLive ? C_HOT : C_MID, 0.88);
       ctx.fillText(status, W - 12, Hh - 2);
     
@@ -435,7 +434,7 @@ export function DelayStageViz() {
         active: (st.current.mix ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -457,7 +456,7 @@ export function DelayStageViz() {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
-      title="Drag: Time ↔ / Feedback ↕ · Bottom: Mix · Double-click: cycle mix"
+      title="Drag taps / stage: Time ↔ / Feedback ↕ · Bottom: Mix · Double-click: cycle mix"
       role="img"
       aria-label="Delay ping cascade"
     >

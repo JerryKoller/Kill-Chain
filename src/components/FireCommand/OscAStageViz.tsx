@@ -5,8 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
-import { getEngine } from "@/audio/AudioEngine";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
@@ -169,7 +168,7 @@ export function OscAStageViz() {
 
       let livePos = p.pos;
       try {
-        livePos = getEngine().fireCommand.getMorphPositions().a;
+        livePos = activeFireEngine().getMorphPositions().a;
       } catch { /* offline / boot */ }
 
       ensure(p.table);
@@ -395,32 +394,55 @@ export function OscAStageViz() {
         ctx.fillRect(0, 0, W, Hh);
       }
 
-      // Telemetry
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
+      // Telemetry — operational size bumped; no duplicate Level %
+      ctx.font = "700 11px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.88);
+      ctx.fillStyle = hexAlpha(C_GLOW, 0.92);
       const octLabel = p.oct === 0 ? "±0" : p.oct > 0 ? `+${p.oct}` : `${p.oct}`;
-      ctx.fillText(`OSC A · ${wavetableName(p.table).toUpperCase()} · ${octLabel}oct`, 12, Hh - 6);
+      ctx.fillText(`WAVE · ${wavetableName(p.table).toUpperCase()} · ${octLabel}oct`, 12, Hh - 6);
       ctx.textAlign = "right";
       if (silent) {
-        ctx.fillStyle = hexAlpha(C_MID, 0.55);
-        ctx.fillText("SILENT · drag rail to morph", W - 12, Hh - 6);
+        ctx.fillStyle = hexAlpha(C_MID, 0.6);
+        ctx.fillText("MUTED — raise Level", W - 12, Hh - 6);
       } else {
-        const bits: string[] = [`${Math.round(p.level * 100)}%`];
+        const bits: string[] = [`FRAME ${lo + 1}→${hi + 1}`];
         if (envAbs > 0.04) bits.push(`ENV ${p.env > 0 ? "+" : "−"}${Math.round(envAbs * 100)}`);
         if (lfoAbs > 0.04) bits.push(`LFO ${Math.round(lfoAbs * 100)}`);
         if (detNorm > 0.04) bits.push(`${p.detune > 0 ? "+" : ""}${Math.round(p.detune)}¢`);
-        ctx.fillStyle = hexAlpha(C_HOT, 0.85);
+        ctx.fillStyle = hexAlpha(C_HOT, 0.9);
         ctx.fillText(bits.join(" · "), W - 12, Hh - 6);
       }
+
+      // Live playhead — establishes this is a live instrument, not a static curve
+      const playU = (now * 0.00035 * (1 + energy) + livePos) % 1;
+      const playX = xL + playU * (xR - xL);
+      const playI = Math.floor(playU * (N - 1));
+      const playV = sample(lo, playI) * (1 - frac) + sample(hi, playI) * frac;
+      const playY = mid - playV * amp * breath;
+      ctx.strokeStyle = hexAlpha(C_GLOW, 0.55 + flashRef.current * 0.3);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(playX, mid - amp * 0.95);
+      ctx.lineTo(playX, mid + amp * 0.55);
+      ctx.stroke();
+      ctx.fillStyle = hexAlpha(C_HOT, 0.95);
+      ctx.beginPath();
+      ctx.arc(playX, playY, 3.2 + flashRef.current, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Frame interpolation caption on canvas
+      ctx.font = "800 10px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = hexAlpha(C_GLOW, 0.7);
+      ctx.fillText(`FRAME ${lo + 1} → ${hi + 1}   MORPH ${Math.round(livePos * 100)}%`, W * 0.5, 18);
     
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: (st.current.level ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );
@@ -461,10 +483,10 @@ export function OscAStageViz() {
         Prime Voice
       </div>
       <div
-        className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
-        style={{ color: hexAlpha(C_HOT, 0.7) }}
+        className="pointer-events-none absolute right-3 top-2 font-mono text-[10px] tabular-nums"
+        style={{ color: hexAlpha(C_HOT, 0.78) }}
       >
-        {Math.round(pos * 100)}%
+        {Math.round(pos * (FRAME_COUNT - 1)) + 1}→{Math.min(FRAME_COUNT, Math.floor(pos * (FRAME_COUNT - 1)) + 2)} · {Math.round(pos * 100)}%
       </div>
     </div>
   );

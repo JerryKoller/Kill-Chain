@@ -6,8 +6,8 @@
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
-import type { LfoWave, LfoDest } from "@/audio/dsp/FireCommandSynth";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
+import type { LfoWave } from "@/audio/dsp/FireCommandSynth";
 import { getEngine } from "@/audio/AudioEngine";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
@@ -133,6 +133,10 @@ export function Lfo2StageViz() {
   const wave1 = useFireCommandStore((s) => s.patch.lfo1Wave) ?? "sine";
   const rate1 = useFireCommandStore((s) => s.patch.lfo1Rate) ?? 5;
   const depth1 = useFireCommandStore((s) => s.patch.lfo1Depth) ?? 0;
+  const relation = useFireCommandStore((s) => s.patch.lfo2Relation) ?? "independent";
+  const phaseOffset = useFireCommandStore((s) => s.patch.lfo2PhaseOffset) ?? 90;
+  const ratioParam = useFireCommandStore((s) => s.patch.lfo2Ratio) ?? 1;
+  const driftMode = useFireCommandStore((s) => s.patch.lfo2DriftMode) ?? "locked";
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -141,20 +145,42 @@ export function Lfo2StageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef({ wave, rate, depth, dest, wave1, rate1, depth1 });
-  st.current = { wave, rate, depth, dest, wave1, rate1, depth1 };
+  const st = useRef({
+    wave,
+    rate,
+    depth,
+    dest,
+    wave1,
+    rate1,
+    depth1,
+    relation,
+    phaseOffset,
+    ratioParam,
+    driftMode,
+  });
+  st.current = {
+    wave,
+    rate,
+    depth,
+    dest,
+    wave1,
+    rate1,
+    depth1,
+    relation,
+    phaseOffset,
+    ratioParam,
+    driftMode,
+  };
 
-  const live = depth > 0.02 || dest !== "off";
-  const linkRatio = nearestSyncRatio(rate, rate1);
-  const linked = Math.abs(Math.log2(Math.max(RATE_MIN, rate) / Math.max(RATE_MIN, rate1 * linkRatio))) < 0.12;
+  const live = depth > 0.02 || dest !== "off" || relation !== "independent";
 
   useEffect(() => {
-    const key = `${wave}|${rate.toFixed(3)}|${depth.toFixed(3)}|${dest}|${rate1.toFixed(3)}`;
+    const key = `${wave}|${rate.toFixed(3)}|${depth.toFixed(3)}|${dest}|${rate1.toFixed(3)}|${relation}|${phaseOffset}|${ratioParam}|${driftMode}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
-      flashRef.current = 1;
+      flashRef.current = 1; // retrigger flash on param change
     }
-  }, [wave, rate, depth, dest, rate1]);
+  }, [wave, rate, depth, dest, rate1, relation, phaseOffset, ratioParam, driftMode]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -182,6 +208,7 @@ export function Lfo2StageViz() {
       const r1 = Math.max(RATE_MIN, st.current.rate1);
       const next = clamp(r1 * ratio, RATE_MIN, RATE_MAX);
       setParam("lfo2Rate", Math.round(next * 1000) / 1000);
+      setParam("lfo2Ratio", ratio);
     },
     [setParam],
   );
@@ -247,11 +274,21 @@ export function Lfo2StageViz() {
       const xR = W - PAD;
       const span = xR - xL;
       const rateN = logNorm(p.rate, RATE_MIN, RATE_MAX);
-      const ratio = nearestSyncRatio(p.rate, p.rate1);
+      const patchRatio = clamp(p.ratioParam ?? 1, 0.125, 8);
+      const ratio = p.relation === "ratio" ? patchRatio : nearestSyncRatio(p.rate, p.rate1);
       const isLinked =
-        Math.abs(Math.log2(Math.max(RATE_MIN, p.rate) / Math.max(RATE_MIN, p.rate1 * ratio))) < 0.12;
+        p.relation === "ratio" ||
+        p.relation === "mirror" ||
+        p.relation === "invert" ||
+        p.relation === "phaseOffset" ||
+        p.relation === "followLag" ||
+        Math.abs(Math.log2(Math.max(RATE_MIN, p.rate) / Math.max(RATE_MIN, p.rate1 * (typeof ratio === "number" ? ratio : 1)))) < 0.12;
       const energy =
-        0.18 + p.depth * 0.5 + (p.dest !== "off" ? 0.14 : 0) + (isLinked ? 0.1 : 0) + flashRef.current * 0.28;
+        0.18 +
+        p.depth * 0.5 +
+        (p.dest !== "off" ? 0.14 : 0) +
+        (isLinked ? 0.1 : 0) +
+        flashRef.current * 0.28;
 
       ctx.clearRect(0, 0, W, Hh);
 
@@ -284,16 +321,54 @@ export function Lfo2StageViz() {
       ctx.lineTo(xR, mid);
       ctx.stroke();
 
-      // Ghost LFO 1 (deeper azure) — twin presence
-      const ghostAmp = amp * (0.35 + Math.min(0.35, p.depth1 * 0.4));
-      ctx.beginPath();
-      for (let x = xL; x <= xR; x += 2) {
-        const ph = ((x - xL) / span) * 2 + 0.5;
-        const y = mid - lfoShape(p.wave1, ph) * ghostAmp;
-        if (x === xL) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      const phaseOff01 = ((p.phaseOffset ?? 0) / 360) % 1;
+      const rate1Eff = Math.max(RATE_MIN, p.rate1);
+      const rate2Eff =
+        p.relation === "ratio" || p.relation === "mirror" || p.relation === "invert" || p.relation === "phaseOffset"
+          ? rate1Eff * (p.relation === "ratio" ? patchRatio : 1)
+          : Math.max(RATE_MIN, p.rate);
+
+      // Samples along span for LFO1 ghost + LFO2 + difference band
+      const sampN = Math.max(2, Math.floor(span));
+      const y1: number[] = [];
+      const y2: number[] = [];
+      for (let i = 0; i <= sampN; i++) {
+        const t = i / sampN;
+        const ph1 = t * 2;
+        const ph2 =
+          p.relation === "independent"
+            ? t * 2
+            : p.relation === "ratio"
+              ? t * 2 * patchRatio + phaseOff01
+              : t * 2 + phaseOff01;
+        let v1 = lfoShape(p.wave1, ph1);
+        let v2 = lfoShape(p.relation !== "independent" ? p.wave1 : p.wave, ph2);
+        if (p.relation === "invert") v2 = -v2;
+        y1.push(mid - v1 * amp * (0.35 + Math.min(0.35, p.depth1 * 0.4)));
+        y2.push(mid - v2 * amp);
       }
-      ctx.strokeStyle = hexAlpha(C1, 0.12 + Math.min(0.2, p.depth1 * 0.25));
+
+      // Shaded difference between twin waves
+      ctx.beginPath();
+      ctx.moveTo(xL, y1[0]!);
+      for (let i = 1; i <= sampN; i++) ctx.lineTo(xL + (i / sampN) * span, y1[i]!);
+      for (let i = sampN; i >= 0; i--) ctx.lineTo(xL + (i / sampN) * span, y2[i]!);
+      ctx.closePath();
+      const diffFill = ctx.createLinearGradient(0, mid - amp, 0, mid + amp);
+      diffFill.addColorStop(0, hexAlpha(C_LINK, 0.1 + p.depth * 0.12));
+      diffFill.addColorStop(0.5, hexAlpha(C, 0.06));
+      diffFill.addColorStop(1, hexAlpha(C1, 0.08));
+      ctx.fillStyle = diffFill;
+      ctx.fill();
+
+      // Ghost LFO 1 (dim) — twin presence
+      ctx.beginPath();
+      for (let i = 0; i <= sampN; i++) {
+        const x = xL + (i / sampN) * span;
+        if (i === 0) ctx.moveTo(x, y1[i]!);
+        else ctx.lineTo(x, y1[i]!);
+      }
+      ctx.strokeStyle = hexAlpha(C1, 0.14 + Math.min(0.22, p.depth1 * 0.28));
       ctx.lineWidth = 1.4;
       ctx.setLineDash([3, 4]);
       ctx.stroke();
@@ -302,9 +377,7 @@ export function Lfo2StageViz() {
       // LFO 2 fill under curve
       ctx.beginPath();
       ctx.moveTo(xL, mid);
-      for (let x = xL; x <= xR; x += 1.5) {
-        ctx.lineTo(x, mid - lfoShape(p.wave, ((x - xL) / span) * 2) * amp);
-      }
+      for (let i = 0; i <= sampN; i++) ctx.lineTo(xL + (i / sampN) * span, y2[i]!);
       ctx.lineTo(xR, mid);
       ctx.closePath();
       const fill = ctx.createLinearGradient(0, mid - amp, 0, mid + amp);
@@ -314,12 +387,12 @@ export function Lfo2StageViz() {
       ctx.fillStyle = fill;
       ctx.fill();
 
-      // Main LFO 2 waveform
+      // Main LFO 2 waveform (bright)
       ctx.beginPath();
-      for (let x = xL; x <= xR; x++) {
-        const y = mid - lfoShape(p.wave, ((x - xL) / span) * 2) * amp;
-        if (x === xL) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      for (let i = 0; i <= sampN; i++) {
+        const x = xL + (i / sampN) * span;
+        if (i === 0) ctx.moveTo(x, y2[i]!);
+        else ctx.lineTo(x, y2[i]!);
       }
       ctx.strokeStyle = hexAlpha(C_GLOW, 0.88 + flashRef.current * 0.12);
       ctx.lineWidth = 2.4;
@@ -328,23 +401,35 @@ export function Lfo2StageViz() {
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Audio-clock tracers: primary + anti-phase twin
+      // Engine-true twin samples for playheads + alignment
       let engT = now / 1000;
+      let eng1: number | null = null;
+      let eng2: number | null = null;
       try {
-        engT = getEngine().ctx.currentTime;
-      } catch { /* */ }
-      const ph = (engT * p.rate) % 1;
-      const phOpp = (ph + 0.5) % 1;
+        const eng = getEngine();
+        engT = eng.ctx.currentTime;
+        eng1 = activeFireEngine().getLfoValue(1);
+        eng2 = activeFireEngine().getLfoValue(2);
+      } catch { /* local fallback below */ }
+      const ph = ((engT * rate2Eff) % 1 + 1) % 1;
+      const ph1 = ((engT * rate1Eff) % 1 + 1) % 1;
+      const live1 = eng1 ?? lfoShape(p.wave1, ph1);
+      const live2 =
+        eng2 ??
+        (p.relation === "invert"
+          ? -lfoShape(p.wave1, (ph1 + phaseOff01) % 1)
+          : lfoShape(p.relation !== "independent" ? p.wave1 : p.wave, ph));
       const px = xL + ph * span;
-      const py = mid - lfoShape(p.wave, ph) * amp;
-      const ox2 = xL + phOpp * span;
-      const oy2 = mid - lfoShape(p.wave, phOpp) * amp * 0.55;
+      const py = mid - live2 * amp;
+      const gx = xL + ph1 * span;
+      const gy = mid - live1 * amp * (0.35 + Math.min(0.35, p.depth1 * 0.4));
+      const aligned = Math.abs(live1 - live2) < 0.08;
 
-      // Orbit trail
+      // Orbit trail on LFO2
       for (let hist = 22; hist > 0; hist--) {
         const histPh = ((ph - hist * 0.018) % 1 + 1) % 1;
         const hx = xL + histPh * span;
-        const hy = mid - lfoShape(p.wave, histPh) * amp;
+        const hy = mid - lfoShape(p.relation !== "independent" ? p.wave1 : p.wave, histPh) * amp;
         const a = (22 - hist) / 22;
         ctx.fillStyle = hexAlpha(C_HOT, a * 0.4 * (0.25 + p.depth));
         ctx.beginPath();
@@ -352,18 +437,18 @@ export function Lfo2StageViz() {
         ctx.fill();
       }
 
-      // Anti-phase satellite (visual twin)
-      ctx.fillStyle = hexAlpha(C1, 0.35 + p.depth * 0.25);
+      // Dim LFO1 ghost cursor
+      ctx.fillStyle = hexAlpha(C1, 0.4 + p.depth1 * 0.2);
       ctx.beginPath();
-      ctx.arc(ox2, oy2, 2.2 + flashRef.current, 0, Math.PI * 2);
+      ctx.arc(gx, gy, 2.4, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = hexAlpha(C1, 0.2);
+      ctx.strokeStyle = hexAlpha(C1, 0.22);
       ctx.beginPath();
       ctx.moveTo(px, py);
-      ctx.lineTo(ox2, oy2);
+      ctx.lineTo(gx, gy);
       ctx.stroke();
 
-      // Primary bloom
+      // Primary bloom (LFO2)
       const bloom = ctx.createRadialGradient(px, py, 0, px, py, 16 + p.depth * 14);
       bloom.addColorStop(0, hexAlpha(C_GLOW, 0.7 + p.depth * 0.25));
       bloom.addColorStop(0.4, hexAlpha(C_DEST, 0.22));
@@ -392,6 +477,16 @@ export function Lfo2StageViz() {
       ctx.arc(px, py, 3.6 + flashRef.current * 1.4, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
+
+      // Phase-alignment sparks when twin values near equal
+      if (aligned && Math.random() < 0.35 + p.depth * 0.3) {
+        sparks.push({
+          a: Math.atan2(py - oy, px - ox) + (Math.random() - 0.5) * 0.6,
+          r: 8 + Math.random() * 22,
+          life: 1,
+          spin: (Math.random() - 0.5) * 0.12,
+        });
+      }
 
       // Destination satellite body (orbits when live)
       if (p.dest !== "off") {
@@ -432,8 +527,8 @@ export function Lfo2StageViz() {
       ctx.strokeStyle = hexAlpha(C_RATE, 0.45);
       ctx.stroke();
 
-      // Link sparks when synced
-      if (isLinked && Math.random() < 0.08 + p.depth * 0.15) {
+      // Link / alignment sparks
+      if ((isLinked || aligned) && Math.random() < 0.08 + p.depth * 0.15) {
         sparks.push({ a: Math.random() * Math.PI * 2, r: 20 + Math.random() * 30, life: 1, spin: (Math.random() - 0.5) * 0.08 });
       }
       for (let i = sparks.length - 1; i >= 0; i--) {
@@ -446,9 +541,9 @@ export function Lfo2StageViz() {
         }
         const sx = ox + Math.cos(s.a) * s.r;
         const sy = oy + Math.sin(s.a) * s.r * 0.4;
-        ctx.fillStyle = hexAlpha(C_LINK, s.life * 0.7);
+        ctx.fillStyle = hexAlpha(aligned ? C_GLOW : C_LINK, s.life * 0.75);
         ctx.beginPath();
-        ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
+        ctx.arc(sx, sy, aligned ? 2 : 1.5, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -465,6 +560,29 @@ export function Lfo2StageViz() {
       ctx.textAlign = "center";
       ctx.fillText(waveLabel, W * 0.5, 16);
 
+      if (flashRef.current > 0.15) {
+        ctx.fillStyle = hexAlpha(C_GLOW, flashRef.current * 0.22);
+        ctx.fillRect(0, 0, W, 3);
+        ctx.fillRect(0, Hh - 3, W, 3);
+      }
+
+      // Live relation / ratio readout
+      const relLabel =
+        p.relation === "independent"
+          ? "INDEP"
+          : p.relation === "ratio"
+            ? `RATIO ${patchRatio % 1 === 0 ? patchRatio.toFixed(0) : patchRatio.toFixed(2)}×`
+            : p.relation === "phaseOffset"
+              ? `φ${Math.round(p.phaseOffset)}°`
+              : p.relation === "followLag"
+                ? "FOLLOW"
+                : p.relation.toUpperCase();
+      const driftTag = p.driftMode !== "locked" ? ` · ${String(p.driftMode).toUpperCase()}` : "";
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexAlpha(C_LINK, 0.85);
+      ctx.fillText(`${relLabel}${driftTag}`, 12, 28);
+
       // Sync link rail
       const railY = Hh - 16;
       ctx.fillStyle = "rgba(255,255,255,0.05)";
@@ -473,9 +591,12 @@ export function Lfo2StageViz() {
       ctx.strokeRect(12.5, railY + 0.5, W - 25, 6);
 
       const slotW = (W - 24) / SYNC_RATIOS.length;
+      const nearest = nearestSyncRatio(p.rate, p.rate1);
       SYNC_RATIOS.forEach((r, i) => {
         const sx = 12 + i * slotW;
-        const on = Math.abs(r - ratio) < 0.01 && isLinked;
+        const on =
+          (p.relation === "ratio" && Math.abs(Math.log2(patchRatio / r)) < 0.08) ||
+          (p.relation !== "ratio" && Math.abs(r - nearest) < 0.01 && isLinked);
         if (on) {
           ctx.fillStyle = hexAlpha(C_LINK, 0.45 + flashRef.current * 0.25);
           ctx.fillRect(sx + 1, railY + 1, slotW - 2, 5);
@@ -487,7 +608,8 @@ export function Lfo2StageViz() {
       });
 
       // Thumb on active ratio
-      const thumbI = SYNC_RATIOS.indexOf(ratio as (typeof SYNC_RATIOS)[number]);
+      const thumbRatio = p.relation === "ratio" ? nearestSyncRatio(rate1Eff * patchRatio, rate1Eff) : nearest;
+      const thumbI = SYNC_RATIOS.indexOf(thumbRatio as (typeof SYNC_RATIOS)[number]);
       const ti = thumbI >= 0 ? thumbI : 2;
       const tx = 12 + (ti + 0.5) * slotW;
       ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
@@ -501,17 +623,25 @@ export function Lfo2StageViz() {
       ctx.fillText("LFO2 · TWIN ORBIT", 12, Hh - 2);
       ctx.textAlign = "right";
       const destLabel = p.dest === "off" ? "IDLE" : `→${p.dest.toUpperCase()}`;
-      const linkTag = isLinked ? ` · ${syncRatioLabel(ratio)}L1` : "";
-      ctx.fillStyle = hexAlpha(p.dest !== "off" ? C_DEST : C_MID, 0.88);
-      ctx.fillText(`${p.rate.toFixed(2)}Hz · D${Math.round(p.depth * 100)} · ${destLabel}${linkTag}`, W - 12, Hh - 2);
+      const ratioRead =
+        p.relation === "ratio"
+          ? ` · ${patchRatio % 1 === 0 ? patchRatio.toFixed(0) : patchRatio.toFixed(2)}×L1`
+          : isLinked
+            ? ` · ${syncRatioLabel(nearest)}L1`
+            : "";
+      ctx.fillStyle = hexAlpha(p.dest !== "off" || p.depth > 0.02 ? C_DEST : C_MID, 0.88);
+      ctx.fillText(`${p.rate.toFixed(2)}Hz · D${Math.round(p.depth * 100)} · ${destLabel}${ratioRead}`, W - 12, Hh - 2);
     
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active:
+          (st.current.depth ?? 0) > 0.02 ||
+          st.current.dest !== "off" ||
+          (st.current.relation ?? "independent") !== "independent",
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -550,9 +680,12 @@ export function Lfo2StageViz() {
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
-        style={{ color: hexAlpha(linked ? C_LINK : C_HOT, 0.78) }}
+        style={{
+          color: hexAlpha(live ? C_HOT : C_MID, live ? 0.9 : 0.7),
+          textShadow: live ? `0 0 10px ${hexAlpha(C, 0.65)}` : undefined,
+        }}
       >
-        {linked ? syncRatioLabel(linkRatio) : dest === "off" ? "IDLE" : dest}
+        {live ? "ACTIVE" : "IDLE"}
       </div>
     </div>
   );

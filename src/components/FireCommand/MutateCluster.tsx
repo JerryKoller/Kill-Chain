@@ -3,9 +3,130 @@
  * keep the winner, evolve again. Visual: pedigree / pressure / organisms.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
+
+/** Compact vertical-drag dial — replaces the Mild↔Wild slider when the cluster is squished. */
+function PressureKnob({
+  value,
+  onChange,
+  size = 28,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  size?: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const startY = useRef(0);
+  const startV = useRef(0);
+  const [drag, setDrag] = useState(false);
+  const t = Math.max(0, Math.min(1, value));
+  const color = "#34d399";
+
+  const down = (e: React.PointerEvent) => {
+    (e.target as Element).setPointerCapture(e.pointerId);
+    startY.current = e.clientY;
+    startV.current = t;
+    setDrag(true);
+  };
+  const move = (e: React.PointerEvent) => {
+    if (!drag) return;
+    const scale = e.shiftKey ? 2400 : 180;
+    const next = Math.max(0, Math.min(1, startV.current + (startY.current - e.clientY) / scale));
+    startY.current = e.clientY;
+    startV.current = next;
+    onChange(next);
+  };
+  const up = (e: React.PointerEvent) => {
+    try {
+      (e.target as Element).releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    setDrag(false);
+  };
+
+  const nudgeRef = useRef<(dir: number, fine: boolean) => void>(() => {});
+  nudgeRef.current = (dir, fine) => {
+    onChange(Math.max(0, Math.min(1, t + dir * (fine ? 0.005 : 0.04))));
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      nudgeRef.current(ev.deltaY < 0 ? 1 : -1, ev.shiftKey);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const angle = -135 + t * 270;
+  const r = size / 2 - 4;
+  const cx = size / 2;
+  const cy = size / 2;
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const pt = (deg: number, rr: number) => ({
+    x: cx + Math.sin(rad(deg)) * rr,
+    y: cy - Math.cos(rad(deg)) * rr,
+  });
+  const arc = (a0: number, a1: number) => {
+    const s = pt(a1, r);
+    const e = pt(a0, r);
+    const large = a1 - a0 > 180 ? 1 : 0;
+    return `M ${s.x} ${s.y} A ${r} ${r} 0 ${large} 0 ${e.x} ${e.y}`;
+  };
+  const tip = pt(angle, r - 1.5);
+
+  return (
+    <div
+      ref={ref}
+      role="slider"
+      tabIndex={0}
+      aria-label="Mutation pressure"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(t * 100)}
+      aria-valuetext={`${Math.round(t * 100)}% — Mild to Wild`}
+      className="relative shrink-0 cursor-ns-resize rounded-full outline-none focus-visible:ring-2 focus-visible:ring-emerald-300/50"
+      style={{ width: size, height: size, touchAction: "none" }}
+      onPointerDown={down}
+      onPointerMove={move}
+      onPointerUp={up}
+      onPointerCancel={up}
+      onDoubleClick={() => onChange(0.35)}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowUp" || e.key === "ArrowRight") {
+          e.preventDefault();
+          nudgeRef.current(1, e.shiftKey);
+        } else if (e.key === "ArrowDown" || e.key === "ArrowLeft") {
+          e.preventDefault();
+          nudgeRef.current(-1, e.shiftKey);
+        } else if (e.key === "Home" || e.key === "0") {
+          e.preventDefault();
+          onChange(0.35);
+        }
+      }}
+      title={`Pressure ${Math.round(t * 100)}% — drag/scroll · Mild↔Wild · Shift = fine · Double-click reset`}
+    >
+      <svg width={size} height={size} className="overflow-visible" aria-hidden>
+        <circle cx={cx} cy={cy} r={r + 1.5} fill="rgba(0,0,0,0.4)" stroke="rgba(52,211,153,0.25)" strokeWidth={1} />
+        <path d={arc(-135, 135)} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={2.5} strokeLinecap="round" />
+        <path
+          d={arc(-135, angle)}
+          fill="none"
+          stroke={color}
+          strokeWidth={2.5}
+          strokeLinecap="round"
+          style={{ filter: drag ? `drop-shadow(0 0 4px ${color})` : `drop-shadow(0 0 1.5px ${color})` }}
+        />
+        <line x1={cx} y1={cy} x2={tip.x} y2={tip.y} stroke={color} strokeWidth={1.75} strokeLinecap="round" />
+        <circle cx={tip.x} cy={tip.y} r={2.25} fill={color} />
+      </svg>
+    </div>
+  );
+}
 
 function HelixMark({ active, size = 22 }: { active: boolean; size?: number }) {
   return (
@@ -110,53 +231,50 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
   );
 
   if (compact) {
+    // Same chrome rhythm as Random Armory: full-width title + control row,
+    // vertically centered in the bay. Mutate/Breed is flex-1 with overflow
+    // clipped so it fills space without bleeding over Mild/Wild.
     return (
-      <div className="relative flex w-full flex-col justify-center gap-1.5 min-w-0 min-h-[56px]">
-        <div className="flex items-center gap-2 min-w-0 h-8">
+      <div className="relative flex h-full w-full min-w-0 flex-col justify-center gap-1.5">
+        <div className="flex h-8 min-w-0 items-center gap-2">
           <HelixMark active={!!mutation || flash} size={18} />
           <div className="min-w-0 flex-1">
             <div className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-200/90 leading-none">
               Natural Selection
             </div>
-            <div className="text-[9px] text-white/40 truncate leading-none mt-0.5">
+            <div className="mt-0.5 truncate text-[9px] leading-none text-white/40">
               {mutation
                 ? `Gen ${mutation.generation} live — pick a survivor`
                 : `${pressureLabel(amount)} · ${Math.round(amount * 100)}% · evolve or die`}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 min-w-0 h-8">
+        <div className="flex h-8 min-w-0 items-center gap-1.5">
           <button
             onClick={breed}
-            className={`h-8 px-3 rounded-md text-[10px] font-black uppercase tracking-[0.1em] transition shrink-0 ${
+            className={`h-8 min-w-0 flex-1 overflow-hidden rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] transition ${
               mutation
                 ? "bg-emerald-400/30 text-emerald-50 ring-1 ring-emerald-300/55 shadow-[0_0_14px_rgba(52,211,153,0.22)]"
                 : "bg-emerald-500/18 text-emerald-100 hover:bg-emerald-500/28 ring-1 ring-emerald-400/40"
             }`}
             title="Breed two offspring of the current sound"
           >
-            {mutation ? "Breed" : "Mutate"}
+            <span className="block truncate">{mutation ? "Breed" : "Mutate"}</span>
           </button>
-          <span className="text-[8px] uppercase tracking-wider text-white/30 shrink-0">Mild</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={amount}
-            onChange={(e) => act().setMutateAmount(Number(e.target.value))}
-            className="min-w-0 flex-1 h-1.5 cursor-pointer accent-emerald-400"
-            aria-label="Mutation pressure"
-            title={`Mutation pressure: ${Math.round(amount * 100)}%`}
-          />
-          <span className="text-[8px] uppercase tracking-wider text-white/30 shrink-0">Wild</span>
+          <div className="flex h-8 w-[5.25rem] shrink-0 items-center justify-center gap-1 rounded-md bg-black/25 ring-1 ring-emerald-400/20">
+            <PressureKnob value={amount} onChange={(v) => act().setMutateAmount(v)} size={24} />
+            <span className="flex flex-col items-start leading-none select-none" aria-hidden>
+              <span className="text-[7px] uppercase tracking-wider text-white/35">Mild</span>
+              <span className="mt-0.5 text-[7px] uppercase tracking-wider text-emerald-200/55">Wild</span>
+            </span>
+          </div>
           {mutation && (
-            <div className="flex items-center gap-1 shrink-0 pl-1.5 ml-0.5 border-l border-white/10">
+            <div className="ml-0.5 flex shrink-0 items-center gap-1 border-l border-white/10 pl-1.5">
               {(["a", "b"] as const).map((w) => (
                 <button
                   key={w}
                   onClick={() => act().auditionMutation(w)}
-                  className={`h-8 w-8 rounded-md text-[10px] font-black ${
+                  className={`h-8 w-7 shrink-0 rounded-md text-[10px] font-black ${
                     mutation.listening === w
                       ? "bg-emerald-400/35 text-emerald-50 ring-1 ring-emerald-200/60"
                       : "bg-black/30 text-white/45 ring-1 ring-white/10 hover:text-white/80"
@@ -171,7 +289,7 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
                   act().commitMutation();
                   toast(`✓ Kept ${mutation.listening.toUpperCase()} — lineage Gen ${mutation.generation}.`);
                 }}
-                className="h-8 px-2 rounded-md text-[9px] font-black uppercase text-lime-100 bg-lime-400/20 ring-1 ring-lime-300/50"
+                className="h-8 shrink-0 rounded-md bg-lime-400/20 px-1.5 text-[9px] font-black uppercase text-lime-100 ring-1 ring-lime-300/50"
                 title="Keep winner"
               >
                 Keep
@@ -181,7 +299,7 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
                   act().discardMutation();
                   toast("↩ Round discarded — parent patch restored");
                 }}
-                className="h-8 w-8 rounded-md text-[10px] text-white/45 hover:text-white/80 bg-black/25 ring-1 ring-white/10"
+                className="h-8 w-7 shrink-0 rounded-md bg-black/25 text-[10px] text-white/45 ring-1 ring-white/10 hover:text-white/80"
                 title="Discard round — restore the parent patch"
               >
                 ✕

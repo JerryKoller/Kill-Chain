@@ -126,6 +126,8 @@ class SpectralProcessor extends AudioWorkletProcessor {
     this.amount = 0.6;
     this.mix = 0.5;
     this.bypass = true;
+    this.binLow = 0;
+    this.binHigh = 1;
     this.ch = [new ChannelState(), new ChannelState()];
     this.port.onmessage = (e) => {
       const d = e.data || {};
@@ -134,14 +136,14 @@ class SpectralProcessor extends AudioWorkletProcessor {
         for (const c of this.ch) { c.captured = false; c.avgMag.fill(0); }
       }
       if (typeof d.amount === "number") {
-        // Dropping the freeze amount to 0 re-arms the capture so pushing the
-        // knob back up grabs whatever is playing NOW, not the stale frame.
         if (this.mode === "freeze" && d.amount < 0.01 && this.amount >= 0.01) {
           for (const c of this.ch) c.captured = false;
         }
         this.amount = d.amount;
       }
       if (typeof d.mix === "number") this.mix = d.mix;
+      if (typeof d.binLow === "number") this.binLow = Math.min(1, Math.max(0, d.binLow));
+      if (typeof d.binHigh === "number") this.binHigh = Math.min(1, Math.max(0, d.binHigh));
       if (typeof d.bypass === "boolean") {
         if (d.bypass && !this.bypass) for (const c of this.ch) c.reset();
         this.bypass = d.bypass;
@@ -196,12 +198,12 @@ class SpectralProcessor extends AudioWorkletProcessor {
     fft(re, im, false);
 
     const a = Math.min(1, Math.max(0, this.amount));
+    const k0 = Math.max(0, Math.floor(Math.min(this.binLow, this.binHigh) * HALF));
+    const k1 = Math.min(HALF, Math.ceil(Math.max(this.binLow, this.binHigh) * HALF));
+    const inBand = (k) => k >= k0 && k <= k1;
     switch (this.mode) {
       case "freeze": {
         if (!st.captured) {
-          // Energy-gated capture: engaging freeze during silence used to
-          // hold an empty frame (the mode then did nothing until re-armed).
-          // Stay armed and grab the first frame that actually has signal.
           let energy = 0;
           for (let k = 0; k <= HALF; k++) energy += re[k] * re[k] + im[k] * im[k];
           if (energy > 1e-6) {
@@ -216,23 +218,19 @@ class SpectralProcessor extends AudioWorkletProcessor {
           }
         }
         for (let k = 0; k <= HALF; k++) {
+          if (!inBand(k)) continue;
           re[k] = re[k] * (1 - a) + st.frozenRe[k] * a;
           im[k] = im[k] * (1 - a) + st.frozenIm[k] * a;
         }
         break;
       }
       case "smear": {
-        // One-pole magnitude average; amount maps to the pole (~0 = live,
-        // 0.995 = seconds-long spectral wash). Live phases keep it organic.
         const c = 0.995 * Math.pow(a, 0.3);
         for (let k = 0; k <= HALF; k++) {
+          if (!inBand(k)) continue;
           const mag = Math.hypot(re[k], im[k]);
           const avg = st.avgMag[k] * c + mag * (1 - c);
           st.avgMag[k] = avg;
-          // Denominator floor: with a near-1e-9 floor, silent input produced
-          // scales in the millions, amplifying numerical noise into a hissy
-          // wash. Floored at 1e-4 the output amplitude can never exceed the
-          // averaged magnitude, so tails decay cleanly instead of fizzing.
           const scale = Math.min(avg / Math.max(mag, 1e-4), 1e4);
           re[k] *= scale;
           im[k] *= scale;
@@ -242,21 +240,24 @@ class SpectralProcessor extends AudioWorkletProcessor {
       case "gate": {
         let peak = 0;
         for (let k = 0; k <= HALF; k++) {
+          if (!inBand(k)) continue;
           const mag = Math.hypot(re[k], im[k]);
           if (mag > peak) peak = mag;
         }
         const thr = peak * a * a * 0.7;
         for (let k = 0; k <= HALF; k++) {
+          if (!inBand(k)) continue;
           if (Math.hypot(re[k], im[k]) < thr) { re[k] = 0; im[k] = 0; }
         }
         break;
       }
       case "shift": {
-        const shift = Math.round((a * 2 - 1) * 96); // ±96 bins ≈ ±2 kHz @48k
+        const shift = Math.round((a * 2 - 1) * 96);
         if (shift !== 0) {
           st.tmpRe.fill(0);
           st.tmpIm.fill(0);
           for (let k = 1; k <= HALF; k++) {
+            if (!inBand(k)) { st.tmpRe[k] = re[k]; st.tmpIm[k] = im[k]; continue; }
             const j = k + shift;
             if (j >= 1 && j <= HALF) { st.tmpRe[j] = re[k]; st.tmpIm[j] = im[k]; }
           }

@@ -18,6 +18,8 @@ import {
   type ModDest,
   type HarmonyMode,
 } from "@/audio/dsp/FireCommandSynth";
+import { adsrToModEnvPoints, normalizeModEnvPoints } from "@/audio/dsp/toneDifferentiation";
+import { upsertLfoQuickRoute, inferLfoDestFromMatrix } from "@/audio/dsp/modRouting";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
 import { applyLoudnessSafety, applyModuleLocks, lockedModuleCount } from "@/lib/fireModuleLocks";
@@ -145,8 +147,55 @@ export function buildArpSequence(order: number[], mode: ArpMode, octaves: number
 let arpTimer: ReturnType<typeof setTimeout> | null = null;
 let arpStep = 0;
 let arpWalkPos = 0; // "walk" mode: drunken index into the sequence
+/** Cancels overlapping scene morph / next-bar recalls. */
+let sceneRecallTimer: ReturnType<typeof setTimeout> | null = null;
+let sceneMorphGen = 0;
+/** True while a morphMs scene recall is scrubbing the live `patch`. */
+let sceneMorphActive = false;
+/** True while the morph pad is scrubbing without commit. */
+let padMorphActive = false;
+
+/** Abort in-flight scene morph / next-bar recalls (A↔B switch, preset load…). */
+function cancelSceneRecall(): void {
+  sceneMorphGen++;
+  sceneMorphActive = false;
+  if (sceneRecallTimer) {
+    clearTimeout(sceneRecallTimer);
+    sceneRecallTimer = null;
+  }
+}
+
+/** Committed A/B slots — never the mid-morph blended `patch`. */
+function committedSlots(s: {
+  editTarget: EditTarget;
+  patch: FirePatch;
+  patchA: FirePatch;
+  patchB: FirePatch;
+}): { patchA: FirePatch; patchB: FirePatch } {
+  if (sceneMorphActive || padMorphActive) return { patchA: s.patchA, patchB: s.patchB };
+  return slotsFromState(s);
+}
+
+/** Discard a mid-scrub blend (scene morph or morph pad) from live `patch`. */
+function discardMorphBlend(
+  get: () => FireCommandState,
+  set: (partial: Partial<FireCommandState>) => void,
+): void {
+  if (!sceneMorphActive && !padMorphActive) return;
+  const s = get();
+  const clean = structuredClone(s.editTarget === "b" ? s.patchB : s.patchA);
+  cancelSceneRecall();
+  padMorphActive = false;
+  set({ patch: clean });
+  try {
+    const e = getEngine();
+    (s.editTarget === "b" ? e.fireCommandB : e.fireCommand).setPatch(clean);
+  } catch { /* engine not ready */ }
+}
 /** Gate/ratchet note-off timers — must cancel on stop/panic or they retrigger. */
 const arpVoiceTimers = new Set<ReturnType<typeof setTimeout>>();
+/** Sequencer→arp latch timers (cancel on transport stop). */
+const seqArpTimers = new Set<number>();
 /** Bumped on every stop so in-flight callbacks no-op. */
 let arpGen = 0;
 
@@ -317,7 +366,7 @@ function randomPatch(): FirePatch {
   if (chance(0.35)) routes.push(MR("lfo2", pick<ModDest>(["pitch", "wtA", "pan"]), rand(-0.4, 0.4)));
   if (chance(0.25)) routes.push(MR("velocity", "cutoff", rand(0.2, 0.6)));
   const gateOn = chance(0.18);
-  return {
+  return normalizePatch({
     oscATable: pick(WAVETABLE_IDS),
     oscAPos: rand(0, 1),
     oscAEnv: morphMod && chance(0.6) ? rand(-0.6, 0.8) : 0,
@@ -325,6 +374,7 @@ function randomPatch(): FirePatch {
     oscAOctave: pick([-1, 0, 0, 0, 1]),
     oscADetune: Math.round(rand(-8, 8)),
     oscALevel: rand(0.55, 0.85),
+    oscAContinuity: rand(0.35, 0.95),
     oscBTable: pick(WAVETABLE_IDS),
     oscBPos: rand(0, 1),
     oscBEnv: chance(0.4) ? rand(-0.5, 0.6) : 0,
@@ -332,6 +382,9 @@ function randomPatch(): FirePatch {
     oscBOctave: pick([-2, -1, 0, 0, 1]),
     oscBDetune: Math.round(rand(-18, 18)),
     oscBLevel: rand(0.2, 0.7),
+    oscBInherit: chance(0.2) ? pick(["morph", "mirror", "offset", "fm"] as const) : "off",
+    oscBPhaseLock: chance(0.12),
+    fmAtoB: chance(0.18) ? rand(0.1, 0.55) : 0,
     oscCTable: pick(WAVETABLE_IDS),
     oscCPos: rand(0, 1),
     oscCEnv: chance(0.4) ? rand(-0.5, 0.6) : 0,
@@ -342,18 +395,26 @@ function randomPatch(): FirePatch {
     unison: pick([1, 1, 3, 3, 5]),
     unisonDetune: Math.round(rand(8, 28)),
     unisonWidth: rand(0.3, 0.95),
+    unisonMix: chance(0.7) ? 1 : rand(0.6, 1),
+    unisonAnchor: chance(0.8),
+    unisonDistribution: pick(["linear", "linear", "gaussian", "center", "edge", "alternating"] as const),
+    unisonPhase: pick(["locked", "locked", "random", "even", "alternating"] as const),
+    unisonTemporalSpread: chance(0.15) ? rand(0.005, 0.025) : 0,
+    unisonTemporalMode: pick(["ltr", "ltr", "center", "random"] as const),
+    unisonEnvSpread: chance(0.2) ? rand(0.1, 0.55) : 0,
     warpStretch: chance(0.18) ? rand(-0.5, 0.6) : 0,
     warpTilt: chance(0.18) ? rand(-0.6, 0.6) : 0,
     warpComb: chance(0.12) ? rand(0.15, 0.6) : 0,
-    lpgOn: chance(0.12),
-    lpgDecay: rand(0.15, 1.1),
-    lpgColor: rand(0.4, 0.95),
-    harmonyMode: "off",
-    harmonyLevel: 0.6,
+    warpAmount: chance(0.7) ? 1 : rand(0.4, 1),
     subWave: pick(SUB_WAVES),
     subLevel: chance(0.6) ? rand(0.2, 0.7) : 0,
+    subPhaseAlign: chance(0.7),
+    subTranslate: chance(0.35) ? rand(0.15, 0.7) : 0,
     noiseLevel: chance(0.2) ? rand(0.05, 0.25) : 0,
     noiseColor: chance(0.5) ? rand(-0.6, 0.7) : 0,
+    noiseMode: chance(0.25) ? pick(["bed", "burst", "storm"] as const) : "bed",
+    noiseDensity: rand(0.25, 0.85),
+    noiseGrain: rand(0.2, 0.7),
     fmAmount: chance(0.3) ? rand(0.1, 0.5) : 0,
     fmRatio: pick([1, 1.5, 2, 2, 3, 4]),
     fmBtoA: chance(0.25) ? rand(0.1, 0.5) : 0,
@@ -363,53 +424,113 @@ function randomPatch(): FirePatch {
     filterCutoff: Math.round(rand(400, 6500)),
     filterResonance: rand(1, 8),
     filterEnvAmount: rand(-0.3, 0.7),
+    filterEnvResoAmount: chance(0.3) ? rand(-0.4, 0.6) : 0,
     filterKeyTrack: rand(0, 0.5),
     filterDrive: chance(0.35) ? rand(0.1, 0.5) : 0,
+    filterDrivePos: chance(0.25) ? "pre" : "post",
+    filterSlope: pick([1, 1, 2, 3] as const),
+    filterCarve: chance(0.2) ? pick(["fundamental", "odds", "evens", "noise"] as const) : "off",
+    filterCarveAmount: chance(0.2) ? rand(0.2, 0.7) : 0,
     ampAttack: chance(0.3) ? rand(0.2, 1.2) : rand(0.002, 0.05),
     ampDecay: rand(0.1, 0.6),
     ampSustain: rand(0.3, 0.95),
     ampRelease: rand(0.15, 1.2),
     velAmount: rand(0.4, 1),
+    velAttack: chance(0.3) ? rand(0.1, 0.6) : 0,
+    ampModel: chance(0.15) ? "gate" : "vca",
+    ampCurveAttack: pick(["lin", "exp", "s"] as const),
+    ampCurveDecay: pick(["exp", "log", "lin"] as const),
+    ampCurveRelease: pick(["exp", "log", "s"] as const),
+    ampRetrigger: pick(["zero", "zero", "current", "legato"] as const),
+    ampHold: chance(0.1) ? rand(0.02, 0.15) : 0,
+    ampOvershoot: chance(0.2) ? rand(0.1, 0.45) : 0,
+    lpgOn: chance(0.12),
+    lpgDecay: rand(0.15, 1.1),
+    lpgColor: rand(0.4, 0.95),
+    lpgModel: pick(["classic", "classic", "fast", "slow", "aged", "bright"] as const),
+    lpgStrike: rand(0.6, 1),
+    lpgRing: rand(0.5, 1),
+    lpgLeakage: chance(0.2) ? rand(0.05, 0.25) : 0,
+    lpgChoke: chance(0.75),
+    lpgResoCouple: chance(0.2) ? rand(0.1, 0.5) : 0,
     filtAttack: rand(0.005, 0.5),
     filtDecay: rand(0.1, 0.6),
     filtSustain: rand(0.2, 0.7),
     filtRelease: rand(0.1, 0.6),
+    filtCurveAttack: "lin",
+    filtCurveDecay: "exp",
+    filtCurveRelease: "exp",
     modAttack: rand(0.005, 0.5),
     modDecay: rand(0.1, 0.9),
     modSustain: rand(0, 0.6),
     modRelease: rand(0.1, 0.7),
+    modEnvPoints: adsrToModEnvPoints(rand(0.005, 0.5), rand(0.1, 0.9), rand(0, 0.6), rand(0.1, 0.7)),
+    modEnvSustainIndex: 2,
+    modEnvLoop: chance(0.12),
+    harmonyMode: "off",
+    harmonyLevel: 0.6,
     lfo1Wave: pick(LFO_WAVES),
     lfo1Rate: chance(0.5) ? rand(0.1, 3) : rand(3, 12),
     lfo1Depth: chance(0.6) ? rand(0.2, 0.7) : 0,
     lfo1Dest: pick(LFO_DESTS),
+    lfo1RateDisplay: "hz",
     lfo2Wave: pick(LFO_WAVES),
     lfo2Rate: rand(0.1, 6),
     lfo2Depth: chance(0.4) ? rand(0.2, 0.6) : 0,
     lfo2Dest: pick(LFO_DESTS),
+    lfo2RateDisplay: "hz",
+    lfo2Relation: chance(0.35) ? pick(["mirror", "invert", "phaseOffset", "ratio", "followLag"] as const) : "independent",
+    lfo2PhaseOffset: pick([0, 45, 90, 180, 270]),
+    lfo2Ratio: pick([0.5, 1, 2]),
+    lfo2DriftMode: chance(0.25) ? pick(["elastic", "wandering"] as const) : "locked",
     pitchEnvAmount: chance(0.25) ? Math.round(rand(-24, 36)) : 0,
     pitchEnvTime: rand(0.08, 0.5),
     mono,
     glide: mono ? rand(0.02, 0.12) : 0.05,
+    glideMode: chance(0.3) ? "always" : "legato",
+    glideCurve: pick(["linear", "exp", "s"] as const),
+    glideRateMode: chance(0.35) ? "rate" : "time",
     drive: rand(0, 0.4),
     driveMode: pick(DRIVE_MODES),
     crush: chance(0.3) ? rand(0.1, 0.4) : 0,
     tone: Math.round(rand(8000, 16000)),
+    driveBias: chance(0.2) ? rand(-0.3, 0.3) : 0,
+    driveSymmetry: chance(0.15) ? rand(-0.4, 0.4) : 0,
+    driveAutoGain: true,
+    driveTonePos: pick(["post", "post", "both", "pre"] as const),
     punch: chance(0.5) ? rand(0.15, 0.5) : 0,
     phaserRate: rand(0.1, 2),
     phaserDepth: rand(0.4, 0.9),
     phaserMix: chance(0.3) ? rand(0.3, 0.6) : 0,
+    phaserStages: pick([2, 4, 4, 6, 8]),
+    phaserFeedback: rand(0.2, 0.55),
+    phaserCenter: Math.round(rand(400, 1600)),
+    phaserStereo: pick(["linked", "linked", "opposed", "quadrature"] as const),
     chorusRate: rand(0.2, 1.5),
     chorusDepth: rand(0.2, 0.7),
     chorusMix: chance(0.6) ? rand(0.2, 0.5) : 0,
+    chorusModel: pick(["single", "dual", "dual", "triple", "ensemble", "dimension", "tape"] as const),
+    chorusVoices: pick([1, 2, 2, 3, 4]),
+    chorusSpread: rand(0.4, 1),
     delayTime: rand(0.12, 0.5),
     delayFeedback: rand(0.2, 0.5),
     delayMix: chance(0.5) ? rand(0.15, 0.35) : 0,
+    delayCascadeMode: pick(["slap", "echo", "echo", "dub", "bounce", "long"] as const),
+    delayDuck: chance(0.2) ? rand(0.1, 0.5) : 0,
     reverbSize: rand(1.5, 4.5),
     reverbMix: lush ? rand(0.2, 0.45) : (chance(0.4) ? rand(0.1, 0.25) : 0),
     reverbDamp: rand(0.25, 0.75),
     reverbPredelay: chance(0.5) ? rand(0.01, 0.08) : 0.02,
     reverbDiffusion: rand(0.45, 0.9),
+    reverbEarly: rand(0.25, 0.7),
+    reverbLowDecay: rand(0.35, 0.75),
     spectralMode: "off", spectralAmount: 0.6, spectralMix: 0.5,
+    spectralLow: 0, spectralHigh: 1,
+    fxQuality: pick(["eco", "live", "live", "high"] as const),
+    lowProtect: chance(0.25) ? pick(["80", "120", "200"] as const) : "off",
+    ageMacro: chance(0.15) ? rand(0.1, 0.45) : 0,
+    ageEvolve: chance(0.1) ? rand(0.05, 0.35) : 0,
+    fxRoutingScene: "serial",
     macro1: rand(0, 1), macro2: rand(0, 1), macro3: 0, macro4: 0,
     modMatrix: makeModMatrix(routes),
     drift: chance(0.5) ? rand(0.1, 0.5) : 0,
@@ -417,6 +538,13 @@ function randomPatch(): FirePatch {
     voiceInstability: chance(0.2) ? rand(0.05, 0.25) : 0,
     tuneVariance: chance(0.2) ? rand(0.05, 0.2) : 0,
     envVariance: chance(0.15) ? rand(0.05, 0.2) : 0,
+    analogDnaSeed: Math.floor(Math.random() * 0xFFFFFFFF) >>> 0,
+    analogDnaLock: false,
+    analogWake: chance(0.2) ? rand(0.05, 0.35) : 0,
+    analogTremor: rand(0.35, 0.75),
+    analogBreath: rand(0.3, 0.65),
+    analogClimate: rand(0.2, 0.5),
+    analogEvents: chance(0.15) ? rand(0.05, 0.3) : 0,
     cassetteGen: chance(0.12) ? rand(0.1, 0.4) : 0,
     tapeSpeed: chance(0.1) ? rand(-0.2, 0.2) : 0,
     wowFlutter: chance(0.12) ? rand(0.05, 0.3) : 0,
@@ -435,6 +563,7 @@ function randomPatch(): FirePatch {
     chipVoiceLimit: 0,
     accentAmount: 0,
     slideOn: false,
+    chipAcidMix: rand(0.15, 0.85),
     fmEngine: "classic",
     fmAlg: 0,
     fmOp1Level: 1,
@@ -473,7 +602,7 @@ function randomPatch(): FirePatch {
     gatePattern: Array.from({ length: 16 }, (_, i) => (i % 2 === 0 ? 1 : (chance(0.3) ? 1 : 0))),
     gateSmooth: gateOn && chance(0.4) ? rand(0.1, 0.6) : 0,
     masterGain: 0.72,
-  };
+  });
 }
 
 // ════════════════════ mutation (natural selection) ════════════════════
@@ -577,6 +706,114 @@ function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
   const patch = { ...DEFAULT_FIRE_PATCH, ...(raw ?? {}) };
   patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
   if (raw && raw.moduleEnable) patch.moduleEnable = { ...raw.moduleEnable };
+  // Migrate legacy ADSR-only patches into MSEG points.
+  if (!Array.isArray(patch.modEnvPoints) || patch.modEnvPoints.length < 2) {
+    patch.modEnvPoints = adsrToModEnvPoints(
+      patch.modAttack ?? 0.02,
+      patch.modDecay ?? 0.5,
+      patch.modSustain ?? 0.3,
+      patch.modRelease ?? 0.4,
+    );
+    patch.modEnvSustainIndex = patch.modEnvPoints.length - 1;
+  } else {
+    patch.modEnvPoints = normalizeModEnvPoints(patch.modEnvPoints);
+  }
+  if (typeof patch.unisonMix !== "number") patch.unisonMix = 1;
+  if (typeof patch.filterSlope !== "number") patch.filterSlope = 1;
+  if (typeof patch.filterEnvResoAmount !== "number") patch.filterEnvResoAmount = 0;
+  if (typeof patch.analogDnaSeed !== "number") patch.analogDnaSeed = 0x73a9c412;
+  if (!patch.lfo2Relation) patch.lfo2Relation = "independent";
+  if (typeof patch.lfo2PhaseOffset !== "number") patch.lfo2PhaseOffset = 90;
+  if (typeof patch.lfo2Ratio !== "number") patch.lfo2Ratio = 1;
+  if (!patch.lfo2DriftMode) patch.lfo2DriftMode = "locked";
+  if (!patch.glideMode) patch.glideMode = "legato";
+  if (!patch.glideCurve) patch.glideCurve = "exp";
+  if (!patch.glideRateMode) patch.glideRateMode = "time";
+  if (!patch.ringMode) patch.ringMode = "ratio";
+  if (!patch.lfo1RateDisplay) patch.lfo1RateDisplay = "hz";
+  if (!patch.lfo2RateDisplay) patch.lfo2RateDisplay = "hz";
+  if (!Array.isArray(patch.fmVectorCorners) || patch.fmVectorCorners.length < 4) {
+    patch.fmVectorCorners = DEFAULT_FIRE_PATCH.fmVectorCorners.map((c) => ({
+      levels: [...c.levels] as [number, number, number, number],
+      ratios: [...c.ratios] as [number, number, number],
+      feedback: c.feedback,
+    }));
+  }
+  if (typeof patch.fmVectorX !== "number") patch.fmVectorX = 0.5;
+  if (typeof patch.fmVectorY !== "number") patch.fmVectorY = 0.5;
+  // FX Clarity migrations
+  if (!patch.fxQuality || !["eco", "live", "high", "render"].includes(patch.fxQuality)) {
+    patch.fxQuality = "live";
+  }
+  if (!patch.lowProtect || !["off", "80", "120", "200", "custom"].includes(patch.lowProtect)) {
+    patch.lowProtect = "off";
+  }
+  if (typeof patch.fxDeltaAudition !== "boolean") patch.fxDeltaAudition = false;
+  if (typeof patch.fxSharedMod !== "boolean") patch.fxSharedMod = false;
+  if (typeof patch.spectralWetOnly !== "boolean") patch.spectralWetOnly = false;
+  if (!patch.fxRoutingScene || !["serial", "driveAgePrint", "spaceCascade", "spectralTail"].includes(patch.fxRoutingScene)) {
+    patch.fxRoutingScene = "serial";
+  }
+  if (!patch.chorusModel) patch.chorusModel = "dual";
+  if (!patch.delayCascadeMode) patch.delayCascadeMode = "echo";
+  if (!patch.phaserStereo) patch.phaserStereo = "linked";
+  if (!patch.driveTonePos) patch.driveTonePos = "post";
+  if (typeof patch.driveAutoGain !== "boolean") patch.driveAutoGain = true;
+  if (typeof patch.ageMacro !== "number") patch.ageMacro = 0;
+  if (typeof patch.ageEvolve !== "number") patch.ageEvolve = 0;
+  if (typeof patch.spectralLow !== "number") patch.spectralLow = 0;
+  if (typeof patch.spectralHigh !== "number") patch.spectralHigh = 1;
+  // Mix Clarity migrations
+  if (!patch.glueMode) patch.glueMode = "glue";
+  if (!patch.masterChainScene) patch.masterChainScene = "glueAirWidth";
+  if (!patch.widthMechanism) patch.widthMechanism = "ms";
+  if (!patch.airArch) patch.airArch = "dual";
+  if (!patch.voiceSteal) patch.voiceSteal = "oldest";
+  if (!patch.ceaseMode) patch.ceaseMode = "notes";
+  if (typeof patch.mixDeltaAudition !== "boolean") patch.mixDeltaAudition = false;
+  if (typeof patch.glueMix !== "number") patch.glueMix = 1;
+  if (typeof patch.monoBelow !== "number") patch.monoBelow = 0;
+  if (typeof patch.scopeDisplayGain !== "number") patch.scopeDisplayGain = 1;
+  // Performance Clarity migrations
+  if (!patch.gateDest || (patch.gateDest !== "volume" && patch.gateDest !== "velocity")) {
+    patch.gateDest = "volume";
+  }
+  if (!patch.scaleMode || !["guide", "soft", "strict", "fold"].includes(patch.scaleMode)) {
+    patch.scaleMode = patch.scaleLock ? "soft" : "guide";
+  }
+  if (patch.scaleMode === "guide") patch.scaleLock = false;
+  else if (patch.scaleMode === "soft" || patch.scaleMode === "strict" || patch.scaleMode === "fold") {
+    patch.scaleLock = true;
+  }
+  if (!patch.scaleFollowers || typeof patch.scaleFollowers !== "object") {
+    patch.scaleFollowers = { harmony: true, chord: true, arp: true, pianoRoll: false };
+  } else {
+    patch.scaleFollowers = {
+      harmony: patch.scaleFollowers.harmony !== false,
+      chord: patch.scaleFollowers.chord !== false,
+      arp: patch.scaleFollowers.arp !== false,
+      pianoRoll: !!patch.scaleFollowers.pianoRoll,
+    };
+  }
+  if (patch.chordMode !== "builder" && patch.chordMode !== "memory") patch.chordMode = "memory";
+  if (!patch.macroResponse || !["absolute", "relative", "bipolar", "smoothed"].includes(patch.macroResponse)) {
+    patch.macroResponse = "absolute";
+  }
+  if (!patch.harmonyVoiceLead || !["parallel", "nearest", "scale"].includes(patch.harmonyVoiceLead)) {
+    patch.harmonyVoiceLead = "parallel";
+  }
+  if (typeof patch.harmonyLow !== "number") patch.harmonyLow = 36;
+  if (typeof patch.harmonyHigh !== "number") patch.harmonyHigh = 96;
+  if (typeof patch.humanizeSeed !== "number") patch.humanizeSeed = 0x4f1ce;
+  if (patch.humanizeSeedMode !== "fixed" && patch.humanizeSeedMode !== "perPlay") {
+    patch.humanizeSeedMode = "fixed";
+  }
+  if (typeof patch.humanizeProtectDownbeats !== "boolean") patch.humanizeProtectDownbeats = true;
+  if (Array.isArray(patch.gatePattern)) {
+    patch.gatePattern = patch.gatePattern.map((v) => clamp(Number(v) || 0, 0, 1));
+    while (patch.gatePattern.length < 16) patch.gatePattern.push(0);
+    patch.gatePattern = patch.gatePattern.slice(0, 16);
+  }
   return patch;
 }
 
@@ -628,6 +865,22 @@ interface PersistShape {
   signalPathOrder: string[];
   /** Performance scene slots (partial patch snapshots). */
   scenes: (Partial<FirePatch> | null)[];
+  /** Per-slot name + capture scope for Orbit Vault. */
+  sceneMeta: {
+    name: string;
+    scope: { entire: boolean; macros: boolean; fx: boolean; performance: boolean; morph: boolean };
+  }[];
+  sceneProtect: { masterGain: boolean; maxVoices: boolean };
+  sceneTransition: "immediate" | "nextBar" | "morphMs";
+  sceneMorphMs: number;
+  activeSceneSlot: number | null;
+}
+
+function defaultSceneMeta(): PersistShape["sceneMeta"] {
+  return Array.from({ length: SCENE_SLOTS }, (_, i) => ({
+    name: `Scene ${i + 1}`,
+    scope: { entire: true, macros: true, fx: true, performance: true, morph: true },
+  }));
 }
 
 function defaults(): PersistShape {
@@ -662,6 +915,11 @@ function defaults(): PersistShape {
     mutationGenealogy: [],
     signalPathOrder: [],
     scenes: Array.from({ length: SCENE_SLOTS }, () => null),
+    sceneMeta: defaultSceneMeta(),
+    sceneProtect: { masterGain: false, maxVoices: false },
+    sceneTransition: "immediate",
+    sceneMorphMs: 400,
+    activeSceneSlot: null,
   };
 }
 
@@ -742,6 +1000,34 @@ function load(): PersistShape {
       scenes: Array.isArray(parsed.scenes)
         ? Array.from({ length: SCENE_SLOTS }, (_, i) => (parsed.scenes?.[i] as Partial<FirePatch> | null) ?? null)
         : d.scenes,
+      sceneMeta: Array.isArray(parsed.sceneMeta)
+        ? Array.from({ length: SCENE_SLOTS }, (_, i) => {
+            const m = parsed.sceneMeta?.[i];
+            const base = d.sceneMeta[i]!;
+            if (!m || typeof m !== "object") return base;
+            return {
+              name: typeof m.name === "string" && m.name.trim() ? m.name.slice(0, 24) : base.name,
+              scope: {
+                entire: m.scope?.entire !== false,
+                macros: !!m.scope?.macros || m.scope?.entire !== false,
+                fx: !!m.scope?.fx || m.scope?.entire !== false,
+                performance: !!m.scope?.performance || m.scope?.entire !== false,
+                morph: !!m.scope?.morph || m.scope?.entire !== false,
+              },
+            };
+          })
+        : d.sceneMeta,
+      sceneProtect: {
+        masterGain: !!parsed.sceneProtect?.masterGain,
+        maxVoices: !!parsed.sceneProtect?.maxVoices,
+      },
+      sceneTransition:
+        parsed.sceneTransition === "nextBar" || parsed.sceneTransition === "morphMs"
+          ? parsed.sceneTransition
+          : "immediate",
+      sceneMorphMs: typeof parsed.sceneMorphMs === "number" ? Math.max(50, Math.min(4000, parsed.sceneMorphMs)) : d.sceneMorphMs,
+      activeSceneSlot:
+        typeof parsed.activeSceneSlot === "number" ? parsed.activeSceneSlot : null,
     };
   } catch {
     return defaults();
@@ -761,6 +1047,12 @@ export function slotsFromState(s: {
   return { patchA: s.patch, patchB: s.patchB };
 }
 
+/** Live DSP engine for the active Edit A/B target (meters, StageViz, gates). */
+export function activeFireEngine() {
+  const e = getEngine();
+  return useFireCommandStore.getState().editTarget === "b" ? e.fireCommandB : e.fireCommand;
+}
+
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePersist(getState: () => FireCommandState): void {
   if (typeof window === "undefined") return;
@@ -769,7 +1061,7 @@ function schedulePersist(getState: () => FireCommandState): void {
     // Read at WRITE time — a snapshot captured at schedule time silently
     // overwrote any field mutated during the debounce window.
     const state = getState();
-    const { patchA, patchB } = slotsFromState(state);
+    const { patchA, patchB } = committedSlots(state);
     const data: PersistShape & { accordionModeV2: boolean } = {
       patch: patchA,
       patchA,
@@ -799,6 +1091,11 @@ function schedulePersist(getState: () => FireCommandState): void {
       mutationGenealogy: state.mutationGenealogy,
       signalPathOrder: state.signalPathOrder,
       scenes: state.scenes,
+      sceneMeta: state.sceneMeta,
+      sceneProtect: state.sceneProtect,
+      sceneTransition: state.sceneTransition,
+      sceneMorphMs: state.sceneMorphMs,
+      activeSceneSlot: state.activeSceneSlot,
     };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -824,6 +1121,11 @@ export interface FireCommandState extends PersistShape {
   setModRoute: (index: number, partial: Partial<ModRoute>) => void;
   setGateStep: (index: number, on: boolean) => void;
   loadPreset: (id: string) => void;
+  /**
+   * Full Fire Command factory reset (Init patch A+B, mixer, performance chrome).
+   * Confirm-gated in the UI like Kill-Chain Purge.
+   */
+  resetToDefaults: () => void;
   /** Push a full patch into Synth B (factory load / project restore). */
   importPatchB: (patch: unknown, presetId?: string) => void;
   randomize: () => void;
@@ -897,6 +1199,10 @@ export interface FireCommandState extends PersistShape {
   captureScene: (slot: number) => void;
   recallScene: (slot: number) => void;
   clearScene: (slot: number) => void;
+  setSceneName: (slot: number, name: string) => void;
+  setSceneScope: (slot: number, partial: Partial<PersistShape["sceneMeta"][0]["scope"]>) => void;
+  setSceneProtect: (partial: Partial<PersistShape["sceneProtect"]>) => void;
+  setSceneTransition: (t: PersistShape["sceneTransition"], morphMs?: number) => void;
   learnChordFromHeld: () => void;
   setSignalPathOrder: (order: string[]) => void;
   clearMutationGenealogy: () => void;
@@ -954,6 +1260,130 @@ function clearLiveNoteMaps(): void {
   livePitchHeld.clear();
 }
 
+/**
+ * Harmony / chord expansions for a sequencer note on channel A or B.
+ * Shared by the live bridge and offline bounce (no ARP — arp needs wall clock).
+ */
+export function expandSequencerSynthVoices(
+  ch: 0 | 1,
+  midi: number,
+  velocity: number,
+): { midi: number; vel: number }[] {
+  const s = useFireCommandStore.getState();
+  const patch = ch === 1 ? s.patchB : s.patchA;
+  const modOn = (id: string) => patch.moduleEnable?.[id] !== false;
+  const vel = clamp(velocity, 0.05, 1);
+  const pitch = clamp(Math.round(midi), 0, 127);
+  const voices: { midi: number; vel: number }[] = [{ midi: pitch, vel }];
+  const mode = patch.harmonyMode ?? "off";
+  const followers = patch.scaleFollowers ?? { harmony: true, chord: true, arp: true, pianoRoll: false };
+  if (modOn("harmony") && mode !== "off") {
+    let comps = harmonyCompanions(pitch, mode).filter((c) => c <= 127);
+    const lo = patch.harmonyLow ?? 36;
+    const hi = patch.harmonyHigh ?? 96;
+    comps = comps.map((c) => {
+      let n = c;
+      while (n < lo) n += 12;
+      while (n > hi) n -= 12;
+      return n;
+    }).filter((c) => c >= 0 && c <= 127);
+    if (followers.harmony && modOn("scale") && (patch.scaleMode ?? (patch.scaleLock ? "soft" : "guide")) !== "guide") {
+      const seq = useFireSequencerStore.getState();
+      comps = comps.map((c) => snapMidiToScale(c, seq.scaleRoot, seq.scaleId));
+    }
+    const lvl = clamp(patch.harmonyLevel ?? 0.6, 0, 1);
+    for (const c of comps) voices.push({ midi: c, vel: vel * lvl });
+  }
+  if (modOn("chord") && patch.chordMemoryOn) {
+    const ivs = patch.chordIntervals ?? [0, 4, 7];
+    let extras = ivs
+      .filter((iv) => iv !== 0)
+      .map((iv) => pitch + iv)
+      .filter((c) => c >= 0 && c <= 127);
+    if (followers.chord && modOn("scale") && (patch.scaleMode ?? (patch.scaleLock ? "soft" : "guide")) !== "guide") {
+      const seq = useFireSequencerStore.getState();
+      extras = extras.map((c) => snapMidiToScale(c, seq.scaleRoot, seq.scaleId));
+    }
+    for (const c of extras) voices.push({ midi: c, vel: vel * 0.85 });
+  }
+  return voices;
+}
+
+/**
+ * Sequencer → synth bridge: applies the same ARP / harmony / chord paths as
+ * live MIDI `noteOn`, instead of bare `playNote` (which skipped them).
+ *
+ * Expansions come from each channel's own slot (`patchA` / `patchB`).
+ * ARP latch remains Synth-A only.
+ */
+export function scheduleSequencerSynthNote(
+  ch: 0 | 1,
+  midi: number,
+  velocity: number,
+  when: number,
+  duration: number,
+): void {
+  const engine = getEngine();
+  const target = ch === 1 ? engine.fireCommandB : engine.fireCommand;
+  const dur = Math.max(0.03, duration);
+  const vel = clamp(velocity, 0.05, 1);
+  const pitch = clamp(Math.round(midi), 0, 127);
+
+  const s = useFireCommandStore.getState();
+  const patch = ch === 1 ? s.patchB : s.patchA;
+  const modOn = (id: string) => patch.moduleEnable?.[id] !== false;
+
+  // ARP latch is Synth-A only.
+  if (ch === 0) {
+    const ctx = engine.ctx;
+    const delayMs = Math.max(0, (when - ctx.currentTime) * 1000);
+    const arpModuleOn = modOn("arp");
+
+    if (s.arp.enabled && arpModuleOn) {
+      // Feed the arp latch for the note's duration (same as holding a key).
+      // Sync arp clock to the sequencer so divisions land on the groove.
+      const seqBpm = useFireSequencerStore.getState().bpm;
+      if (Math.abs(s.arp.bpm - seqBpm) > 0.5) {
+        useFireCommandStore.setState({ arp: { ...s.arp, bpm: seqBpm } });
+      }
+      const onId = window.setTimeout(() => {
+        seqArpTimers.delete(onId);
+        const st = useFireCommandStore.getState();
+        if (!(st.arp.enabled && st.patchA.moduleEnable?.["arp"] !== false)) {
+          engine.fireCommand.playNote(pitch, vel, ctx.currentTime, dur);
+          return;
+        }
+        const freshLatch = st.arp.hold && st.heldNotes.length === 0;
+        const arpOrder = freshLatch ? [] : [...st.arpOrder];
+        if (!arpOrder.includes(pitch)) arpOrder.push(pitch);
+        const heldNotes = st.heldNotes.includes(pitch) ? st.heldNotes : [...st.heldNotes, pitch];
+        useFireCommandStore.setState({ arpOrder, heldNotes });
+        if (arpTimer === null) startArpScheduler(useFireCommandStore.getState, useFireCommandStore.setState);
+      }, delayMs);
+      const offId = window.setTimeout(() => {
+        seqArpTimers.delete(offId);
+        const st = useFireCommandStore.getState();
+        const heldNotes = st.heldNotes.filter((n) => n !== pitch);
+        const arpOrder = st.arp.hold ? st.arpOrder : st.arpOrder.filter((n) => n !== pitch);
+        useFireCommandStore.setState({ heldNotes, arpOrder });
+      }, delayMs + dur * 1000);
+      seqArpTimers.add(onId);
+      seqArpTimers.add(offId);
+      return;
+    }
+  }
+
+  for (const v of expandSequencerSynthVoices(ch, pitch, vel)) {
+    target.playNote(v.midi, v.vel, when, dur);
+  }
+}
+
+/** Cancel pending sequencer→arp latch timers (call on transport stop). */
+export function clearSequencerArpLatches(): void {
+  for (const id of seqArpTimers) clearTimeout(id);
+  seqArpTimers.clear();
+}
+
 export const SCENE_SLOTS = 8;
 
 export const useFireCommandStore = create<FireCommandState>((set, get) => {
@@ -987,22 +1417,83 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     setEditTarget: (t) => {
       const s = get();
       if (s.editTarget === t) return;
+      // Drop any mid-morph blend before committing the abandoned slot.
+      if (sceneMorphActive || padMorphActive) discardMorphBlend(get, set);
+      else cancelSceneRecall();
+      const from = get().editTarget;
       const committed = commitActive();
+      // Morph scrub / live drift lives on the engine only — snap the abandoned
+      // voice back to the committed store slot so A/B don't desync.
+      engineFor(from).setPatch(from === "b" ? committed.patchB : committed.patchA);
+      // Flush held/arp/harmony so noteOff after the switch can't miss the
+      // engine that actually sounded the note.
+      stopArpScheduler();
+      clearLiveNoteMaps();
+      getEngine().fireCommand.allNotesOff();
+      getEngine().peekFireCommandB()?.allNotesOff();
       const nextPatch = structuredClone(t === "b" ? committed.patchB : committed.patchA);
       set({
         editTarget: t,
         patch: nextPatch,
         patchA: committed.patchA,
         patchB: committed.patchB,
+        heldNotes: [],
+        arpOrder: [],
+        arpCurrent: null,
+        arpStepIndex: -1,
       });
       engineFor(t).setPatch(nextPatch);
+      // Keep sequencer Draw A/B aligned with the edit target.
+      const wantCh = t === "b" ? 1 : 0;
+      const seq = useFireSequencerStore.getState();
+      if (seq.activeChannel !== wantCh) {
+        if (t === "b" && !seq.synthBEnabled) seq.setSynthBEnabled(true);
+        useFireSequencerStore.setState({ activeChannel: wantCh });
+      }
+      // Re-arm latch arp only when editing A (arp is A-only).
+      if (t === "a" && get().arp.enabled && get().patch.moduleEnable?.["arp"] !== false) {
+        startArpScheduler(get, set);
+      }
       persist();
     },
 
     setParam: (key, value) => {
+      // Knob moves mid-morph would otherwise commit the blend into patchA/B.
+      if (sceneMorphActive || padMorphActive) discardMorphBlend(get, set);
       pushFireHistory(`param:${String(key)}`);
       const s = get();
-      const patch = { ...s.patch, [key]: value };
+      let patch = { ...s.patch, [key]: value } as FirePatch;
+      let alsoMatrix = false;
+      let alsoLfoDest: { lfo1?: LfoDest; lfo2?: LfoDest } | null = null;
+
+      // Phase 1B: keep LFO Quick Route ↔ Patch Loom matrix in sync.
+      if (key === "lfo1Dest" || key === "lfo2Dest") {
+        const lfo = key === "lfo1Dest" ? 1 : 2;
+        const depth = lfo === 1 ? patch.lfo1Depth : patch.lfo2Depth;
+        patch = {
+          ...patch,
+          modMatrix: upsertLfoQuickRoute(patch.modMatrix ?? [], lfo as 1 | 2, value as LfoDest, depth),
+        };
+        alsoMatrix = true;
+      } else if (key === "lfo1Depth" || key === "lfo2Depth") {
+        const lfo = key === "lfo1Depth" ? 1 : 2;
+        const dest = lfo === 1 ? patch.lfo1Dest : patch.lfo2Dest;
+        if (dest && dest !== "off") {
+          patch = {
+            ...patch,
+            modMatrix: upsertLfoQuickRoute(patch.modMatrix ?? [], lfo as 1 | 2, dest, value as number),
+          };
+          alsoMatrix = true;
+        }
+      } else if (key === "modMatrix") {
+        const matrix = value as ModRoute[];
+        const d1 = inferLfoDestFromMatrix(matrix, 1);
+        const d2 = inferLfoDestFromMatrix(matrix, 2);
+        alsoLfoDest = {};
+        if (d1 != null) { patch.lfo1Dest = d1; alsoLfoDest.lfo1 = d1; }
+        if (d2 != null) { patch.lfo2Dest = d2; alsoLfoDest.lfo2 = d2; }
+      }
+
       const { patchA, patchB } = commitActive(patch);
       set({
         patch,
@@ -1013,7 +1504,13 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         mutation: null,
         mutateLineage: 0,
       });
-      activeEngine().set(key, value);
+      // Prefer incremental engine.set — full setPatch rebuilds every voice bank
+      // and was a major scrub-while-playing hitch.
+      const eng = activeEngine();
+      eng.set(key, value);
+      if (alsoMatrix) eng.set("modMatrix", patch.modMatrix);
+      if (alsoLfoDest?.lfo1 != null) eng.set("lfo1Dest", alsoLfoDest.lfo1);
+      if (alsoLfoDest?.lfo2 != null) eng.set("lfo2Dest", alsoLfoDest.lfo2);
       persist();
     },
 
@@ -1033,6 +1530,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const src = factory ?? user;
       if (!src) return;
       pushFireHistory();
+      cancelSceneRecall();
       const patch = { ...DEFAULT_FIRE_PATCH, ...src.patch };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
       patch.moduleEnable = src.patch.moduleEnable
@@ -1040,10 +1538,13 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         : {};
       const s = get();
       if (s.editTarget === "b") {
+        clearLiveNoteMaps();
+        getEngine().fireCommandB.allNotesOff();
         set({
           patch,
           patchB: patch,
           presetIdB: id,
+          heldNotes: [],
         });
         getEngine().fireCommandB.setPatch(patch);
         persist();
@@ -1073,13 +1574,76 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       persist();
     },
 
+    resetToDefaults: () => {
+      pushFireHistory();
+      cancelSceneRecall();
+      clearLiveNoteMaps();
+      stopArpScheduler();
+      const patchA = normalizePatch({});
+      const patchB = defaultPatchB();
+      const eng = getEngine();
+      eng.fireCommand.allNotesOff();
+      eng.peekFireCommandB()?.allNotesOff();
+      eng.fireCommand.setPatch(patchA);
+      eng.fireCommandB.setPatch(patchB);
+      const d = defaults();
+      set({
+        patch: structuredClone(patchA),
+        patchA,
+        patchB,
+        presetId: "init",
+        presetIdB: "hyperspace",
+        editTarget: "a",
+        octave: 4,
+        routeThroughFx: true,
+        arp: { ...DEFAULT_ARP, enabled: false },
+        arpOrder: [],
+        arpCurrent: null,
+        arpStepIndex: -1,
+        heldNotes: [],
+        keyboardMode: "full",
+        fireUiDensity: "studio",
+        fireUiDensityBeforeFocus: "studio",
+        labelMode: "both",
+        moduleLocks: {},
+        accordionMode: false,
+        pinnedModules: [],
+        maxVoices: 12,
+        mutateAmount: 0.35,
+        mutation: null,
+        mutateLineage: 0,
+        mutationGenealogy: [],
+        signalPathOrder: [],
+        scenes: Array.from({ length: SCENE_SLOTS }, () => null),
+        sceneMeta: defaultSceneMeta(),
+        sceneProtect: { masterGain: false, maxVoices: false },
+        sceneTransition: "immediate",
+        sceneMorphMs: 400,
+        activeSceneSlot: null,
+        kbdVelGain: d.kbdVelGain,
+        kbdVelCurve: d.kbdVelCurve,
+        kbdDelayMs: d.kbdDelayMs,
+        kbdAttackMs: d.kbdAttackMs,
+      });
+      // Sequencer / piano roll / arrangement / mixer — full blank project.
+      void import("@/state/fireSequencerStore").then((m) => {
+        m.useFireSequencerStore.getState().resetProjectDefaults();
+      });
+      persist();
+    },
+
     importPatchB: (rawPatch, presetId) => {
       pushFireHistory();
       const patch = normalizePatch(rawPatch as Partial<FirePatch>);
       const presetIdB = presetId ?? "custom";
       const s = get();
+      clearLiveNoteMaps();
+      getEngine().fireCommandB.allNotesOff();
       const partial: Partial<FireCommandState> = { patchB: patch, presetIdB };
-      if (s.editTarget === "b") partial.patch = patch;
+      if (s.editTarget === "b") {
+        partial.patch = patch;
+        partial.heldNotes = [];
+      }
       set(partial);
       getEngine().fireCommandB.setPatch(patch);
       persist();
@@ -1191,11 +1755,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     importPatch: (rawPatch, rawArp) => {
-      if (get().editTarget === "b") {
-        get().importPatchB(rawPatch);
-        return;
-      }
+      // Always load into Synth A (+ arp). Never redirect to B — that broke
+      // .kcproj open while Edit B was active (A/arp never applied).
       pushFireHistory();
+      cancelSceneRecall();
+      padMorphActive = false;
       const patch = { ...DEFAULT_FIRE_PATCH, ...(rawPatch as Partial<FirePatch>) };
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
       patch.moduleEnable = (rawPatch as Partial<FirePatch>)?.moduleEnable
@@ -1205,23 +1769,39 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
         : { ...DEFAULT_ARP, enabled: false };
       stopArpScheduler();
-      set({
-        patch,
-        patchA: patch,
-        presetId: "custom",
-        arp,
-        heldNotes: [],
-        arpOrder: [],
-        arpCurrent: null,
-        arpStepIndex: -1,
-        mutation: null,
-        mutateLineage: 0,
-      });
-      const fc = getEngine().fireCommand;
       clearLiveNoteMaps();
+      const s = get();
+      if (s.editTarget === "b") {
+        // Keep editing B — only replace slot A / arp.
+        set({
+          patchA: patch,
+          presetId: "custom",
+          arp,
+          heldNotes: [],
+          arpOrder: [],
+          arpCurrent: null,
+          arpStepIndex: -1,
+          mutation: null,
+          mutateLineage: 0,
+        });
+      } else {
+        set({
+          patch,
+          patchA: patch,
+          presetId: "custom",
+          arp,
+          heldNotes: [],
+          arpOrder: [],
+          arpCurrent: null,
+          arpStepIndex: -1,
+          mutation: null,
+          mutateLineage: 0,
+        });
+      }
+      const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
-      if (arp.enabled) startArpScheduler(get, set);
+      if (arp.enabled && get().editTarget === "a") startArpScheduler(get, set);
       persist();
     },
 
@@ -1258,11 +1838,14 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
     applyMorphPatch: (patch, commit) => {
       if (!commit) {
-        // Scrub path: push only dirty numeric (and changed discrete) keys so we
-        // don't rebuild the whole engine graph at 60 Hz via setPatch.
+        // Scrub: mirror into live `patch` so UI/knobs match the engine, but do
+        // not commit into patchA/B until pointer-up (same as scene morph).
+        padMorphActive = true;
+        set({ patch });
         activeEngine().applyLiveMorph(patch);
         return;
       }
+      padMorphActive = false;
       const s = get();
       const cloned = structuredClone(patch);
       const { patchA, patchB } = commitActive(cloned);
@@ -1283,10 +1866,13 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
       const s = get();
       if (s.editTarget === "b") {
+        clearLiveNoteMaps();
+        getEngine().fireCommandB.allNotesOff();
         set({
           patch,
           patchB: patch,
           presetIdB: "custom",
+          heldNotes: [],
         });
         getEngine().fireCommandB.setPatch(patch);
         persist();
@@ -1327,7 +1913,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         arp: { ...s.arp },
         createdAt: Date.now(),
       };
-      set({ userPresets: [...s.userPresets, preset], presetId: id });
+      set({
+        userPresets: [...s.userPresets, preset],
+        ...(s.editTarget === "b" ? { presetIdB: id } : { presetId: id }),
+      });
       persist();
       return id;
     },
@@ -1338,6 +1927,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       set({
         userPresets: s.userPresets.filter((p) => p.id !== id),
         presetId: s.presetId === id ? "custom" : s.presetId,
+        presetIdB: s.presetIdB === id ? "custom" : s.presetIdB,
       });
       persist();
     },
@@ -1368,9 +1958,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         void import("@/lib/sourceArbiter").then(({ claimSource }) => claimSource("fire"));
       }
       const shapedVel = shapeLiveVelocity(velocity, s.kbdVelGain, s.kbdVelCurve);
-      useFireSequencerStore.getState().recordNoteOn(midi, shapedVel);
+      // ARP is A-only. When editing B, skip the latch so keys audition B dry.
       const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
-      if (s.arp.enabled && arpModuleOn) {
+      if (s.editTarget === "a" && s.arp.enabled && arpModuleOn) {
+        useFireSequencerStore.getState().recordNoteOn(midi, shapedVel);
         const freshLatch = s.arp.hold && s.heldNotes.length === 0;
         const arpOrder = freshLatch ? [] : [...s.arpOrder];
         if (!arpOrder.includes(midi)) arpOrder.push(midi);
@@ -1379,42 +1970,104 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         if (arpTimer === null) startArpScheduler(get, set);
         return;
       }
-      const engine = getEngine();
-      void engine.resume();
+      void getEngine().resume();
+      const eng = activeEngine();
       const modOn = (id: string) => s.patch.moduleEnable?.[id] !== false;
 
       let playMidi = midi;
-      if (modOn("scale") && s.patch.scaleLock) {
+      const scaleMode = s.patch.scaleMode ?? (s.patch.scaleLock ? "soft" : "guide");
+      if (modOn("scale") && scaleMode !== "guide") {
         const seq = useFireSequencerStore.getState();
-        playMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
+        if (scaleMode === "strict") {
+          // Reject before record — out-of-scale presses must not land in the roll.
+          if (!inScale(midi, seq.scaleRoot, seq.scaleId)) return;
+          playMidi = midi;
+        } else if (scaleMode === "fold") {
+          const snapped = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
+          // Prefer snap in the direction of the press (up if above snap, else down).
+          playMidi = snapped;
+          if (snapped < midi) {
+            const up = snapMidiToScale(midi + 1, seq.scaleRoot, seq.scaleId);
+            if (Math.abs(up - midi) < Math.abs(snapped - midi)) playMidi = up;
+          }
+        } else {
+          playMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
+        }
       }
+      useFireSequencerStore.getState().recordNoteOn(midi, shapedVel);
       livePitchHeld.set(midi, playMidi);
 
       let playVel = shapedVel;
       if (modOn("human") && s.patch.humanizeOn) {
+        const seed = (s.patch.humanizeSeed ?? 0x4f1ce) ^ (midi * 2654435761);
+        const rnd = () => {
+          let t = (seed + Math.floor(performance.now() * 0.01)) >>> 0;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
         const j = (s.patch.humanizeVelocity ?? 0.2) * 0.35;
-        playVel = clamp(shapedVel * (1 + (Math.random() * 2 - 1) * j), 0.05, 1);
+        playVel = clamp(shapedVel * (1 + (rnd() * 2 - 1) * j), 0.05, 1);
       }
 
-      const when = liveWhen(s.kbdDelayMs);
+      // Gate → velocity destination (use the engine that will sound the note)
+      if (
+        modOn("gate")
+        && s.patch.gateOn
+        && (s.patch.gateDest ?? "volume") === "velocity"
+      ) {
+        try {
+          const step = eng.getGateStep();
+          const openAmt = clamp(s.patch.gatePattern[step] ?? 1, 0, 1);
+          const cut = s.patch.gateDepth * (1 - openAmt);
+          playVel = clamp(playVel * (1 - cut), 0.05, 1);
+        } catch { /* ignore */ }
+      }
+
+      const timingJitterMs =
+        modOn("human") && s.patch.humanizeOn
+          ? (s.patch.humanizeTiming ?? 0) * 28 * ((Math.random() * 2) - 1)
+          : 0;
+      const when = liveWhen(s.kbdDelayMs + timingJitterMs);
       const attackSec = clamp(s.kbdAttackMs, 1, 80) / 1000;
-      engine.fireCommand.noteOn(playMidi, playVel, when, attackSec);
+      eng.noteOn(playMidi, playVel, when, attackSec);
 
       const mode = s.patch.harmonyMode ?? "off";
+      const followers = s.patch.scaleFollowers ?? { harmony: true, chord: true, arp: true, pianoRoll: false };
       if (modOn("harmony") && mode !== "off" && !harmonyHeld.has(midi)) {
-        const comps = harmonyCompanions(playMidi, mode).filter((c) => c <= 127);
+        let comps = harmonyCompanions(playMidi, mode).filter((c) => c <= 127);
+        const lo = s.patch.harmonyLow ?? 36;
+        const hi = s.patch.harmonyHigh ?? 96;
+        comps = comps.map((c) => {
+          let n = c;
+          while (n < lo) n += 12;
+          while (n > hi) n -= 12;
+          return n;
+        }).filter((c) => c >= 0 && c <= 127);
+        if (followers.harmony && modOn("scale") && scaleMode !== "guide") {
+          const seq = useFireSequencerStore.getState();
+          comps = comps.map((c) => snapMidiToScale(c, seq.scaleRoot, seq.scaleId));
+        }
         const lvl = clamp(s.patch.harmonyLevel ?? 0.6, 0, 1);
-        for (const c of comps) engine.fireCommand.noteOn(c, playVel * lvl, when, attackSec);
+        for (const c of comps) eng.noteOn(c, playVel * lvl, when, attackSec);
         harmonyHeld.set(midi, comps);
       }
 
-      if (modOn("chord") && s.patch.chordMemoryOn && !chordHeld.has(midi)) {
+      const chordArmed =
+        (s.patch.chordMode ?? "memory") === "memory"
+          ? s.patch.chordMemoryOn
+          : s.patch.chordMemoryOn; // builder still fires intervals when armed
+      if (modOn("chord") && chordArmed && !chordHeld.has(midi)) {
         const ivs = s.patch.chordIntervals ?? [0, 4, 7];
-        const extras = ivs
+        let extras = ivs
           .filter((iv) => iv !== 0)
           .map((iv) => playMidi + iv)
           .filter((c) => c >= 0 && c <= 127);
-        for (const c of extras) engine.fireCommand.noteOn(c, playVel * 0.85, when, attackSec);
+        if (followers.chord && modOn("scale") && scaleMode !== "guide") {
+          const seq = useFireSequencerStore.getState();
+          extras = extras.map((c) => snapMidiToScale(c, seq.scaleRoot, seq.scaleId));
+        }
+        for (const c of extras) eng.noteOn(c, playVel * 0.85, when, attackSec);
         chordHeld.set(midi, extras);
       }
 
@@ -1425,13 +2078,13 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const s = get();
       useFireSequencerStore.getState().recordNoteOff(midi);
       const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
-      if (s.arp.enabled && arpModuleOn) {
+      if (s.editTarget === "a" && s.arp.enabled && arpModuleOn) {
         const heldNotes = s.heldNotes.filter((n) => n !== midi);
         const arpOrder = s.arp.hold ? s.arpOrder : s.arpOrder.filter((n) => n !== midi);
         set({ heldNotes, arpOrder });
         return;
       }
-      const engine = getEngine();
+      const eng = activeEngine();
       const when = liveWhen(s.kbdDelayMs);
       const offMidi = livePitchHeld.get(midi) ?? (() => {
         if (s.patch.moduleEnable?.["scale"] !== false && s.patch.scaleLock) {
@@ -1441,17 +2094,17 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         return midi;
       })();
       livePitchHeld.delete(midi);
-      engine.fireCommand.noteOff(offMidi, when);
-      if (offMidi !== midi) engine.fireCommand.noteOff(midi, when);
+      eng.noteOff(offMidi, when);
+      if (offMidi !== midi) eng.noteOff(midi, when);
       const comps = harmonyHeld.get(midi);
       if (comps) {
         harmonyHeld.delete(midi);
-        for (const c of comps) engine.fireCommand.noteOff(c, when);
+        for (const c of comps) eng.noteOff(c, when);
       }
       const chord = chordHeld.get(midi);
       if (chord) {
         chordHeld.delete(midi);
-        for (const c of chord) engine.fireCommand.noteOff(c, when);
+        for (const c of chord) eng.noteOff(c, when);
       }
       set({ heldNotes: s.heldNotes.filter((n) => n !== midi) });
     },
@@ -1464,7 +2117,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       engine.peekFireCommandB()?.allNotesOff();
       set({ heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
       // Re-arm latch arp if still enabled (empty order parks until next note).
-      if (get().arp.enabled && get().patch.moduleEnable?.["arp"] !== false) {
+      if (
+        get().editTarget === "a"
+        && get().arp.enabled
+        && get().patch.moduleEnable?.["arp"] !== false
+      ) {
         startArpScheduler(get, set);
       }
     },
@@ -1476,7 +2133,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       getEngine().fireCommand.allNotesOff();
       getEngine().peekFireCommandB()?.allNotesOff();
       set({ octave: o, heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
-      if (get().arp.enabled && get().patch.moduleEnable?.["arp"] !== false) {
+      if (
+        get().editTarget === "a"
+        && get().arp.enabled
+        && get().patch.moduleEnable?.["arp"] !== false
+      ) {
         startArpScheduler(get, set);
       }
       persist();
@@ -1518,7 +2179,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       }
       set({ arp, arpOrder });
       if (arp.enabled && !prev.enabled) {
-        startArpScheduler(get, set);
+        if (get().editTarget === "a") startArpScheduler(get, set);
       } else if (!arp.enabled && prev.enabled) {
         stopArpScheduler();
         getEngine().fireCommand.allNotesOff();
@@ -1602,8 +2263,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       engine.fireCommandB.setMaxVoices(s.maxVoices);
       engine.fireCommand.setPatch(patchA);
       engine.fireCommandB.setPatch(patchB);
+      const bpm = useFireSequencerStore.getState().bpm;
+      engine.fireCommand.setHostBpm(bpm);
+      engine.fireCommandB.setHostBpm(bpm);
       useAudioStore.getState().setBypass(!s.routeThroughFx);
-      if (s.arp.enabled) startArpScheduler(get, set);
+      if (s.arp.enabled && s.editTarget === "a") startArpScheduler(get, set);
     },
 
     setModuleEnable: (moduleId, on) => {
@@ -1631,9 +2295,41 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
     captureScene: (slot) => {
       const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
-      const scenes = [...get().scenes];
-      scenes[i] = { ...get().patch, moduleEnable: { ...(get().patch.moduleEnable ?? {}) } };
-      set({ scenes });
+      const st = get();
+      const meta = st.sceneMeta[i] ?? defaultSceneMeta()[i]!;
+      const full = { ...st.patch, moduleEnable: { ...(st.patch.moduleEnable ?? {}) } };
+      let snap: Partial<FirePatch> = full;
+      if (!meta.scope.entire) {
+        snap = { moduleEnable: full.moduleEnable };
+        const take = (keys: (keyof FirePatch)[]) => {
+          for (const k of keys) (snap as Record<string, unknown>)[k] = full[k];
+        };
+        if (meta.scope.macros) take(["macro1", "macro2", "macro3", "macro4", "macroResponse", "modMatrix"]);
+        if (meta.scope.fx) {
+          take([
+            "drive", "driveBias", "driveInGain", "driveOutGain", "crush", "punch",
+            "ageMacro", "ageEvolve", "cassetteGen", "tapeSpeed", "wowFlutter", "vhsColor",
+            "chorusMix", "phaserMix", "delayMix", "reverbMix",
+            "spectralMix", "spectralMode", "fxRoutingScene",
+          ] as (keyof FirePatch)[]);
+        }
+        if (meta.scope.performance) {
+          take([
+            "gateOn", "gateRate", "gateDepth", "gateSteps", "gatePattern", "gateSmooth", "gateDest",
+            "harmonyMode", "harmonyLevel", "harmonyVoiceLead", "harmonyLow", "harmonyHigh",
+            "scaleLock", "scaleMode", "scaleFollowers",
+            "chordMemoryOn", "chordMode", "chordIntervals",
+            "humanizeOn", "humanizeTiming", "humanizeVelocity", "humanizeSeed", "humanizeSeedMode",
+            "humanizeProtectDownbeats",
+          ] as (keyof FirePatch)[]);
+        }
+        if (meta.scope.morph) {
+          take(["fmVectorX", "fmVectorY", "fmVectorCorners"] as (keyof FirePatch)[]);
+        }
+      }
+      const scenes = [...st.scenes];
+      scenes[i] = snap;
+      set({ scenes, activeSceneSlot: i });
       persist();
     },
 
@@ -1642,32 +2338,123 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const snap = get().scenes[i];
       if (!snap) return;
       pushFireHistory(`scene:${i}`);
-      const s = get();
-      const patch = {
-        ...DEFAULT_FIRE_PATCH,
-        ...s.patch,
-        ...snap,
-        moduleEnable: { ...(snap.moduleEnable ?? s.patch.moduleEnable ?? {}) },
+      // Cancel any in-flight morph / next-bar recall so recalls don't stack.
+      cancelSceneRecall();
+      const morphGen = ++sceneMorphGen;
+      const apply = () => {
+        if (morphGen !== sceneMorphGen) return;
+        sceneMorphActive = false;
+        sceneRecallTimer = null;
+        const cur = get();
+        const protect = cur.sceneProtect;
+        // Prefer committed slots as the base — mid-morph `patch` may still be blended
+        // if we landed here from the final morph tick.
+        const base = cur.editTarget === "b" ? cur.patchB : cur.patchA;
+        const patch = {
+          ...DEFAULT_FIRE_PATCH,
+          ...base,
+          ...snap,
+          moduleEnable: { ...(snap.moduleEnable ?? base.moduleEnable ?? {}) },
+        };
+        if (protect.masterGain) patch.masterGain = base.masterGain;
+        patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+        const normalized = normalizePatch(patch);
+        const { patchA, patchB } = commitActive(normalized);
+        set({
+          patch: normalized,
+          patchA,
+          patchB,
+          presetId: cur.editTarget === "a" ? "custom" : cur.presetId,
+          presetIdB: cur.editTarget === "b" ? "custom" : cur.presetIdB,
+          mutation: cur.editTarget === "a" ? null : cur.mutation,
+          activeSceneSlot: i,
+        });
+        activeEngine().setPatch(normalized);
+        persist();
       };
-      patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-      const { patchA, patchB } = commitActive(patch);
-      set({
-        patch,
-        patchA,
-        patchB,
-        presetId: s.editTarget === "a" ? "custom" : s.presetId,
-        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
-        mutation: s.editTarget === "a" ? null : s.mutation,
-      });
-      activeEngine().setPatch(patch);
-      persist();
+      const mode = get().sceneTransition;
+      if (mode === "morphMs") {
+        const ms = get().sceneMorphMs || 400;
+        const steps = 8;
+        let n = 0;
+        const from = { ...(get().editTarget === "b" ? get().patchB : get().patchA) };
+        sceneMorphActive = true;
+        const tick = () => {
+          if (morphGen !== sceneMorphGen) return;
+          n++;
+          const t = n / steps;
+          const blended = { ...from } as FirePatch & Record<string, unknown>;
+          for (const key of Object.keys(snap) as (keyof FirePatch)[]) {
+            const a = from[key];
+            const b = snap[key];
+            if (typeof a === "number" && typeof b === "number") {
+              blended[key as string] = a + (b - a) * t;
+            } else if (t >= 1) {
+              blended[key as string] = b;
+            }
+          }
+          if (n >= steps) {
+            apply();
+          } else {
+            const mid = normalizePatch(blended);
+            // Scrub engine + UI patch; commit slots only on final apply so a
+            // mid-morph setParam isn't fighting half-written patchA/patchB.
+            set({ patch: mid });
+            activeEngine().applyLiveMorph(mid);
+            sceneRecallTimer = setTimeout(tick, ms / steps);
+          }
+        };
+        tick();
+        return;
+      }
+      if (mode === "nextBar") {
+        const bpm = useFireSequencerStore.getState().bpm || 120;
+        const wait = (60 / bpm) * 4 * 1000;
+        sceneRecallTimer = setTimeout(() => {
+          sceneRecallTimer = null;
+          apply();
+        }, wait);
+        return;
+      }
+      apply();
     },
 
     clearScene: (slot) => {
       const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
       const scenes = [...get().scenes];
       scenes[i] = null;
-      set({ scenes });
+      set({ scenes, activeSceneSlot: get().activeSceneSlot === i ? null : get().activeSceneSlot });
+      persist();
+    },
+
+    setSceneName: (slot, name) => {
+      const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
+      const sceneMeta = [...get().sceneMeta];
+      const cur = sceneMeta[i] ?? defaultSceneMeta()[i]!;
+      sceneMeta[i] = { ...cur, name: name.trim().slice(0, 24) || cur.name };
+      set({ sceneMeta });
+      persist();
+    },
+
+    setSceneScope: (slot, partial) => {
+      const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
+      const sceneMeta = [...get().sceneMeta];
+      const cur = sceneMeta[i] ?? defaultSceneMeta()[i]!;
+      sceneMeta[i] = { ...cur, scope: { ...cur.scope, ...partial } };
+      set({ sceneMeta });
+      persist();
+    },
+
+    setSceneProtect: (partial) => {
+      set({ sceneProtect: { ...get().sceneProtect, ...partial } });
+      persist();
+    },
+
+    setSceneTransition: (t, morphMs) => {
+      set({
+        sceneTransition: t,
+        ...(typeof morphMs === "number" ? { sceneMorphMs: Math.max(50, Math.min(4000, morphMs)) } : {}),
+      });
       persist();
     },
 
@@ -1695,9 +2482,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 registerFireHistoryProvider("fireCommand", {
   capture: () => {
     const s = useFireCommandStore.getState();
-    const { patchA, patchB } = slotsFromState(s);
-    // Omit userPresets — they are not undoable edits and cloning the full
-    // user bank on every knob coalescence is the main history cost spike.
+    const { patchA, patchB } = committedSlots(s);
     return {
       patch: patchA,
       patchA,
@@ -1740,7 +2525,14 @@ registerFireHistoryProvider("fireCommand", {
     engine.fireCommandB.setPatch(patchB);
     engine.fireCommand.setMaxVoices(s.maxVoices);
     engine.fireCommandB.setMaxVoices(s.maxVoices);
-    if (s.arp.enabled) {
+    // Keep sequencer Draw A/B aligned with restored edit target.
+    const wantCh = editTarget === "b" ? 1 : 0;
+    const seq = useFireSequencerStore.getState();
+    if (seq.activeChannel !== wantCh) {
+      if (editTarget === "b" && !seq.synthBEnabled) seq.setSynthBEnabled(true);
+      useFireSequencerStore.setState({ activeChannel: wantCh });
+    }
+    if (s.arp.enabled && editTarget === "a") {
       startArpScheduler(
         useFireCommandStore.getState,
         (p) => useFireCommandStore.setState(p),

@@ -84,6 +84,8 @@ export function PitchStageViz() {
   const time = useFireCommandStore((s) => s.patch.pitchEnvTime) ?? 0.2;
   const glide = useFireCommandStore((s) => s.patch.glide) ?? 0;
   const mono = useFireCommandStore((s) => s.patch.mono) ?? false;
+  const glideMode = useFireCommandStore((s) => s.patch.glideMode) ?? "legato";
+  const glideCurve = useFireCommandStore((s) => s.patch.glideCurve) ?? "exp";
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -93,18 +95,18 @@ export function PitchStageViz() {
   const strikeRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef({ amt, time, glide, mono });
-  st.current = { amt, time, glide, mono };
+  const st = useRef({ amt, time, glide, mono, glideMode, glideCurve });
+  st.current = { amt, time, glide, mono, glideMode, glideCurve };
 
   const live = Math.abs(amt) > 0.5 || glide > 0.02;
 
   useEffect(() => {
-    const key = `${amt}|${time.toFixed(3)}|${glide.toFixed(3)}|${mono}`;
+    const key = `${amt}|${time.toFixed(3)}|${glide.toFixed(3)}|${mono}|${glideMode}|${glideCurve}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [amt, time, glide, mono]);
+  }, [amt, time, glide, mono, glideMode, glideCurve]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -246,10 +248,15 @@ export function PitchStageViz() {
         }
       }
 
-      // Pitch envelope contour (strike → decay to 0)
+      // Pitch envelope contour (MIDI note-on strike → decay) — left zone
       const peakY = mid - (p.amt / 48) * ladderSpan * 1.05;
       const decayX = railL + 20 + timeN * (railR * 0.45 - railL);
       const envCol = dir > 0 ? C_UP : dir < 0 ? C_DN : C_MID;
+
+      ctx.font = "800 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_AMT, 0.7);
+      ctx.textAlign = "left";
+      ctx.fillText("PITCH ENV · MIDI", railL, 22);
 
       if (Math.abs(p.amt) > 0.5) {
         ctx.beginPath();
@@ -301,12 +308,19 @@ export function PitchStageViz() {
         ctx.shadowBlur = 0;
       }
 
-      // Portamento / poly zone (right)
+      // Portamento / glide zone (right) — separate from pitch env
       const gStartX = W * 0.58;
       const gStartY = mid + 16;
       const gLen = 36 + p.glide * 100;
       const gEndX = Math.min(W - 20, gStartX + gLen);
       const gEndY = mid - 10 - p.glide * 8;
+      const modeTag = String(p.glideMode ?? "legato").toUpperCase();
+      const curveTag = String(p.glideCurve ?? "exp").toUpperCase();
+
+      ctx.font = "800 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_GLIDE, 0.75);
+      ctx.textAlign = "left";
+      ctx.fillText(`GLIDE · ${modeTag} · ${curveTag}`, gStartX - 4, 22);
 
       if (p.mono) {
         // Mono comet
@@ -347,7 +361,7 @@ export function PitchStageViz() {
         ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
         ctx.fillStyle = hexAlpha(C_GLIDE, 0.85);
         ctx.textAlign = "left";
-        ctx.fillText("MONO COMET", gStartX - 4, Hh * 0.72);
+        ctx.fillText(`MONO · ${modeTag}`, gStartX - 4, Hh * 0.72);
       } else {
         // Poly discrete notes
         for (let v = 0; v < 5; v++) {
@@ -456,7 +470,11 @@ export function PitchStageViz() {
       ctx.fillStyle = hexAlpha(C_GLIDE, 0.8);
       ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText(p.mono ? "GLIDE · PORTAMENTO" : "GLIDE · (arm mono)", 14, railY - 3);
+      ctx.fillText(
+        p.mono ? `GLIDE · ${modeTag} · ${curveTag}` : `GLIDE · (arm mono) · ${curveTag}`,
+        14,
+        railY - 3,
+      );
 
       ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
@@ -465,19 +483,19 @@ export function PitchStageViz() {
       ctx.textAlign = "right";
       const status = !isLive
         ? p.mono
-          ? "MONO · IDLE"
+          ? `MONO · ${modeTag} · IDLE`
           : "POLY · IDLE"
-        : `${p.amt > 0 ? "+" : ""}${Math.round(p.amt)}st · ${p.time < 1 ? `${Math.round(p.time * 1000)}ms` : `${p.time.toFixed(2)}s`}${p.glide > 0.02 ? ` · G${Math.round(p.glide * 100)}` : ""}`;
+        : `ENV ${p.amt > 0 ? "+" : ""}${Math.round(p.amt)}st/${p.time < 1 ? `${Math.round(p.time * 1000)}ms` : `${p.time.toFixed(2)}s`}${p.glide > 0.02 ? ` · G${Math.round(p.glide * 100)} ${curveTag}` : ""}`;
       ctx.fillStyle = hexAlpha(isLive ? C_HOT : C_MID, 0.88);
       ctx.fillText(status, W - 12, Hh - 2);
     
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: Math.abs(st.current.amt ?? 0) > 0.01 || (st.current.glide ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -518,7 +536,7 @@ export function PitchStageViz() {
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
         style={{ color: hexAlpha(mono ? C_GLIDE : C_MID, 0.78) }}
       >
-        {mono ? "MONO" : "POLY"}
+        {mono ? `${glideMode} · ${glideCurve}` : "POLY"}
       </div>
     </div>
   );

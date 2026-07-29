@@ -163,6 +163,23 @@ export class AudioEngine {
   /** Fire master limiter — glue/safety on the summed Fire output. */
   private readonly fireLimiter: DynamicsCompressorNode;
   private fireLimiterEnabled = true;
+  /** Master listen dim (−12 dB) multiplier applied on top of master fader. */
+  private fireDimOn = false;
+  /** Master mono-fold listen (true mid collapse after bus clip). */
+  private fireMonoOn = false;
+  private readonly fireMonoIn: GainNode;
+  private readonly fireMonoSplit: ChannelSplitterNode;
+  private readonly fireMonoMid: GainNode;
+  private readonly fireMonoMerge: ChannelMergerNode;
+  private readonly fireStereoPass: GainNode;
+  /** Per-part input trim (pre-fader), linear 0..2 — applied in setFirePartMix. */
+  private readonly firePartTrimGain: Record<FireMixPart, number>;
+  private fireMasterLevel = 1;
+  private fireMasterMuted = false;
+  /** Duck envelope extras (attack/hold/HPF are host-side approximations). */
+  private duckAttackSec = 0.005;
+  private duckHoldSec = 0;
+  private duckHpfHz = 0;
 
   readonly analyserPost: AnalyserNode;
   readonly analyserPre: AnalyserNode;
@@ -314,7 +331,24 @@ export class AudioEngine {
     this.fireBus.connect(this.fireMasterGain);
     this.fireMasterGain.connect(this.fireLimiter);
     this.fireLimiter.connect(this.fireBusPad);
-    this.fireBusPad.connect(this.fireBusClip).connect(this.inputBus);
+    this.fireBusPad.connect(this.fireBusClip);
+    // Post-clip: stereo pass OR mono-fold → inputBus; fireTap always post-clip.
+    this.fireStereoPass = this.ctx.createGain();
+    this.fireMonoIn = this.ctx.createGain();
+    this.fireMonoSplit = this.ctx.createChannelSplitter(2);
+    this.fireMonoMid = this.ctx.createGain();
+    this.fireMonoMid.gain.value = 0.5;
+    this.fireMonoMerge = this.ctx.createChannelMerger(2);
+    this.fireBusClip.connect(this.fireStereoPass);
+    this.fireStereoPass.connect(this.inputBus);
+    this.fireBusClip.connect(this.fireMonoIn);
+    this.fireMonoIn.gain.value = 0;
+    this.fireMonoIn.connect(this.fireMonoSplit);
+    this.fireMonoSplit.connect(this.fireMonoMid, 0);
+    this.fireMonoSplit.connect(this.fireMonoMid, 1);
+    this.fireMonoMid.connect(this.fireMonoMerge, 0, 0);
+    this.fireMonoMid.connect(this.fireMonoMerge, 0, 1);
+    this.fireMonoMerge.connect(this.inputBus);
     // Clean tap of the summed synth+drums (post-clipper, pre-chain) — the
     // Fire Command WAV export records from here.
     this.fireTap = this.ctx.createGain();
@@ -328,6 +362,7 @@ export class AudioEngine {
       return { gain, pan };
     };
     this.firePart = { a: mkPart(), b: mkPart(), drums: mkPart(), samples: mkPart() };
+    this.firePartTrimGain = { a: 1, b: 1, drums: 1, samples: 1 };
     // Sidechain ducks Synth A only — bass/808s on Synth B stay solid.
     this.fireDuck = this.ctx.createGain();
     this.firePart.a.pan.connect(this.fireDuck);
@@ -363,21 +398,43 @@ export class AudioEngine {
 
   // ────────── Fire Command mixer (v1.6) ──────────
 
-  /** Set one part strip: level (0..1.5), pan (-1..1), effective mute. */
+  /** Set one part strip: level (0..1.5), pan (-1..1), effective mute. Trim is pre-fader. */
   setFirePartMix(part: FireMixPart, level: number, pan: number, muted: boolean): void {
     const p = this.firePart[part];
     const t = this.ctx.currentTime;
-    p.gain.gain.setTargetAtTime(muted ? 0 : Math.max(0, Math.min(1.5, level)), t, 0.02);
+    const trim = this.firePartTrimGain[part] ?? 1;
+    const g = muted ? 0 : Math.max(0, Math.min(1.5, level)) * Math.max(0, Math.min(2, trim));
+    p.gain.gain.setTargetAtTime(g, t, 0.02);
     p.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), t, 0.02);
   }
 
-  /** Fire master fader (pre-limiter). */
+  /** Per-part input trim (0..2, 1 = unity). Re-apply via setFirePartMix. */
+  setFirePartTrim(part: FireMixPart, trim: number): void {
+    this.firePartTrimGain[part] = Math.max(0, Math.min(2, trim));
+  }
+
+  /** Fire master fader (pre-limiter). Dim applies −12 dB listen cut. */
   setFireMasterMix(level: number, muted: boolean): void {
+    this.fireMasterLevel = level;
+    this.fireMasterMuted = muted;
+    const dim = this.fireDimOn ? 0.25 : 1;
     this.fireMasterGain.gain.setTargetAtTime(
-      muted ? 0 : Math.max(0, Math.min(1.5, level)),
+      muted ? 0 : Math.max(0, Math.min(1.5, level)) * dim,
       this.ctx.currentTime,
       0.02,
     );
+  }
+
+  setFireDim(on: boolean): void {
+    this.fireDimOn = on;
+    this.setFireMasterMix(this.fireMasterLevel, this.fireMasterMuted);
+  }
+
+  setFireMono(on: boolean): void {
+    this.fireMonoOn = on;
+    const t = this.ctx.currentTime;
+    this.fireStereoPass.gain.setTargetAtTime(on ? 0 : 1, t, 0.02);
+    this.fireMonoIn.gain.setTargetAtTime(on ? 1 : 0, t, 0.02);
   }
 
   /** Toggle the Fire master limiter (the safety clipper always stays). */
@@ -389,21 +446,39 @@ export class AudioEngine {
     else this.fireMasterGain.connect(this.fireBusPad);
   }
 
+  /** Live gain reduction in dB (≤ 0). 0 when limiter bypassed. */
+  getFireLimiterReduction(): number {
+    if (!this.fireLimiterEnabled) return 0;
+    return this.fireLimiter.reduction;
+  }
+
+  isFireLimiterEnabled(): boolean {
+    return this.fireLimiterEnabled;
+  }
+
   /**
-   * Sidechain duck (v1.6): dip Synth A to `1 - amount` at `when` and ramp
-   * back to unity over `releaseSec`. Synth B bypasses the duck so bass roles
-   * stay solid while pads/leads pump.
+   * Sidechain duck (v1.6+): dip Synth A to `1 - amount` at `when` and ramp
+   * back to unity over `releaseSec`. Optional attack/hold shape the envelope.
    */
   fireDuckTrigger(when: number, amount: number, releaseSec: number): void {
     const g = this.fireDuck.gain;
     const t = Math.max(this.ctx.currentTime, when);
     const dip = Math.max(0.02, 1 - Math.max(0, Math.min(1, amount)));
-    // cancelAndHoldAtTime keeps an in-flight release ramp from snapping.
+    const atk = Math.max(0.001, this.duckAttackSec);
+    const hold = Math.max(0, this.duckHoldSec);
     const gg = g as AudioParam & { cancelAndHoldAtTime?: (t: number) => void };
     if (typeof gg.cancelAndHoldAtTime === "function") gg.cancelAndHoldAtTime(t);
     else g.cancelScheduledValues(t);
-    g.setValueAtTime(dip, t);
-    g.linearRampToValueAtTime(1, t + Math.max(0.02, releaseSec));
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(dip, t + atk);
+    g.setValueAtTime(dip, t + atk + hold);
+    g.linearRampToValueAtTime(1, t + atk + hold + Math.max(0.02, releaseSec));
+  }
+
+  setDuckEnvelope(opts: { attackSec?: number; holdSec?: number; hpfHz?: number }): void {
+    if (typeof opts.attackSec === "number") this.duckAttackSec = Math.max(0.001, Math.min(0.2, opts.attackSec));
+    if (typeof opts.holdSec === "number") this.duckHoldSec = Math.max(0, Math.min(0.4, opts.holdSec));
+    if (typeof opts.hpfHz === "number") this.duckHpfHz = Math.max(0, Math.min(500, opts.hpfHz));
   }
 
   /** Post-pan tap point for one Fire part (stems export). */

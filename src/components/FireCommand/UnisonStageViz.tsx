@@ -348,10 +348,10 @@ export function UnisonStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: (st.current.unison ?? 1) > 1,
         dragging: !!dragRef.current,
         particles: particles.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );

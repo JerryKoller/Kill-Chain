@@ -7,10 +7,12 @@ import { useEffect, useRef } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { DRUM_LANES } from "@/audio/dsp/FireDrumKit";
 import { getEngine } from "@/audio/AudioEngine";
+import { FIRE_LIMITER_CEILING_DB, fmtGrDb, peakToDbfs } from "@/audio/dsp/mixClarity";
 import {
   useFireSequencerStore,
   MIXER_PARTS,
   type MixerStripId,
+  type SoloMode,
 } from "@/state/fireSequencerStore";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
@@ -35,7 +37,7 @@ const STRIP_META: Record<MixerStripId, { label: string; short: string; color: st
 const fmtDb = (level: number) =>
   level <= 0.001 ? "-∞" : `${(20 * Math.log10(level)).toFixed(1)} dB`;
 
-type MeterEls = { fill: HTMLDivElement; peak: HTMLDivElement };
+type MeterEls = { fill: HTMLDivElement; peak: HTMLDivElement; holdDb: HTMLSpanElement };
 
 type MixChar = {
   id: string;
@@ -116,6 +118,7 @@ const MIX_CHARS: MixChar[] = [
       samples: { level: 0.5 },
       master: { level: 0.75 },
     },
+    duck: false,
   },
 ];
 
@@ -133,8 +136,16 @@ function applyMixChar(char: MixChar) {
       ...(id !== "master" && p.solo !== undefined ? { solo: p.solo } : id !== "master" ? { solo: false } : {}),
     });
   }
-  if (char.duck !== undefined) setDuck({ enabled: char.duck, amount: char.duckAmount ?? 0.6 });
+  // Behavioral scenes: Duck always enables sidechain; Quiet disables it.
+  if (char.id === "duck" || char.duck === true) {
+    setDuck({ enabled: true, amount: char.duckAmount ?? 0.7, attackMs: 6, holdMs: 30 });
+  } else if (char.duck === false || char.id === "quiet" || char.id === "unity") {
+    setDuck({ enabled: false });
+  } else if (char.duck !== undefined) {
+    setDuck({ enabled: char.duck, amount: char.duckAmount ?? 0.6 });
+  }
   if (char.limiter !== undefined) setFireLimiterOn(char.limiter);
+  else if (char.id === "unity") setFireLimiterOn(true);
 }
 
 function MixerCharacterStrip() {
@@ -190,6 +201,8 @@ function MixerQuickActions() {
   const setFireLimiterOn = useFireSequencerStore((s) => s.setFireLimiterOn);
   const duckEnabled = useFireSequencerStore((s) => s.duckEnabled);
   const setDuck = useFireSequencerStore((s) => s.setDuck);
+  const soloMode = useFireSequencerStore((s) => s.soloMode);
+  const setSoloMode = useFireSequencerStore((s) => s.setSoloMode);
   const savedRef = useRef({
     mixer: null as null | typeof mixer,
     duck: false,
@@ -197,6 +210,11 @@ function MixerQuickActions() {
   });
 
   const muted = MIXER_PARTS.every((id) => mixer[id].mute) && mixer.master.mute;
+  const soloModes: { id: SoloMode; label: string }[] = [
+    { id: "exclusive", label: "Solo" },
+    { id: "additive", label: "Add" },
+    { id: "dim", label: "Dim" },
+  ];
 
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
@@ -227,20 +245,22 @@ function MixerQuickActions() {
       >
         {muted ? "Open" : "Kill"}
       </button>
-      <button
-        type="button"
-        onClick={() => setFireLimiterOn(!fireLimiterOn)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: fireLimiterOn ? `${C_GLOW}88` : `${C}44`,
-          color: fireLimiterOn ? C_GLOW : `${C}bb`,
-          background: fireLimiterOn ? `${C}38` : `${C}14`,
-          boxShadow: fireLimiterOn ? `0 0 12px ${C}44` : undefined,
-        }}
-        title="Master limiter"
-      >
-        {fireLimiterOn ? "Lim" : "Lim○"}
-      </button>
+      {soloModes.map((m) => (
+        <button
+          key={m.id}
+          type="button"
+          onClick={() => setSoloMode(m.id)}
+          className="rounded-md border px-1.5 py-0.5 text-[9px] font-bold transition"
+          style={
+            soloMode === m.id
+              ? { borderColor: `${C_GLOW}88`, color: C_GLOW, background: `${C}30` }
+              : { borderColor: `${C}33`, color: `${C}99`, background: `${C}10` }
+          }
+          title={`Solo mode: ${m.id}`}
+        >
+          {m.label}
+        </button>
+      ))}
       <button
         type="button"
         onClick={() => setDuck({ enabled: !duckEnabled })}
@@ -267,6 +287,68 @@ function MixerQuickActions() {
   );
 }
 
+function MasterLimiterBlock() {
+  const fireLimiterOn = useFireSequencerStore((s) => s.fireLimiterOn);
+  const setFireLimiterOn = useFireSequencerStore((s) => s.setFireLimiterOn);
+  const grRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = 0;
+    const tick = (t: number) => {
+      raf = requestAnimationFrame(tick);
+      if (document.hidden || t - last < 80) return;
+      last = t;
+      if (!grRef.current) return;
+      try {
+        const gr = getEngine().getFireLimiterReduction();
+        grRef.current.textContent = `GR −${fmtGrDb(gr)}`;
+      } catch {
+        grRef.current.textContent = "GR −0.0";
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-1.5"
+      style={{
+        borderColor: fireLimiterOn ? `${C_GLOW}66` : "rgba(255,255,255,0.12)",
+        background: fireLimiterOn ? `${C}22` : "rgba(0,0,0,0.35)",
+        boxShadow: fireLimiterOn ? `0 0 14px ${C}33` : undefined,
+      }}
+    >
+      <span className="text-[8px] font-black uppercase tracking-[0.2em]" style={{ color: `${C}99` }}>
+        Master Limiter
+      </span>
+      <button
+        type="button"
+        onClick={() => setFireLimiterOn(!fireLimiterOn)}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider"
+        style={
+          fireLimiterOn
+            ? { borderColor: `${C_GLOW}88`, color: C_GLOW, background: `${C}38` }
+            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+        }
+        title="Fire bus DynamicsCompressor — one engine"
+      >
+        {fireLimiterOn ? "ON" : "OFF"}
+      </button>
+      <span className="font-mono text-[10px] text-white/55">
+        CEILING {FIRE_LIMITER_CEILING_DB.toFixed(1)}
+      </span>
+      <span ref={grRef} className="font-mono text-[10px]" style={{ color: C_GLOW }}>
+        GR −0.0
+      </span>
+      <span className="text-[9px] text-white/35" title="Soft-clip after limiter">
+        Safety clip · always on
+      </span>
+    </div>
+  );
+}
+
 function Strip({
   id,
   registerMeter,
@@ -276,20 +358,26 @@ function Strip({
 }) {
   const strip = useFireSequencerStore((s) => s.mixer[id]);
   const setMixerStrip = useFireSequencerStore((s) => s.setMixerStrip);
+  const masterDim = useFireSequencerStore((s) => s.masterDim);
+  const masterMono = useFireSequencerStore((s) => s.masterMono);
+  const setMasterDim = useFireSequencerStore((s) => s.setMasterDim);
+  const setMasterMono = useFireSequencerStore((s) => s.setMasterMono);
   const meta = STRIP_META[id];
   const isMaster = id === "master";
   const fillRef = useRef<HTMLDivElement>(null);
   const peakRef = useRef<HTMLDivElement>(null);
+  const holdDbRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    if (fillRef.current && peakRef.current) {
-      registerMeter(id, { fill: fillRef.current, peak: peakRef.current });
+    if (fillRef.current && peakRef.current && holdDbRef.current) {
+      registerMeter(id, { fill: fillRef.current, peak: peakRef.current, holdDb: holdDbRef.current });
     }
     return () => registerMeter(id, null);
   }, [id, registerMeter]);
 
   const panLabel =
     strip.pan === 0 ? "C" : strip.pan < 0 ? `L${Math.round(-strip.pan * 100)}` : `R${Math.round(strip.pan * 100)}`;
+  const trim = strip.trim ?? 1;
 
   return (
     <div
@@ -318,6 +406,24 @@ function Strip({
         {!isMaster && (
           <span className="font-mono text-[9px]" style={{ color: `${meta.color}88` }}>{panLabel}</span>
         )}
+      </div>
+
+      <div className="flex w-full flex-col items-center gap-0.5">
+        <span className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${meta.color}77` }}>Trim</span>
+        <input
+          type="range"
+          min={0}
+          max={2}
+          step={0.02}
+          value={trim}
+          onChange={(e) => setMixerStrip(id, { trim: Number(e.target.value) })}
+          onDoubleClick={() => setMixerStrip(id, { trim: 1 })}
+          className="w-full"
+          style={{ accentColor: meta.color }}
+          aria-label={`${meta.label} trim`}
+          title={`Trim ${fmtDb(trim)} — double-click unity`}
+        />
+        <span className="font-mono text-[8px]" style={{ color: `${meta.color}88` }}>{fmtDb(trim)}</span>
       </div>
 
       <div className="flex items-end gap-2">
@@ -370,6 +476,7 @@ function Strip({
       </div>
 
       <span className="font-mono text-[10px]" style={{ color: `${meta.color}aa` }}>{fmtDb(strip.level)}</span>
+      <span ref={holdDbRef} className="font-mono text-[8px] text-white/40" title="Peak hold">−∞</span>
 
       {!isMaster && (
         <div className="flex w-full flex-col items-center gap-0.5">
@@ -412,8 +519,32 @@ function Strip({
                 ? { borderColor: `${C_GLOW}88`, background: `${C}35`, color: C_GLOW, boxShadow: `0 0 12px ${C}44` }
                 : { borderColor: `${meta.color}33`, background: "rgba(0,0,0,0.3)", color: "rgba(255,255,255,0.45)" }
             }
-            title="Solo (mutes every non-solo part)"
+            title="Solo"
           >S</button>
+        )}
+        {isMaster && (
+          <>
+            <button
+              onClick={() => setMasterDim(!masterDim)}
+              className="h-7 px-1.5 rounded-lg border text-[9px] font-bold transition"
+              style={
+                masterDim
+                  ? { borderColor: `${C_GLOW}88`, background: `${C}35`, color: C_GLOW }
+                  : { borderColor: `${meta.color}33`, background: "rgba(0,0,0,0.3)", color: "rgba(255,255,255,0.45)" }
+              }
+              title="Dim −12 dB listen cut"
+            >DIM</button>
+            <button
+              onClick={() => setMasterMono(!masterMono)}
+              className="h-7 px-1.5 rounded-lg border text-[9px] font-bold transition"
+              style={
+                masterMono
+                  ? { borderColor: `${C_GLOW}88`, background: `${C}35`, color: C_GLOW }
+                  : { borderColor: `${meta.color}33`, background: "rgba(0,0,0,0.3)", color: "rgba(255,255,255,0.45)" }
+              }
+              title="Mono fold"
+            >MONO</button>
+          </>
         )}
       </div>
     </div>
@@ -425,6 +556,10 @@ function SidechainRack() {
   const duckAmount = useFireSequencerStore((s) => s.duckAmount);
   const duckReleaseMs = useFireSequencerStore((s) => s.duckReleaseMs);
   const duckSource = useFireSequencerStore((s) => s.duckSource);
+  const duckAttackMs = useFireSequencerStore((s) => s.duckAttackMs);
+  const duckHoldMs = useFireSequencerStore((s) => s.duckHoldMs);
+  const duckHpfHz = useFireSequencerStore((s) => s.duckHpfHz);
+  const duckListen = useFireSequencerStore((s) => s.duckListen);
   const setDuck = useFireSequencerStore((s) => s.setDuck);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -589,6 +724,26 @@ function SidechainRack() {
       </label>
 
       <label className="flex items-center gap-1.5 text-[10px] text-dim">
+        <span className="w-12 uppercase tracking-wider">Attack</span>
+        <input
+          type="range" min={1} max={80} step={1} value={duckAttackMs}
+          onChange={(e) => setDuck({ attackMs: Number(e.target.value) })}
+          className="flex-1" style={{ accentColor: C }}
+        />
+        <span className="w-8 text-right font-mono text-white/50">{duckAttackMs}ms</span>
+      </label>
+
+      <label className="flex items-center gap-1.5 text-[10px] text-dim">
+        <span className="w-12 uppercase tracking-wider">Hold</span>
+        <input
+          type="range" min={0} max={200} step={5} value={duckHoldMs}
+          onChange={(e) => setDuck({ holdMs: Number(e.target.value) })}
+          className="flex-1" style={{ accentColor: C }}
+        />
+        <span className="w-8 text-right font-mono text-white/50">{duckHoldMs}ms</span>
+      </label>
+
+      <label className="flex items-center gap-1.5 text-[10px] text-dim">
         <span className="w-12 uppercase tracking-wider">Release</span>
         <input
           type="range" min={40} max={800} step={10} value={duckReleaseMs}
@@ -597,9 +752,34 @@ function SidechainRack() {
         />
         <span className="w-8 text-right font-mono text-white/50">{duckReleaseMs}ms</span>
       </label>
+
+      <label className="flex items-center gap-1.5 text-[10px] text-dim">
+        <span className="w-12 uppercase tracking-wider">HPF</span>
+        <input
+          type="range" min={0} max={500} step={10} value={duckHpfHz}
+          onChange={(e) => setDuck({ hpfHz: Number(e.target.value) })}
+          className="flex-1" style={{ accentColor: C }}
+        />
+        <span className="w-10 text-right font-mono text-white/50">{duckHpfHz}Hz</span>
+      </label>
+
+      <button
+        type="button"
+        onClick={() => setDuck({ listen: !duckListen })}
+        className="self-start rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider"
+        style={
+          duckListen
+            ? { borderColor: `${C_HOT}88`, color: C_GLOW, background: `${C}30` }
+            : { borderColor: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+        }
+        title="Listen / preview sidechain detector"
+      >
+        {duckListen ? "Listen ON" : "Listen"}
+      </button>
     </div>
   );
 }
+
 
 export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const [collapsed, toggle] = useFireCollapsed("mixer", false);
@@ -609,7 +789,6 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
     if (isFocused("mixer") && collapsed) ensureExpanded("mixer");
   }, [collapsed, isFocused]);
   const fireLimiterOn = useFireSequencerStore((s) => s.fireLimiterOn);
-  const setFireLimiterOn = useFireSequencerStore((s) => s.setFireLimiterOn);
   const mixer = useFireSequencerStore((s) => s.mixer);
   const duckEnabled = useFireSequencerStore((s) => s.duckEnabled);
 
@@ -665,6 +844,7 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
         els.peak.style.bottom = `${pn * 100}%`;
         els.peak.style.opacity = pn > 0.01 ? "1" : "0";
         els.peak.style.background = held >= 1 ? "#ff5d5d" : "rgba(255,255,255,0.85)";
+        if (els.holdDb) els.holdDb.textContent = peakToDbfs(held);
       }
     };
     raf = requestAnimationFrame(loop);
@@ -698,20 +878,7 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
           </span>
           <span className="text-[9px] normal-case tracking-normal text-white/35">· Sum Deck</span>
         </button>
-        {(!collapsed || isFocused("mixer")) && (
-          <button
-            onClick={() => setFireLimiterOn(!fireLimiterOn)}
-            className="h-7 px-3 rounded-lg text-[10px] font-bold border transition"
-            style={
-              fireLimiterOn
-                ? { borderColor: `${C_GLOW}70`, background: `${C}28`, color: C_GLOW, boxShadow: `0 0 12px ${C}40` }
-                : { borderColor: "rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.3)", color: "rgba(255,255,255,0.4)" }
-            }
-            title="Master limiter on the Fire output — glue + overload protection"
-          >
-            {fireLimiterOn ? "● LIMITER" : "○ LIMITER"}
-          </button>
-        )}
+        {(!collapsed || isFocused("mixer")) && <MasterLimiterBlock />}
       </div>
 
       {(!collapsed || isFocused("mixer")) && (

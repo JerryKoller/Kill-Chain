@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEven
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useToneTelemetry } from "./useToneTelemetry";
 
 const H = 176;
 const C = FC.envAmp;
@@ -103,6 +104,7 @@ export function AmpEnvStageViz() {
   const lpgColor = useFireCommandStore((s) => s.patch.lpgColor) ?? 0.7;
   const setParam = useFireCommandStore((s) => s.setParam);
 
+  const tel = useToneTelemetry();
   const parked = lpgOn && pluckOn;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -434,35 +436,44 @@ export function AmpEnvStageViz() {
           ctx.fill();
         }
 
-        // Playhead comet
-        const cycle = (now / (1800 + logNorm(p.a, A_MIN, A_MAX) * 800 + logNorm(p.r, R_MIN, R_MAX) * 600)) % 1;
-        const px = x0 + cycle * (x4 - x0);
-        let py = yLv(0);
-        if (px <= x1) py = yLv(((px - x0) / Math.max(1, wA)) * breathe);
-        else if (px <= x2) py = yLv(1 - ((px - x1) / Math.max(1, wD)) * (1 - p.sus));
-        else if (px <= x3) py = yLv(p.sus);
-        else py = yLv(p.sus * (1 - (px - x3) / Math.max(1, wR)));
+        // Live telemetry cursor
+        const telData = lpgOn ? tel.pluck : tel.amp;
+        const active = tel.voiceCount > 0;
+        if (active && telData) {
+          const level = clamp(telData.level, 0, 1);
+          const stage = telData.stage;
+          let cx = x0;
+          if (stage === "attack") cx = x0 + clamp(telData.phase, 0, 1) * wA;
+          else if (stage === "decay") cx = x1 + clamp(telData.phase, 0, 1) * wD;
+          else if (stage === "sustain") cx = x2 + clamp(telData.phase, 0, 1) * wS;
+          else if (stage === "release" || stage === "decay_out") cx = x3 + clamp(telData.phase, 0, 1) * wR;
+          else if (stage === "strike") cx = x0 + clamp(telData.phase, 0, 1) * (wA + wD) * 0.35;
+          else if (stage === "ring") cx = x1 + clamp(telData.phase, 0, 1) * (wD + wS) * 0.5;
+          else cx = x0 + clamp(telData.phase, 0, 1) * (x4 - x0);
+          const cy = yLv(level * (0.55 + p.vel * 0.45));
 
-        for (let trail = 7; trail > 0; trail--) {
-          const tc = (cycle - trail * 0.018 + 1) % 1;
-          const tx = x0 + tc * (x4 - x0);
-          let ty = yLv(0);
-          if (tx <= x1) ty = yLv(((tx - x0) / Math.max(1, wA)) * breathe);
-          else if (tx <= x2) ty = yLv(1 - ((tx - x1) / Math.max(1, wD)) * (1 - p.sus));
-          else if (tx <= x3) ty = yLv(p.sus);
-          else ty = yLv(p.sus * (1 - (tx - x3) / Math.max(1, wR)));
-          ctx.fillStyle = hexAlpha(C_GLOW, (1 - trail / 8) * 0.28);
+          ctx.strokeStyle = hexAlpha(C_GLOW, 0.7);
+          ctx.lineWidth = 1.8;
+          ctx.setLineDash([2, 2]);
           ctx.beginPath();
-          ctx.arc(tx, ty, 1.4 + (1 - trail / 8) * 1.6, 0, Math.PI * 2);
+          ctx.moveTo(cx, top);
+          ctx.lineTo(cx, cy);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          ctx.fillStyle = "#fff8e0";
+          ctx.shadowBlur = 16;
+          ctx.shadowColor = C;
+          ctx.beginPath();
+          ctx.arc(cx, cy, 4.5 + flashRef.current * 2, 0, Math.PI * 2);
           ctx.fill();
+          ctx.shadowBlur = 0;
+
+          ctx.font = "900 9px ui-sans-serif, system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
+          ctx.fillText(String(stage).slice(0, 6).toUpperCase(), cx, cy - 12);
         }
-        ctx.fillStyle = "#fff8e0";
-        ctx.shadowBlur = 14;
-        ctx.shadowColor = C;
-        ctx.beginPath();
-        ctx.arc(px, py, 3.6 + flashRef.current * 1.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
 
         // Stage labels under zones
         ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
@@ -517,10 +528,10 @@ export function AmpEnvStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: tel.voiceCount > 0,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

@@ -234,9 +234,9 @@ function createMainWindow(): void {
     minHeight: 720,
     backgroundColor: "#06060c",
     title: "Kill-Chain",
-    frame: true,
+    // Frameless so native OS chrome is gone; min/max/close live in TitleBar.
+    frame: false,
     titleBarStyle: "hidden",
-    // Custom hover-reveal window buttons live in TitleBar (no always-on native overlay).
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

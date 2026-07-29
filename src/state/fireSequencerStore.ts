@@ -29,7 +29,26 @@ import { DRUM_LANES, type DrumLane } from "@/audio/dsp/FireDrumKit";
 import { DEFAULT_FIRE_PATCH, makeModMatrix, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { audioUrlForPath } from "@/state/libraryStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
-import { useFireCommandStore, slotsFromState } from "@/state/fireCommandStore";
+import { useFireCommandStore, slotsFromState, scheduleSequencerSynthNote, expandSequencerSynthVoices, clearSequencerArpLatches } from "@/state/fireCommandStore";
+import {
+  type DrumStep,
+  type DrumLaneMix,
+  type DrumFeel,
+  type FillPersonality,
+  DEFAULT_LANE_MIX,
+  emptyStep,
+  onStep,
+  coerceDrumStep,
+  sanitizeStepArray,
+  cloneSteps,
+  stepVel,
+  effectiveVel,
+  feelScales,
+  laneLocalStep,
+  seededRand,
+} from "@/components/FireCommand/drumClarity";
+
+export type { DrumStep, DrumLaneMix, DrumFeel, FillPersonality };
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -63,7 +82,7 @@ export interface SampleLane {
   name: string;
   path: string;
   level: number;
-  steps: number[];
+  steps: DrumStep[];
 }
 
 export const MAX_SAMPLE_LANES = 6;
@@ -88,7 +107,7 @@ export interface RollNote {
 }
 
 export const STEPS_PER_BAR = 16;
-export const MAX_BARS = 8;
+export const MAX_BARS = 96;
 
 // ── Arrangement (v1.6) ──
 
@@ -100,7 +119,7 @@ export interface Section {
   notes: RollNote[];
   drums: DrumPattern;
   /** sample lane id → this section's step grid (missing lane = silent). */
-  sampleSteps: Record<string, number[]>;
+  sampleSteps: Record<string, DrumStep[]>;
   /** Automation lanes (v1.7): param id → per-step points. */
   automation: AutomationMap;
   /** Optional Synth A/B patch snapshots for this pattern (song timbre recall). */
@@ -129,6 +148,18 @@ export interface PlaylistTrack {
   /** Record/edit arm for this arrangement lane. */
   arm: boolean;
   color: string;
+  collapsed?: boolean;
+  /** Soft layer hint for headers. */
+  layer?: "a" | "b" | "drums" | "samples" | "other";
+}
+
+/** Clip-local unique content (overrides bank section while keeping lineage). */
+export interface ClipLocalContent {
+  notes?: RollNote[];
+  drums?: DrumPattern;
+  sampleSteps?: Record<string, import("@/components/FireCommand/drumClarity").DrumStep[]>;
+  automation?: AutomationMap;
+  bars?: number;
 }
 
 /** One placed pattern block on the arrangement timeline (absolute 16ths). */
@@ -142,6 +173,11 @@ export interface ArrangementClip {
   lengthSteps?: number;
   /** Optional clip color override (else track / pattern color). */
   color?: string;
+  /** When true, schedule/edit from `local` instead of the bank section. */
+  unique?: boolean;
+  local?: ClipLocalContent;
+  /** Display instance suffix for UNIQUE badges (C1, C2…). */
+  instanceLabel?: string;
 }
 
 let clipSeq = 0;
@@ -161,18 +197,27 @@ function sectionLenSteps(sec: { bars: number }): number {
 }
 
 function clipAudibleLen(clip: ArrangementClip, sec: { bars: number }): number {
-  const full = sectionLenSteps(sec);
+  const fullBars = clip.unique && clip.local?.bars != null
+    ? Math.max(1, clip.local.bars)
+    : Math.max(1, sec.bars);
+  const full = fullBars * STEPS_PER_BAR;
   if (clip.lengthSteps == null) return full;
   return clamp(Math.round(clip.lengthSteps), 1, full);
 }
 
 function defaultPlaylistTracks(): PlaylistTrack[] {
+  const names = [
+    "Synth A", "Synth B", "Drums", "Bass", "Lead",
+    "Chords", "Atmosphere", "Samples", "Automation", "FX",
+  ];
   return Array.from({ length: MAX_PLAYLIST_TRACKS }, (_, i) => ({
-    name: i === 0 ? "Track 1" : `Track ${i + 1}`,
+    name: names[i] ?? `Track ${i + 1}`,
     mute: false,
     solo: false,
     arm: i === 0,
     color: PLAYLIST_TRACK_COLORS[i % PLAYLIST_TRACK_COLORS.length],
+    collapsed: false,
+    layer: i === 0 ? "a" : i === 1 ? "b" : i === 2 ? "drums" : i === 7 ? "samples" : "other",
   }));
 }
 
@@ -183,11 +228,13 @@ function sanitizePlaylistTracks(raw: unknown): PlaylistTrack[] {
     const t = raw[i] as Partial<PlaylistTrack> | undefined;
     if (!t || typeof t !== "object") return d;
     return {
-      name: typeof t.name === "string" && t.name.trim() ? t.name.trim().slice(0, 18) : d.name,
+      name: typeof t.name === "string" && t.name.trim() ? t.name.trim().slice(0, 24) : d.name,
       mute: t.mute === true,
       solo: t.solo === true,
       arm: t.arm === true,
       color: typeof t.color === "string" && t.color ? t.color : d.color,
+      collapsed: t.collapsed === true,
+      layer: t.layer ?? d.layer,
     };
   });
 }
@@ -227,9 +274,35 @@ function sanitizeArrangement(raw: unknown, sections: Section[]): ArrangementClip
     const patternId = String((c as ArrangementClip).patternId ?? "");
     if (!ids.has(patternId)) continue;
     const sec = byId.get(patternId)!;
-    const full = sectionLenSteps(sec);
-    const startStep = snapToBar(Number((c as ArrangementClip).startStep) || 0);
-    const maxStep = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
+    const unique = (c as ArrangementClip).unique === true;
+    const instanceLabel = typeof (c as ArrangementClip).instanceLabel === "string"
+      ? (c as ArrangementClip).instanceLabel
+      : undefined;
+    let local: ClipLocalContent | undefined;
+    const rawLocal = (c as ArrangementClip).local;
+    if (unique && rawLocal && typeof rawLocal === "object") {
+      const bars = clamp(Math.round(Number(rawLocal.bars) || sec.bars), 1, MAX_BARS);
+      const total = bars * STEPS_PER_BAR;
+      local = {
+        bars,
+        notes: sanitizeNotes(rawLocal.notes, total),
+        drums: sanitizeDrums(rawLocal.drums, total),
+        automation: sanitizeAutomation(rawLocal.automation, total),
+        sampleSteps: (() => {
+          const outSteps: Record<string, import("@/components/FireCommand/drumClarity").DrumStep[]> = {};
+          if (rawLocal.sampleSteps && typeof rawLocal.sampleSteps === "object") {
+            for (const [k, arr] of Object.entries(rawLocal.sampleSteps)) {
+              outSteps[k] = sanitizeStepArray(arr, total);
+            }
+          }
+          return outSteps;
+        })(),
+      };
+    }
+    const fullBars = local?.bars ?? sec.bars;
+    const full = Math.max(1, fullBars) * STEPS_PER_BAR;
+    const startStep = snapToStep(Number((c as ArrangementClip).startStep) || 0);
+    const maxStep = Math.max(0, MAX_ARRANGEMENT_BARS * STEPS_PER_BAR - full);
     const track = clamp(Math.round(Number((c as ArrangementClip).track) || 0), 0, MAX_PLAYLIST_TRACKS - 1);
     const rawLen = (c as ArrangementClip).lengthSteps;
     const lengthSteps = rawLen == null ? undefined : clamp(Math.round(Number(rawLen)), 1, full);
@@ -241,6 +314,9 @@ function sanitizeArrangement(raw: unknown, sections: Section[]): ArrangementClip
       track,
       lengthSteps,
       color,
+      unique: unique || undefined,
+      local,
+      instanceLabel,
     });
     if (out.length >= MAX_CLIPS) break;
   }
@@ -251,14 +327,18 @@ function sanitizeArrangement(raw: unknown, sections: Section[]): ArrangementClip
 export type MixerStripId = "a" | "b" | "drums" | "samples" | "master";
 export const MIXER_PARTS = ["a", "b", "drums", "samples"] as const;
 
+export type SoloMode = "exclusive" | "additive" | "dim";
+
 export interface MixerStrip {
   level: number; // 0..1.5 (1 = unity)
   pan: number;   // -1..1 (ignored on master)
   mute: boolean;
   solo: boolean; // ignored on master
+  /** Pre-fader input trim 0..2 (1 = unity). */
+  trim: number;
 }
 
-const defaultStrip = (): MixerStrip => ({ level: 1, pan: 0, mute: false, solo: false });
+const defaultStrip = (): MixerStrip => ({ level: 1, pan: 0, mute: false, solo: false, trim: 1 });
 
 function defaultMixer(): Record<MixerStripId, MixerStrip> {
   return {
@@ -278,24 +358,53 @@ function sanitizeMixer(raw: unknown): Record<MixerStripId, MixerStrip> {
       pan: clamp(Number(v.pan ?? 0) || 0, -1, 1),
       mute: v.mute === true,
       solo: v.solo === true,
+      trim: clamp(Number(v.trim ?? 1) || 1, 0, 2),
     };
   }
   return out;
 }
 
-/** Push the mixer + limiter + solo logic into the engine's part strips. */
+/** Push the mixer + limiter + solo + dim/mono + duck envelope into the engine. */
 function applyMixerToEngine(s: {
   mixer: Record<MixerStripId, MixerStrip>;
   fireLimiterOn: boolean;
+  soloMode?: SoloMode;
+  masterDim?: boolean;
+  masterMono?: boolean;
+  duckAttackMs?: number;
+  duckHoldMs?: number;
+  duckHpfHz?: number;
 }): void {
   const eng = getEngine();
+  const mode = s.soloMode ?? "exclusive";
   const anySolo = MIXER_PARTS.some((p) => s.mixer[p].solo);
   for (const p of MIXER_PARTS) {
     const m = s.mixer[p];
-    eng.setFirePartMix(p, m.level, m.pan, m.mute || (anySolo && !m.solo));
+    eng.setFirePartTrim(p, m.trim ?? 1);
+    let muted = m.mute;
+    let level = m.level;
+    if (anySolo) {
+      if (mode === "exclusive") {
+        muted = muted || !m.solo;
+      } else if (mode === "additive") {
+        // Solo'd parts stay; non-solo stay at level (additive = no mute of others)
+        muted = m.mute;
+      } else if (mode === "dim") {
+        if (!m.solo) level = m.level * 0.25;
+        muted = m.mute;
+      }
+    }
+    eng.setFirePartMix(p, level, m.pan, muted);
   }
   eng.setFireMasterMix(s.mixer.master.level, s.mixer.master.mute);
   eng.setFireLimiterEnabled(s.fireLimiterOn);
+  if (typeof s.masterDim === "boolean") eng.setFireDim(s.masterDim);
+  if (typeof s.masterMono === "boolean") eng.setFireMono(s.masterMono);
+  eng.setDuckEnvelope({
+    attackSec: (s.duckAttackMs ?? 8) / 1000,
+    holdSec: (s.duckHoldMs ?? 40) / 1000,
+    hpfHz: s.duckHpfHz ?? 0,
+  });
 }
 
 let secSeq = 0;
@@ -499,49 +608,53 @@ function sanitizeAutomation(raw: unknown, total: number): AutomationMap {
 }
 
 export interface DrumPattern {
-  /** lane id → step array (0 = off, otherwise velocity 0..1). */
-  steps: Record<DrumLane, number[]>;
+  /** lane id → rich step array (vel 0 = off). */
+  steps: Record<DrumLane, DrumStep[]>;
 }
 
 export function emptyDrums(totalSteps: number): DrumPattern {
-  const steps = {} as Record<DrumLane, number[]>;
-  for (const l of DRUM_LANES) steps[l.id] = new Array(totalSteps).fill(0);
+  const steps = {} as Record<DrumLane, DrumStep[]>;
+  for (const l of DRUM_LANES) steps[l.id] = Array.from({ length: totalSteps }, () => emptyStep());
   return { steps };
 }
 
 // A tasteful default groove so the section makes sound out of the box.
 function starterDrums(totalSteps: number): DrumPattern {
   const d = emptyDrums(totalSteps);
-  for (let s = 0; s < totalSteps; s += 8) { d.steps.kick[s] = 1; }
-  for (let s = 4; s < totalSteps; s += 8) { d.steps.snare[s] = 1; }
-  for (let s = 0; s < totalSteps; s += 2) { d.steps.chat[s] = s % 8 === 6 ? 0 : 0.8; }
-  for (let s = 6; s < totalSteps; s += 8) { d.steps.ohat[s] = 0.7; }
+  for (let s = 0; s < totalSteps; s += 8) { d.steps.kick[s] = onStep(1); }
+  for (let s = 4; s < totalSteps; s += 8) { d.steps.snare[s] = onStep(1); }
+  for (let s = 0; s < totalSteps; s += 2) { d.steps.chat[s] = s % 8 === 6 ? emptyStep() : onStep(0.8); }
+  for (let s = 6; s < totalSteps; s += 8) { d.steps.ohat[s] = onStep(0.7); }
   return d;
 }
 
 /** Named pattern-only grooves for the Drum Bay (overwrites steps, not samples). */
 export type DrumGrooveId = "house" | "trap" | "break" | "clear";
 
-export function buildDrumGroove(id: DrumGrooveId, totalSteps: number): DrumPattern {
+export function buildDrumGroove(id: DrumGrooveId, totalSteps: number, seed = Date.now()): DrumPattern {
   if (id === "clear") return emptyDrums(totalSteps);
   if (id === "house") {
     const d = emptyDrums(totalSteps);
-    for (let s = 0; s < totalSteps; s += 4) d.steps.kick[s] = 1; // four-on-the-floor
-    for (let s = 4; s < totalSteps; s += 8) d.steps.clap[s] = 0.9;
-    for (let s = 0; s < totalSteps; s += 2) d.steps.chat[s] = s % 4 === 2 ? 0.55 : 0.85;
-    for (let s = 6; s < totalSteps; s += 8) d.steps.ohat[s] = 0.65;
+    for (let s = 0; s < totalSteps; s += 4) d.steps.kick[s] = onStep(1);
+    for (let s = 4; s < totalSteps; s += 8) d.steps.clap[s] = onStep(0.9);
+    for (let s = 0; s < totalSteps; s += 2) {
+      d.steps.chat[s] = onStep(s % 4 === 2 ? 0.55 : 0.85);
+      // Soft regenerate variance on re-click
+      if (seededRand(seed + s) > 0.92) d.steps.chat[s] = onStep(0.4, { prob: 0.7 });
+    }
+    for (let s = 6; s < totalSteps; s += 8) d.steps.ohat[s] = onStep(0.65);
     return d;
   }
   if (id === "trap") {
     const d = emptyDrums(totalSteps);
-    for (let s = 0; s < totalSteps; s += 8) d.steps.kick[s] = 1;
-    for (let s = 6; s < totalSteps; s += 16) d.steps.kick[s] = 0.85;
-    for (let s = 4; s < totalSteps; s += 8) d.steps.snare[s] = 1;
-    // Rolling hats
+    for (let s = 0; s < totalSteps; s += 8) d.steps.kick[s] = onStep(1);
+    for (let s = 6; s < totalSteps; s += 16) d.steps.kick[s] = onStep(0.85);
+    for (let s = 4; s < totalSteps; s += 8) d.steps.snare[s] = onStep(1);
     for (let s = 0; s < totalSteps; s++) {
-      d.steps.chat[s] = s % 2 === 0 ? 0.7 : 0.35;
+      const base = s % 2 === 0 ? 0.7 : 0.35;
+      d.steps.chat[s] = onStep(base, seededRand(seed + s * 3) > 0.85 ? { ratchet: 2 } : undefined);
     }
-    for (let s = 14; s < totalSteps; s += 16) d.steps.ohat[s] = 0.6;
+    for (let s = 14; s < totalSteps; s += 16) d.steps.ohat[s] = onStep(0.6);
     return d;
   }
   // break — Amen-ish skeleton
@@ -550,11 +663,18 @@ export function buildDrumGroove(id: DrumGrooveId, totalSteps: number): DrumPatte
   const snareHits = [4, 12];
   for (let bar = 0; bar < Math.ceil(totalSteps / 16); bar++) {
     const o = bar * 16;
-    for (const h of kickHits) if (o + h < totalSteps) d.steps.kick[o + h] = 1;
-    for (const h of snareHits) if (o + h < totalSteps) d.steps.snare[o + h] = 1;
+    for (const h of kickHits) if (o + h < totalSteps) d.steps.kick[o + h] = onStep(1);
+    for (const h of snareHits) if (o + h < totalSteps) {
+      d.steps.snare[o + h] = onStep(1, seededRand(seed + o + h) > 0.7 ? { accent: true } : undefined);
+    }
   }
-  for (let s = 0; s < totalSteps; s += 2) d.steps.chat[s] = 0.75;
-  for (let s = 2; s < totalSteps; s += 8) d.steps.ohat[s] = 0.5;
+  for (let s = 0; s < totalSteps; s += 2) d.steps.chat[s] = onStep(0.75);
+  for (let s = 2; s < totalSteps; s += 8) d.steps.ohat[s] = onStep(0.5);
+  // Ghost snares
+  for (let s = 0; s < totalSteps; s++) {
+    if (d.steps.snare[s]?.vel) continue;
+    if (seededRand(seed + s * 7) > 0.88) d.steps.snare[s] = onStep(0.35, { prob: 0.6 });
+  }
   return d;
 }
 
@@ -626,6 +746,22 @@ interface PersistShape {
   scaleSnap: boolean;
   /** Per-lane user sample overrides (path + display name). */
   drumSamples: Partial<Record<DrumLane, { path: string; name: string }>>;
+  /** Lanes locked from genre / fill / random generation. */
+  drumLaneLocks: Partial<Record<DrumLane, boolean>>;
+  /** Per-lane mix / polymeter / feel. */
+  drumLaneMix: Partial<Record<DrumLane, DrumLaneMix>>;
+  /** Hat choke: closed hat cuts open hat. */
+  drumHatChoke: boolean;
+  /** Kick phase reset / polarity (−1 or 1). */
+  drumKickPolarity: 1 | -1;
+  /** Follow playhead scroll in long patterns. */
+  drumFollowPlayhead: boolean;
+  /** Fill preview overlay (null = none). */
+  drumFillPreview: DrumPattern | null;
+  /** Auto-fire fill on last bar of each loop. */
+  drumFillAuto: boolean;
+  drumFillIntensity: number;
+  drumFillPersonality: FillPersonality;
   /** The sample deck — lane definitions; step grids live inside sections. */
   samples: SampleLane[];
   /** Arrangement (v1.6+): pattern bank + absolute-time playlist clips. */
@@ -648,8 +784,21 @@ interface PersistShape {
   duckAmount: number;    // 0..1 depth
   duckReleaseMs: number; // 40..800
   duckSource: DrumLane;
+  duckAttackMs: number;  // 1..80
+  duckHoldMs: number;    // 0..200
+  duckHpfHz: number;     // 0..500
+  duckListen: boolean;
+  soloMode: SoloMode;
+  masterDim: boolean;
+  masterMono: boolean;
   /** Live recording (v1.6): snap captured notes to the 1/16 grid. */
   recordQuantize: boolean;
+  recordMode: "overdub" | "replace";
+  recordCountIn: number;
+  metronome: boolean;
+  /** Selected arrangement clip for editor context / breadcrumb. */
+  selectedClipId: string | null;
+  trackHeaderWidth: number;
 }
 
 /** Mirror of the active section — what the editors bind to and actions edit. */
@@ -665,6 +814,8 @@ interface ActiveMirror {
 const pendingRec = new Map<number, { id: string; startStep: number }>();
 /** One undo entry per record pass (reset on arm / play). */
 let recPassPushed = false;
+/** AudioContext time after which recordNoteOn accepts input (count-in). */
+let recArmedAt = 0;
 
 function starterSection(): Section {
   const bars = 2;
@@ -675,6 +826,21 @@ function starterSection(): Section {
     bars,
     notes: starterNotes(),
     drums: starterDrums(total),
+    sampleSteps: {},
+    automation: {},
+  };
+}
+
+/** Empty pattern bank — blank-slate project (no starter riff / groove). */
+function blankSection(): Section {
+  const bars = 2;
+  const total = bars * STEPS_PER_BAR;
+  return {
+    id: sectionId(),
+    name: "A",
+    bars,
+    notes: [],
+    drums: emptyDrums(total),
     sampleSteps: {},
     automation: {},
   };
@@ -699,6 +865,15 @@ function defaults(): PersistShape {
     scaleId: "off",
     scaleSnap: true,
     drumSamples: {},
+    drumLaneLocks: {},
+    drumLaneMix: {},
+    drumHatChoke: true,
+    drumKickPolarity: 1,
+    drumFollowPlayhead: true,
+    drumFillPreview: null,
+    drumFillAuto: false,
+    drumFillIntensity: 0.55,
+    drumFillPersonality: "snareRoll",
     samples: [],
     sections: [sec],
     activeSectionId: sec.id,
@@ -714,7 +889,40 @@ function defaults(): PersistShape {
     duckAmount: 0.6,
     duckReleaseMs: 220,
     duckSource: "kick",
+    duckAttackMs: 8,
+    duckHoldMs: 40,
+    duckHpfHz: 0,
+    duckListen: false,
+    soloMode: "exclusive",
+    masterDim: false,
+    masterMono: false,
     recordQuantize: true,
+    recordMode: "overdub",
+    recordCountIn: 1,
+    metronome: false,
+    selectedClipId: null,
+    trackHeaderWidth: 168,
+  };
+}
+
+/** Factory-empty project: one blank pattern, default mix/transport, no samples. */
+function blankProject(): PersistShape {
+  const sec = blankSection();
+  return {
+    ...defaults(),
+    scaleRoot: 0, // C
+    scaleId: "off",
+    scaleSnap: true,
+    drumSamples: {},
+    samples: [],
+    sections: [sec],
+    activeSectionId: sec.id,
+    arrangement: [{ id: clipId(), patternId: sec.id, startStep: 0, track: 0 }],
+    playlistTracks: defaultPlaylistTracks(),
+    playMode: "pattern",
+    playScope: "pattern",
+    selectionStart: 0,
+    selectionEnd: 16,
   };
 }
 
@@ -737,12 +945,7 @@ function sanitizeDrums(raw: unknown, total: number): DrumPattern {
   const steps = (raw as DrumPattern | undefined)?.steps;
   if (steps && typeof steps === "object") {
     for (const l of DRUM_LANES) {
-      const src = steps[l.id];
-      if (Array.isArray(src)) {
-        for (let i = 0; i < Math.min(total, src.length); i++) {
-          drums.steps[l.id][i] = clamp(Number(src[i]) || 0, 0, 1);
-        }
-      }
+      drums.steps[l.id] = sanitizeStepArray(steps[l.id], total);
     }
   }
   return drums;
@@ -757,21 +960,13 @@ function sanitizeSampleLanes(raw: unknown, total: number): SampleLane[] {
         !!l && typeof l.path === "string" && typeof l.name === "string",
     )
     .slice(0, MAX_SAMPLE_LANES)
-    .map((l) => {
-      const steps = new Array<number>(total).fill(0);
-      if (Array.isArray(l.steps)) {
-        for (let i = 0; i < Math.min(total, l.steps.length); i++) {
-          steps[i] = clamp(Number(l.steps[i]) || 0, 0, 1);
-        }
-      }
-      return {
-        id: typeof l.id === "string" ? l.id : `sl${Math.random().toString(36).slice(2, 9)}`,
-        name: l.name.slice(0, 40),
-        path: l.path,
-        level: clamp(Number(l.level ?? 1) || 1, 0, 1.5),
-        steps,
-      };
-    });
+    .map((l) => ({
+      id: typeof l.id === "string" ? l.id : `sl${Math.random().toString(36).slice(2, 9)}`,
+      name: l.name.slice(0, 40),
+      path: l.path,
+      level: clamp(Number(l.level ?? 1) || 1, 0, 1.5),
+      steps: sanitizeStepArray(l.steps, total),
+    }));
 }
 
 function sanitizeDrumSamples(
@@ -868,15 +1063,11 @@ function sanitizeSection(raw: unknown, fallbackName: string): Section | null {
   const r = raw as Partial<Section>;
   const bars = clamp(Math.round(Number(r.bars) || 1), 1, MAX_BARS);
   const total = bars * STEPS_PER_BAR;
-  const sampleSteps: Record<string, number[]> = {};
+  const sampleSteps: Record<string, DrumStep[]> = {};
   if (r.sampleSteps && typeof r.sampleSteps === "object") {
     for (const [laneId, arr] of Object.entries(r.sampleSteps)) {
       if (!Array.isArray(arr)) continue;
-      const steps = new Array<number>(total).fill(0);
-      for (let i = 0; i < Math.min(total, arr.length); i++) {
-        steps[i] = clamp(Number(arr[i]) || 0, 0, 1);
-      }
-      sampleSteps[laneId] = steps;
+      sampleSteps[laneId] = sanitizeStepArray(arr, total);
     }
   }
   return {
@@ -893,14 +1084,9 @@ function sanitizeSection(raw: unknown, fallbackName: string): Section | null {
 }
 
 /** Steps for a lane inside a section (padded/zeroed to the section length). */
-function laneStepsFor(sec: Section, laneId: string): number[] {
+function laneStepsFor(sec: Section, laneId: string): DrumStep[] {
   const total = sec.bars * STEPS_PER_BAR;
-  const src = sec.sampleSteps[laneId];
-  const out = new Array<number>(total).fill(0);
-  if (Array.isArray(src)) {
-    for (let i = 0; i < Math.min(total, src.length); i++) out[i] = src[i];
-  }
-  return out;
+  return sanitizeStepArray(sec.sampleSteps[laneId], total);
 }
 
 /** Build the active-section editing mirror (samples get the section's grids). */
@@ -1004,6 +1190,18 @@ function load(): PersistShape & ActiveMirror {
       scaleId: SCALES.some((s) => s.id === p.scaleId) ? (p.scaleId as ScaleId) : d.scaleId,
       scaleSnap: p.scaleSnap !== false,
       drumSamples: sanitizeDrumSamples(p.drumSamples),
+      drumLaneLocks: (p as { drumLaneLocks?: Partial<Record<DrumLane, boolean>> }).drumLaneLocks ?? {},
+      drumLaneMix: (p as { drumLaneMix?: Partial<Record<DrumLane, DrumLaneMix>> }).drumLaneMix ?? {},
+      drumHatChoke: (p as { drumHatChoke?: boolean }).drumHatChoke !== false,
+      drumKickPolarity: (p as { drumKickPolarity?: 1 | -1 }).drumKickPolarity === -1 ? -1 : 1,
+      drumFollowPlayhead: (p as { drumFollowPlayhead?: boolean }).drumFollowPlayhead !== false,
+      drumFillPreview: null,
+      drumFillAuto: (p as { drumFillAuto?: boolean }).drumFillAuto === true,
+      drumFillIntensity: clamp(Number((p as { drumFillIntensity?: number }).drumFillIntensity ?? 0.55) || 0.55, 0, 1),
+      drumFillPersonality: (["snareRoll", "tomDescent", "kickBurst", "hatRush", "breakbeat", "trap", "minimal"] as FillPersonality[])
+        .includes((p as { drumFillPersonality?: FillPersonality }).drumFillPersonality as FillPersonality)
+        ? ((p as { drumFillPersonality: FillPersonality }).drumFillPersonality)
+        : "snareRoll",
       samples: laneDefs,
       sections,
       activeSectionId,
@@ -1028,14 +1226,62 @@ function load(): PersistShape & ActiveMirror {
       duckSource: DRUM_LANES.some((l) => l.id === p.duckSource)
         ? (p.duckSource as DrumLane)
         : "kick",
+      duckAttackMs: clamp(Number((p as { duckAttackMs?: number }).duckAttackMs ?? 8) || 8, 1, 80),
+      duckHoldMs: clamp(Number((p as { duckHoldMs?: number }).duckHoldMs ?? 40) || 40, 0, 200),
+      duckHpfHz: clamp(Number((p as { duckHpfHz?: number }).duckHpfHz ?? 0) || 0, 0, 500),
+      duckListen: (p as { duckListen?: boolean }).duckListen === true,
+      soloMode: (["exclusive", "additive", "dim"] as SoloMode[]).includes((p as { soloMode?: SoloMode }).soloMode as SoloMode)
+        ? ((p as { soloMode: SoloMode }).soloMode)
+        : "exclusive",
+      masterDim: (p as { masterDim?: boolean }).masterDim === true,
+      masterMono: (p as { masterMono?: boolean }).masterMono === true,
       recordQuantize: p.recordQuantize !== false,
+      recordMode: (p as { recordMode?: string }).recordMode === "replace" ? "replace" : "overdub",
+      recordCountIn: clamp(Math.round(Number((p as { recordCountIn?: number }).recordCountIn ?? 1) || 1), 0, 4),
+      metronome: (p as { metronome?: boolean }).metronome === true,
+      selectedClipId: null,
+      trackHeaderWidth: clamp(Math.round(Number((p as { trackHeaderWidth?: number }).trackHeaderWidth ?? 168) || 168), 120, 280),
     });
   } catch {
     return finish(d);
   }
 }
 
-/** Fold the editing mirror back into the section list. */
+/** True when the editor mirror is editing a unique clip's local content. */
+function editingUniqueClip(s: {
+  selectedClipId: string | null;
+  arrangement: ArrangementClip[];
+}): ArrangementClip | null {
+  if (!s.selectedClipId) return null;
+  const clip = s.arrangement.find((c) => c.id === s.selectedClipId);
+  return clip?.unique ? clip : null;
+}
+
+function mirrorLocalFromState(s: {
+  bars: number;
+  notes: RollNote[];
+  drums: DrumPattern;
+  automation: AutomationMap;
+  samples: SampleLane[];
+}): ClipLocalContent {
+  return {
+    bars: s.bars,
+    notes: s.notes,
+    drums: s.drums,
+    automation: s.automation,
+    sampleSteps: Object.fromEntries(s.samples.map((l) => [l.id, l.steps])),
+  };
+}
+
+/** Fold unique-clip edits into arrangement; leave bank section alone while unique. */
+function arrangementWithActive(s: FireSequencerState): ArrangementClip[] {
+  const u = editingUniqueClip(s);
+  if (!u) return s.arrangement;
+  const local = mirrorLocalFromState(s);
+  return s.arrangement.map((c) => (c.id === u.id ? { ...c, unique: true, local } : c));
+}
+
+/** Fold the editing mirror back into the section list (skipped while editing UNIQUE). */
 function sectionsWithActive(s: {
   sections: Section[];
   activeSectionId: string;
@@ -1044,7 +1290,16 @@ function sectionsWithActive(s: {
   drums: DrumPattern;
   automation: AutomationMap;
   samples: SampleLane[];
+  selectedClipId?: string | null;
+  arrangement?: ArrangementClip[];
 }): Section[] {
+  if (
+    s.selectedClipId
+    && s.arrangement
+    && editingUniqueClip({ selectedClipId: s.selectedClipId, arrangement: s.arrangement })
+  ) {
+    return s.sections;
+  }
   return s.sections.map((sec) =>
     sec.id === s.activeSectionId
       ? {
@@ -1069,10 +1324,19 @@ function persistShapeOf(s: FireSequencerState): PersistShape {
     collapsed: s.collapsed,
     scaleRoot: s.scaleRoot, scaleId: s.scaleId, scaleSnap: s.scaleSnap,
     drumSamples: s.drumSamples,
+    drumLaneLocks: s.drumLaneLocks,
+    drumLaneMix: s.drumLaneMix,
+    drumHatChoke: s.drumHatChoke,
+    drumKickPolarity: s.drumKickPolarity,
+    drumFollowPlayhead: s.drumFollowPlayhead,
+    drumFillPreview: null,
+    drumFillAuto: s.drumFillAuto,
+    drumFillIntensity: s.drumFillIntensity,
+    drumFillPersonality: s.drumFillPersonality,
     samples: s.samples,
     sections: sectionsWithActive(s),
     activeSectionId: s.activeSectionId,
-    arrangement: s.arrangement,
+    arrangement: arrangementWithActive(s),
     playlistTracks: s.playlistTracks,
     playMode: s.playMode,
     playScope: s.playScope,
@@ -1084,7 +1348,19 @@ function persistShapeOf(s: FireSequencerState): PersistShape {
     duckAmount: s.duckAmount,
     duckReleaseMs: s.duckReleaseMs,
     duckSource: s.duckSource,
+    duckAttackMs: s.duckAttackMs,
+    duckHoldMs: s.duckHoldMs,
+    duckHpfHz: s.duckHpfHz,
+    duckListen: s.duckListen,
+    soloMode: s.soloMode,
+    masterDim: s.masterDim,
+    masterMono: s.masterMono,
     recordQuantize: s.recordQuantize,
+    recordMode: s.recordMode,
+    recordCountIn: s.recordCountIn,
+    metronome: s.metronome,
+    selectedClipId: s.selectedClipId,
+    trackHeaderWidth: s.trackHeaderWidth,
   };
 }
 
@@ -1097,10 +1373,13 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePersist(get: () => FireSequencerState): void {
   if (typeof window === "undefined") return;
   if (persistTimer) clearTimeout(persistTimer);
+  // While transport is running, coalesce writes longer so note/drum edits
+  // don't fight the audio thread with JSON.stringify every few hundred ms.
+  const delay = get().playing ? 1600 : 400;
   persistTimer = setTimeout(() => {
     const data = persistShapeOf(get());
     try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { /* ignore */ }
-  }, 400);
+  }, delay);
 }
 
 // ── look-ahead scheduler (module scope: survives store re-renders) ──
@@ -1218,18 +1497,52 @@ function notesByStep(notes: RollNote[]): Map<number, RollNote[]> {
 }
 
 /** Pattern content the scheduler reads for one section (active = live mirror). */
-function contentFor(s: FireSequencerState, secId: string): {
+function contentFor(s: FireSequencerState, secId: string, clipId?: string): {
   notes: RollNote[];
   notesByStep: Map<number, RollNote[]>;
   drums: DrumPattern;
-  laneSteps: (laneId: string) => number[] | undefined;
+  laneSteps: (laneId: string) => DrumStep[] | undefined;
+  automation?: AutomationMap;
+  fromUnique?: boolean;
 } {
+  if (clipId && clipId !== "_active") {
+    const clip = s.arrangement.find((c) => c.id === clipId);
+    if (clip?.unique) {
+      // Live mirror while this unique clip is selected for edit.
+      if (clip.id === s.selectedClipId) {
+        return {
+          notes: s.notes,
+          notesByStep: notesByStep(s.notes),
+          drums: s.drums,
+          laneSteps: (laneId) => s.samples.find((l) => l.id === laneId)?.steps,
+          automation: s.automation,
+          fromUnique: true,
+        };
+      }
+      if (clip.local) {
+        const notes = clip.local.notes ?? [];
+        const bars = clip.local.bars ?? s.bars;
+        const total = bars * STEPS_PER_BAR;
+        const drums = clip.local.drums ?? emptyDrums(total);
+        const sampleSteps = clip.local.sampleSteps ?? {};
+        return {
+          notes,
+          notesByStep: notesByStep(notes),
+          drums,
+          laneSteps: (laneId) => sampleSteps[laneId],
+          automation: clip.local.automation,
+          fromUnique: true,
+        };
+      }
+    }
+  }
   if (secId === s.activeSectionId) {
     return {
       notes: s.notes,
       notesByStep: notesByStep(s.notes),
       drums: s.drums,
       laneSteps: (laneId) => s.samples.find((l) => l.id === laneId)?.steps,
+      automation: s.automation,
     };
   }
   const sec = s.sections.find((x) => x.id === secId);
@@ -1246,6 +1559,7 @@ function contentFor(s: FireSequencerState, secId: string): {
     notesByStep: notesByStep(sec.notes),
     drums: sec.drums,
     laneSteps: (laneId) => sec.sampleSteps[laneId],
+    automation: sec.automation,
   };
 }
 
@@ -1290,9 +1604,9 @@ function applyAutomationTick(s: FireSequencerState, now: number): void {
     if (!slot) return; // gap — silence, leave knobs alone this tick
     maybeRestoreArrSound(slot.sectionId);
     pos = g - slot.start;
-    auto = slot.sectionId === s.activeSectionId
-      ? s.automation
-      : s.sections.find((x) => x.id === slot.sectionId)?.automation ?? {};
+    // Unique clips carry automation in clip.local — same path as note/drum schedule.
+    const content = contentFor(s, slot.sectionId, slot.clipId);
+    auto = content.automation ?? {};
   }
   const fc = getEngine().fireCommand;
   for (const def of AUTO_PARAMS) {
@@ -1322,9 +1636,11 @@ function restoreAutomationBaseline(): void {
     // A newer play pass started while this resolved — its automation owns the
     // knobs now; restoring the stale baseline would stomp live sweeps.
     if (token !== startToken) return;
-    const patch = useFireCommandStore.getState().patch;
+    // Automation always drives Synth A — restore from patchA, not the active
+    // edit-target patch (which may be B while editing).
+    const patchA = useFireCommandStore.getState().patchA;
     const fc = getEngine().fireCommand;
-    for (const k of keys) fc.set(k, patch[k]);
+    for (const k of keys) fc.set(k, patchA[k]);
   });
 }
 
@@ -1338,24 +1654,66 @@ function schedulePatternAtStep(
   whenDrums: number,
   whenSamples: number,
   dur: number,
+  /** When true, route Synth A notes through ARP / harmony / chord (live only). */
+  bridgeLiveSynth = false,
 ): void {
+  const patternLen = Math.max(1, (content.drums.steps.kick?.length ?? STEPS_PER_BAR));
+  const anySolo = DRUM_LANES.some((l) => s.drumLaneMix?.[l.id]?.solo);
+  const fpA = engine.fireCommand.getPatch();
+  const fpB = engine.fireCommandB.getPatch();
+  const humanBaseOn = fpA.moduleEnable?.["human"] !== false && fpA.humanizeOn;
+
   if (s.drumsEnabled) {
     for (const lane of DRUM_LANES) {
-      const v = content.drums.steps[lane.id]?.[step] ?? 0;
-      if (v > 0) {
-        engine.fireDrums.trigger(lane.id, whenDrums, v);
-        if (s.duckEnabled && lane.id === s.duckSource) {
-          engine.fireDuckTrigger(whenDrums, s.duckAmount * v, s.duckReleaseMs / 1000);
+      const mix = s.drumLaneMix?.[lane.id] ?? DEFAULT_LANE_MIX();
+      if (mix.muted) continue;
+      if (anySolo && !mix.solo) continue;
+      const local = laneLocalStep(step, mix, patternLen);
+      const cell = content.drums.steps[lane.id]?.[local];
+      const st = coerceDrumStep(cell);
+      if (st.vel <= 0) continue;
+      const prob = st.prob ?? 1;
+      if (prob < 1 && Math.random() > prob) continue;
+
+      const scales = feelScales(mix.feel);
+      let when = whenDrums + (st.micro ?? 0) * dur * 0.45;
+      let vel = effectiveVel(st) * (mix.level ?? 1);
+      if (scales.timing > 0 || scales.velocity > 0) {
+        const tj = (humanBaseOn ? (fpA.humanizeTiming ?? 0.25) : 0.25) * dur * 0.35 * scales.timing;
+        const vj = (humanBaseOn ? (fpA.humanizeVelocity ?? 0.2) : 0.2) * 0.4 * scales.velocity;
+        when += (Math.random() * 2 - 1) * tj;
+        vel = Math.max(0.05, Math.min(1.2, vel * (1 + (Math.random() * 2 - 1) * vj)));
+      }
+
+      const ratchet = Math.max(1, Math.min(4, st.ratchet ?? 1));
+      const pan = mix.pan ?? 0;
+      for (let r = 0; r < ratchet; r++) {
+        const rt = when + (r * dur) / ratchet;
+        engine.fireDrums.trigger(lane.id, rt, vel, {
+          pan,
+          polarity: lane.id === "kick" ? (s.drumKickPolarity ?? 1) : 1,
+          chokeOpenHat: s.drumHatChoke !== false && lane.id === "chat",
+        });
+        if (s.duckEnabled && lane.id === s.duckSource && r === 0) {
+          engine.fireDuckTrigger(rt, s.duckAmount * vel, s.duckReleaseMs / 1000);
         }
       }
     }
   }
   for (const sl of s.samples) {
-    const v = content.laneSteps(sl.id)?.[step] ?? 0;
-    if (v <= 0) continue;
+    const cell = content.laneSteps(sl.id)?.[step];
+    const st = coerceDrumStep(cell);
+    if (st.vel <= 0) continue;
+    const prob = st.prob ?? 1;
+    if (prob < 1 && Math.random() > prob) continue;
     const buf = sampleBuffers.get(sl.path);
-    if (buf) engine.fireDrums.playBuffer(buf, whenSamples, v, sl.level, true);
-    else void loadSampleBuffer(sl.path);
+    if (!buf) { void loadSampleBuffer(sl.path); continue; }
+    const vel = effectiveVel(st);
+    const when = whenSamples + (st.micro ?? 0) * dur * 0.45;
+    const ratchet = Math.max(1, Math.min(4, st.ratchet ?? 1));
+    for (let r = 0; r < ratchet; r++) {
+      engine.fireDrums.playBuffer(buf, when + (r * dur) / ratchet, vel, sl.level, true);
+    }
   }
   if (s.synthEnabled || s.synthBEnabled) {
     const bucket = content.notesByStep.get(step);
@@ -1363,9 +1721,8 @@ function schedulePatternAtStep(
       for (const n of bucket) {
         const isB = n.ch === 1;
         if (isB ? !s.synthBEnabled : !s.synthEnabled) continue;
-        const target = isB ? engine.fireCommandB : engine.fireCommand;
         const offset = (n.step - step) * dur;
-        const fp = engine.fireCommand.getPatch();
+        const fp = isB ? fpB : fpA;
         const humanOn = fp.moduleEnable?.["human"] !== false && fp.humanizeOn;
         let when = whenSynth + offset;
         let vel = n.vel;
@@ -1375,9 +1732,23 @@ function schedulePatternAtStep(
           when += (Math.random() * 2 - 1) * tj;
           vel = Math.max(0.05, Math.min(1, n.vel * (1 + (Math.random() * 2 - 1) * vj)));
         }
-        target.playNote(
-          n.midi, vel, when, Math.max(0.03, n.len * dur * 0.98),
-        );
+        // Live: ARP / harmony / chord via bridge. Offline: harmony / chord
+        // expansions without wall-clock arp timers.
+        if (bridgeLiveSynth) {
+          scheduleSequencerSynthNote(
+            isB ? 1 : 0,
+            n.midi,
+            vel,
+            when,
+            Math.max(0.03, n.len * dur * 0.98),
+          );
+        } else {
+          const target = isB ? engine.fireCommandB : engine.fireCommand;
+          const noteDur = Math.max(0.03, n.len * dur * 0.98);
+          for (const v of expandSequencerSynthVoices(isB ? 1 : 0, n.midi, vel)) {
+            target.playNote(v.midi, v.vel, when, noteDur);
+          }
+        }
       }
     }
   }
@@ -1386,9 +1757,14 @@ function schedulePatternAtStep(
 /** Engine surface used by the live scheduler and offline dry bounce. */
 export type FireScheduleEngine = {
   fireCommand: { playNote: (midi: number, velocity: number, when: number, duration: number) => void; getPatch: () => { moduleEnable?: Record<string, boolean>; humanizeOn?: boolean; humanizeTiming?: number; humanizeVelocity?: number }; setPatch: (p: FirePatch) => void };
-  fireCommandB: { playNote: (midi: number, velocity: number, when: number, duration: number) => void; setPatch: (p: FirePatch) => void };
+  fireCommandB: { playNote: (midi: number, velocity: number, when: number, duration: number) => void; getPatch: () => { moduleEnable?: Record<string, boolean>; humanizeOn?: boolean; humanizeTiming?: number; humanizeVelocity?: number }; setPatch: (p: FirePatch) => void };
   fireDrums: {
-    trigger: (lane: import("@/audio/dsp/FireDrumKit").DrumLane, when: number, velocity?: number) => void;
+    trigger: (
+      lane: import("@/audio/dsp/FireDrumKit").DrumLane,
+      when: number,
+      velocity?: number,
+      opts?: { pan?: number; polarity?: number; chokeOpenHat?: boolean },
+    ) => void;
     playBuffer: (buffer: AudioBuffer, when: number, velocity?: number, level?: number, toSampleBus?: boolean) => void;
   };
   fireDuckTrigger: (when: number, amount: number, releaseSec: number) => void;
@@ -1440,7 +1816,7 @@ export function scheduleFirePass(
       applySound(primary.sectionId);
       for (const slot of slots) {
         const step = globalStep - slot.start;
-        const content = contentFor(s, slot.sectionId);
+        const content = contentFor(s, slot.sectionId, slot.clipId);
         const halfDur = dur * 0.5;
         const odd = step % 2 === 1;
         const whenSynth = base + (odd ? s.swing * halfDur : 0);
@@ -1495,8 +1871,38 @@ function startScheduler(get: () => FireSequencerState): void {
     const cue = get().playMode === "arrangement"
       ? clamp(Math.floor(arrangementCueStep), 0, Math.max(0, songTotal - 1))
       : 0;
-    loopStartTime = ctx.currentTime + 0.08 - cue * stepDur(get().bpm);
+    const st = get();
+    const dur0 = stepDur(st.bpm);
+    // Count-in only applies when transport starts while REC is armed.
+    // Delay musical content; schedule click track during the lead-in.
+    const leadSteps = st.recording ? Math.max(0, st.recordCountIn) * STEPS_PER_BAR : 0;
+    const leadSec = leadSteps * dur0;
+    const musicAt = ctx.currentTime + 0.08 + leadSec;
+    loopStartTime = musicAt - cue * dur0;
     nextStep = cue;
+    if (st.recording) {
+      recArmedAt = musicAt;
+      // Always click during count-in (even if Metro is off) so the lead is audible.
+      for (let i = 0; i < leadSteps; i++) {
+        if (i % 4 !== 0) continue;
+        const t = ctx.currentTime + 0.08 + i * dur0;
+        try {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.type = "square";
+          osc.frequency.value = i % STEPS_PER_BAR === 0 ? 1200 : 800;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(i % STEPS_PER_BAR === 0 ? 0.09 : 0.05, t + 0.002);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+          osc.connect(g);
+          g.connect(engine.destinationTap ?? ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.05);
+        } catch { /* ignore */ }
+      }
+    } else {
+      recArmedAt = 0;
+    }
 
     const tick = () => {
       const s = get();
@@ -1529,6 +1935,26 @@ function startScheduler(get: () => FireSequencerState): void {
         // long stall fires the whole backlog as one machine-gun burst.
         if (base < now - 0.03) { nextStep++; continue; }
 
+        // Metronome clicks (DSP-real subset) — bar + beat accents while armed.
+        if (s.metronome && (s.recording || s.playing)) {
+          const beatStep = song ? globalStep % STEPS_PER_BAR : globalStep % STEPS_PER_BAR;
+          if (beatStep % 4 === 0) {
+            try {
+              const osc = ctx.createOscillator();
+              const g = ctx.createGain();
+              osc.type = "square";
+              osc.frequency.value = beatStep === 0 ? 1200 : 800;
+              g.gain.setValueAtTime(0.0001, base);
+              g.gain.exponentialRampToValueAtTime(beatStep === 0 ? 0.08 : 0.045, base + 0.002);
+              g.gain.exponentialRampToValueAtTime(0.0001, base + 0.04);
+              osc.connect(g);
+              g.connect(engine.destinationTap ?? ctx.destination);
+              osc.start(base);
+              osc.stop(base + 0.05);
+            } catch { /* ignore */ }
+          }
+        }
+
         if (song) {
           const slots = slotsCovering(globalStep, s.playlistTracks);
           if (slots.length === 0) { nextStep++; continue; } // gap / muted = silence
@@ -1536,13 +1962,13 @@ function startScheduler(get: () => FireSequencerState): void {
           maybeRestoreArrSound(primary.sectionId);
           for (const slot of slots) {
             const step = globalStep - slot.start;
-            const content = contentFor(s, slot.sectionId);
+            const content = contentFor(s, slot.sectionId, slot.clipId);
             const halfDur = dur * 0.5;
             const odd = step % 2 === 1;
             const whenSynth = base + (odd ? s.swing * halfDur : 0);
             const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
             const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
-            schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur);
+            schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur, true);
           }
         } else {
           const step = globalStep;
@@ -1552,7 +1978,7 @@ function startScheduler(get: () => FireSequencerState): void {
           const whenSynth = base + (odd ? s.swing * halfDur : 0);
           const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
           const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
-          schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur);
+          schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur, true);
         }
 
         nextStep++;
@@ -1726,8 +2152,13 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   setSwingSamples: (v: number) => void;
   setSwingLinked: (on: boolean) => void;
 
-  /** Fill generator (v1.6): rewrite the LAST BAR of the drum grid as a fill. */
-  generateDrumFill: () => void;
+  /** Fill generator: rewrite the LAST BAR (or stage a preview). */
+  generateDrumFill: (opts?: { preview?: boolean; intensity?: number; personality?: FillPersonality }) => void;
+  acceptDrumFillPreview: () => void;
+  revertDrumFillPreview: () => void;
+  setDrumFillAuto: (on: boolean) => void;
+  setDrumFillIntensity: (v: number) => void;
+  setDrumFillPersonality: (p: FillPersonality) => void;
 
   // ── automation lanes (v1.7) ──
   /** Set (or erase with null) one lane point in the ACTIVE section. */
@@ -1736,7 +2167,8 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   clearAutomationLane: (param: AutoParamId) => void;
 
   toggleDrumStep: (lane: DrumLane, step: number) => void;
-  setDrumStep: (lane: DrumLane, step: number, vel: number) => void;
+  setDrumStep: (lane: DrumLane, step: number, velOrStep: number | Partial<DrumStep>) => void;
+  patchDrumStep: (lane: DrumLane, step: number, patch: Partial<DrumStep>) => void;
   clearDrums: () => void;
   /** Pattern-only groove presets (House / Trap / Break / Clear). */
   applyDrumGroove: (id: DrumGrooveId) => void;
@@ -1746,6 +2178,13 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   euclidLane: (lane: DrumLane, pulses: number) => void;
   randomLane: (lane: DrumLane, density: number) => void;
   clearLane: (lane: DrumLane) => void;
+  toggleDrumLaneLock: (lane: DrumLane) => void;
+  setDrumLaneMix: (lane: DrumLane, partial: Partial<DrumLaneMix>) => void;
+  setDrumHatChoke: (on: boolean) => void;
+  setDrumKickPolarity: (p: 1 | -1) => void;
+  setDrumFollowPlayhead: (on: boolean) => void;
+  transformDrumLane: (lane: DrumLane, op: "rotate" | "reverse" | "invert" | "shiftLeft" | "shiftRight" | "copyHalf") => void;
+  transformAllDrums: (op: "rotate" | "reverse" | "invert") => void;
 
   /** Swap a drum lane's synthesized hit for the operator's own sample. */
   setDrumSample: (lane: DrumLane, path: string | null, name?: string) => Promise<boolean>;
@@ -1754,7 +2193,7 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
 
   addSampleLane: (path: string, name: string) => Promise<boolean>;
   removeSampleLane: (id: string) => void;
-  setSampleStep: (id: string, step: number, vel: number) => void;
+  setSampleStep: (id: string, step: number, velOrStep: number | Partial<DrumStep>) => void;
   setSampleLevel: (id: string, level: number) => void;
   clearSampleLane: (id: string) => void;
   auditionSample: (id: string) => void;
@@ -1769,17 +2208,45 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   renameSection: (id: string, name: string) => void;
   removeSection: (id: string) => void;
   /** Place a pattern clip (UI supplies pre-snapped step). Overlap only blocked on the same track. */
-  placeClip: (patternId: string, startStep: number, track?: number) => string | null;
+  placeClip: (
+    patternId: string,
+    startStep: number,
+    track?: number,
+    opts?: { lengthSteps?: number },
+  ) => string | null;
   removeClip: (clipId: string) => void;
-  /** Move a clip; optional track change. Same-track overlaps park after last free end. */
-  moveClip: (clipId: string, startStep: number, track?: number) => void;
+  /** Move a clip; optional track change. Returns false if destination overlaps. */
+  moveClip: (clipId: string, startStep: number, track?: number) => boolean;
   duplicateClip: (clipId: string) => string | null;
-  /** Nudge clip start by sequencer steps (negative = earlier). */
-  nudgeClip: (clipId: string, stepsDelta: number) => void;
+  /** Nudge clip start by sequencer steps (negative = earlier). Returns false if blocked. */
+  nudgeClip: (clipId: string, stepsDelta: number) => boolean;
   /** Trim audible length in steps (1..pattern length). Pass null to restore full. */
   trimClip: (clipId: string, lengthSteps: number | null) => void;
   setClipColor: (clipId: string, color: string | null) => void;
   setPlaylistTrack: (index: number, partial: Partial<PlaylistTrack>) => void;
+  /** Make a linked clip unique (clip-local content copy). */
+  makeClipUnique: (clipId: string) => boolean;
+  /** Jump editor to the bank source pattern for a clip. */
+  editClipSource: (clipId: string) => void;
+  /** Commit unique local content into a new bank pattern and re-link. */
+  commitClipVariation: (clipId: string) => string | null;
+  /** Load unique clip local into the editor mirror for editing. */
+  selectClipForEdit: (clipId: string) => void;
+  /** Flush and clear arrangement clip selection. */
+  clearSelectedClip: () => void;
+  /** Change which bank pattern a clip points at (clears unique). */
+  replaceClipPattern: (clipId: string, patternId: string) => boolean;
+  setTrackHeaderWidth: (w: number) => void;
+  /** Pattern variation: duplicate / mutate / simplify / densify / fill. */
+  varyPattern: (mode: "duplicate" | "mutate" | "simplify" | "densify" | "fill") => void;
+  /** Count linked (non-unique) clips sharing a pattern. */
+  linkedClipCount: (patternId: string) => number;
+  /** Grow pattern bars with an explicit strategy. */
+  setBarsWithMode: (bars: number, mode: "empty" | "duplicate" | "stretch") => void;
+  /** Record mode extras. */
+  setRecordMode: (mode: "overdub" | "replace") => void;
+  setRecordCountIn: (bars: number) => void;
+  setMetronome: (on: boolean) => void;
   /** Scrub arrangement playhead. Works while stopped or playing. */
   seekArrangement: (absoluteStep: number) => void;
   setPlayMode: (mode: PlayMode) => void;
@@ -1791,9 +2258,20 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   setFireLimiterOn: (on: boolean) => void;
   setDuck: (partial: Partial<{
     enabled: boolean; amount: number; releaseMs: number; source: DrumLane;
+    attackMs: number; holdMs: number; hpfHz: number; listen: boolean;
   }>) => void;
+  setSoloMode: (mode: SoloMode) => void;
+  setMasterDim: (on: boolean) => void;
+  setMasterMono: (on: boolean) => void;
   /** Re-apply the persisted mixer to the engine (view mount / project load). */
   syncFireMixer: () => void;
+  /** Reset mixer + duck + limiter listen flags to factory defaults. */
+  resetMixDefaults: () => void;
+  /**
+   * Full blank-slate project reset: empty piano roll / drums / arrangement,
+   * default transport + mixer, stop playback. Used by Fire Command Defaults.
+   */
+  resetProjectDefaults: () => void;
 
   // ── live recording (v1.6) ──
   setRecording: (on: boolean) => void;
@@ -1816,23 +2294,17 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     const s = get();
     const drums = emptyDrums(total);
     for (const l of DRUM_LANES) {
-      const src = s.drums.steps[l.id];
-      for (let i = 0; i < total; i++) {
-        // Growing repeats the existing pattern; shrinking truncates.
-        drums.steps[l.id][i] = src[i % src.length] ?? 0;
-      }
+      drums.steps[l.id] = cloneSteps(s.drums.steps[l.id] ?? [], total);
     }
-    const samples = s.samples.map((sl) => {
-      const steps = new Array<number>(total).fill(0);
-      for (let i = 0; i < total; i++) steps[i] = sl.steps[i % Math.max(1, sl.steps.length)] ?? 0;
-      return { ...sl, steps };
-    });
+    const samples = s.samples.map((sl) => ({
+      ...sl,
+      steps: cloneSteps(sl.steps ?? [], total),
+    }));
     const automation: AutomationMap = {};
     for (const def of AUTO_PARAMS) {
       const src = s.automation[def.id];
       if (!src || src.length === 0) continue;
       const arr = new Array<number | null>(total).fill(null);
-      // Growing repeats the lane; shrinking truncates (same rule as drums).
       for (let i = 0; i < total; i++) arr[i] = src[i % src.length] ?? null;
       automation[def.id] = arr;
     }
@@ -1880,6 +2352,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       set({ playing: false });
       stopScheduler();
       pendingRec.clear();
+      clearSequencerArpLatches();
       const engine = getEngine();
       engine.fireCommand.allNotesOff();
       engine.peekFireCommandB()?.allNotesOff();
@@ -1907,6 +2380,11 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       // Re-anchor so the tempo change applies cleanly from "now".
       const wasPlaying = get().playing;
       set({ bpm: v });
+      try {
+        const eng = getEngine();
+        eng.fireCommand.setHostBpm(v);
+        eng.fireCommandB.setHostBpm(v);
+      } catch { /* engine not ready */ }
       if (wasPlaying) startScheduler(get);
       persist();
     },
@@ -2099,13 +2577,14 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       set({
         notes: s.notes.map((n) => {
           if (!sel.has(n.id)) return n;
-          let midi = clamp(n.midi + semis, 12, 108);
+          // Keep within the piano-roll viewport (C1–C7), not silent off-canvas.
+          let midi = clamp(n.midi + semis, 24, 96);
           if (s.scaleSnap && s.scaleId !== "off" && Math.abs(semis) === 1) {
             // Single-semitone nudges walk the SCALE, not the chromatic grid.
             const dir = semis > 0 ? 1 : -1;
             midi = n.midi;
             for (let step = 1; step <= 6; step++) {
-              const cand = clamp(n.midi + dir * step, 12, 108);
+              const cand = clamp(n.midi + dir * step, 24, 96);
               if (inScale(cand, s.scaleRoot, s.scaleId)) { midi = cand; break; }
             }
           }
@@ -2119,12 +2598,25 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       pushFireHistory();
       const s = get();
       const total = s.bars * STEPS_PER_BAR;
+      const p = useFireCommandStore.getState().patch;
+      const timing = p.humanizeTiming ?? 0.25;
+      const velAmt = p.humanizeVelocity ?? 0.2;
+      const protect = p.humanizeProtectDownbeats !== false;
+      let rng = (p.humanizeSeed ?? 0x4f1ce) >>> 0;
+      const rnd = () => {
+        rng = (Math.imul(rng ^ (rng >>> 15), rng | 1) >>> 0);
+        rng ^= rng + Math.imul(rng ^ (rng >>> 7), rng | 61);
+        return ((rng ^ (rng >>> 14)) >>> 0) / 4294967296;
+      };
       set({
-        notes: s.notes.map((n) => ({
-          ...n,
-          vel: clamp(n.vel + (Math.random() * 2 - 1) * 0.09, 0.05, 1),
-          step: clamp(n.step + (Math.random() * 2 - 1) * 0.045, 0, total - 0.25),
-        })),
+        notes: s.notes.map((n) => {
+          if (protect && Math.floor(n.step) % 16 === 0) return n;
+          return {
+            ...n,
+            vel: clamp(n.vel + (rnd() * 2 - 1) * velAmt * 0.35, 0.05, 1),
+            step: clamp(n.step + (rnd() * 2 - 1) * timing * 0.18, 0, total - 0.25),
+          };
+        }),
       });
       persist();
     },
@@ -2192,47 +2684,102 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     },
     setSwingLinked: (on) => { set({ swingLinked: on }); persist(); },
 
-    generateDrumFill: () => {
-      pushFireHistory();
+    generateDrumFill: (opts) => {
       const s = get();
+      const intensity = clamp(opts?.intensity ?? s.drumFillIntensity ?? 0.55, 0, 1);
+      const personality = opts?.personality ?? s.drumFillPersonality ?? "snareRoll";
+      const preview = opts?.preview === true;
       const total = s.bars * STEPS_PER_BAR;
-      const start = total - STEPS_PER_BAR; // the fill owns the last bar
-      const steps = {} as Record<DrumLane, number[]>;
-      for (const l of DRUM_LANES) steps[l.id] = [...s.drums.steps[l.id]];
+      const start = total - STEPS_PER_BAR;
+      const locks = s.drumLaneLocks ?? {};
+      const steps = {} as Record<DrumLane, DrumStep[]>;
+      for (const l of DRUM_LANES) steps[l.id] = s.drums.steps[l.id].map((x) => ({ ...x }));
+
+      const write = (lane: DrumLane, i: number, st: DrumStep) => {
+        if (locks[lane]) return;
+        steps[lane][start + i] = st;
+      };
       const clearBar = (lane: DrumLane) => {
-        for (let i = start; i < total; i++) steps[lane][i] = 0;
+        if (locks[lane]) return;
+        for (let i = 0; i < STEPS_PER_BAR; i++) steps[lane][start + i] = emptyStep();
       };
 
-      // Kick thins out — keep the downbeat, drop the rest of the bar.
-      clearBar("kick");
-      steps.kick[start] = 1;
-      // Snare density ramps toward the turnaround, velocities swelling.
-      clearBar("snare");
-      for (let i = 0; i < STEPS_PER_BAR; i++) {
-        const pos = i / (STEPS_PER_BAR - 1); // 0..1 through the bar
-        const density = 0.12 + pos * pos * 0.85;
-        if (Math.random() < density) {
-          steps.snare[start + i] = clamp(0.45 + pos * 0.55 + (Math.random() - 0.5) * 0.15, 0.3, 1);
+      // Base: thin kick + snare ramp
+      if (!locks.kick) {
+        clearBar("kick");
+        write("kick", 0, onStep(1));
+        if (personality === "kickBurst" || intensity > 0.7) {
+          for (let i = STEPS_PER_BAR - 4; i < STEPS_PER_BAR; i++) {
+            if (Math.random() < intensity) write("kick", i, onStep(0.6 + intensity * 0.3));
+          }
         }
       }
-      // Guarantee the classic closing burst.
-      for (let i = STEPS_PER_BAR - 3; i < STEPS_PER_BAR; i++) {
-        steps.snare[start + i] = clamp(0.7 + (i - (STEPS_PER_BAR - 3)) * 0.15, 0, 1);
+      if (!locks.snare) {
+        clearBar("snare");
+        if (personality === "snareRoll" || personality === "trap" || personality === "breakbeat") {
+          for (let i = 0; i < STEPS_PER_BAR; i++) {
+            const pos = i / (STEPS_PER_BAR - 1);
+            const density = 0.08 + pos * pos * (0.5 + intensity * 0.5);
+            if (Math.random() < density) {
+              write("snare", i, onStep(
+                clamp(0.4 + pos * 0.55, 0.3, 1),
+                intensity > 0.65 && Math.random() < 0.35 ? { ratchet: 2 + Math.floor(intensity * 2) } : undefined,
+              ));
+            }
+          }
+          for (let i = STEPS_PER_BAR - 3; i < STEPS_PER_BAR; i++) {
+            write("snare", i, onStep(0.75 + (i - (STEPS_PER_BAR - 3)) * 0.1, { accent: true }));
+          }
+        } else if (personality === "minimal") {
+          write("snare", STEPS_PER_BAR - 4, onStep(0.55, { prob: 0.7 }));
+          write("snare", STEPS_PER_BAR - 1, onStep(0.9, { accent: true }));
+        }
       }
-      // A couple of toms tumbling down the second half.
-      clearBar("tom");
-      for (let i = STEPS_PER_BAR / 2; i < STEPS_PER_BAR; i += 2) {
-        if (Math.random() < 0.5) steps.tom[start + i] = 0.6 + Math.random() * 0.3;
+      if (!locks.tom && (personality === "tomDescent" || intensity > 0.45)) {
+        clearBar("tom");
+        for (let i = STEPS_PER_BAR / 2; i < STEPS_PER_BAR; i += personality === "tomDescent" ? 1 : 2) {
+          if (Math.random() < 0.35 + intensity * 0.4) {
+            write("tom", i, onStep(0.5 + intensity * 0.4, { micro: (Math.random() - 0.5) * 0.3 }));
+          }
+        }
       }
-      // Open the hats up in the back half; drop the closed hats out for tension.
-      for (let i = STEPS_PER_BAR / 2; i < STEPS_PER_BAR; i++) steps.chat[start + i] = 0;
-      steps.ohat[start + STEPS_PER_BAR - 2] = 0.8;
-      // Crash lands on the loop's downbeat — the payoff.
-      steps.crash[0] = 1;
+      if (!locks.chat && personality === "hatRush") {
+        for (let i = STEPS_PER_BAR / 2; i < STEPS_PER_BAR; i++) {
+          write("chat", i, onStep(0.55, { ratchet: intensity > 0.6 ? 2 : 1 }));
+        }
+      }
+      if (!locks.ohat) {
+        write("ohat", STEPS_PER_BAR - 2, onStep(0.7 + intensity * 0.25));
+      }
+      if (!locks.crash && intensity > 0.35) {
+        write("crash", 0, onStep(1, { accent: true }));
+      }
 
-      set({ drums: { steps } });
+      const next: DrumPattern = { steps };
+      if (preview) {
+        set({ drumFillPreview: next, drumFillIntensity: intensity, drumFillPersonality: personality });
+      } else {
+        pushFireHistory();
+        set({ drums: next, drumFillPreview: null, drumFillIntensity: intensity, drumFillPersonality: personality });
+        persist();
+      }
+    },
+
+    acceptDrumFillPreview: () => {
+      const preview = get().drumFillPreview;
+      if (!preview) return;
+      pushFireHistory();
+      set({ drums: preview, drumFillPreview: null });
       persist();
     },
+
+    revertDrumFillPreview: () => {
+      set({ drumFillPreview: null });
+    },
+
+    setDrumFillAuto: (on) => { set({ drumFillAuto: on }); persist(); },
+    setDrumFillIntensity: (v) => { set({ drumFillIntensity: clamp(v, 0, 1) }); persist(); },
+    setDrumFillPersonality: (p) => { set({ drumFillPersonality: p }); persist(); },
 
     setAutomationPoint: (param, step, value) => {
       const s = get();
@@ -2263,32 +2810,61 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
     toggleDrumStep: (lane, step) => {
       const s = get();
-      const cur = s.drums.steps[lane][step] ?? 0;
-      get().setDrumStep(lane, step, cur > 0 ? 0 : 1);
+      const cur = coerceDrumStep(s.drums.steps[lane][step]);
+      get().setDrumStep(lane, step, cur.vel > 0 ? 0 : 1);
     },
 
-    setDrumStep: (lane, step, vel) => {
-      // Coalesce per lane: paint-drags across a row become one undo step.
+    setDrumStep: (lane, step, velOrStep) => {
       pushFireHistory(`drum:${lane}`);
       const s = get();
-      const steps = { ...s.drums.steps };
-      const arr = [...steps[lane]];
-      arr[step] = clamp(vel, 0, 1);
+      // While a fill preview is up, edit the preview so Accept keeps mid-preview paints.
+      const target = s.drumFillPreview ?? s.drums;
+      const steps = { ...target.steps };
+      const arr = steps[lane].map((x) => ({ ...x }));
+      if (typeof velOrStep === "number") {
+        arr[step] = velOrStep > 0 ? onStep(velOrStep) : emptyStep();
+      } else {
+        const base = coerceDrumStep(arr[step]);
+        const next = { ...base, ...velOrStep };
+        arr[step] = (next.vel ?? 0) > 0 ? coerceDrumStep(next) : emptyStep();
+      }
       steps[lane] = arr;
-      set({ drums: { steps } });
-      persist();
+      if (s.drumFillPreview) {
+        set({ drumFillPreview: { steps } });
+      } else {
+        set({ drums: { steps } });
+        persist();
+      }
+    },
+
+    patchDrumStep: (lane, step, patch) => {
+      const cur = coerceDrumStep(get().drums.steps[lane][step]);
+      get().setDrumStep(lane, step, { ...cur, ...patch, vel: patch.vel ?? cur.vel });
     },
 
     clearDrums: () => {
       pushFireHistory();
-      set({ drums: emptyDrums(get().bars * STEPS_PER_BAR) });
+      const s = get();
+      const total = s.bars * STEPS_PER_BAR;
+      const locks = s.drumLaneLocks ?? {};
+      const next = emptyDrums(total);
+      for (const l of DRUM_LANES) {
+        if (locks[l.id]) next.steps[l.id] = s.drums.steps[l.id].map((x) => ({ ...x }));
+      }
+      set({ drums: next });
       persist();
     },
 
     applyDrumGroove: (id) => {
       pushFireHistory();
-      const total = get().bars * STEPS_PER_BAR;
-      set({ drums: buildDrumGroove(id, total) });
+      const s = get();
+      const total = s.bars * STEPS_PER_BAR;
+      const locks = s.drumLaneLocks ?? {};
+      const next = buildDrumGroove(id, total);
+      for (const l of DRUM_LANES) {
+        if (locks[l.id]) next.steps[l.id] = s.drums.steps[l.id].map((x) => ({ ...x }));
+      }
+      set({ drums: next });
       persist();
     },
 
@@ -2301,14 +2877,15 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     },
 
     euclidLane: (lane, pulses) => {
+      if (get().drumLaneLocks?.[lane]) return;
       pushFireHistory(`euclid:${lane}`);
       const s = get();
       const total = s.bars * STEPS_PER_BAR;
       const perBar = euclidPattern(pulses, STEPS_PER_BAR);
       const steps = { ...s.drums.steps };
-      const arr = new Array<number>(total).fill(0);
+      const arr = Array.from({ length: total }, () => emptyStep());
       for (let i = 0; i < total; i++) {
-        if (perBar[i % STEPS_PER_BAR]) arr[i] = 1;
+        if (perBar[i % STEPS_PER_BAR]) arr[i] = onStep(1);
       }
       steps[lane] = arr;
       set({ drums: { steps } });
@@ -2316,14 +2893,15 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     },
 
     randomLane: (lane, density) => {
+      if (get().drumLaneLocks?.[lane]) return;
       pushFireHistory();
       const s = get();
       const total = s.bars * STEPS_PER_BAR;
       const steps = { ...s.drums.steps };
-      const arr = new Array<number>(total).fill(0);
+      const arr = Array.from({ length: total }, () => emptyStep());
       for (let i = 0; i < total; i++) {
         if (Math.random() < density) {
-          arr[i] = Math.random() < 0.3 ? 0.7 : 1;
+          arr[i] = onStep(Math.random() < 0.3 ? 0.7 : 1, Math.random() < 0.15 ? { prob: 0.7 } : undefined);
         }
       }
       steps[lane] = arr;
@@ -2332,10 +2910,65 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     },
 
     clearLane: (lane) => {
+      if (get().drumLaneLocks?.[lane]) return;
       pushFireHistory();
       const s = get();
       const steps = { ...s.drums.steps };
-      steps[lane] = new Array<number>(s.bars * STEPS_PER_BAR).fill(0);
+      steps[lane] = Array.from({ length: s.bars * STEPS_PER_BAR }, () => emptyStep());
+      set({ drums: { steps } });
+      persist();
+    },
+
+    toggleDrumLaneLock: (lane) => {
+      const locks = { ...(get().drumLaneLocks ?? {}) };
+      locks[lane] = !locks[lane];
+      set({ drumLaneLocks: locks });
+      persist();
+    },
+
+    setDrumLaneMix: (lane, partial) => {
+      const cur = { ...DEFAULT_LANE_MIX(), ...(get().drumLaneMix?.[lane] ?? {}) };
+      const next = { ...(get().drumLaneMix ?? {}), [lane]: { ...cur, ...partial } };
+      set({ drumLaneMix: next });
+      persist();
+    },
+
+    setDrumHatChoke: (on) => { set({ drumHatChoke: on }); persist(); },
+    setDrumKickPolarity: (p) => { set({ drumKickPolarity: p }); persist(); },
+    setDrumFollowPlayhead: (on) => { set({ drumFollowPlayhead: on }); persist(); },
+
+    transformDrumLane: (lane, op) => {
+      if (get().drumLaneLocks?.[lane]) return;
+      pushFireHistory(`xform:${lane}`);
+      const s = get();
+      const arr = s.drums.steps[lane].map((x) => ({ ...x }));
+      const n = arr.length;
+      let next = arr;
+      if (op === "rotate" || op === "shiftRight") next = [arr[n - 1]!, ...arr.slice(0, n - 1)];
+      else if (op === "shiftLeft") next = [...arr.slice(1), arr[0]!];
+      else if (op === "reverse") next = [...arr].reverse();
+      else if (op === "invert") next = arr.map((st) => (st.vel > 0 ? emptyStep() : onStep(0.85)));
+      else if (op === "copyHalf") {
+        const half = Math.floor(n / 2);
+        next = arr.map((st, i) => (i >= half ? { ...arr[i - half]! } : st));
+      }
+      set({ drums: { steps: { ...s.drums.steps, [lane]: next } } });
+      persist();
+    },
+
+    transformAllDrums: (op) => {
+      pushFireHistory();
+      const s = get();
+      const locks = s.drumLaneLocks ?? {};
+      const steps = { ...s.drums.steps };
+      for (const l of DRUM_LANES) {
+        if (locks[l.id]) continue;
+        const arr = steps[l.id].map((x) => ({ ...x }));
+        const n = arr.length;
+        if (op === "rotate") steps[l.id] = [arr[n - 1]!, ...arr.slice(0, n - 1)];
+        else if (op === "reverse") steps[l.id] = [...arr].reverse();
+        else steps[l.id] = arr.map((st) => (st.vel > 0 ? emptyStep() : onStep(0.85)));
+      }
       set({ drums: { steps } });
       persist();
     },
@@ -2361,11 +2994,17 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
     hydrateSamples: async () => {
       const s = get();
+      const drums = getEngine().fireDrums;
       for (const lane of DRUM_LANES) {
         const spec = s.drumSamples[lane.id];
-        if (!spec) continue;
+        if (!spec?.path) {
+          // Clear stale overrides left over from a previous project/session.
+          drums.setSample(lane.id, null);
+          continue;
+        }
         const buf = await loadSampleBuffer(spec.path);
-        if (buf) getEngine().fireDrums.setSample(lane.id, buf);
+        if (buf) drums.setSample(lane.id, buf);
+        else drums.setSample(lane.id, null);
       }
       await Promise.all(s.samples.map((sl) => loadSampleBuffer(sl.path)));
     },
@@ -2381,7 +3020,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         name: name.slice(0, 40),
         path: filePath,
         level: 1,
-        steps: new Array<number>(get().bars * STEPS_PER_BAR).fill(0),
+        steps: Array.from({ length: get().bars * STEPS_PER_BAR }, () => emptyStep()),
       };
       set({ samples: [...get().samples, lane] });
       persist();
@@ -2402,14 +3041,21 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
-    setSampleStep: (id, step, vel) => {
+    setSampleStep: (id, step, velOrStep) => {
       pushFireHistory(`sampleStep:${id}`);
       set({
-        samples: get().samples.map((l) =>
-          l.id === id
-            ? { ...l, steps: l.steps.map((v, i) => (i === step ? clamp(vel, 0, 1) : v)) }
-            : l,
-        ),
+        samples: get().samples.map((l) => {
+          if (l.id !== id) return l;
+          const steps = l.steps.map((x) => ({ ...x }));
+          if (typeof velOrStep === "number") {
+            steps[step] = velOrStep > 0 ? onStep(velOrStep) : emptyStep();
+          } else {
+            const base = coerceDrumStep(steps[step]);
+            const next = { ...base, ...velOrStep };
+            steps[step] = (next.vel ?? 0) > 0 ? coerceDrumStep(next) : emptyStep();
+          }
+          return { ...l, steps };
+        }),
       });
       persist();
     },
@@ -2429,7 +3075,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const total = get().bars * STEPS_PER_BAR;
       set({
         samples: get().samples.map((l) =>
-          l.id === id ? { ...l, steps: new Array<number>(total).fill(0) } : l,
+          l.id === id ? { ...l, steps: Array.from({ length: total }, () => emptyStep()) } : l,
         ),
       });
       persist();
@@ -2449,15 +3095,24 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
     setActiveSection: (id) => {
       const s = get();
-      if (id === s.activeSectionId) return;
-      // Snapshot live A/B into the leaving section, then restore target if it has snaps.
-      const sections = sectionsWithActive(s).map((sec) =>
-        sec.id === s.activeSectionId ? withLivePatchSnapshots(sec) : sec,
+      if (id === s.activeSectionId && !editingUniqueClip(s)) return;
+      // Flush unique local (if any) before switching bank section.
+      const arrangement = arrangementWithActive(s);
+      const wasUnique = !!editingUniqueClip(s);
+      // Snapshot live A/B into the leaving section only when not editing unique.
+      const sections = (wasUnique ? s.sections : sectionsWithActive({ ...s, arrangement })).map((sec) =>
+        !wasUnique && sec.id === s.activeSectionId ? withLivePatchSnapshots(sec) : sec,
       );
       const target = sections.find((x) => x.id === id);
       if (!target) return;
       const m = mirrorOf(target, s.samples);
-      set({ sections, activeSectionId: id, ...m });
+      set({
+        sections,
+        arrangement,
+        activeSectionId: id,
+        selectedClipId: wasUnique ? null : s.selectedClipId,
+        ...m,
+      });
       restoreSectionPatches(target);
       lastArrSoundSec = id;
       if (s.playing && s.playMode === "pattern") startScheduler(get);
@@ -2469,7 +3124,10 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const s = get();
       if (s.sections.length >= MAX_SECTIONS) return null;
       pushFireHistory();
-      const sections = sectionsWithActive(s);
+      // Flush unique locals first; never leave selectedClipId pointing at unique while mirror becomes a blank pattern.
+      const arrangement = arrangementWithActive(s);
+      const wasUnique = !!editingUniqueClip(s);
+      const sections = wasUnique ? s.sections : sectionsWithActive({ ...s, arrangement });
       const bars = 2;
       const total = bars * STEPS_PER_BAR;
       const sec: Section = {
@@ -2478,13 +3136,15 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         bars,
         notes: [],
         drums: emptyDrums(total),
-        sampleSteps: Object.fromEntries(s.samples.map((l) => [l.id, new Array(total).fill(0)])),
+        sampleSteps: Object.fromEntries(s.samples.map((l) => [l.id, Array.from({ length: total }, () => emptyStep())])),
         automation: {},
       };
       const m = mirrorOf(sec, s.samples);
       set({
         sections: [...sections, sec],
+        arrangement,
         activeSectionId: sec.id,
+        selectedClipId: null,
         ...m,
       });
       if (s.playing && s.playMode === "pattern") startScheduler(get);
@@ -2497,7 +3157,9 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const s = get();
       if (s.sections.length >= MAX_SECTIONS) return null;
       pushFireHistory();
-      const sections = sectionsWithActive(s);
+      const arrangement = arrangementWithActive(s);
+      const wasUnique = !!editingUniqueClip(s);
+      const sections = wasUnique ? s.sections : sectionsWithActive({ ...s, arrangement });
       const src = sections.find((x) => x.id === s.activeSectionId) ?? sections[0];
       const sec: Section = {
         id: sectionId(),
@@ -2513,7 +3175,9 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const m = mirrorOf(sec, s.samples);
       set({
         sections: [...sections, sec],
+        arrangement,
         activeSectionId: sec.id,
+        selectedClipId: null,
         ...m,
       });
       if (s.playing && s.playMode === "pattern") startScheduler(get);
@@ -2552,18 +3216,20 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
-    placeClip: (patternId, startStep, track = 0) => {
+    placeClip: (patternId, startStep, track = 0, opts) => {
       const s = get();
       if (s.arrangement.length >= MAX_CLIPS) return null;
       const secs = sectionsWithActive(s);
       const sec = secs.find((x) => x.id === patternId);
       if (!sec) return null;
-      pushFireHistory();
-      const len = sectionLenSteps(sec);
+      const full = sectionLenSteps(sec);
+      const len = opts?.lengthSteps != null
+        ? clamp(Math.round(opts.lengthSteps), 1, full)
+        : full;
       const tr = clamp(Math.round(track), 0, MAX_PLAYLIST_TRACKS - 1);
       let start = snapToStep(startStep);
-      const maxStart = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
-      start = clamp(start, 0, Math.max(0, maxStart));
+      const maxStart = Math.max(0, MAX_ARRANGEMENT_BARS * STEPS_PER_BAR - len);
+      start = clamp(start, 0, maxStart);
 
       const occupied = s.arrangement
         .filter((c) => (c.track ?? 0) === tr)
@@ -2578,9 +3244,19 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
       if (overlaps(start)) return null;
 
+      pushFireHistory();
       const id = clipId();
       set({
-        arrangement: [...s.arrangement, { id, patternId, startStep: start, track: tr }],
+        arrangement: [
+          ...s.arrangement,
+          {
+            id,
+            patternId,
+            startStep: start,
+            track: tr,
+            lengthSteps: len === full ? undefined : len,
+          },
+        ],
       });
       refreshSongMap(get);
       persist();
@@ -2591,7 +3267,19 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const s = get();
       if (!s.arrangement.some((c) => c.id === id)) return;
       pushFireHistory();
-      set({ arrangement: s.arrangement.filter((c) => c.id !== id) });
+      const wasSelected = s.selectedClipId === id;
+      const wasUnique = wasSelected && !!editingUniqueClip(s);
+      const arrangement = s.arrangement.filter((c) => c.id !== id);
+      if (wasUnique) {
+        // Discard unique edits with the clip — restore bank mirror, never write unique → bank.
+        const target = s.sections.find((x) => x.id === s.activeSectionId);
+        const m = target ? mirrorOf(target, s.samples) : {};
+        set({ arrangement, selectedClipId: null, ...m });
+      } else if (wasSelected) {
+        set({ arrangement, selectedClipId: null });
+      } else {
+        set({ arrangement });
+      }
       refreshSongMap(get);
       persist();
     },
@@ -2599,11 +3287,10 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     moveClip: (id, startStep, track) => {
       const s = get();
       const clip = s.arrangement.find((c) => c.id === id);
-      if (!clip) return;
+      if (!clip) return false;
       const secs = sectionsWithActive(s);
       const sec = secs.find((x) => x.id === clip.patternId);
-      if (!sec) return;
-      pushFireHistory();
+      if (!sec) return false;
       const len = clipAudibleLen(clip, sec);
       const tr = clamp(
         Math.round(track == null ? (clip.track ?? 0) : track),
@@ -2611,8 +3298,11 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         MAX_PLAYLIST_TRACKS - 1,
       );
       let start = snapToStep(startStep);
-      const maxStart = (MAX_ARRANGEMENT_BARS - sec.bars) * STEPS_PER_BAR;
-      start = clamp(start, 0, Math.max(0, maxStart));
+      const maxStart = Math.max(0, MAX_ARRANGEMENT_BARS * STEPS_PER_BAR - len);
+      start = clamp(start, 0, maxStart);
+
+      // No-op move — don't pollute undo.
+      if (start === clip.startStep && tr === (clip.track ?? 0)) return true;
 
       const occupied = s.arrangement
         .filter((c) => c.id !== id && (c.track ?? 0) === tr)
@@ -2625,8 +3315,9 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const overlaps = (st: number) =>
         occupied.some((o) => st < o.start + o.len && o.start < st + len);
 
-      if (overlaps(start)) return;
+      if (overlaps(start)) return false;
 
+      pushFireHistory();
       set({
         arrangement: s.arrangement.map((c) =>
           c.id === id ? { ...c, startStep: start, track: tr } : c,
@@ -2634,41 +3325,49 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       });
       refreshSongMap(get);
       persist();
+      return true;
     },
 
     duplicateClip: (id) => {
       const s = get();
       const clip = s.arrangement.find((c) => c.id === id);
       if (!clip || s.arrangement.length >= MAX_CLIPS) return null;
-      const secs = sectionsWithActive(s);
-      const sec = secs.find((x) => x.id === clip.patternId);
+      const arrangement = arrangementWithActive(s);
+      const live = arrangement.find((c) => c.id === id) ?? clip;
+      const secs = sectionsWithActive({ ...s, arrangement, selectedClipId: editingUniqueClip(s) ? null : s.selectedClipId });
+      const sec = secs.find((x) => x.id === live.patternId);
       if (!sec) return null;
-      const len = clipAudibleLen(clip, sec);
-      const newId = get().placeClip(clip.patternId, clip.startStep + len, clip.track ?? 0);
+      const len = clipAudibleLen(live, sec);
+      const newId = get().placeClip(live.patternId, live.startStep + len, live.track ?? 0, {
+        lengthSteps: live.lengthSteps ?? len,
+      });
       if (!newId) return null;
-      if (clip.lengthSteps != null || clip.color) {
-        set({
-          arrangement: get().arrangement.map((c) =>
-            c.id === newId
-              ? {
-                  ...c,
-                  lengthSteps: clip.lengthSteps,
-                  color: clip.color,
-                }
-              : c,
-          ),
-        });
-        refreshSongMap(get);
-        persist();
-      }
+      set({
+        arrangement: get().arrangement.map((c) =>
+          c.id === newId
+            ? {
+                ...c,
+                lengthSteps: live.lengthSteps,
+                color: live.color,
+                unique: live.unique || undefined,
+                local: live.unique && live.local ? structuredClone(live.local) : undefined,
+                instanceLabel: live.unique
+                  ? `${live.instanceLabel ?? sec.name}copy`
+                  : undefined,
+              }
+            : c,
+        ),
+      });
+      refreshSongMap(get);
+      persist();
       return newId;
     },
 
     nudgeClip: (id, stepsDelta) => {
       const s = get();
       const clip = s.arrangement.find((c) => c.id === id);
-      if (!clip || !Number.isFinite(stepsDelta) || stepsDelta === 0) return;
-      get().moveClip(id, clip.startStep + stepsDelta, clip.track);
+      if (!clip || !Number.isFinite(stepsDelta) || stepsDelta === 0) return false;
+      return get().moveClip(id, clip.startStep + stepsDelta, clip.track);
     },
 
     trimClip: (id, lengthSteps) => {
@@ -2679,7 +3378,10 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const sec = secs.find((x) => x.id === clip.patternId);
       if (!sec) return;
       pushFireHistory();
-      const full = sectionLenSteps(sec);
+      const fullBars = clip.unique && clip.local?.bars != null
+        ? Math.max(1, clip.local.bars)
+        : Math.max(1, sec.bars);
+      const full = fullBars * STEPS_PER_BAR;
       const nextLen = lengthSteps == null
         ? undefined
         : clamp(snapToStep(lengthSteps), 1, full);
@@ -2708,6 +3410,323 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
+    makeClipUnique: (id) => {
+      const s = get();
+      const clip = s.arrangement.find((c) => c.id === id);
+      if (!clip || clip.unique) return false;
+      // Flush bank mirror into sections first so local is a true copy of source.
+      const sections = sectionsWithActive(s);
+      const sec = sections.find((x) => x.id === clip.patternId);
+      if (!sec) return false;
+      pushFireHistory();
+      const sameSource = s.arrangement.filter((c) => c.patternId === clip.patternId && c.unique);
+      const instanceLabel = `${sec.name}${sameSource.length + 1}`;
+      const local: ClipLocalContent = {
+        bars: sec.bars,
+        notes: structuredClone(sec.notes),
+        drums: structuredClone(sec.drums),
+        sampleSteps: structuredClone(sec.sampleSteps),
+        automation: structuredClone(sec.automation),
+      };
+      const total = sec.bars * STEPS_PER_BAR;
+      const samples = s.samples.map((l) => ({
+        ...l,
+        steps: sanitizeStepArray(local.sampleSteps?.[l.id], total),
+      }));
+      // Load local into the mirror in the same set — don't leave selectedClipId
+      // pointing at unique while the mirror still holds unrelated content.
+      set({
+        sections,
+        arrangement: s.arrangement.map((c) =>
+          c.id === id ? { ...c, unique: true, local, instanceLabel } : c,
+        ),
+        selectedClipId: id,
+        bars: sec.bars,
+        notes: local.notes ?? [],
+        drums: local.drums ?? emptyDrums(total),
+        automation: local.automation ?? {},
+        samples,
+      });
+      persist();
+      return true;
+    },
+
+    editClipSource: (id) => {
+      const clip = get().arrangement.find((c) => c.id === id);
+      if (!clip) return;
+      // setActiveSection flushes unique + clears selectedClipId when leaving UNIQUE.
+      // Do NOT re-select the unique clip — that would overwrite local with bank.
+      get().setActiveSection(clip.patternId);
+    },
+
+    commitClipVariation: (id) => {
+      const s = get();
+      // Flush live unique edits into arrangement before reading local.
+      const arrangement = arrangementWithActive(s);
+      const clip = arrangement.find((c) => c.id === id);
+      if (!clip?.unique || !clip.local) return null;
+      if (s.sections.length >= MAX_SECTIONS) return null;
+      pushFireHistory();
+      const local = clip.local;
+      const bars = local.bars ?? s.bars;
+      const total = bars * STEPS_PER_BAR;
+      const newId = sectionId();
+      const name = (clip.instanceLabel ?? nextSectionName(s.sections)).slice(0, 24);
+      const newSec: Section = {
+        id: newId,
+        name,
+        bars,
+        notes: local.notes ?? [],
+        drums: local.drums ?? emptyDrums(total),
+        sampleSteps: local.sampleSteps ?? {},
+        automation: local.automation ?? {},
+      };
+      // Bank sections unchanged (we were editing unique) + new pattern.
+      const sections = [...s.sections, newSec];
+      const m = mirrorOf(newSec, s.samples);
+      set({
+        sections,
+        arrangement: arrangement.map((c) =>
+          c.id === id
+            ? { ...c, patternId: newId, unique: false, local: undefined, instanceLabel: undefined }
+            : c,
+        ),
+        activeSectionId: newId,
+        selectedClipId: id, // now linked to the new bank pattern
+        ...m,
+      });
+      refreshSongMap(get);
+      persist();
+      return newId;
+    },
+
+    selectClipForEdit: (id) => {
+      const s = get();
+      const clip = s.arrangement.find((c) => c.id === id);
+      if (!clip) return;
+
+      const wasUnique = !!editingUniqueClip(s);
+      // Flush unique → arrangement; flush bank → sections only when leaving bank (not unique).
+      const arrangement = arrangementWithActive(s);
+      const sections = wasUnique ? s.sections : sectionsWithActive({ ...s, arrangement });
+
+      if (clip.unique) {
+        const local = arrangement.find((c) => c.id === id)?.local ?? clip.local;
+        if (!local) return;
+        const bars = local.bars ?? s.bars;
+        const total = bars * STEPS_PER_BAR;
+        const samples = s.samples.map((l) => ({
+          ...l,
+          steps: sanitizeStepArray(local.sampleSteps?.[l.id], total),
+        }));
+        set({
+          sections,
+          arrangement,
+          selectedClipId: id,
+          // Keep lineage section id for breadcrumb without loading bank into mirror.
+          activeSectionId: clip.patternId,
+          bars,
+          notes: local.notes ?? [],
+          drums: local.drums ?? emptyDrums(total),
+          automation: local.automation ?? {},
+          samples,
+        });
+        persist();
+        return;
+      }
+
+      // Linked: clear unique context first so setActiveSection never writes unique → bank.
+      set({ sections, arrangement, selectedClipId: null });
+      get().setActiveSection(clip.patternId);
+      set({ selectedClipId: id });
+    },
+
+    clearSelectedClip: () => {
+      const s = get();
+      if (!s.selectedClipId) return;
+      const wasUnique = !!editingUniqueClip(s);
+      const arrangement = arrangementWithActive(s);
+      if (wasUnique) {
+        const target = s.sections.find((x) => x.id === s.activeSectionId);
+        const m = target ? mirrorOf(target, s.samples) : {};
+        set({ arrangement, selectedClipId: null, ...m });
+      } else {
+        const sections = sectionsWithActive({ ...s, arrangement });
+        set({ sections, arrangement, selectedClipId: null });
+      }
+      persist();
+    },
+
+    /** Replace a clip's patternId (linked lineage change). */
+    replaceClipPattern: (clipId, patternId) => {
+      const s = get();
+      if (!s.arrangement.some((c) => c.id === clipId)) return false;
+      if (!s.sections.some((sec) => sec.id === patternId) && patternId !== s.activeSectionId) {
+        const secs = sectionsWithActive(s);
+        if (!secs.some((sec) => sec.id === patternId)) return false;
+      }
+      pushFireHistory();
+      set({
+        arrangement: arrangementWithActive(s).map((c) =>
+          c.id === clipId
+            ? { ...c, patternId, unique: false, local: undefined, instanceLabel: undefined }
+            : c,
+        ),
+      });
+      refreshSongMap(get);
+      persist();
+      return true;
+    },
+
+    setTrackHeaderWidth: (w) => {
+      set({ trackHeaderWidth: clamp(Math.round(w), 120, 280) });
+      persist();
+    },
+
+    /** Pattern variation helpers — densify / simplify / mutate / fill. */
+    varyPattern: (mode) => {
+      const s = get();
+      pushFireHistory(`vary:${mode}`);
+      const total = s.bars * STEPS_PER_BAR;
+      if (mode === "duplicate") {
+        get().duplicatePattern();
+        return;
+      }
+      if (mode === "mutate") {
+        // Light note jitter + drum fill — ties into existing fill engine / NS entry.
+        const notes = s.notes.map((n) => ({
+          ...n,
+          vel: clamp(n.vel + (Math.random() * 2 - 1) * 0.12, 0.05, 1),
+          step: clamp(n.step + (Math.random() * 2 - 1) * 0.15, 0, total - 0.25),
+        }));
+        set({ notes });
+        get().generateDrumFill({ preview: false, intensity: s.drumFillIntensity });
+        persist();
+        return;
+      }
+      if (mode === "simplify") {
+        set({
+          notes: s.notes.filter((n, i) => i % 2 === 0 || n.vel > 0.7 || Math.floor(n.step) % 4 === 0),
+        });
+        persist();
+        return;
+      }
+      if (mode === "densify") {
+        const extra = s.notes
+          .filter((n) => n.vel > 0.4)
+          .slice(0, 24)
+          .map((n) => ({
+            ...n,
+            id: noteId(),
+            step: clamp(n.step + (Math.random() > 0.5 ? 0.5 : 1), 0, total - 0.25),
+            vel: clamp(n.vel * 0.7, 0.05, 1),
+            len: Math.max(0.25, n.len * 0.5),
+          }));
+        set({ notes: [...s.notes, ...extra] });
+        persist();
+        return;
+      }
+      if (mode === "fill") {
+        get().generateDrumFill({
+          preview: false,
+          intensity: Math.max(0.45, s.drumFillIntensity),
+        });
+        persist();
+      }
+    },
+
+    linkedClipCount: (patternId) => {
+      const s = get();
+      return s.arrangement.filter((c) => c.patternId === patternId && !c.unique).length;
+    },
+
+    setBarsWithMode: (bars, mode) => {
+      const next = clamp(Math.round(bars), 1, MAX_BARS);
+      const s = get();
+      if (next === s.bars) return;
+      if (next < s.bars || mode === "empty") {
+        get().setBars(next);
+        return;
+      }
+      pushFireHistory();
+      const oldTotal = s.bars * STEPS_PER_BAR;
+      const total = next * STEPS_PER_BAR;
+      if (mode === "duplicate") {
+        const drums = emptyDrums(total);
+        for (const l of DRUM_LANES) {
+          for (let i = 0; i < total; i++) {
+            drums.steps[l.id][i] = { ...(s.drums.steps[l.id][i % oldTotal] ?? emptyStep()) };
+          }
+        }
+        const notes = [
+          ...s.notes,
+          ...s.notes.map((n) => ({
+            ...n,
+            id: `dup${Math.random().toString(36).slice(2, 8)}`,
+            step: n.step + oldTotal,
+          })).filter((n) => n.step < total),
+        ];
+        const samples = s.samples.map((sl) => ({
+          ...sl,
+          steps: Array.from({ length: total }, (_, i) => ({ ...(sl.steps[i % oldTotal] ?? emptyStep()) })),
+        }));
+        const automation: AutomationMap = {};
+        for (const def of AUTO_PARAMS) {
+          const src = s.automation[def.id];
+          if (!src || src.length === 0) continue;
+          const arr = new Array<number | null>(total).fill(null);
+          for (let i = 0; i < total; i++) arr[i] = src[i % oldTotal] ?? null;
+          automation[def.id] = arr;
+        }
+        set({ bars: next, drums, notes, samples, automation });
+      } else {
+        const scale = next / s.bars;
+        const notes = s.notes.map((n) => ({
+          ...n,
+          step: Math.min(total - 0.25, n.step * scale),
+          len: Math.max(0.25, n.len * scale),
+        }));
+        const drums = emptyDrums(total);
+        for (const l of DRUM_LANES) {
+          for (let i = 0; i < oldTotal; i++) {
+            const st = s.drums.steps[l.id][i];
+            if (!st || st.vel <= 0) continue;
+            const dest = Math.min(total - 1, Math.round(i * scale));
+            drums.steps[l.id][dest] = { ...st };
+          }
+        }
+        const samples = s.samples.map((sl) => {
+          const nextSteps = Array.from({ length: total }, () => emptyStep());
+          for (let i = 0; i < oldTotal; i++) {
+            const st = sl.steps[i];
+            if (!st || st.vel <= 0) continue;
+            const dest = Math.min(total - 1, Math.round(i * scale));
+            nextSteps[dest] = { ...st };
+          }
+          return { ...sl, steps: nextSteps };
+        });
+        const automation: AutomationMap = {};
+        for (const def of AUTO_PARAMS) {
+          const src = s.automation[def.id];
+          if (!src || src.length === 0) continue;
+          const arr = new Array<number | null>(total).fill(null);
+          for (let i = 0; i < oldTotal; i++) {
+            const v = src[i];
+            if (v == null) continue;
+            const dest = Math.min(total - 1, Math.round(i * scale));
+            arr[dest] = v;
+          }
+          if (arr.some((v) => v != null)) automation[def.id] = arr;
+        }
+        set({ bars: next, notes, drums, samples, automation });
+      }
+      persist();
+    },
+
+    setRecordMode: (mode) => { set({ recordMode: mode }); persist(); },
+    setRecordCountIn: (bars) => { set({ recordCountIn: clamp(Math.round(bars), 0, 4) }); persist(); },
+    setMetronome: (on) => { set({ metronome: on }); persist(); },
+
     setPlaylistTrack: (index, partial) => {
       const i = clamp(Math.round(index), 0, MAX_PLAYLIST_TRACKS - 1);
       const s = get();
@@ -2716,17 +3735,25 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         ? s.playlistTracks
         : sanitizePlaylistTracks(s.playlistTracks))];
       const t = next[i];
+      const arm = partial.arm ?? t.arm;
       next[i] = {
         name: typeof partial.name === "string" && partial.name.trim()
-          ? partial.name.trim().slice(0, 18)
+          ? partial.name.trim().slice(0, 24)
           : t.name,
         mute: partial.mute ?? t.mute,
         solo: partial.solo ?? t.solo,
-        arm: partial.arm ?? t.arm,
+        arm,
         color: typeof partial.color === "string" && partial.color ? partial.color : t.color,
+        collapsed: partial.collapsed ?? t.collapsed,
+        layer: partial.layer ?? t.layer,
       };
+      // Arm is exclusive — one target lane for append / new clips.
+      if (partial.arm === true) {
+        for (let j = 0; j < next.length; j++) {
+          if (j !== i) next[j] = { ...next[j], arm: false };
+        }
+      }
       set({ playlistTracks: next });
-      // Mute/solo changes affect live layering without restarting.
       refreshSongMap(get);
       persist();
     },
@@ -2790,10 +3817,11 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         pan: clamp(Number(partial.pan ?? cur.pan), -1, 1),
         mute: partial.mute ?? cur.mute,
         solo: partial.solo ?? cur.solo,
+        trim: clamp(Number(partial.trim ?? cur.trim ?? 1), 0, 2),
       };
       const mixer = { ...s.mixer, [id]: strip };
       set({ mixer });
-      applyMixerToEngine({ mixer, fireLimiterOn: s.fireLimiterOn });
+      applyMixerToEngine(get());
       persist();
     },
 
@@ -2812,21 +3840,102 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         duckAmount: clamp(Number(partial.amount ?? s.duckAmount), 0, 1),
         duckReleaseMs: clamp(Number(partial.releaseMs ?? s.duckReleaseMs), 40, 800),
         duckSource: partial.source ?? s.duckSource,
+        duckAttackMs: clamp(Number(partial.attackMs ?? s.duckAttackMs), 1, 80),
+        duckHoldMs: clamp(Number(partial.holdMs ?? s.duckHoldMs), 0, 200),
+        duckHpfHz: clamp(Number(partial.hpfHz ?? s.duckHpfHz), 0, 500),
+        duckListen: partial.listen ?? s.duckListen,
       });
       // Turning duck off mid-play: release the gain back to unity.
       if (partial.enabled === false) {
         getEngine().fireDuckTrigger(0, 0, 0.05);
       }
+      applyMixerToEngine(get());
+      persist();
+    },
+
+    setSoloMode: (mode) => {
+      set({ soloMode: mode });
+      applyMixerToEngine(get());
+      persist();
+    },
+
+    setMasterDim: (on) => {
+      set({ masterDim: on });
+      applyMixerToEngine(get());
+      persist();
+    },
+
+    setMasterMono: (on) => {
+      set({ masterMono: on });
+      applyMixerToEngine(get());
       persist();
     },
 
     syncFireMixer: () => applyMixerToEngine(get()),
+
+    resetMixDefaults: () => {
+      set({
+        mixer: defaultMixer(),
+        fireLimiterOn: true,
+        duckEnabled: false,
+        duckAmount: 0.6,
+        duckReleaseMs: 220,
+        duckSource: "kick",
+        duckAttackMs: 8,
+        duckHoldMs: 40,
+        duckHpfHz: 0,
+        duckListen: false,
+        soloMode: "exclusive",
+        masterDim: false,
+        masterMono: false,
+      });
+      applyMixerToEngine(get());
+      persist();
+    },
+
+    resetProjectDefaults: () => {
+      if (get().playing) get().stop();
+      pendingRec.clear();
+      recPassPushed = false;
+      arrangementCueStep = 0;
+      lastArrSoundSec = null;
+      const p = blankProject();
+      const active = p.sections[0];
+      const m = mirrorOf(active, p.samples);
+      set({
+        ...p,
+        activeSectionId: active.id,
+        samples: m.samples,
+        bars: m.bars,
+        notes: m.notes,
+        drums: m.drums,
+        automation: m.automation,
+        playing: false,
+        recording: false,
+      });
+      applyMixerToEngine(get());
+      void get().hydrateSamples();
+      persist();
+    },
 
     // ── live recording (v1.6) ──
 
     setRecording: (on) => {
       pendingRec.clear();
       recPassPushed = false;
+      if (on) {
+        const s = get();
+        const ctx = getEngine().ctx;
+        // Mid-play arm: gate notes after count-in. Stopped: defer to play()/scheduler.
+        if (s.playing) {
+          const lead = Math.max(0, s.recordCountIn) * STEPS_PER_BAR * stepDur(s.bpm);
+          recArmedAt = ctx.currentTime + lead;
+        } else {
+          recArmedAt = 0;
+        }
+      } else {
+        recArmedAt = 0;
+      }
       set({ recording: on });
     },
 
@@ -2835,6 +3944,8 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     recordNoteOn: (midi, velocity) => {
       const s = get();
       if (!s.recording || !s.playing) return;
+      const ctx = getEngine().ctx;
+      if (recArmedAt > 0 && ctx.currentTime < recArmedAt) return;
       // Playhead in ACTIVE-section steps; -1 = song mode is elsewhere.
       const raw = getPlayheadStep(s.bpm, s.bars);
       if (raw < 0) return;
@@ -2842,7 +3953,13 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       let step = s.recordQuantize ? Math.round(raw) % total : raw;
       step = clamp(step, 0, total - 0.25);
       // The whole pass is ONE undo entry — capture state before its first note.
-      if (!recPassPushed) { pushFireHistory(); recPassPushed = true; }
+      if (!recPassPushed) {
+        pushFireHistory();
+        recPassPushed = true;
+        if (s.recordMode === "replace") {
+          set({ notes: [] });
+        }
+      }
       const id = noteId();
       const n: RollNote = {
         id,
@@ -2915,9 +4032,17 @@ registerFireHistoryProvider("fireSequencer", {
       synthBPresetId: s.synthBPresetId, activeChannel: s.activeChannel,
       scaleRoot: s.scaleRoot, scaleId: s.scaleId, scaleSnap: s.scaleSnap,
       drumSamples: s.drumSamples, samples: s.samples,
+      drumLaneLocks: s.drumLaneLocks,
+      drumLaneMix: s.drumLaneMix,
+      drumHatChoke: s.drumHatChoke,
+      drumKickPolarity: s.drumKickPolarity,
+      drumFillAuto: s.drumFillAuto,
+      drumFillIntensity: s.drumFillIntensity,
+      drumFillPersonality: s.drumFillPersonality,
       sections,
       activeSectionId: s.activeSectionId,
-      arrangement: s.arrangement,
+      arrangement: arrangementWithActive(s),
+      selectedClipId: s.selectedClipId,
       playlistTracks: s.playlistTracks,
       playMode: s.playMode,
     playScope: s.playScope,
@@ -2929,6 +4054,13 @@ registerFireHistoryProvider("fireSequencer", {
       duckAmount: s.duckAmount,
       duckReleaseMs: s.duckReleaseMs,
       duckSource: s.duckSource,
+      duckAttackMs: s.duckAttackMs,
+      duckHoldMs: s.duckHoldMs,
+      duckHpfHz: s.duckHpfHz,
+      duckListen: s.duckListen,
+      soloMode: s.soloMode,
+      masterDim: s.masterDim,
+      masterMono: s.masterMono,
     };
   },
   restore: (snap) => {

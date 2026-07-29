@@ -411,7 +411,7 @@ export function MatrixStageViz() {
         active: false,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

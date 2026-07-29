@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { SpectralMode } from "@/audio/dsp/FireCommandSynth";
+import { getEngine } from "@/audio/AudioEngine";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 
@@ -70,6 +71,8 @@ export function SpectralStageViz() {
   const mode = (useFireCommandStore((s) => s.patch.spectralMode) ?? "off") as SpectralMode;
   const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
   const mix = useFireCommandStore((s) => s.patch.spectralMix) ?? 0.5;
+  const binLow = useFireCommandStore((s) => s.patch.spectralLow) ?? 0;
+  const binHigh = useFireCommandStore((s) => s.patch.spectralHigh) ?? 1;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -78,18 +81,18 @@ export function SpectralStageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef({ mode, amount, mix });
-  st.current = { mode, amount, mix };
+  const st = useRef({ mode, amount, mix, binLow, binHigh });
+  st.current = { mode, amount, mix, binLow, binHigh };
 
   const live = mode !== "off";
 
   useEffect(() => {
-    const key = `${mode}|${amount.toFixed(3)}|${mix.toFixed(3)}`;
+    const key = `${mode}|${amount.toFixed(3)}|${mix.toFixed(3)}|${binLow.toFixed(3)}|${binHigh.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [mode, amount, mix]);
+  }, [mode, amount, mix, binLow, binHigh]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -164,8 +167,10 @@ export function SpectralStageViz() {
     if (!ctx) return;
         const cur = new Float32Array(N).fill(0.15);
     const frozen = new Float32Array(N).fill(0);
+    const trails = Array.from({ length: N }, () => new Float32Array(6).fill(0));
     const sparkles: Array<{ x: number; y: number; life: number; bin: number }> = [];
     let lastMode: SpectralMode = "off";
+    let freqBuf: Uint8Array<ArrayBuffer> | null = null;
 
     const stopLoop = startStageVizLoop(
       (now) => {
@@ -177,6 +182,7 @@ export function SpectralStageViz() {
         lastMode = p.mode;
         frozen.fill(0);
         cur.fill(0.15);
+        for (const t of trails) t.fill(0);
       }
 
       const isLive = p.mode !== "off";
@@ -186,6 +192,34 @@ export function SpectralStageViz() {
       const usableH = stageH - PAD * 2;
       const bw = (W - PAD * 2) / N;
       const sec = now / 1000;
+      const lo = clamp(Math.min(p.binLow ?? 0, p.binHigh ?? 1), 0, 1);
+      const hi = clamp(Math.max(p.binLow ?? 0, p.binHigh ?? 1), 0, 1);
+
+      // Pull live frequency bins when analyserPost is available
+      let liveBins: Float32Array | null = null;
+      try {
+        const e = getEngine();
+        const analyser = e.analyserPost;
+        if (analyser && e.ctx.state === "running") {
+          if (!freqBuf || freqBuf.length !== analyser.frequencyBinCount) {
+            freqBuf = new Uint8Array(analyser.frequencyBinCount);
+          }
+          analyser.getByteFrequencyData(freqBuf);
+          liveBins = new Float32Array(N);
+          const srcN = freqBuf.length;
+          for (let i = 0; i < N; i++) {
+            const a = Math.floor((i / N) * srcN * 0.7);
+            const b = Math.floor(((i + 1) / N) * srcN * 0.7);
+            let sum = 0;
+            let c = 0;
+            for (let j = a; j < Math.max(a + 1, b); j++) {
+              sum += freqBuf[j] ?? 0;
+              c++;
+            }
+            liveBins[i] = (sum / Math.max(1, c)) / 255;
+          }
+        }
+      } catch { /* engine not ready */ }
 
       ctx.clearRect(0, 0, W, Hh);
 
@@ -215,6 +249,31 @@ export function SpectralStageViz() {
         ctx.stroke();
       }
 
+      // spectralLow / spectralHigh region overlay
+      {
+        const x0 = PAD + lo * (W - PAD * 2);
+        const x1 = PAD + hi * (W - PAD * 2);
+        ctx.fillStyle = hexAlpha(C_MID, 0.08);
+        ctx.fillRect(PAD, PAD, x0 - PAD, usableH);
+        ctx.fillRect(x1, PAD, W - PAD - x1, usableH);
+        ctx.strokeStyle = hexAlpha(C_GLOW, 0.35 + flashRef.current * 0.2);
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x0, PAD);
+        ctx.lineTo(x0, PAD + usableH);
+        ctx.moveTo(x1, PAD);
+        ctx.lineTo(x1, PAD + usableH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = hexAlpha(C_GLOW, 0.65);
+        ctx.textAlign = "left";
+        ctx.fillText(`LO ${Math.round(lo * 100)}`, x0 + 2, PAD + 10);
+        ctx.textAlign = "right";
+        ctx.fillText(`HI ${Math.round(hi * 100)}`, x1 - 2, PAD + 10);
+      }
+
       if (!isLive) {
         ctx.font = "700 11px ui-sans-serif, system-ui, sans-serif";
         ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flashRef.current * 0.3);
@@ -237,7 +296,9 @@ export function SpectralStageViz() {
           ctx.fillRect(PAD, PAD, W - PAD * 2, 4 + p.amount * 6);
         }
         if (p.mode === "freeze" && p.amount > 0.25) {
-          ctx.strokeStyle = hexAlpha(C_GLOW, 0.08 * p.amount);
+          ctx.fillStyle = hexAlpha(C_GLOW, 0.04 * p.amount);
+          ctx.fillRect(PAD, PAD, W - PAD * 2, usableH);
+          ctx.strokeStyle = hexAlpha(C_GLOW, 0.1 * p.amount);
           ctx.lineWidth = 1;
           for (let i = 0; i < N; i += 4) {
             const x = PAD + i * bw;
@@ -249,26 +310,32 @@ export function SpectralStageViz() {
         }
 
         for (let i = 0; i < N; i++) {
-          const live = Math.max(
-            0.03,
-            (0.72 / (1 + i * 0.11)) * (0.55 + 0.45 * Math.sin(sec * (1.15 + i * 0.28) + i * 1.6)),
-          );
+          const u = i / N;
+          const inBand = u >= lo && u <= hi;
+          const synth =
+            (0.72 / (1 + i * 0.11)) * (0.55 + 0.45 * Math.sin(sec * (1.15 + i * 0.28) + i * 1.6));
+          const live = liveBins ? clamp(liveBins[i]! * 1.35, 0.03, 1) : Math.max(0.03, synth);
           let v = live;
           let x = PAD + i * bw;
-          let dim = false;
+          let dim = !inBand;
 
           if (p.mode === "freeze") {
             if (frozen[i]! < 0.01) frozen[i] = live;
+            // Hold frozen snapshot; amount blends hold vs live
             cur[i] = frozen[i]! * p.amount + live * (1 - p.amount);
             v = cur[i]!;
           } else if (p.mode === "smear") {
             frozen[i] = 0;
             cur[i]! += (live - cur[i]!) * (1 - p.amount * 0.94);
             v = cur[i]!;
+            // Trail history for smear streaks
+            const hist = trails[i]!;
+            for (let t = hist.length - 1; t > 0; t--) hist[t] = hist[t - 1]!;
+            hist[0] = v;
           } else if (p.mode === "gate") {
             frozen[i] = 0;
             const thr = p.amount * 0.5;
-            dim = live < thr;
+            dim = dim || live < thr;
             v = live;
             cur[i] = live;
           } else if (p.mode === "shift") {
@@ -279,11 +346,23 @@ export function SpectralStageViz() {
             if (x < PAD - bw || x > W - PAD) continue;
           }
 
-          const barH = v * usableH * (0.55 + p.mix * 0.45);
+          // Smear trails behind bars
+          if (p.mode === "smear" && inBand) {
+            const hist = trails[i]!;
+            for (let t = hist.length - 1; t >= 1; t--) {
+              const tv = hist[t]!;
+              const th = tv * usableH * (0.55 + p.mix * 0.45) * (1 - t * 0.12);
+              const ty = PAD + usableH - th;
+              ctx.fillStyle = hexAlpha(C_HOT, (0.06 + p.amount * 0.1) * (1 - t / hist.length) * p.mix);
+              ctx.fillRect(x + 0.4, ty, Math.max(1.2, bw - 1.4), th);
+            }
+          }
+
+          const barH = v * usableH * (0.55 + p.mix * 0.45) * (inBand ? 1 : 0.25);
           const y0 = PAD + usableH - barH;
           const tShade = 0.55 + (i / N) * 0.4;
 
-          if (!dim) {
+          if (!dim && inBand) {
             const glow = ctx.createRadialGradient(x + bw / 2, y0, 0, x + bw / 2, y0, bw * 3);
             glow.addColorStop(0, hexAlpha(C_GLOW, (0.12 + v * 0.18) * p.mix));
             glow.addColorStop(1, hexAlpha(C_HOT, 0));
@@ -292,12 +371,24 @@ export function SpectralStageViz() {
           }
 
           const g = ctx.createLinearGradient(0, y0, 0, PAD + usableH);
-          g.addColorStop(0, hexAlpha(bandShade(FC.fx, tShade), dim ? 0.12 : 0.55 + v * 0.4));
-          g.addColorStop(1, hexAlpha(C_DEEP, dim ? 0.05 : 0.25));
+          g.addColorStop(0, hexAlpha(bandShade(FC.fx, tShade), dim ? 0.1 : 0.55 + v * 0.4));
+          g.addColorStop(1, hexAlpha(C_DEEP, dim ? 0.04 : 0.25));
           ctx.fillStyle = g;
           ctx.fillRect(x + 0.4, y0, Math.max(1.4, bw - 1.2), barH);
 
-          if (!dim && v > 0.12) {
+          // Freeze hold cap
+          if (p.mode === "freeze" && inBand && frozen[i]! > 0.05) {
+            const fh = frozen[i]! * usableH * (0.55 + p.mix * 0.45);
+            const fy = PAD + usableH - fh;
+            ctx.strokeStyle = hexAlpha(C_GLOW, 0.45 * p.amount);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + 0.4, fy);
+            ctx.lineTo(x + bw - 0.4, fy);
+            ctx.stroke();
+          }
+
+          if (!dim && v > 0.12 && inBand) {
             ctx.fillStyle = hexAlpha(C_GLOW, 0.7 + v * 0.3);
             ctx.shadowBlur = 6 + v * 8;
             ctx.shadowColor = C;
@@ -305,7 +396,7 @@ export function SpectralStageViz() {
             ctx.shadowBlur = 0;
           }
 
-          if (!dim && v > 0.5 && p.mix > 0.1 && Math.random() < 0.07 * v * p.mix) {
+          if (!dim && inBand && v > 0.5 && p.mix > 0.1 && Math.random() < 0.07 * v * p.mix) {
             sparkles.push({ x: x + bw / 2, y: y0, life: 1, bin: i });
           }
         }
@@ -415,17 +506,17 @@ export function SpectralStageViz() {
         p.mode === "shift"
           ? `${p.amount < 0.5 ? "−" : "+"}${Math.round(Math.abs(p.amount * 2 - 1) * 100)}`
           : `${Math.round(p.amount * 100)}`;
-      const status = !isLive ? "BYPASS" : `${p.mode} · A${amtLabel} · M${Math.round(p.mix * 100)}`;
+      const status = !isLive ? "BYPASS" : `${p.mode} · A${amtLabel} · ${Math.round(lo * 100)}–${Math.round(hi * 100)}`;
       ctx.fillStyle = hexAlpha(isLive ? C_HOT : C_MID, 0.88);
       ctx.fillText(status, W - 12, Hh - 2);
     
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: st.current.mode !== "off" && (st.current.mix ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: sparkles.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

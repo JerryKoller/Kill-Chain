@@ -307,12 +307,12 @@ export function HumanQuickActions() {
 }
 
 export function humanStageLabel(on: boolean, enabled: boolean, timing: number, vel: number): string {
-  if (!enabled) return "Bypass";
-  if (!on || (timing < 0.03 && vel < 0.03)) return "Grid";
+  if (!enabled) return "Bypass — module offline";
+  if (!on || (timing < 0.03 && vel < 0.03)) return "Grid — humanize bypassed";
   const hit = humanCharMatch(timing, vel, on);
-  if (hit) return hit.label;
-  if (timing > 0.55 && vel < 0.2) return "Time";
-  if (vel > 0.55 && timing < 0.2) return "Dyn";
-  if (timing + vel > 1.2) return "Wild";
-  return "Feel";
+  if (hit) return `${hit.label} — active under play`;
+  if (timing > 0.55 && vel < 0.2) return "Time — active under play";
+  if (vel > 0.55 && timing < 0.2) return "Dyn — active under play";
+  if (timing + vel > 1.2) return "Wild — active under play";
+  return "Feel — active under play";
 }

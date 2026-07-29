@@ -6,8 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
-import { getEngine } from "@/audio/AudioEngine";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 
@@ -127,7 +126,7 @@ export function GateStageViz() {
     }
     const id = window.setInterval(() => {
       try {
-        playStepRef.current = getEngine().fireCommand.getGateStep();
+        playStepRef.current = activeFireEngine().getGateStep();
       } catch {
         playStepRef.current = -1;
       }

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEven
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useToneTelemetry } from "./useToneTelemetry";
 
 const H = 176;
 const C = FC.pluck;
@@ -80,6 +81,8 @@ export function PluckStageViz() {
   const color = useFireCommandStore((s) => s.patch.lpgColor) ?? 0.7;
   const vel = useFireCommandStore((s) => s.patch.velAmount) ?? 1;
   const setParam = useFireCommandStore((s) => s.setParam);
+  
+  const tel = useToneTelemetry();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -369,13 +372,30 @@ export function PluckStageViz() {
         ctx.fillText(m.label, 22, my + 24);
       });
 
+      const telData = tel.pluck;
+      const active = tel.voiceCount > 0;
+      let stageName = "SLEEP";
+      if (p.on && telData) {
+        if (!active && telData.stage === "idle") stageName = "ARMED";
+        else if (telData.stage === "strike") stageName = "STRIKE";
+        else if (telData.stage === "ring") stageName = "RING";
+        else if (telData.stage === "decay_out" || telData.stage === "release") stageName = "DECAY";
+        else if (active) stageName = String(telData.stage).toUpperCase();
+        else stageName = "ARMED";
+      }
+
       if (!p.on) {
         ctx.fillStyle = "rgba(0,0,0,0.35)";
         ctx.fillRect(0, 0, W, Hh - 24);
         ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.fillStyle = hexAlpha(C_GLOW, 0.5 + Math.sin(now / 500) * 0.12);
-        ctx.fillText("SLEEP · arm LPG to strike", W * 0.5, Hh * 0.38);
+        ctx.fillText("SLEEP · DSP DISABLED", W * 0.5, Hh * 0.38);
+      } else if (p.on && active && telData) {
+        ctx.font = "800 10px ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillStyle = hexAlpha(C_GLOW, 0.9);
+        ctx.fillText(`◉ ${stageName}`, 14, Math.max(12, (typeof top === "number" ? top : 24) - 8));
       }
 
       // Vel rail
@@ -419,10 +439,10 @@ export function PluckStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: !!st.current.on,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -463,7 +483,16 @@ export function PluckStageViz() {
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
         style={{ color: hexAlpha(C_HOT, 0.75) }}
       >
-        {on ? "ARMED" : "SLEEP"}
+        {(() => {
+          if (!on) return "SLEEP";
+          const telData = tel.pluck;
+          const active = tel.voiceCount > 0;
+          if (!active || !telData) return "ARMED";
+          if (telData.stage === "strike") return "STRIKE";
+          if (telData.stage === "ring") return "RING";
+          if (telData.stage === "decay_out" || telData.stage === "release") return "DECAY";
+          return "ARMED";
+        })()}
       </div>
     </div>
   );

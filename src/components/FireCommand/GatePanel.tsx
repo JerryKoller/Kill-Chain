@@ -276,6 +276,33 @@ export function GateQuickActions() {
       </button>
       <button
         type="button"
+        onClick={() => setPattern([...pattern].reverse())}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${GATE_C}55`, color: GATE_C_GLOW, background: `${GATE_C}1c` }}
+        title="Reverse pattern"
+      >
+        Rev
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const steps = Math.max(2, Math.min(16, Math.round(useFireCommandStore.getState().patch.gateSteps)));
+          const hits = Math.max(1, Math.round(steps * 0.4));
+          const out = new Array(16).fill(0);
+          for (let i = 0; i < hits; i++) {
+            const idx = Math.floor((i * steps) / hits) % steps;
+            out[idx] = 1;
+          }
+          setPattern(out);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${GATE_C}55`, color: GATE_C_GLOW, background: `${GATE_C}1c` }}
+        title="Euclidean fill (~40% density)"
+      >
+        Euc
+      </button>
+      <button
+        type="button"
         onClick={() => setPattern(Array.from({ length: 16 }, () => (Math.random() < 0.55 ? 1 : 0)))}
         className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
         style={{ borderColor: `${GATE_C}55`, color: GATE_C_GLOW, background: `${GATE_C}1c` }}
@@ -319,10 +346,10 @@ export function GateQuickActions() {
 }
 
 export function gateStageLabel(on: boolean, enabled: boolean, depth: number, rate: number): string {
-  if (!enabled) return "Bypass";
-  if (!on) return "Armed";
-  if (depth < 0.15) return "Whisper";
-  if (rate >= 12) return "Strobe";
-  if (rate <= 2) return "Pump";
-  return "Live";
+  if (!enabled) return "Bypass — module offline";
+  if (!on) return "Armed — waiting for notes";
+  if (depth < 0.15) return "Whisper — wet level at zero";
+  if (rate >= 12) return "Strobe — active under play";
+  if (rate <= 2) return "Pump — active under play";
+  return "Live — active under play";
 }

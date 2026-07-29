@@ -5,8 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
-import { getEngine } from "@/audio/AudioEngine";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
@@ -75,6 +74,8 @@ export function OscBStageViz() {
   const lfo = useFireCommandStore((s) => s.patch.oscBLfo);
   const oct = useFireCommandStore((s) => s.patch.oscBOctave);
   const detune = useFireCommandStore((s) => s.patch.oscBDetune);
+  const aTable = useFireCommandStore((s) => s.patch.oscATable);
+  const aPos = useFireCommandStore((s) => s.patch.oscAPos);
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -85,8 +86,8 @@ export function OscBStageViz() {
   const dragRef = useRef(false);
   const prevKey = useRef("");
   const prevTable = useRef(table);
-  const st = useRef({ table, level, pos, env, lfo, oct, detune });
-  st.current = { table, level, pos, env, lfo, oct, detune };
+  const st = useRef({ table, level, pos, env, lfo, oct, detune, aTable, aPos });
+  st.current = { table, level, pos, env, lfo, oct, detune, aTable, aPos };
 
   useEffect(() => {
     const key = `${table}|${level.toFixed(3)}|${pos.toFixed(3)}|${env.toFixed(3)}|${lfo.toFixed(3)}|${oct}|${detune}`;
@@ -156,11 +157,19 @@ export function OscBStageViz() {
     if (!ctx) return;
         const cache: Float32Array[] = [];
     let cacheTable = "";
+    const cacheA: Float32Array[] = [];
+    let cacheATable = "";
     const ensure = (id: string) => {
       if (cacheTable === id && cache.length) return;
       cache.length = 0;
       for (let i = 0; i < FRAME_COUNT; i++) cache.push(frameSamples(id, i / (FRAME_COUNT - 1), N));
       cacheTable = id;
+    };
+    const ensureA = (id: string) => {
+      if (cacheATable === id && cacheA.length) return;
+      cacheA.length = 0;
+      for (let i = 0; i < FRAME_COUNT; i++) cacheA.push(frameSamples(id, i / (FRAME_COUNT - 1), N));
+      cacheATable = id;
     };
 
     const stopLoop = startStageVizLoop(
@@ -172,7 +181,7 @@ export function OscBStageViz() {
 
       let livePos = p.pos;
       try {
-        livePos = getEngine().fireCommand.getMorphPositions().b;
+        livePos = activeFireEngine().getMorphPositions().b;
       } catch { /* offline / boot */ }
 
       ensure(p.table);
@@ -253,6 +262,34 @@ export function OscBStageViz() {
 
       const waveAt = (i: number, phase: number) =>
         sample(lo, i, phase) * (1 - frac) + sample(hi, i, phase) * frac;
+
+      // Dim Prime (A) reference behind Twin — relationship visualization
+      ensureA(p.aTable);
+      const aCur = p.aPos * (FRAME_COUNT - 1);
+      const aLo = Math.floor(aCur);
+      const aHi = Math.min(aLo + 1, FRAME_COUNT - 1);
+      const aFrac = aCur - aLo;
+      const sampleA = (frame: number, i: number) => {
+        const f = cacheA[Math.max(0, Math.min(FRAME_COUNT - 1, frame))]!;
+        return f[i] ?? 0;
+      };
+      ctx.beginPath();
+      for (let i = 0; i < N; i++) {
+        const v = sampleA(aLo, i) * (1 - aFrac) + sampleA(aHi, i) * aFrac;
+        const x = xL + (i / (N - 1)) * (xR - xL);
+        const y = mid - v * amp * 0.72 * breath;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = hexAlpha(FC.oscA, 0.22 + energy * 0.12);
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexAlpha(FC.oscA, 0.45);
+      ctx.fillText("A REF", 12, 16);
 
       // Ghost frames — staggered twin helix
       for (const offset of [-3, -2, -1, 1, 2, 3]) {
@@ -462,10 +499,10 @@ export function OscBStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: (st.current.level ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );

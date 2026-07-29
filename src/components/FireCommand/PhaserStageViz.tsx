@@ -79,6 +79,8 @@ export function PhaserStageViz() {
   const rate = useFireCommandStore((s) => s.patch.phaserRate) ?? 0.4;
   const depth = useFireCommandStore((s) => s.patch.phaserDepth) ?? 0.6;
   const mix = useFireCommandStore((s) => s.patch.phaserMix) ?? 0;
+  const stages = useFireCommandStore((s) => s.patch.phaserStages) ?? 4;
+  const center = useFireCommandStore((s) => s.patch.phaserCenter) ?? 800;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -87,18 +89,18 @@ export function PhaserStageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef({ rate, depth, mix });
-  st.current = { rate, depth, mix };
+  const st = useRef({ rate, depth, mix, stages, center });
+  st.current = { rate, depth, mix, stages, center };
 
   const live = mix > 0.02;
 
   useEffect(() => {
-    const key = `${rate.toFixed(3)}|${depth.toFixed(3)}|${mix.toFixed(3)}`;
+    const key = `${rate.toFixed(3)}|${depth.toFixed(3)}|${mix.toFixed(3)}|${stages}|${center.toFixed(0)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [rate, depth, mix]);
+  }, [rate, depth, mix, stages, center]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -192,9 +194,13 @@ export function PhaserStageViz() {
       const isLive = p.mix > 0.02;
       const energy = 0.1 + p.mix * 0.45 + p.depth * 0.2 + flashRef.current * 0.25;
       const sweep = (Math.sin(now / 1000 * p.rate * 2 * Math.PI) * 0.5 + 0.5) * p.depth;
-      const notches = 4;
+      const notches = clamp(Math.round(p.stages ?? 4), 4, 12);
+      // Map center Hz (100–8000) onto log frequency axis
+      const centerN = Math.log(clamp(p.center ?? 800, 100, 8000) / 100) / Math.log(80);
       const PAD = 12;
-      const stageH = Hh * 0.72;
+      const stageH = Hh * 0.62;
+      const lfoY0 = Hh * 0.64;
+      const lfoH = Hh * 0.1;
 
       ctx.clearRect(0, 0, W, Hh);
 
@@ -206,6 +212,15 @@ export function PhaserStageViz() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, Hh);
 
+      // Freq axis ticks
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_MID, 0.45);
+      ctx.textAlign = "center";
+      for (const [lab, f] of [["100", 100], ["1k", 1000], ["8k", 8000]] as const) {
+        const u = Math.log(f / 100) / Math.log(80);
+        ctx.fillText(lab, PAD + u * (W - PAD * 2), stageH - 2);
+      }
+
       // Dry ghost spectrum when mix low
       if (p.mix < 0.85) {
         ctx.beginPath();
@@ -213,7 +228,7 @@ export function PhaserStageViz() {
           const u = i / 80;
           const y = 0.55 + 0.12 * Math.sin(u * 8 + now / 900);
           const px = PAD + u * (W - PAD * 2);
-          const py = PAD + (1 - y) * (stageH - PAD);
+          const py = PAD + (1 - y) * (stageH - PAD - 10);
           if (i === 0) ctx.moveTo(px, py);
           else ctx.lineTo(px, py);
         }
@@ -222,36 +237,20 @@ export function PhaserStageViz() {
         ctx.stroke();
       }
 
-      // Phase curtain layers (rate = undulation speed)
-      for (let layer = 0; layer < 3; layer++) {
-        ctx.beginPath();
-        for (let i = 0; i <= 100; i++) {
-          const u = i / 100;
-          const y =
-            0.5 +
-            0.1 * Math.sin(u * 14 + now * 0.001 * (0.5 + rateN * 2) - layer * 0.6) +
-            0.04 * Math.sin(u * 6 + now * 0.0007 * p.rate);
-          const px = PAD + u * (W - PAD * 2);
-          const py = PAD + y * (stageH - PAD) + layer * 5;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.strokeStyle = hexAlpha(C_MID, (0.08 + p.mix * 0.18) * (1 - layer * 0.28));
-        ctx.lineWidth = 1.4 - layer * 0.25;
-        ctx.stroke();
-      }
+      // Frequency-response style notches (centers scaled by phaserCenter)
+      const floorY = stageH - 12;
+      const notchSpread = 0.55 + (1 - centerN) * 0.15;
+      const notchBase = centerN * 0.35;
 
-      // Notch comb spectrum fill
-      const floorY = stageH - 4;
       ctx.beginPath();
       ctx.moveTo(PAD, floorY);
-      for (let i = 0; i <= 110; i++) {
-        const u = i / 110;
-        let y = 0.58 + 0.16 * Math.sin(u * 9 + now / 800);
+      for (let i = 0; i <= 120; i++) {
+        const u = i / 120;
+        let y = 0.62 + 0.1 * Math.sin(u * 6 + now / 900);
         for (let n = 0; n < notches; n++) {
-          const center = (n + 0.5) / notches + (sweep - 0.5) * 0.38;
-          const dist = Math.abs(u - center);
-          y -= Math.exp(-dist * dist * 200) * (0.32 + p.depth * 0.42) * (0.35 + p.mix * 0.65);
+          const centerU = notchBase + ((n + 0.5) / notches) * notchSpread + (sweep - 0.5) * 0.22 * p.depth;
+          const dist = Math.abs(u - centerU);
+          y -= Math.exp(-dist * dist * (180 + notches * 8)) * (0.28 + p.depth * 0.4) * (0.35 + p.mix * 0.65);
         }
         y = Math.max(0.05, y);
         const px = PAD + u * (W - PAD * 2);
@@ -270,13 +269,13 @@ export function PhaserStageViz() {
 
       // Notch crest stroke
       ctx.beginPath();
-      for (let i = 0; i <= 110; i++) {
-        const u = i / 110;
-        let y = 0.58 + 0.16 * Math.sin(u * 9 + now / 800);
+      for (let i = 0; i <= 120; i++) {
+        const u = i / 120;
+        let y = 0.62 + 0.1 * Math.sin(u * 6 + now / 900);
         for (let n = 0; n < notches; n++) {
-          const center = (n + 0.5) / notches + (sweep - 0.5) * 0.38;
-          const dist = Math.abs(u - center);
-          y -= Math.exp(-dist * dist * 200) * (0.32 + p.depth * 0.42) * (0.35 + p.mix * 0.65);
+          const centerU = notchBase + ((n + 0.5) / notches) * notchSpread + (sweep - 0.5) * 0.22 * p.depth;
+          const dist = Math.abs(u - centerU);
+          y -= Math.exp(-dist * dist * (180 + notches * 8)) * (0.28 + p.depth * 0.4) * (0.35 + p.mix * 0.65);
         }
         y = Math.max(0.05, y);
         const px = PAD + u * (W - PAD * 2);
@@ -293,14 +292,14 @@ export function PhaserStageViz() {
 
       // Allpass notch beams
       for (let n = 0; n < notches; n++) {
-        const center = (n + 0.5) / notches + (sweep - 0.5) * 0.38;
-        const x = PAD + center * (W - PAD * 2);
+        const centerU = notchBase + ((n + 0.5) / notches) * notchSpread + (sweep - 0.5) * 0.22 * p.depth;
+        const x = PAD + centerU * (W - PAD * 2);
         const beam = ctx.createLinearGradient(x, 8, x, floorY);
         beam.addColorStop(0, hexAlpha(C_GLOW, 0.55 + p.mix * 0.4));
         beam.addColorStop(0.5, hexAlpha(C_HOT, 0.25 + p.mix * 0.3));
         beam.addColorStop(1, hexAlpha(C_DEEP, 0.08 + p.mix * 0.15));
         ctx.strokeStyle = beam;
-        ctx.lineWidth = 1.5 + p.mix * 2 + p.depth * 0.8;
+        ctx.lineWidth = 1.4 + p.mix * 1.8 + p.depth * 0.6;
         ctx.shadowBlur = 6 + p.mix * 10;
         ctx.shadowColor = C;
         ctx.beginPath();
@@ -326,24 +325,41 @@ export function PhaserStageViz() {
         }
       }
 
-      // Feedback shimmer (DSP fb ∝ mix)
-      if (p.mix > 0.15) {
-        const fb = p.mix * 0.55;
-        ctx.strokeStyle = hexAlpha(C_HOT, 0.1 + fb * 0.35);
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 5]);
-        ctx.beginPath();
-        for (let i = 0; i <= 60; i++) {
-          const u = i / 60;
-          const y = 0.35 + 0.08 * Math.sin(u * 20 + now * 0.004 * p.rate + fb * 4);
-          const px = PAD + u * (W - PAD * 2);
-          const py = PAD + y * (stageH - PAD);
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
+      // Center marker
+      ctx.strokeStyle = hexAlpha(C_RATE, 0.4);
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(PAD + centerN * (W - PAD * 2), PAD);
+      ctx.lineTo(PAD + centerN * (W - PAD * 2), floorY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_RATE, 0.7);
+      ctx.textAlign = "center";
+      const cHz = p.center ?? 800;
+      ctx.fillText(cHz >= 1000 ? `${(cHz / 1000).toFixed(1)}k` : `${Math.round(cHz)}`, PAD + centerN * (W - PAD * 2), PAD + 10);
+
+      // LFO trace (rate)
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(PAD, lfoY0, W - PAD * 2, lfoH);
+      ctx.strokeStyle = hexAlpha(C_MID, 0.25);
+      ctx.strokeRect(PAD + 0.5, lfoY0 + 0.5, W - PAD * 2 - 1, lfoH - 1);
+      ctx.beginPath();
+      for (let i = 0; i <= 80; i++) {
+        const u = i / 80;
+        const lfo = Math.sin((u * 4 + now / 1000 * p.rate) * Math.PI * 2);
+        const px = PAD + u * (W - PAD * 2);
+        const py = lfoY0 + lfoH * 0.5 - lfo * (lfoH * 0.35) * (0.4 + p.depth * 0.6);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
       }
+      ctx.strokeStyle = hexAlpha(C_GLOW, 0.75 + p.mix * 0.2);
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_RATE, 0.75);
+      ctx.textAlign = "left";
+      ctx.fillText(`LFO ${p.rate < 1 ? p.rate.toFixed(2) : p.rate.toFixed(1)}Hz · ${notches}stg`, PAD + 4, lfoY0 - 3);
 
       // Sparks
       for (let i = sparks.length - 1; i >= 0; i--) {
@@ -364,7 +380,7 @@ export function PhaserStageViz() {
 
       // Rate / Depth crosshair
       const hx = rateN * W;
-      const hy = (1 - p.depth) * (Hh * 0.68);
+      const hy = (1 - p.depth) * (Hh * 0.58);
       ctx.strokeStyle = hexAlpha(C_GLOW, 0.35 + flashRef.current * 0.3);
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -414,7 +430,7 @@ export function PhaserStageViz() {
       ctx.textAlign = "right";
       const status = !isLive
         ? "BYPASS"
-        : `${p.rate < 1 ? p.rate.toFixed(2) : p.rate.toFixed(1)}Hz · D${Math.round(p.depth * 100)} · M${Math.round(p.mix * 100)}`;
+        : `${notches}n · ${p.rate < 1 ? p.rate.toFixed(2) : p.rate.toFixed(1)}Hz · D${Math.round(p.depth * 100)}`;
       ctx.fillStyle = hexAlpha(isLive ? C_HOT : C_MID, 0.88);
       ctx.fillText(status, W - 12, Hh - 2);
     
@@ -424,7 +440,7 @@ export function PhaserStageViz() {
         active: (st.current.mix ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

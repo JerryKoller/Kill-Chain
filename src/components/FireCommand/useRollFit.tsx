@@ -1,6 +1,7 @@
 /**
  * Fit-to-width step sizing for the piano roll / velocity / automation lanes.
- * zoom = 1 fills the host; zoom > 1 reveals horizontal scroll for detail.
+ * zoom = 1 fills the host; zoom > 1 zooms in (horizontal scroll);
+ * zoom < 1 zooms out past fit for a bird's-eye overview.
  */
 
 import {
@@ -15,7 +16,7 @@ import {
   type RefObject,
 } from "react";
 
-const ZOOM_MIN = 1;
+const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
 
 type RollFitValue = {
@@ -82,11 +83,13 @@ export function RollFitProvider({
     const usable = Math.max(0, viewportW - gutter);
     // Fallback until first measure so first paint isn't a zero-width flash.
     const fitCell = usable > 0 ? usable / steps : 26;
-    const cellW = fitCell * zoom;
-    // Always derive grid from gutter + cells so paint/hit share one geometry
-    // (avoid viewportW vs content-box drift from borders/padding).
-    const snappedCell =
-      zoom <= 1.001 && usable > 0 ? usable / steps : cellW;
+    // Keep a readable minimum cell so long patterns (16–96 bars) always
+    // expose a horizontal scrollbar instead of crushing notes to a few px.
+    const MIN_CELL = 10;
+    const nearFit = Math.abs(zoom - 1) < 0.001;
+    const snappedCell = nearFit && usable > 0
+      ? Math.max(MIN_CELL, usable / steps)
+      : Math.max(MIN_CELL * 0.5, fitCell * zoom);
     const gridW = gutter + steps * snappedCell;
     return {
       hostRef,
@@ -97,7 +100,7 @@ export function RollFitProvider({
       zoom,
       setZoom,
       bumpZoom,
-      fitMode: zoom <= 1.001,
+      fitMode: nearFit && snappedCell <= fitCell + 0.01,
     };
   }, [totalSteps, gutter, viewportW, zoom, setZoom, bumpZoom]);
 
@@ -125,3 +128,19 @@ export function useRollFitOptional(): RollFitValue | null {
 
 export const ROLL_ZOOM_MIN = ZOOM_MIN;
 export const ROLL_ZOOM_MAX = ZOOM_MAX;
+
+/** Shared horizontal scroll so piano roll / velocity / automation stay aligned. */
+let rollHScrollLeft = 0;
+const rollHScrollListeners = new Set<(left: number) => void>();
+
+export function setRollHScroll(left: number): void {
+  if (Math.abs(left - rollHScrollLeft) < 0.5) return;
+  rollHScrollLeft = left;
+  for (const fn of rollHScrollListeners) fn(left);
+}
+
+export function subscribeRollHScroll(fn: (left: number) => void): () => void {
+  rollHScrollListeners.add(fn);
+  fn(rollHScrollLeft);
+  return () => { rollHScrollListeners.delete(fn); };
+}

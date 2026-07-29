@@ -98,6 +98,7 @@ export function AgeStageViz() {
   const hiss = useFireCommandStore((s) => s.patch.hiss) ?? 0;
   const hum = useFireCommandStore((s) => s.patch.hum) ?? 0;
   const print = useFireCommandStore((s) => s.patch.printThrough) ?? 0;
+  const ageEvolve = useFireCommandStore((s) => s.patch.ageEvolve) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -106,21 +107,21 @@ export function AgeStageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef<AgeState>({ cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print });
-  st.current = { cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print };
+  const st = useRef<AgeState & { evolve: number }>({ cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print, evolve: ageEvolve });
+  st.current = { cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print, evolve: ageEvolve };
 
-  const heat = Math.max(cass, wow, vhs, dust, hiss, hum, print, srr, bbd, comp, Math.abs(speed), bit !== "off" ? 0.35 : 0);
+  const heat = Math.max(cass, wow, vhs, dust, hiss, hum, print, srr, bbd, comp, Math.abs(speed), ageEvolve, bit !== "off" ? 0.35 : 0);
   const live = heat > 0.03;
 
   useEffect(() => {
     const key = [
-      cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print,
+      cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print, ageEvolve,
     ].map((v) => (typeof v === "number" ? v.toFixed(3) : v)).join("|");
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print]);
+  }, [cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print, ageEvolve]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -195,6 +196,7 @@ export function AgeStageViz() {
     if (!ctx) return;
         const dustParts: Array<{ x: number; y: number; vx: number; vy: number; life: number; size: number }> = [];
     const grain: Array<{ x: number; y: number; life: number; size: number }> = [];
+    const dropouts: Array<{ x: number; w: number; life: number }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
@@ -203,14 +205,16 @@ export function AgeStageViz() {
       flashRef.current *= 0.86;
 
       const beds = Math.max(p.dust, p.hiss, p.hum, p.print);
+      const evolve = p.evolve ?? 0;
+      const wowEff = clamp(p.wow + evolve * 0.08, 0, 1);
       const heatN = Math.max(
-        p.cass, p.wow, p.vhs, beds, p.srr, p.bbd, p.comp, Math.abs(p.speed),
+        p.cass, wowEff, p.vhs, beds, p.srr, p.bbd, p.comp, Math.abs(p.speed), evolve,
         p.bit !== "off" ? 0.35 : 0,
       );
       const isLive = heatN > 0.03;
       const speedN = (p.speed + 1) * 0.5;
       const spinRate = (0.35 + p.cass * 2.2 + Math.abs(p.speed) * 1.8) * (p.speed < 0 ? -1 : 1);
-      const wobble = Math.sin(now * 0.002 * (0.4 + p.wow * 5)) * (1.5 + p.wow * 7);
+      const wobble = Math.sin(now * 0.002 * (0.4 + wowEff * 5)) * (1.5 + wowEff * 7);
 
       ctx.clearRect(0, 0, W, Hh);
 
@@ -298,17 +302,33 @@ export function AgeStageViz() {
       drawReel(W * 0.22, spin, leftFill);
       drawReel(W * 0.78, -spin * (1.02 + Math.abs(p.speed) * 0.15), rightFill);
 
-      // Tape bridge with wow warp
+      // Tape bridge — stable reference + wowed path
       const xL = W * 0.22 + 18;
       const xR = W * 0.78 - 18;
+      // Stable reference line
+      ctx.strokeStyle = hexAlpha(C_MID, 0.28);
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(xL, reelY);
+      ctx.lineTo(xR, reelY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_MID, 0.55);
+      ctx.textAlign = "left";
+      ctx.fillText("REF", xL, reelY - 6);
+
+      // Wowed oxide path
       ctx.beginPath();
       ctx.moveTo(xL, reelY);
       for (let x = xL; x <= xR; x += 3) {
         const u = (x - xL) / Math.max(1, xR - xL);
         const y =
           reelY +
-          Math.sin(x * 0.07 + now * 0.004 + p.wow * 10) * (1 + p.wow * 6) +
-          Math.sin(u * Math.PI * 2 + now * 0.001) * p.cass * 2;
+          Math.sin(x * 0.07 + now * 0.004 + wowEff * 10) * (1 + wowEff * 6) +
+          Math.sin(u * Math.PI * 2 + now * 0.001) * p.cass * 2 +
+          Math.sin(now * 0.0017 + u * 4) * evolve * 3;
         ctx.lineTo(x, y);
       }
       ctx.strokeStyle = hexAlpha(C_GLOW, 0.35 + p.cass * 0.5);
@@ -368,24 +388,35 @@ export function AgeStageViz() {
         }
       }
 
-      // Primary aged wave
+      // Primary aged wave (wowed vs stable ghost)
+      // Stable reference wave
       ctx.beginPath();
       for (let i = 0; i <= 110; i++) {
         const u = i / 110;
-        let x = Math.sin(u * Math.PI * 5 + phase);
-        // Wow pitch wobble
-        x = Math.sin(u * Math.PI * 5 + phase + Math.sin(now * 0.008) * p.wow * 1.8);
-        // Hum ripple
+        const x = Math.sin(u * Math.PI * 5 + phase);
+        const px = wx0 + u * wUsable;
+        const py = mid - x * ampBase;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = hexAlpha(C_MID, 0.22);
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Wowed path
+      ctx.beginPath();
+      for (let i = 0; i <= 110; i++) {
+        const u = i / 110;
+        let x = Math.sin(u * Math.PI * 5 + phase + Math.sin(now * 0.008) * wowEff * 1.8 + evolve * Math.sin(now * 0.003 + u) * 0.4);
         x += Math.sin(u * Math.PI * 2 + now * 0.0015) * p.hum * 0.28;
-        // SR reduce stairs
         if (p.srr > 0.04) {
           const steps = Math.max(3, Math.round(48 - p.srr * 42));
           x = Math.round(x * steps) / steps;
         }
-        // Bit depth
         if (p.bit === "8bit") x = Math.round(x * 7) / 7;
         else if (p.bit === "12bit") x = Math.round(x * 14) / 14;
-        // Comp squeeze
         x *= 1 - p.comp * 0.4;
         const px = wx0 + u * wUsable;
         const py = mid - x * ampBase;
@@ -428,6 +459,49 @@ export function AgeStageViz() {
         ctx.lineTo(wx0 + wUsable, bot);
         ctx.stroke();
         ctx.setLineDash([]);
+      }
+
+      // Noise floor ticks (dust / hiss bed)
+      {
+        const floorY = Hh * 0.72;
+        const tickN = Math.floor(8 + (p.dust + p.hiss) * 28);
+        ctx.strokeStyle = hexAlpha(C_BED, 0.15 + (p.dust + p.hiss) * 0.35);
+        ctx.lineWidth = 1;
+        for (let i = 0; i < tickN; i++) {
+          const tx = 10 + ((i * 47 + now * 0.02) % (W - 20));
+          const th = 2 + ((i * 13) % 5) * (0.4 + p.dust + p.hiss);
+          ctx.beginPath();
+          ctx.moveTo(tx, floorY);
+          ctx.lineTo(tx, floorY - th);
+          ctx.stroke();
+        }
+        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = hexAlpha(C_BED, 0.55 + beds * 0.3);
+        ctx.textAlign = "left";
+        ctx.fillText("NOISE FLOOR", 12, floorY + 10);
+      }
+
+      // Occasional dropout flashes (dust + wow + evolve)
+      const dropChance = 0.02 + p.dust * 0.12 + wowEff * 0.04 + evolve * 0.06;
+      if (isLive && Math.random() < dropChance) {
+        dropouts.push({
+          x: 20 + Math.random() * (W - 40),
+          w: 8 + Math.random() * (18 + p.dust * 30),
+          life: 1,
+        });
+      }
+      for (let i = dropouts.length - 1; i >= 0; i--) {
+        const d = dropouts[i]!;
+        d.life -= 0.06;
+        if (d.life <= 0) {
+          dropouts.splice(i, 1);
+          continue;
+        }
+        ctx.fillStyle = hexAlpha("#000000", 0.55 * d.life);
+        ctx.fillRect(d.x, Hh * 0.12, d.w, Hh * 0.55);
+        ctx.strokeStyle = hexAlpha(C_HOT, 0.35 * d.life);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(d.x, Hh * 0.12, d.w, Hh * 0.55);
       }
 
       // Dust particles
@@ -568,10 +642,24 @@ export function AgeStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active:
+          Math.max(
+            st.current.cass,
+            st.current.wow,
+            st.current.vhs,
+            st.current.dust,
+            st.current.hiss,
+            st.current.hum,
+            st.current.print,
+            st.current.srr,
+            st.current.bbd,
+            st.current.comp,
+            Math.abs(st.current.speed),
+            st.current.bit !== "off" ? 0.35 : 0,
+          ) > 0.03,
         dragging: !!dragRef.current,
         particles: dustParts.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

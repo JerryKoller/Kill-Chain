@@ -109,6 +109,8 @@ export function ScenesQuickActions({
 }) {
   const scenes = useFireCommandStore((s) => s.scenes);
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["scenes"] !== false);
+  const sceneTransition = useFireCommandStore((s) => s.sceneTransition);
+  const setSceneTransition = useFireCommandStore((s) => s.setSceneTransition);
   const captureScene = useFireCommandStore((s) => s.captureScene);
   const recallScene = useFireCommandStore((s) => s.recallScene);
   const clearScene = useFireCommandStore((s) => s.clearScene);
@@ -144,6 +146,19 @@ export function ScenesQuickActions({
 
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
+      <select
+        value={sceneTransition}
+        onChange={(e) =>
+          setSceneTransition(e.target.value as "immediate" | "nextBar" | "morphMs")
+        }
+        className="h-6 rounded-md border bg-black/40 px-1 text-[9px] uppercase outline-none"
+        style={{ borderColor: `${SCENES_C}44`, color: SCENES_C_GLOW }}
+        title="Scene recall transition"
+      >
+        <option value="immediate">Immediate</option>
+        <option value="nextBar">Next bar</option>
+        <option value="morphMs">Morph</option>
+      </select>
       <button
         type="button"
         onClick={() => cycle(-1)}
@@ -209,12 +224,12 @@ export function ScenesQuickActions({
 }
 
 export function sceneStageLabel(occ: number, mode: SceneMode, enabled: boolean): string {
-  if (!enabled) return "Bypass";
-  if (occ === 0) return "Empty";
-  if (occ >= SCENE_SLOTS) return "Full";
-  if (mode === "capture") return "Capture";
-  if (mode === "clear") return "Clear";
-  return "Orbit";
+  if (!enabled) return "Bypass — module offline";
+  if (occ === 0) return "Empty — no saved scene";
+  if (occ >= SCENE_SLOTS) return "Full — scene bank in motion";
+  if (mode === "capture") return "Capture — waiting for notes";
+  if (mode === "clear") return "Clear — enabled, no activity";
+  return "Orbit — scene bank in motion";
 }
 
 export function avgSceneEnergy(scenes: (Partial<FirePatch> | null)[]): number {

@@ -1,7 +1,7 @@
 /**
  * FM Rack · Vector — Vector Lattice stage visualizer.
  * 4-op algorithm graph · operator levels/ratios · feedback · vector morph (Signal Path Mod · FC.fmRack).
- * Drag pad: Vec Rate ↔ / Vec Depth ↕. Drag orbs: Level ↕ / Ratio ↔ (Op2–4). Bottom: Feedback. Double-click: next alg.
+ * Drag pad: fmVector X/Y (corner morph). Drag orbs: Level ↕ / Ratio ↔ (Op2–4). Bottom: Feedback. Double-click: next alg.
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
@@ -29,19 +29,28 @@ const C_OP = [
 const RATIO_MIN = 0.25;
 const RATIO_MAX = 16;
 
-/** Algorithm cable routes: [fromOp, toOp] (0-indexed). */
+/** Alg 0–3 ≈ serial-ish stacks; Alg 4–7 ≈ parallel-ish blends (matches DSP). */
 const ALG_ROUTES: Record<number, Array<[number, number]>> = {
-  0: [[1, 0]],
+  0: [[1, 0]], // serial stack
   1: [[2, 1], [1, 0]],
   2: [[1, 0], [2, 0]],
   3: [[3, 2], [2, 1], [1, 0]],
-  4: [[2, 1], [3, 1], [1, 0]],
+  4: [[2, 1], [3, 1], [1, 0]], // parallel-ish
   5: [[1, 0], [2, 0], [3, 0]],
   6: [[3, 2], [2, 0], [1, 0]],
   7: [[3, 0], [2, 0], [1, 0]],
 };
 
-const ALG_NAMES = ["Stack1", "Stack2", "Twin", "Cascade", "Fork", "Parallel", "Branch", "All→C"] as const;
+const ALG_NAMES = [
+  "Ser·Stack1",
+  "Ser·Stack2",
+  "Ser·Twin",
+  "Ser·Cascade",
+  "Par·Fork",
+  "Par·Parallel",
+  "Par·Branch",
+  "Par·All→C",
+] as const;
 
 function hexAlpha(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -114,6 +123,8 @@ export function FmRackStageViz() {
   const r4 = useFireCommandStore((s) => s.patch.fmOp4Ratio) ?? 3;
   const vecRate = useFireCommandStore((s) => s.patch.vectorRate) ?? 0;
   const vecDepth = useFireCommandStore((s) => s.patch.vectorDepth) ?? 0;
+  const fmVecX = useFireCommandStore((s) => s.patch.fmVectorX) ?? 0.5;
+  const fmVecY = useFireCommandStore((s) => s.patch.fmVectorY) ?? 0.5;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -137,19 +148,21 @@ export function FmRackStageViz() {
     r4,
     vecRate,
     vecDepth,
+    fmVecX,
+    fmVecY,
   });
-  st.current = { engine, alg, feedback, op1, op2, op3, op4, r2, r3, r4, vecRate, vecDepth };
+  st.current = { engine, alg, feedback, op1, op2, op3, op4, r2, r3, r4, vecRate, vecDepth, fmVecX, fmVecY };
 
   const ops4 = engine === "ops4";
-  const live = ops4 && (feedback > 0.02 || vecDepth > 0.02 || op2 > 0.05 || op3 > 0.05 || op4 > 0.05);
+  const live = ops4 && (feedback > 0.02 || vecDepth > 0.02 || op2 > 0.05 || op3 > 0.05 || op4 > 0.05 || Math.abs(fmVecX - 0.5) > 0.02 || Math.abs(fmVecY - 0.5) > 0.02);
 
   useEffect(() => {
-    const key = `${engine}|${alg}|${feedback.toFixed(3)}|${op1.toFixed(2)}|${op2.toFixed(2)}|${op3.toFixed(2)}|${op4.toFixed(2)}|${r2.toFixed(2)}|${r3.toFixed(2)}|${r4.toFixed(2)}|${vecRate.toFixed(3)}|${vecDepth.toFixed(3)}`;
+    const key = `${engine}|${alg}|${feedback.toFixed(3)}|${op1.toFixed(2)}|${op2.toFixed(2)}|${op3.toFixed(2)}|${op4.toFixed(2)}|${r2.toFixed(2)}|${r3.toFixed(2)}|${r4.toFixed(2)}|${vecRate.toFixed(3)}|${vecDepth.toFixed(3)}|${fmVecX.toFixed(3)}|${fmVecY.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [engine, alg, feedback, op1, op2, op3, op4, r2, r3, r4, vecRate, vecDepth]);
+  }, [engine, alg, feedback, op1, op2, op3, op4, r2, r3, r4, vecRate, vecDepth, fmVecX, fmVecY]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -174,10 +187,24 @@ export function FmRackStageViz() {
       const wrap = wrapRef.current;
       if (!wrap) return;
       const rect = wrap.getBoundingClientRect();
+      // Map into the vector pad region (right lattice) when possible; else full pad
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       const y = clamp((clientY - rect.top) / Math.max(1, rect.height * 0.78), 0, 1);
-      setParam("vectorRate", Math.round(x * 1000) / 1000);
-      setParam("vectorDepth", Math.round((1 - y) * 1000) / 1000);
+      // Prefer pad-local mapping: pad is centered ~78% W / 40% H with radius ~36 CSS px.
+      // Fall back to normalized stage XY so drag still works anywhere on the stage.
+      const padCx = rect.left + rect.width * 0.78;
+      const padCy = rect.top + rect.height * 0.4;
+      const padR = Math.min(rect.width, rect.height) * 0.09;
+      const inPad = Math.abs(clientX - padCx) <= padR * 1.35 && Math.abs(clientY - padCy) <= padR * 1.35;
+      if (inPad) {
+        const vx = clamp(0.5 + (clientX - padCx) / (padR * 2), 0, 1);
+        const vy = clamp(0.5 + (clientY - padCy) / (padR * 2), 0, 1);
+        setParam("fmVectorX", Math.round(vx * 1000) / 1000);
+        setParam("fmVectorY", Math.round(vy * 1000) / 1000);
+      } else {
+        setParam("fmVectorX", Math.round(x * 1000) / 1000);
+        setParam("fmVectorY", Math.round(y * 1000) / 1000);
+      }
     },
     [setParam],
   );
@@ -435,11 +462,11 @@ export function FmRackStageViz() {
         ctx.fillRect(pos.x - 12, pos.y + sz + 5, 24 * lv, 3);
       });
 
-      // Vector morph pad (right)
+      // Vector morph pad (right) — wired to fmVectorX/Y corner morph
       const vx = W * 0.78;
       const vy = Hh * 0.4;
       const vr = 36;
-      ctx.strokeStyle = hexAlpha(C_VEC, 0.25 + p.vecDepth * 0.35);
+      ctx.strokeStyle = hexAlpha(C_VEC, 0.25 + Math.max(p.vecDepth, Math.abs(p.fmVecX - 0.5) + Math.abs(p.fmVecY - 0.5)) * 0.35);
       ctx.lineWidth = 1.2;
       ctx.strokeRect(vx - vr, vy - vr, vr * 2, vr * 2);
       ctx.beginPath();
@@ -450,7 +477,21 @@ export function FmRackStageViz() {
       ctx.strokeStyle = hexAlpha(C_MID, 0.2);
       ctx.stroke();
 
-      // Orbit trail
+      // Soft corner markers (A B / C D morph corners)
+      const corners = [
+        { x: vx - vr + 4, y: vy - vr + 4, l: "A" },
+        { x: vx + vr - 4, y: vy - vr + 4, l: "B" },
+        { x: vx - vr + 4, y: vy + vr - 4, l: "C" },
+        { x: vx + vr - 4, y: vy + vr - 4, l: "D" },
+      ];
+      ctx.font = "700 6px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_VEC, 0.45);
+      corners.forEach((c) => {
+        ctx.textAlign = "center";
+        ctx.fillText(c.l, c.x, c.y + 2);
+      });
+
+      // Optional slow orbit trail (vectorRate/Depth still animate when set)
       const phase = engT * (0.3 + p.vecRate * 5);
       const vdx = Math.sin(phase) * p.vecDepth * (vr - 4);
       const vdy = Math.cos(phase * 0.87) * p.vecDepth * (vr - 4);
@@ -459,16 +500,17 @@ export function FmRackStageViz() {
           const ph = phase - h * 0.15;
           const tx = vx + Math.sin(ph) * p.vecDepth * (vr - 4);
           const ty = vy + Math.cos(ph * 0.87) * p.vecDepth * (vr - 4);
-          ctx.fillStyle = hexAlpha(C_VEC, ((12 - h) / 12) * 0.35 * p.vecDepth);
+          ctx.fillStyle = hexAlpha(C_VEC, ((12 - h) / 12) * 0.25 * p.vecDepth);
           ctx.beginPath();
           ctx.arc(tx, ty, 1.5, 0, Math.PI * 2);
           ctx.fill();
         }
       }
-      // Crosshair of current rate/depth setting
-      const hx = vx - vr + p.vecRate * vr * 2;
-      const hy = vy + vr - p.vecDepth * vr * 2;
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.4 + flashRef.current * 0.3);
+
+      // Live fmVectorX/Y thumb
+      const hx = vx - vr + clamp(p.fmVecX ?? 0.5, 0, 1) * vr * 2;
+      const hy = vy - vr + clamp(p.fmVecY ?? 0.5, 0, 1) * vr * 2;
+      ctx.strokeStyle = hexAlpha(C_GLOW, 0.45 + flashRef.current * 0.3);
       ctx.beginPath();
       ctx.moveTo(hx - 6, hy);
       ctx.lineTo(hx + 6, hy);
@@ -476,18 +518,21 @@ export function FmRackStageViz() {
       ctx.lineTo(hx, hy + 6);
       ctx.stroke();
 
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.9);
+      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
       ctx.shadowBlur = 10;
       ctx.shadowColor = C_VEC;
       ctx.beginPath();
-      ctx.arc(vx + vdx, vy + vdy, 3.5 + flashRef.current, 0, Math.PI * 2);
+      ctx.arc(hx + (p.vecDepth > 0.02 ? vdx * 0.15 : 0), hy + (p.vecDepth > 0.02 ? vdy * 0.15 : 0), 3.8 + flashRef.current, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
 
       ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = hexAlpha(C_VEC, 0.8);
       ctx.textAlign = "center";
-      ctx.fillText("VECTOR", vx, vy - vr - 6);
+      ctx.fillText("FM VEC", vx, vy - vr - 6);
+      ctx.font = "700 6px ui-monospace, Menlo, monospace";
+      ctx.fillStyle = hexAlpha(C_VEC, 0.65);
+      ctx.fillText(`${(p.fmVecX ?? 0.5).toFixed(2)},${(p.fmVecY ?? 0.5).toFixed(2)}`, vx, vy + vr + 10);
 
       // Sparks along cables when live
       if (ops4Live && energy > 0.4 && Math.random() < 0.1 + p.feedback * 0.15) {
@@ -564,17 +609,23 @@ export function FmRackStageViz() {
       ctx.textAlign = "right";
       const status = !ops4Live
         ? "STANDBY"
-        : `FB${Math.round(p.feedback * 100)} · V${Math.round(p.vecDepth * 100)}/${Math.round(p.vecRate * 100)}`;
+        : `ALG${algI}${algI <= 3 ? "·S" : "·P"} · FB${Math.round(p.feedback * 100)} · XY ${(p.fmVecX ?? 0.5).toFixed(2)},${(p.fmVecY ?? 0.5).toFixed(2)}`;
       ctx.fillStyle = hexAlpha(ops4Live ? C_HOT : C_MID, 0.88);
       ctx.fillText(status, W - 12, Hh - 2);
     
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active:
+          st.current.engine === "ops4" &&
+          ((st.current.feedback ?? 0) > 0.02 ||
+            (st.current.vecDepth ?? 0) > 0.02 ||
+            (st.current.op2 ?? 0) > 0.05 ||
+            (st.current.op3 ?? 0) > 0.05 ||
+            (st.current.op4 ?? 0) > 0.05),
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -596,7 +647,7 @@ export function FmRackStageViz() {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
-      title="Pad: Vec Rate↔ / Depth↕ · Drag orbs: Level↕ / Ratio↔ · Bottom: Feedback · Double-click: next alg (arms 4-op)"
+      title="Pad: fmVector X/Y · Drag orbs: Level↕ / Ratio↔ · Bottom: Feedback · Double-click: next alg (arms 4-op)"
       role="img"
       aria-label="FM Rack vector lattice"
     >

@@ -9,6 +9,7 @@ import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { FireFilterType } from "@/audio/dsp/FireCommandSynth";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useToneTelemetry } from "./useToneTelemetry";
 
 const H = 176;
 const C = FC.envFilt;
@@ -116,6 +117,8 @@ export function FiltEnvStageViz() {
   const reso = useFireCommandStore((s) => s.patch.filterResonance) ?? 0.7;
   const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
   const setParam = useFireCommandStore((s) => s.setParam);
+  
+  const tel = useToneTelemetry();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -328,14 +331,28 @@ export function FiltEnvStageViz() {
         ctx.fillText(h.label, h.x, top - 4);
       }
 
-      // Playhead + cutoff laser sync
-      const cycle = (now / (1700 + logNorm(p.a, A_MIN, A_MAX) * 700)) % 1;
-      const sx = x0 + cycle * (x4 - x0);
+      // Live telemetry cursor + cutoff laser sync
+      const active = tel.voiceCount > 0;
+      const telData = tel.filt;
+      let sx = x0;
       let envLv = 0;
-      if (sx <= x1) envLv = (sx - x0) / Math.max(1, wA);
-      else if (sx <= x2) envLv = 1 - ((sx - x1) / Math.max(1, wD)) * (1 - p.sus);
-      else if (sx <= x3) envLv = p.sus;
-      else envLv = p.sus * (1 - (sx - x3) / Math.max(1, wR));
+      if (active && telData) {
+        const phase = clamp(telData.phase, 0, 1);
+        envLv = clamp(telData.level, 0, 1);
+        const stage = telData.stage;
+        if (stage === "attack") sx = x0 + phase * wA;
+        else if (stage === "decay") sx = x1 + phase * wD;
+        else if (stage === "sustain") sx = x2 + phase * wS;
+        else if (stage === "release" || stage === "decay_out") sx = x3 + phase * wR;
+        else sx = x0 + phase * (x4 - x0);
+      } else {
+        const cycle = (now / 1700) % 1;
+        sx = x0 + cycle * (x4 - x0);
+        if (sx <= x1) envLv = (sx - x0) / Math.max(1, wA);
+        else if (sx <= x2) envLv = 1 - ((sx - x1) / Math.max(1, wD)) * (1 - p.sus);
+        else if (sx <= x3) envLv = p.sus;
+        else envLv = p.sus * (1 - (sx - x3) / Math.max(1, wR));
+      }
       const sy = yLv(envLv);
 
       // Env-modulated cutoff for ghost Bode
@@ -373,20 +390,29 @@ export function FiltEnvStageViz() {
       ctx.fillRect(cx - 1.5, top, 3, usableH);
       ctx.shadowBlur = 0;
 
-      // Sweep marker
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.55);
-      ctx.lineWidth = 1.5;
+      // Sweep marker (bright when active)
+      ctx.strokeStyle = hexAlpha(C_GLOW, active ? 0.75 : 0.35);
+      ctx.lineWidth = active ? 2 : 1.5;
+      ctx.setLineDash(active ? [] : [2, 2]);
       ctx.beginPath();
       ctx.moveTo(sx, top);
       ctx.lineTo(sx, sy);
       ctx.stroke();
+      ctx.setLineDash([]);
       ctx.fillStyle = "#fff8e0";
-      ctx.shadowBlur = 14;
+      ctx.shadowBlur = active ? 16 : 10;
       ctx.shadowColor = C;
       ctx.beginPath();
-      ctx.arc(sx, sy, 3.6 + flashRef.current * 1.5, 0, Math.PI * 2);
+      ctx.arc(sx, sy, (active ? 4.5 : 3.2) + flashRef.current * 1.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
+
+      if (active && telData && telData.stage !== "idle") {
+        ctx.font = "900 9px ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
+        ctx.fillText(String(telData.stage).slice(0, 6).toUpperCase(), sx, sy - 12);
+      }
 
       // Sparks along laser when amt high
       if (amt > 0.08 && Math.random() < 0.15 + amt * 0.35) {
@@ -494,10 +520,10 @@ export function FiltEnvStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: tel.voiceCount > 0,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

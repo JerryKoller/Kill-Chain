@@ -81,8 +81,10 @@ export const FIRE_FOCUS_RING: FocusModule[] = [
     id: "mixer.unison",
     knobs: [
       K("unison", "Unison", 1, 7, { integer: true }),
+      K("unisonMix", "Choir Mix", 0, 1),
       K("unisonDetune", "Detune", 0, 50, { integer: true }),
       K("unisonWidth", "Width", 0, 1),
+      K("unisonTemporalSpread", "Temporal", 0, 0.05),
       K("drift", "Drift", 0, 1),
     ],
   },
@@ -102,6 +104,7 @@ export const FIRE_FOCUS_RING: FocusModule[] = [
       K("filterCutoff", "Cutoff", 20, 18000, { curve: "log" }),
       K("filterResonance", "Reso", 0.1, 28, { curve: "log" }),
       K("filterEnvAmount", "Env Amt", -1, 1),
+      K("filterEnvResoAmount", "Env→Reso", -1, 1),
       K("filterKeyTrack", "Key Trk", 0, 1),
       K("filterDrive", "Sat", 0, 1),
     ],
@@ -143,6 +146,7 @@ export const FIRE_FOCUS_RING: FocusModule[] = [
     knobs: [
       K("lpgDecay", "Decay", 0.05, 2.5, { curve: "log" }),
       K("lpgColor", "Color", 0, 1),
+      K("lpgStrike", "Strike", 0, 1),
       K("velAmount", "Vel", 0, 1),
     ],
   },

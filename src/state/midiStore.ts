@@ -11,7 +11,11 @@ export type MidiTarget =
   | { kind: "macro"; name: "warmer" | "cleaner" | "punchier" | "wider" | "bigger" | "tighter" }
   | { kind: "transport"; action: "play-pause" | "next" | "prev" | "snapshot-a" | "swap-ab" }
   /** Macro Reactor pad by 0-based index (toggles; velocity = intensity). */
-  | { kind: "reactorPad"; pad: number };
+  | { kind: "reactorPad"; pad: number }
+  /** Fire Command performance patch params (macros, gate, harmony mix, etc.). */
+  | { kind: "fireParam"; key: string }
+  /** Orbit Vault scene recall by 0-based slot. */
+  | { kind: "fireScene"; slot: number };
 
 export interface MidiMapping {
   /** Composite key = `<deviceId>:<channel>:<cc>` for CC, `<deviceId>:<channel>:N:<note>` for notes. */
@@ -327,13 +331,18 @@ function handleMessage(deviceId: string, data: ArrayLike<number>): void {
     value = data2 / 127;
     label = `CC ${data1} ch${channel + 1}`;
 
-    // Signal Path focus knobs / PROG·BANK nav take priority over learn mappings.
-    if (useFireMidiFocusStore.getState().handleCc(data1, value, data2)) {
-      useMidiStore.setState({
-        lastMessage: { id, label, value },
-        lastActiveAt: { ...useMidiStore.getState().lastActiveAt, [id]: Date.now() },
-      });
-      return;
+    // Signal Path focus knobs / PROG·BANK nav — but never steal while learning,
+    // and never override CCs that already have a MIDI learn mapping.
+    const midiSnap = useMidiStore.getState();
+    const mapped = midiSnap.mappings.some((m) => m.id === id);
+    if (!midiSnap.learning && !mapped) {
+      if (useFireMidiFocusStore.getState().handleCc(data1, value, data2)) {
+        useMidiStore.setState({
+          lastMessage: { id, label, value },
+          lastActiveAt: { ...useMidiStore.getState().lastActiveAt, [id]: Date.now() },
+        });
+        return;
+      }
     }
   } else if (status === 0x90 && data2 > 0) {
     id = `${deviceId}:${channel}:note:${data1}`;
@@ -377,6 +386,8 @@ function describeTarget(t: MidiTarget): string {
   if (t.kind === "param") return t.key;
   if (t.kind === "macro") return `macro:${t.name}`;
   if (t.kind === "reactorPad") return `reactor pad ${t.pad + 1}`;
+  if (t.kind === "fireParam") return `fire:${t.key}`;
+  if (t.kind === "fireScene") return `scene ${t.slot + 1}`;
   return `transport:${t.action}`;
 }
 
@@ -386,6 +397,20 @@ function applyMidi(target: MidiTarget, normalized: number): void {
     const v = isBipolar(target.key) ? normalized * 2 - 1 : normalized;
     const next = { ...audio.params, [target.key]: v };
     audio.replaceParams(next);
+    return;
+  }
+  if (target.kind === "fireParam") {
+    void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
+      const key = target.key as keyof import("@/audio/dsp/FireCommandSynth").FirePatch;
+      useFireCommandStore.getState().setParam(key, normalized as never);
+    });
+    return;
+  }
+  if (target.kind === "fireScene") {
+    if (normalized < 0.4) return;
+    void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
+      useFireCommandStore.getState().recallScene(target.slot);
+    });
     return;
   }
   if (target.kind === "macro") {

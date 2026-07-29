@@ -6,9 +6,8 @@
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
-import { getEngine } from "@/audio/AudioEngine";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 
@@ -203,7 +202,7 @@ export function LiveStageViz() {
 
       let n = 0;
       try {
-        n = getEngine().fireCommand.getActiveVoiceCount();
+        n = activeFireEngine().getActiveVoiceCount();
       } catch {
         n = 0;
       }
@@ -419,7 +418,7 @@ export function LiveStageViz() {
         active: false,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 28 },
     );

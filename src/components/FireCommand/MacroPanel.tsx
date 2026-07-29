@@ -4,8 +4,10 @@
  */
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import { DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { MACRO_HELM_COLORS, MACRO_KEYS, type MacroKey } from "./MacroStageViz";
+import { MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
 
 export const MACRO_C = FC.macros;
 export const MACRO_C_GLOW = bandShade(FC_BAND.perf, 0.92);
@@ -173,9 +175,23 @@ export function MacroQuickActions() {
   const m2 = useFireCommandStore((s) => s.patch.macro2) ?? 0;
   const m3 = useFireCommandStore((s) => s.patch.macro3) ?? 0;
   const m4 = useFireCommandStore((s) => s.patch.macro4) ?? 0;
+  const matrix = useFireCommandStore((s) => s.patch.modMatrix) ?? [];
+  const response = useFireCommandStore((s) => s.patch.macroResponse) ?? "absolute";
 
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
+      <select
+        value={response}
+        onChange={(e) => setParam("macroResponse", e.target.value as FirePatch["macroResponse"])}
+        className="h-6 rounded-md border bg-black/40 px-1 text-[9px] uppercase tracking-wider outline-none"
+        style={{ borderColor: `${MACRO_C}44`, color: MACRO_C_GLOW }}
+        title="Macro response mode"
+      >
+        <option value="absolute">Absolute</option>
+        <option value="relative">Relative (zero at arm)</option>
+        <option value="bipolar">Bipolar</option>
+        <option value="smoothed">Smoothed</option>
+      </select>
       <button
         type="button"
         onClick={() => {
@@ -186,7 +202,7 @@ export function MacroQuickActions() {
         }}
         className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
         style={{ borderColor: `${MACRO_C}55`, color: MACRO_C_GLOW, background: `${MACRO_C}1c` }}
-        title="Zero all helms"
+        title="Zero — return all macros to neutral (0)"
       >
         Zero
       </button>
@@ -200,23 +216,38 @@ export function MacroQuickActions() {
         }}
         className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
         style={{ borderColor: `${MACRO_C}55`, color: MACRO_C_GLOW, background: `${MACRO_C}1c` }}
-        title="Invert all levels"
+        title="Invert — invert current macro values"
       >
         Invert
       </button>
       <button
         type="button"
         onClick={() => {
-          setParam("macro1", m4);
-          setParam("macro2", m3);
-          setParam("macro3", m2);
-          setParam("macro4", m1);
+          const next = matrix.map((r) => {
+            if (!r.source.startsWith("macro") || r.dest === "none") return r;
+            return { ...r, amount: -r.amount };
+          });
+          setParam("modMatrix", next);
         }}
         className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
         style={{ borderColor: `${MACRO_C}55`, color: MACRO_C_GLOW, background: `${MACRO_C}1c` }}
-        title="Reverse M1↔M4"
+        title="Flip — negate destination amounts for all macro routes (swap min/max sense)"
       >
         Flip
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setParam("macro1", DEFAULT_FIRE_PATCH.macro1);
+          setParam("macro2", DEFAULT_FIRE_PATCH.macro2);
+          setParam("macro3", DEFAULT_FIRE_PATCH.macro3);
+          setParam("macro4", DEFAULT_FIRE_PATCH.macro4);
+        }}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
+        style={{ borderColor: `${MACRO_C}55`, color: MACRO_C_GLOW, background: `${MACRO_C}1c` }}
+        title="Reset — restore default patch macro positions"
+      >
+        Reset
       </button>
       <button
         type="button"
@@ -237,10 +268,10 @@ export function MacroQuickActions() {
 
 export function macroStageLabel(vals: number[]): string {
   const e = Math.max(...vals);
-  if (e < 0.03) return "Idle";
-  if (vals.every((v) => near(v, vals[0]!))) return "Uniform";
-  if (vals[0]! > 0.7 && vals[1]! < 0.15 && vals[2]! < 0.15 && vals[3]! < 0.15) return "Lead";
-  if (vals[0]! > 0.5 && vals[2]! > 0.5 && vals[1]! < 0.2 && vals[3]! < 0.2) return "Cross";
-  if (vals[0]! < vals[1]! && vals[1]! < vals[2]! && vals[2]! < vals[3]!) return "Rise";
-  return "Live";
+  if (e < 0.03) return "Idle — enabled, no activity";
+  if (vals.every((v) => near(v, vals[0]!))) return "Uniform — enabled, no activity";
+  if (vals[0]! > 0.7 && vals[1]! < 0.15 && vals[2]! < 0.15 && vals[3]! < 0.15) return "Lead — active under play";
+  if (vals[0]! > 0.5 && vals[2]! > 0.5 && vals[1]! < 0.2 && vals[3]! < 0.2) return "Cross — active under play";
+  if (vals[0]! < vals[1]! && vals[1]! < vals[2]! && vals[2]! < vals[3]!) return "Rise — active under play";
+  return "Live — active under play";
 }

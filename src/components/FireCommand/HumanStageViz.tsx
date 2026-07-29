@@ -422,7 +422,7 @@ export function HumanStageViz() {
         active: !!(st.current.on && st.current.enabled),
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 22 },
     );

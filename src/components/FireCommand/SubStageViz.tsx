@@ -328,10 +328,10 @@ export function SubStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: (st.current.level ?? 0) > 0.02,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );

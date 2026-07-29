@@ -23,6 +23,47 @@ import {
   applyWarp,
 } from "./wavetables";
 import { FireVintageAge } from "./FireVintageAge";
+import { punchMacroToGlue, type GlueMode, type MasterChainScene } from "./mixClarity";
+import {
+  type AmpModel,
+  type AmpRetrigger,
+  type EnvCurve,
+  type FilterCarveMode,
+  type FilterDrivePos,
+  type FilterSlope,
+  type LpgModel,
+  type ModEnvPoint,
+  type ToneVoiceTelemetry,
+  type UnisonDistribution,
+  type UnisonPhaseMode,
+  type UnisonTemporalMode,
+  adsrToModEnvPoints,
+  evalModEnvHeld,
+  evalModEnvRelease,
+  idleTelemetry,
+  lpgModelTimes,
+  normalizeModEnvPoints,
+  unisonDelaySec,
+  unisonPhaseOffsets,
+  unisonPositions,
+  voiceIdentityUnit,
+} from "./toneDifferentiation";
+
+export type {
+  AmpModel,
+  AmpRetrigger,
+  EnvCurve,
+  FilterCarveMode,
+  FilterDrivePos,
+  FilterSlope,
+  LpgModel,
+  ModEnvPoint,
+  ToneEnvTelemetry,
+  ToneVoiceTelemetry,
+  UnisonDistribution,
+  UnisonPhaseMode,
+  UnisonTemporalMode,
+} from "./toneDifferentiation";
 
 export type FireFilterType = "lowpass" | "bandpass" | "highpass" | "notch";
 export type SubWave = "sine" | "triangle" | "square" | "sawtooth";
@@ -36,6 +77,10 @@ export type DriveMode = "soft" | "tube" | "fold" | "hard" | "fuzz";
 export type FireBitDepth = "off" | "12bit" | "8bit";
 export type ChipNoiseMode = "white" | "nes" | "gb" | "periodic";
 export type FmEngineMode = "classic" | "ops4";
+/** Noise Grain Storm operating mode. */
+export type NoiseMode = "bed" | "burst" | "storm";
+/** Twin Voice continuous inheritance from Osc A. */
+export type OscBInheritMode = "off" | "morph" | "mirror" | "offset" | "family" | "lock" | "fm";
 
 // ── Modulation matrix ──
 export type ModSource =
@@ -43,8 +88,42 @@ export type ModSource =
   | "macro1" | "macro2" | "macro3" | "macro4" | "random";
 export type ModDest =
   | "none" | "pitch" | "cutoff" | "resonance" | "wtA" | "wtB" | "wtC"
-  | "levelA" | "levelB" | "levelC" | "fm" | "pan" | "volume" | "reverb" | "delay";
-export interface ModRoute { source: ModSource; dest: ModDest; amount: number; }
+  | "levelA" | "levelB" | "levelC" | "fm" | "pan" | "volume" | "reverb" | "delay"
+  | "chorusMix" | "phaserMix" | "drive" | "spectral";
+export type FxQuality = "eco" | "live" | "high" | "render";
+export type LowProtect = "off" | "80" | "120" | "200" | "custom";
+export type DriveTonePos = "pre" | "post" | "both";
+export type PhaserStereoMode = "linked" | "opposed" | "quadrature";
+export type ChorusModel = "single" | "dual" | "triple" | "ensemble" | "dimension" | "tape";
+export type DelayCascadeMode = "slap" | "echo" | "dub" | "bounce" | "long" | "infinite";
+export type FxRoutingScene = "serial" | "driveAgePrint" | "spaceCascade" | "spectralTail";
+/** Twin Orbit relationship of LFO2 relative to LFO1. */
+export type Lfo2Relation = "independent" | "mirror" | "invert" | "phaseOffset" | "ratio" | "followLag";
+export type Lfo2DriftMode = "locked" | "elastic" | "wandering";
+export type GlideMode = "always" | "legato";
+export type GlideCurve = "linear" | "exp" | "s";
+export type GlideRateMode = "time" | "rate";
+export type RingMode = "ratio" | "fixed";
+export type LfoRateDisplay = "hz" | "sync";
+/** Mini-state stored at a Vector Lattice pad corner. */
+export interface FmVectorCorner {
+  levels: [number, number, number, number];
+  ratios: [number, number, number];
+  feedback: number;
+}
+export interface ModRoute {
+  source: ModSource;
+  dest: ModDest;
+  amount: number;
+  /** Flip polarity after reading the source. */
+  invert?: boolean;
+  /** Map bipolar −1..1 sources into 0..1 before scaling. */
+  unipolar?: boolean;
+  /** 0..1 slew / smooth on the route contribution. */
+  smooth?: number;
+  /** Response curve applied to |source| before polarity. */
+  curve?: "linear" | "exp" | "log" | "invert";
+}
 // MK IV: 8 → 12 slots. makeModMatrix pads shorter (legacy) matrices with
 // inert routes, so every persisted patch/preset loads unchanged.
 export const MOD_SLOTS = 12;
@@ -53,9 +132,40 @@ export function makeModMatrix(routes: ModRoute[] = []): ModRoute[] {
   const out: ModRoute[] = [];
   for (let i = 0; i < MOD_SLOTS; i++) {
     const r = routes[i];
-    out.push(r ? { source: r.source, dest: r.dest, amount: r.amount } : { source: "none", dest: "none", amount: 0 });
+    const sm = typeof r?.smooth === "number" ? Math.max(0, Math.min(1, r.smooth)) : 0;
+    const curve = r?.curve === "exp" || r?.curve === "log" || r?.curve === "invert" ? r.curve : "linear";
+    out.push(
+      r
+        ? {
+            source: r.source,
+            dest: r.dest,
+            amount: r.amount,
+            invert: !!r.invert,
+            unipolar: !!r.unipolar,
+            smooth: sm,
+            curve,
+          }
+        : { source: "none", dest: "none", amount: 0, invert: false, unipolar: false, smooth: 0, curve: "linear" },
+    );
   }
   return out;
+}
+
+/** Apply route polarity / curve transforms to a raw bipolar source sample. */
+export function applyRouteSource(raw: number, r: ModRoute): number {
+  let s = raw;
+  if (r.unipolar) s = (s + 1) * 0.5;
+  const curve = r.curve ?? "linear";
+  if (curve !== "linear") {
+    const sign = s < 0 ? -1 : 1;
+    let mag = Math.min(1, Math.abs(s));
+    if (curve === "exp") mag = mag * mag;
+    else if (curve === "log") mag = Math.sqrt(mag);
+    else if (curve === "invert") mag = 1 - mag;
+    s = sign * mag;
+  }
+  if (r.invert) s = -s;
+  return s;
 }
 
 export interface FirePatch {
@@ -67,6 +177,12 @@ export interface FirePatch {
   oscAOctave: number;
   oscADetune: number;
   oscALevel: number;
+  /**
+   * 0..1 Prime Voice Continuity.
+   * Low = discrete frame snaps (glitchy table steps).
+   * High = full subframe morph resolution (smooth interpolation character).
+   */
+  oscAContinuity: number;
   // ── Oscillator B (wavetable) ──
   oscBTable: string;
   oscBPos: number;
@@ -75,6 +191,12 @@ export interface FirePatch {
   oscBOctave: number;
   oscBDetune: number;
   oscBLevel: number;
+  /** Continuous Twin inheritance from A (morph / lock / FM…). */
+  oscBInherit: OscBInheritMode;
+  /** When true (or inherit=lock), B tracks A's frequency base (phase-lock feel). */
+  oscBPhaseLock: boolean;
+  /** 0..1 — osc A's audio frequency-modulates osc B (Twin FM from Prime). */
+  fmAtoB: number;
   // ── Oscillator C (wavetable) ──
   oscCTable: string;
   oscCPos: number;
@@ -90,16 +212,42 @@ export interface FirePatch {
   warpTilt: number;
   /** 0..1 periodic comb notching across the harmonics (0 = off). */
   warpComb: number;
+  /**
+   * -1..1 Forge master amount.
+   * Scales Stretch/Tilt/Comb (negative = inverse transform). 0 = bypass.
+   */
+  warpAmount: number;
   // ── Unison ──
   unison: number;
   unisonDetune: number;
   unisonWidth: number;
+  /** Mix of generated choir vs anchor/center (0 = dry center, 1 = full choir). */
+  unisonMix: number;
+  /** Keep center partial locked (tune/pan/delay). */
+  unisonAnchor: boolean;
+  unisonDistribution: UnisonDistribution;
+  unisonPhase: UnisonPhaseMode;
+  /** 0..0.05 seconds max per-voice start delay. */
+  unisonTemporalSpread: number;
+  unisonTemporalMode: UnisonTemporalMode;
+  /** 0..1 spread amp/filt envelope timing across choir partials (via note jitter). */
+  unisonEnvSpread: number;
   // ── Sub + Noise ──
   subWave: SubWave;
   subLevel: number;
+  /** Align Sub start/detune with Prime (protected foundation lock). */
+  subPhaseAlign: boolean;
+  /** 0..1 upper-harmonic translation for small-speaker audibility. */
+  subTranslate: number;
   noiseLevel: number;
   /** -1..1 noise tilt: -1 = dark rumble (LP 350 Hz), 0 = white, +1 = airy hiss (HP 6 kHz). */
   noiseColor: number;
+  /** Grain Storm operating mode. */
+  noiseMode: NoiseMode;
+  /** 0..1 storm/burst event density. */
+  noiseDensity: number;
+  /** 0..1 grain duration / hold (storm) or burst body. */
+  noiseGrain: number;
   // ── FM + Ring ──
   fmAmount: number;
   fmRatio: number;
@@ -112,9 +260,17 @@ export interface FirePatch {
   filterCutoff: number;
   filterResonance: number;
   filterEnvAmount: number;
+  /** -1..1 filter-envelope → resonance depth. */
+  filterEnvResoAmount: number;
   filterKeyTrack: number;
   /** 0..1 per-voice post-filter saturation (0 = clean, exactly current behavior). */
   filterDrive: number;
+  filterDrivePos: FilterDrivePos;
+  /** Cascaded biquad count (1=12dB, 2=24dB, 3=36dB-ish). */
+  filterSlope: FilterSlope;
+  filterCarve: FilterCarveMode;
+  /** 0..1 carve intensity. */
+  filterCarveAmount: number;
   // ── Amp ADSR ──
   ampAttack: number;
   ampDecay: number;
@@ -122,6 +278,17 @@ export interface FirePatch {
   ampRelease: number;
   /** 0..1 velocity → amp depth. 1 = full tracking (legacy behavior), 0 = fixed level. */
   velAmount: number;
+  /** Velocity → attack time shortening (0 = off). */
+  velAttack: number;
+  ampModel: AmpModel;
+  ampCurveAttack: EnvCurve;
+  ampCurveDecay: EnvCurve;
+  ampCurveRelease: EnvCurve;
+  ampRetrigger: AmpRetrigger;
+  /** Optional hold after attack (seconds). */
+  ampHold: number;
+  /** 0..1 punch overshoot above peak. */
+  ampOvershoot: number;
   // ── Lowpass gate (v1.7, Aalto-style vactrol) ──
   /** LPG mode replaces the amp/filter ADSR with a struck vactrol envelope. */
   lpgOn: boolean;
@@ -129,31 +296,62 @@ export interface FirePatch {
   lpgDecay: number;
   /** 0..1 — how much the gate colors the tone (drives cutoff with the strike). */
   lpgColor: number;
+  lpgModel: LpgModel;
+  /** 0..1 strike excitation amount. */
+  lpgStrike: number;
+  /** 0..1 body ring persistence (scales decay). */
+  lpgRing: number;
+  /** 0..1 residual leakage after ring. */
+  lpgLeakage: number;
+  /** Choke previous strike on re-trigger. */
+  lpgChoke: boolean;
+  /** 0..1 excite filter resonance / noise burst into filter. */
+  lpgResoCouple: number;
   // ── Filter ADSR ──
   filtAttack: number;
   filtDecay: number;
   filtSustain: number;
   filtRelease: number;
-  // ── Mod envelope (morph/timbre) ──
+  filtCurveAttack: EnvCurve;
+  filtCurveDecay: EnvCurve;
+  filtCurveRelease: EnvCurve;
+  // ── Mod envelope (morph/timbre) — ADSR mirrors + MSEG ──
   modAttack: number;
   modDecay: number;
   modSustain: number;
   modRelease: number;
+  modEnvPoints: ModEnvPoint[];
+  modEnvSustainIndex: number;
+  modEnvLoop: boolean;
   // ── LFO 1 ──
   lfo1Wave: LfoWave;
   lfo1Rate: number;
   lfo1Depth: number;
   lfo1Dest: LfoDest;
+  /** UI rate readout: free Hz vs musical sync hint. */
+  lfo1RateDisplay: LfoRateDisplay;
   // ── LFO 2 ──
   lfo2Wave: LfoWave;
   lfo2Rate: number;
   lfo2Depth: number;
   lfo2Dest: LfoDest;
+  lfo2RateDisplay: LfoRateDisplay;
+  /** Twin Orbit relationship to LFO 1. */
+  lfo2Relation: Lfo2Relation;
+  /** Degrees when relation is phaseOffset (0/45/90/180/270). */
+  lfo2PhaseOffset: number;
+  /** Rate multiplier vs LFO1 when relation is ratio (e.g. 0.5, 2). */
+  lfo2Ratio: number;
+  /** Slow wander of offset/ratio within Twin Orbit. */
+  lfo2DriftMode: Lfo2DriftMode;
   // ── Pitch env + voice ──
   pitchEnvAmount: number;
   pitchEnvTime: number;
   mono: boolean;
   glide: number;
+  glideMode: GlideMode;
+  glideCurve: GlideCurve;
+  glideRateMode: GlideRateMode;
   // ── Harmonizer (v1.7): scale-locked companion notes on live input ──
   harmonyMode: HarmonyMode;
   /** 0..1 velocity scale on the companion notes. */
@@ -164,17 +362,61 @@ export interface FirePatch {
   crush: number;
   tone: number;
   punch: number;
+  /** Glue / Press Anvil — Mix Clarity */
+  glueInGain: number;
+  glueOutGain: number;
+  glueAutoGain: boolean;
+  glueMode: import("./mixClarity").GlueMode;
+  glueThreshold: number;
+  glueRatio: number;
+  glueAttack: number;
+  glueRelease: number;
+  glueKnee: number;
+  glueMakeup: number;
+  glueMix: number;
+  glueUseAdvanced: boolean;
+  mixDeltaAudition: boolean;
+  masterChainScene: import("./mixClarity").MasterChainScene;
+  /** Drive input trim (linear gain 0..2, 1 = unity). */
+  driveInGain: number;
+  /** Drive output trim. */
+  driveOutGain: number;
+  /** Compensate perceived loudness after drive. */
+  driveAutoGain: boolean;
+  /** Bias (−1..1) for asymmetric transfer. */
+  driveBias: number;
+  /** Symmetry (−1..1) even/odd balance tilt. */
+  driveSymmetry: number;
+  /** DC blocker after drive. */
+  driveDcBlock: boolean;
+  /** Where Tone LPF sits relative to drive. */
+  driveTonePos: DriveTonePos;
   // ── Phaser ──
   phaserRate: number;
   phaserDepth: number;
   phaserMix: number;
+  phaserStages: number;
+  phaserFeedback: number;
+  phaserCenter: number;
+  phaserStereo: PhaserStereoMode;
   // ── Chorus + Delay ──
   chorusRate: number;
   chorusDepth: number;
   chorusMix: number;
+  chorusVoices: number;
+  chorusDelay: number;
+  chorusSpread: number;
+  chorusModel: ChorusModel;
+  chorusLowCut: number;
   delayTime: number;
   delayFeedback: number;
   delayMix: number;
+  delaySync: boolean;
+  delayCascadeMode: DelayCascadeMode;
+  delayDuck: number;
+  delayFbFilter: number;
+  delayFbDrive: number;
+  delayFreeze: boolean;
   // ── Reverb ──
   reverbSize: number;
   reverbMix: number;
@@ -184,6 +426,10 @@ export interface FirePatch {
   reverbPredelay: number;
   /** 0..1 — early/dense diffusion character. */
   reverbDiffusion: number;
+  reverbEarly: number;
+  reverbLowDecay: number;
+  reverbHighCut: number;
+  reverbFreeze: boolean;
   // ── Signal Path rack enables (v3.0.1) — true = stage engaged ──
   pathOsc: boolean;
   pathFilter: boolean;
@@ -198,6 +444,33 @@ export interface FirePatch {
   spectralAmount: number;
   /** 0..1 dry/wet, latency-matched inside the worklet. 0 = hard bypass. */
   spectralMix: number;
+  spectralLow: number;
+  spectralHigh: number;
+  spectralFftSize: number;
+  // ── FX Clarity rack-wide ──
+  fxQuality: FxQuality;
+  lowProtect: LowProtect;
+  lowProtectHz: number;
+  /** Audition wet−dry delta on supported FX. */
+  fxDeltaAudition: boolean;
+  ageInGain: number;
+  ageOutGain: number;
+  reverbInGain: number;
+  reverbOutGain: number;
+  spectralInGain: number;
+  spectralOutGain: number;
+  /** Oxide Archive group locks (true = lock against AGE macro / randomize). */
+  ageLockMedium: boolean;
+  ageLockMotion: boolean;
+  ageLockWear: boolean;
+  ageLockResolution: boolean;
+  ageMacro: number;
+  ageEvolve: number;
+  /** Shared Phaser↔Chorus LFO link. */
+  fxSharedMod: boolean;
+  fxRoutingScene: FxRoutingScene;
+  /** Spectral processes only wet delay/reverb when true (Phase 6 tap). */
+  spectralWetOnly: boolean;
   // ── Macros ──
   macro1: number;
   macro2: number;
@@ -215,6 +488,18 @@ export interface FirePatch {
   tuneVariance: number;
   /** 0..1 — per-note ADSR time jitter. */
   envVariance: number;
+  /** Integer DNA seed for persistent voice personalities. */
+  analogDnaSeed: number;
+  /** Lock DNA against mutation. */
+  analogDnaLock: boolean;
+  /** 0..1 warm-up / wake instability that converges while playing. */
+  analogWake: number;
+  /** Relative scale for tremor / breath / climate time layers (Rate still master). */
+  analogTremor: number;
+  analogBreath: number;
+  analogClimate: number;
+  /** 0..1 occasional irregular event probability. */
+  analogEvents: number;
   // ── Vintage Age bus (Genesis) ──
   cassetteGen: number;
   /** -1..1 variable tape speed. */
@@ -242,6 +527,12 @@ export interface FirePatch {
   accentAmount: number;
   /** Legato extends glide (slide) in mono mode. */
   slideOn: boolean;
+  /**
+   * 0..1 Chip↔Acid personality blend.
+   * 0 = Chip (clocked pulse / grit / voice limits).
+   * 1 = Acid (slide / accent / sync punch).
+   */
+  chipAcidMix: number;
   // ── FM Rack / Vector (Genesis v3.0) ──
   fmEngine: FmEngineMode;
   fmAlg: number; // 0..7 algorithm index
@@ -256,17 +547,33 @@ export interface FirePatch {
   /** Slow XY vector motion on osc A/B wavetable positions. */
   vectorRate: number;
   vectorDepth: number;
+  /** Ring modulator: ratio of carrier vs absolute Hz. */
+  ringMode: RingMode;
+  /** Vector Lattice pad corners (NW, NE, SW, SE). */
+  fmVectorCorners: FmVectorCorner[];
+  /** Active pad morph X/Y 0..1. */
+  fmVectorX: number;
+  fmVectorY: number;
   // ── Stereo width (bus mid/side) ──
   /** 0 = mono, 1 = untouched (legacy behavior), up to 1.4 = extra-wide sides. */
   stereoWidth: number;
+  widthInGain: number;
+  widthOutGain: number;
+  /** Mono-below frequency for side channel (0 = off). */
+  monoBelow: number;
+  widthMechanism: import("./mixClarity").WidthMechanism;
+  widthCorrWarn: number;
   // ── Trance gate ──
   gateOn: boolean;
   gateRate: number;   // steps per second
   gateDepth: number;  // 0..1, how deep closed steps cut
   gateSteps: number;  // 2..16 active steps
-  gatePattern: number[]; // length 16, 0/1
-  /** 0..1 edge softness — 0 = hard chop (legacy), 1 = pumping swells. */
+  /** Length 16; each step 0..1 open amount (legacy 0/1 still works). */
+  gatePattern: number[];
+  /** 0..1 edge softness — 0 = hard chop (legacy), 1 = pumping swells. UI: Edge. */
   gateSmooth: number;
+  /** Gate destination — volume bus or live velocity scale. */
+  gateDest: "volume" | "velocity";
   // ── Master ──
   masterGain: number;
   // ── v3.0.2 module fill ──
@@ -278,10 +585,24 @@ export interface FirePatch {
   airHigh: number;
   /** 0..1 wet amount for air shelves (0 = bypass). */
   airAmount: number;
-  /** Live scale-lock (snap played notes to sequencer scale). */
+  airInGain: number;
+  airOutGain: number;
+  airArch: import("./mixClarity").AirArch;
+  airMsMode: boolean;
+  /** Scope display amplitude (does not change output). */
+  scopeDisplayGain: number;
+  voiceSteal: import("./mixClarity").VoiceStealPolicy;
+  ceaseMode: import("./mixClarity").CeaseMode;
+  /** Live scale-lock (snap played notes to sequencer scale). Legacy; prefer scaleMode. */
   scaleLock: boolean;
+  /** Correction mode: guide=no change, soft=snap, strict=reject, fold=wrap. */
+  scaleMode: "guide" | "soft" | "strict" | "fold";
+  /** Which systems follow Key Lattice. */
+  scaleFollowers: { harmony: boolean; chord: boolean; arp: boolean; pianoRoll: boolean };
   /** Chord memory: fire stored intervals with each key. */
   chordMemoryOn: boolean;
+  /** Builder constructs intervals; Memory learns/replays. */
+  chordMode: "builder" | "memory";
   /** Relative semis from the played root, e.g. [0, 4, 7]. */
   chordIntervals: number[];
   /** Sequencer / live humanize enable. */
@@ -290,6 +611,17 @@ export interface FirePatch {
   humanizeTiming: number;
   /** 0..1 velocity jitter strength. */
   humanizeVelocity: number;
+  /** Deterministic seed for humanize PRNG. */
+  humanizeSeed: number;
+  humanizeSeedMode: "fixed" | "perPlay";
+  /** Skip jitter on bar downbeats (step % 16 === 0). */
+  humanizeProtectDownbeats: boolean;
+  /** Macro response when read as mod sources. */
+  macroResponse: "absolute" | "relative" | "bipolar" | "smoothed";
+  /** Kin Halo voice leading. */
+  harmonyVoiceLead: "parallel" | "nearest" | "scale";
+  harmonyLow: number;
+  harmonyHigh: number;
   /**
    * Per-module enable map. Missing key = on; `false` = bypassed.
    * Keys match fireModuleAtlas module ids.
@@ -299,7 +631,7 @@ export interface FirePatch {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const midiToFreq = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
-const MAX_UNISON = 7;
+const MAX_UNISON = 16;
 
 /**
  * Fixed headroom trim on the voice-summing bus.
@@ -357,43 +689,58 @@ const CLIP_RANGE = 3;
  */
 const DRIVE_RANGE = 2;
 
-function makeDriveCurve(drive: number, mode: DriveMode = "soft"): Float32Array<ArrayBuffer> {
+function makeDriveCurve(
+  drive: number,
+  mode: DriveMode = "soft",
+  bias = 0,
+  symmetry = 0,
+): Float32Array<ArrayBuffer> {
   const n = 4096;
   const curve = new Float32Array(n);
   if (drive <= 0) {
-    // Identity over the full ±DRIVE_RANGE span (curve values may exceed ±1 —
-    // WaveShaper output is unclamped, only its input domain is [-1, 1]).
     for (let i = 0; i < n; i++) curve[i] = ((i / (n - 1)) * 2 - 1) * DRIVE_RANGE;
     return curve;
   }
-  const shape = (x: number): number => {
+  const b = clamp(bias, -1, 1) * 0.35;
+  const sym = clamp(symmetry, -1, 1);
+  const shape = (xIn: number): number => {
+    const x = xIn + b;
+    let y: number;
     switch (mode) {
       case "tube": {
-        // asymmetric soft clip — even harmonics, warm
         const k = 1 + drive * 7;
-        const y = x >= 0 ? Math.tanh(k * x) : Math.tanh(k * 0.6 * x);
-        return y / Math.tanh(k);
+        y = x >= 0 ? Math.tanh(k * x) : Math.tanh(k * (0.55 + sym * 0.25) * x);
+        y /= Math.tanh(k);
+        break;
       }
       case "fold": {
-        // sine wavefolder — extra reflections add metallic harmonics with drive
-        const g = 1 + drive * 5;
-        return Math.sin(x * g * Math.PI * 0.5);
+        const g = 1 + drive * (5 + Math.abs(sym) * 2);
+        y = Math.sin(x * g * Math.PI * 0.5);
+        if (sym > 0.2) y = Math.sin(y * Math.PI * (0.5 + sym * 0.4));
+        break;
       }
       case "hard": {
         const g = 1 + drive * 9;
-        return clamp(x * g, -1, 1);
+        const pos = clamp(x * g * (1 + sym * 0.3), -1, 1);
+        const neg = clamp(x * g * (1 - sym * 0.3), -1, 1);
+        y = x >= 0 ? pos : neg;
+        break;
       }
       case "fuzz": {
-        // aggressive, near-square with rounded shoulders
         const k = 1 + drive * 22;
-        return Math.tanh(k * x);
+        y = Math.tanh(k * x);
+        // Rectify-ish grit on positive half when symmetry high
+        if (sym > 0.35 && x > 0) y = Math.abs(y);
+        break;
       }
       case "soft":
       default: {
         const k = 1 + drive * 8;
-        return Math.tanh(k * x) / Math.tanh(k);
+        y = Math.tanh(k * x) / Math.tanh(k);
+        break;
       }
     }
+    return y;
   };
   for (let i = 0; i < n; i++) {
     const x = ((i / (n - 1)) * 2 - 1) * DRIVE_RANGE;
@@ -487,11 +834,8 @@ function makeSoftClipCurve(): Float32Array<ArrayBuffer> {
   return curve;
 }
 
-function unisonSpread(n: number): number[] {
-  if (n <= 1) return [0];
-  const out: number[] = [];
-  for (let i = 0; i < n; i++) out.push((i / (n - 1)) * 2 - 1);
-  return out;
+function unisonSpread(n: number, dist: UnisonDistribution = "linear"): number[] {
+  return unisonPositions(n, dist);
 }
 
 interface LfoBank {
@@ -521,14 +865,25 @@ class Voice {
   private readonly groupC: Group | null;
   private readonly sub: OscillatorNode;
   private readonly gSub: GainNode;
+  /** Upper-harmonic translation oscillator (subTranslate audibility). */
+  private readonly subHarm: OscillatorNode;
+  private readonly gSubHarm: GainNode;
   private readonly noise: AudioBufferSourceNode;
   private readonly gNoise: GainNode;
+  /** Burst mode: driven by amp envelope. */
+  private readonly noiseBurst: GainNode;
   /** Tilt filter on the noise layer (noiseColor: dark ↔ white ↔ bright). */
   private readonly noiseFilt: BiquadFilterNode;
   private readonly fmOsc: OscillatorNode;
   private readonly fmGain: GainNode;
   /** Osc B audio → osc A frequency (cross FM). Scaled by fmBtoA in applyFm. */
   private readonly xmodGain: GainNode;
+  /** Osc A audio → osc B frequency (Twin FM from Prime). */
+  private readonly xmodGainAB: GainNode;
+  private stormPhase = 0;
+  private stormOpen = true;
+  private lfoToSub: boolean = true;
+  private burstWired = false;
   private readonly mix: GainNode;
   readonly filter: BiquadFilterNode;
   /** 1/CLIP_RANGE pad + shared saturation curve — the per-voice Filter Drive. */
@@ -552,6 +907,12 @@ class Voice {
    *  unison voice count rises (wider, not louder) so stacked unison can't blow
    *  past the soft-clip on its own. */
   private readonly uNorm: number;
+  /** Extra cascaded biquads for slope > 12 dB/oct. */
+  private readonly filterExtra: BiquadFilterNode[] = [];
+  /** Harmonic carve notch / peaking stage. */
+  private readonly carveFilt: BiquadFilterNode;
+  /** Persistent Analog Life personality slot (0..47). */
+  voiceSlot = 0;
 
   midi: number;
   baseFreq: number;
@@ -563,6 +924,8 @@ class Voice {
   private stopped = false;
   /** Optional live keyboard attack override (seconds). */
   private liveAttackSec: number | null = null;
+  /** Cached mod-env level at release for MSEG release stage. */
+  private modLevelAtRelease = 0;
 
   constructor(
     private readonly synth: FireCommandSynth,
@@ -587,8 +950,15 @@ class Voice {
     this.baseFreq = midiToFreq(midi);
     this.unisonCount = Math.round(clamp(p.unison, 1, MAX_UNISON));
     this.uNorm = 1 / Math.sqrt(this.unisonCount);
-    // Analog Life: static per-note tuning variance (audible cents spread).
-    this.tuneCents = (Math.random() * 2 - 1) * clamp(p.tuneVariance ?? 0, 0, 1) * 85;
+    // Analog Life: persistent DNA personality + note variance.
+    const seed = (p.analogDnaSeed ?? 0x73a9c412) >>> 0;
+    this.voiceSlot = Math.abs(midi + Math.round(velocity * 17)) % 48;
+    const idTune = voiceIdentityUnit(seed, this.voiceSlot, 0);
+    const wake = clamp(p.analogWake ?? 0, 0, 1);
+    this.tuneCents =
+      idTune * clamp(p.tuneVariance ?? 0, 0, 1) * 55
+      + (Math.random() * 2 - 1) * clamp(p.tuneVariance ?? 0, 0, 1) * 30 * (1 - wake * 0.5)
+      + idTune * wake * 40;
     const t = Math.max(ctx.currentTime, when ?? ctx.currentTime);
 
     this.mix = ctx.createGain();
@@ -602,6 +972,8 @@ class Voice {
     this.fmOsc.connect(this.fmGain);
     this.xmodGain = ctx.createGain();
     this.xmodGain.gain.value = 0;
+    this.xmodGainAB = ctx.createGain();
+    this.xmodGainAB.gain.value = 0;
 
     this.groupA = this.makeGroup(ctx, this.unisonCount, bankA);
     this.groupB = this.makeGroup(ctx, this.unisonCount, bankB);
@@ -614,28 +986,60 @@ class Voice {
     // as a pure (silent) modulator, Serum-style.
     for (const pan of this.groupB.pans) pan.connect(this.xmodGain);
     for (const o of this.groupA.osc) this.xmodGain.connect(o.frequency);
+    // Twin FM: A → B
+    for (const pan of this.groupA.pans) pan.connect(this.xmodGainAB);
+    for (const o of this.groupB.osc) this.xmodGainAB.connect(o.frequency);
 
     this.sub = ctx.createOscillator();
     this.sub.type = p.subWave;
     this.gSub = ctx.createGain();
     this.sub.connect(this.gSub).connect(this.mix);
+    this.subHarm = ctx.createOscillator();
+    this.subHarm.type = "sine";
+    this.gSubHarm = ctx.createGain();
+    this.gSubHarm.gain.value = 0;
+    this.subHarm.connect(this.gSubHarm).connect(this.mix);
 
     this.noise = ctx.createBufferSource();
     this.noise.buffer = noiseBuffer;
     this.noise.loop = true;
     this.noiseFilt = ctx.createBiquadFilter();
+    this.noiseBurst = ctx.createGain();
+    this.noiseBurst.gain.value = 1;
     this.gNoise = ctx.createGain();
-    this.noise.connect(this.noiseFilt).connect(this.gNoise).connect(this.mix);
+    this.noise.connect(this.noiseFilt).connect(this.noiseBurst).connect(this.gNoise).connect(this.mix);
 
-    // mix → filter → (pad → filter-drive shaper) → vca. At filterDrive = 0
-    // the shaper's curve is the exact identity over ±CLIP_RANGE, so the two
-    // extra nodes are tonally transparent while still hard-bounding a
-    // pathological voice (max unison + resonance) at ±CLIP_RANGE.
+    // mix → [pre-drive?] → filter(+cascade) → carve → [post-drive?] → vca.
+    // At filterDrive = 0 the shaper is identity over ±CLIP_RANGE.
     this.fdPad = ctx.createGain();
     this.fdPad.gain.value = 1 / CLIP_RANGE;
     this.fdShaper = ctx.createWaveShaper();
     this.fdShaper.curve = synth.filterDriveCurve;
-    this.mix.connect(this.filter).connect(this.fdPad).connect(this.fdShaper).connect(this.vca).connect(dest);
+    this.carveFilt = ctx.createBiquadFilter();
+    this.carveFilt.type = "allpass";
+    this.carveFilt.Q.value = 1;
+    this.carveFilt.frequency.value = 1000;
+
+    const slope = Math.round(clamp(p.filterSlope ?? 1, 1, 3)) as FilterSlope;
+    for (let i = 1; i < slope; i++) {
+      const extra = ctx.createBiquadFilter();
+      extra.type = p.filterType;
+      extra.Q.value = clamp(p.filterResonance, 0.0001, 30) * 0.55;
+      this.filterExtra.push(extra);
+    }
+
+    const drivePre = (p.filterDrivePos ?? "post") === "pre";
+    let node: AudioNode = this.mix;
+    if (drivePre) {
+      node = node.connect(this.fdPad).connect(this.fdShaper);
+    }
+    node = node.connect(this.filter);
+    for (const extra of this.filterExtra) node = node.connect(extra);
+    node = node.connect(this.carveFilt);
+    if (!drivePre) {
+      node = node.connect(this.fdPad).connect(this.fdShaper);
+    }
+    node.connect(this.vca).connect(dest);
 
     this.filter.type = p.filterType;
     this.filter.Q.value = clamp(p.filterResonance, 0.0001, 30);
@@ -656,15 +1060,16 @@ class Voice {
 
     // FM + LFO + pitch-env taps into every oscillator.
     for (const o of this.allOscs()) this.fmGain.connect(o.frequency);
+    this.lfoToSub = !(p.subPhaseAlign ?? true);
     for (const bank of [synth.lfo1, synth.lfo2]) {
       bank.filterDepth.connect(this.filter.frequency);
       for (const o of this.allOscs()) bank.pitchDepth.connect(o.detune);
-      bank.pitchDepth.connect(this.sub.detune);
+      if (this.lfoToSub) bank.pitchDepth.connect(this.sub.detune);
     }
     for (const o of this.allOscs()) this.pitchEnv.connect(o.detune);
     this.pitchEnv.connect(this.sub.detune);
     for (const o of this.allOscs()) this.modDetune.connect(o.detune);
-    this.modDetune.connect(this.sub.detune);
+    if (this.lfoToSub) this.modDetune.connect(this.sub.detune);
 
     this.setOscLevels(p);
     this.setFilterLive(p);
@@ -672,12 +1077,25 @@ class Voice {
     this.applyTuning(p, t, true);
     this.applyFm(p);
     this.applyUnisonSpread(p);
-    this.setWtA(clamp(p.oscAPos, 0, 1));
+    this.setWtA(clamp(p.oscAPos, 0, 1), p.oscAContinuity ?? 0.72);
     this.setWtB(clamp(p.oscBPos, 0, 1));
     this.setWtC(clamp(p.oscCPos, 0, 1));
 
-    for (const o of this.allOscs()) o.start(t);
+    const dnaSeed = (p.analogDnaSeed ?? 1) >>> 0;
+    const spreadSec = p.moduleEnable?.["mixer.unison"] === false ? 0 : (p.unisonTemporalSpread ?? 0);
+    const mode = p.unisonTemporalMode ?? "ltr";
+    const anchor = p.unisonAnchor !== false;
+    const mid = (this.unisonCount - 1) / 2;
+    for (let i = 0; i < this.unisonCount; i++) {
+      const isAnchor = anchor && this.unisonCount > 1 && Math.abs(i - mid) < 0.51;
+      const delay = isAnchor ? 0 : unisonDelaySec(i, this.unisonCount, spreadSec, mode, dnaSeed);
+      const st = t + delay;
+      this.groupA.osc[i].start(st);
+      this.groupB.osc[i].start(st);
+      if (this.groupC) this.groupC.osc[i].start(st);
+    }
     this.sub.start(t);
+    this.subHarm.start(t);
     this.fmOsc.start(t);
     this.noise.start(t);
     this.ampEnv.start(t);
@@ -710,17 +1128,21 @@ class Voice {
       : [...this.groupA.osc, ...this.groupB.osc];
   }
 
-  private setWt(group: Group, pos: number): void {
-    const k = Math.round(clamp(pos, 0, 1) * (SUBFRAMES - 1));
+  private setWt(group: Group, pos: number, continuity = 1): void {
+    const cont = clamp(continuity, 0, 1);
+    // Continuity low → coarse frame grid (discrete snaps); high → full subframe resolution.
+    const steps = Math.max(2, Math.round(4 + cont * (SUBFRAMES - 4)));
+    const snapped = Math.round(clamp(pos, 0, 1) * (steps - 1)) / (steps - 1);
+    const k = Math.round(snapped * (SUBFRAMES - 1));
     if (k === group.lastK) return;
     group.lastK = k;
     const wave = group.bank[k];
     for (const o of group.osc) o.setPeriodicWave(wave);
   }
 
-  setWtA(pos: number): void { this.setWt(this.groupA, pos); }
-  setWtB(pos: number): void { this.setWt(this.groupB, pos); }
-  setWtC(pos: number): void { if (this.groupC) this.setWt(this.groupC, pos); }
+  setWtA(pos: number, continuity = 1): void { this.setWt(this.groupA, pos, continuity); }
+  setWtB(pos: number): void { this.setWt(this.groupB, pos, 1); }
+  setWtC(pos: number): void { if (this.groupC) this.setWt(this.groupC, pos, 1); }
 
   setBankA(bank: PeriodicWave[]): void { this.groupA.bank = bank; this.groupA.lastK = -1; }
   setBankB(bank: PeriodicWave[]): void { this.groupB.bank = bank; this.groupB.lastK = -1; }
@@ -730,7 +1152,7 @@ class Voice {
   setSubWave(w: SubWave): void { this.sub.type = w; }
 
   private detuneFor(p: FirePatch, group: "a" | "b" | "c", i: number): number {
-    const spread = unisonSpread(this.unisonCount);
+    const spread = unisonSpread(this.unisonCount, p.unisonDistribution ?? "linear");
     const base = group === "a" ? p.oscADetune : group === "b" ? p.oscBDetune : p.oscCDetune;
     return base + spread[i] * p.unisonDetune;
   }
@@ -738,45 +1160,94 @@ class Voice {
   applyUnisonSpread(p: FirePatch): void {
     const unisonOn = p.moduleEnable?.["mixer.unison"] !== false;
     const count = unisonOn ? this.unisonCount : 1;
-    const spread = unisonSpread(this.unisonCount);
+    const dist = p.unisonDistribution ?? "linear";
+    const spread = unisonSpread(this.unisonCount, dist);
+    const phases = unisonPhaseOffsets(this.unisonCount, p.unisonPhase ?? "locked", p.analogDnaSeed ?? 1);
     const t = this.ctx.currentTime;
     const detune = unisonOn ? p.unisonDetune : 0;
     const width = unisonOn ? p.unisonWidth : 0;
+    const mix = clamp(p.unisonMix ?? 1, 0, 1);
+    const anchor = p.unisonAnchor !== false;
+    const mid = (this.unisonCount - 1) / 2;
     for (let i = 0; i < this.unisonCount; i++) {
-      const pan = (count <= 1 ? 0 : spread[i]) * width;
-      this.groupA.pans[i].pan.setTargetAtTime(pan, t, 0.02);
-      this.groupB.pans[i].pan.setTargetAtTime(pan, t, 0.02);
-      const baseA = p.oscADetune + (unisonOn ? spread[i] * detune : 0);
-      const baseB = p.oscBDetune + (unisonOn ? spread[i] * detune : 0);
-      this.groupA.osc[i].detune.setValueAtTime(baseA, t);
-      this.groupB.osc[i].detune.setValueAtTime(baseB, t);
+      const isAnchor = anchor && this.unisonCount > 1 && Math.abs(i - mid) < 0.51;
+      const choirScale = isAnchor ? 0 : mix;
+      const pan = (count <= 1 || isAnchor ? 0 : spread[i]) * width * (isAnchor ? 0 : 1);
+      const det = isAnchor ? 0 : spread[i] * detune * choirScale;
+      // Alternating polarity approximated as inverted detune + slight opposite pan bias.
+      const pol = (p.unisonPhase === "alternating" && i % 2 === 1 && !isAnchor) ? -1 : 1;
+      this.groupA.pans[i].pan.setTargetAtTime(pan * pol, t, 0.02);
+      this.groupB.pans[i].pan.setTargetAtTime(pan * pol, t, 0.02);
+      const phaseCents = (phases[i] / (Math.PI * 2)) * 0.01; // tiny unique offset
+      this.groupA.osc[i].detune.setValueAtTime(p.oscADetune + (unisonOn ? det : 0) + phaseCents, t);
+      this.groupB.osc[i].detune.setValueAtTime(p.oscBDetune + (unisonOn ? det : 0) + phaseCents, t);
       if (this.groupC) {
-        this.groupC.pans[i].pan.setTargetAtTime(pan, t, 0.02);
-        this.groupC.osc[i].detune.setValueAtTime(p.oscCDetune + (unisonOn ? spread[i] * detune : 0), t);
+        this.groupC.pans[i].pan.setTargetAtTime(pan * pol, t, 0.02);
+        this.groupC.osc[i].detune.setValueAtTime(p.oscCDetune + (unisonOn ? det : 0) + phaseCents, t);
       }
     }
   }
 
-  applyTuning(p: FirePatch, t: number, immediate: boolean): void {
+  applyTuning(p: FirePatch, t: number, immediate: boolean, fromMidi?: number): void {
     this.baseFreq = midiToFreq(this.midi);
     const fA = this.baseFreq * Math.pow(2, p.oscAOctave);
-    const fB = this.baseFreq * Math.pow(2, p.oscBOctave);
+    const phaseLock = !!(p.oscBPhaseLock || p.oscBInherit === "lock");
+    const fB = phaseLock
+      ? fA * Math.pow(2, p.oscBOctave - p.oscAOctave)
+      : this.baseFreq * Math.pow(2, p.oscBOctave);
     const fC = this.baseFreq * Math.pow(2, p.oscCOctave);
-    // Acid slide: legato glide stretches when slideOn.
+    // Acid slide: legato glide stretches when slideOn — stronger when Acid personality is high.
     const pitchOn = p.moduleEnable?.["pitch"] !== false;
-    const chipSlide = p.slideOn && p.moduleEnable?.["chip"] !== false;
+    const chipOn = p.moduleEnable?.["chip"] !== false;
+    const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
+    const chipSlide = p.slideOn && chipOn && acidMix > 0.2;
     const glideBase = (pitchOn || chipSlide) ? p.glide : 0;
-    const glideSec = (chipSlide && p.mono && !immediate)
-      ? Math.max(glideBase, 0.14) * 2.2
+    let glideSec = (chipSlide && p.mono && !immediate)
+      ? Math.max(glideBase, 0.14) * (1.4 + acidMix * 1.6)
       : glideBase;
+    const glideMode = p.glideMode ?? "legato";
+    const allowGlide = glideSec > 0 && (glideMode === "always" || !immediate);
+    if (allowGlide && (p.glideRateMode ?? "time") === "rate" && fromMidi != null) {
+      const semis = Math.max(0.5, Math.abs(this.midi - fromMidi));
+      // glide 0..1 → rate ~1..40 semis/sec
+      const rate = 1 + clamp(glideBase, 0, 1) * 39;
+      glideSec = semis / rate;
+    }
+    const curve = p.glideCurve ?? "exp";
     const setFreq = (osc: OscillatorNode, f: number) => {
-      if (immediate || glideSec <= 0) osc.frequency.setValueAtTime(f, t);
-      else osc.frequency.setTargetAtTime(f, t, Math.max(0.005, glideSec / 3));
+      if (!allowGlide || glideSec <= 0) {
+        osc.frequency.cancelScheduledValues(t);
+        osc.frequency.setValueAtTime(f, t);
+        return;
+      }
+      const cur = osc.frequency.value;
+      osc.frequency.cancelScheduledValues(t);
+      osc.frequency.setValueAtTime(cur, t);
+      if (curve === "linear") {
+        osc.frequency.linearRampToValueAtTime(f, t + Math.max(0.008, glideSec));
+      } else if (curve === "s") {
+        const n = 16;
+        const arr = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          const u = i / (n - 1);
+          const s = u * u * (3 - 2 * u);
+          arr[i] = cur + (f - cur) * s;
+        }
+        try {
+          osc.frequency.setValueCurveAtTime(arr, t, Math.max(0.01, glideSec));
+        } catch {
+          osc.frequency.setTargetAtTime(f, t, Math.max(0.005, glideSec / 3));
+        }
+      } else {
+        osc.frequency.setTargetAtTime(f, t, Math.max(0.005, glideSec / 3));
+      }
     };
     for (const o of this.groupA.osc) setFreq(o, fA);
     for (const o of this.groupB.osc) setFreq(o, fB);
     if (this.groupC) for (const o of this.groupC.osc) setFreq(o, fC);
-    setFreq(this.sub, this.baseFreq * Math.pow(2, p.subOctave ?? -1));
+    const fSub = this.baseFreq * Math.pow(2, p.subOctave ?? -1);
+    setFreq(this.sub, fSub);
+    setFreq(this.subHarm, fSub * 2);
     this.applyUnisonSpread(p);
   }
 
@@ -787,43 +1258,83 @@ class Voice {
     if (!fmOn && !rackOn) {
       this.fmGain.gain.setValueAtTime(0, t);
       this.xmodGain.gain.setTargetAtTime(0, t, 0.02);
+      this.xmodGainAB.gain.setTargetAtTime(0, t, 0.02);
       return;
     }
     // BUG FIX: FM Rack (ops4) only applies when BOTH fm module AND fm.rack module are on.
     if ((p.fmEngine ?? "classic") === "ops4" && fmOn && rackOn) {
-      // 4-op rack: op1 is carrier (audible via fmGain into all osc freqs as
-      // a brightener); ops 2–4 stack as modulators with algorithm-ish ratios.
-      const fb = clamp(p.fmFeedback ?? 0, 0, 1);
-      const l1 = clamp(p.fmOp1Level ?? 1, 0, 1);
-      const l2 = clamp(p.fmOp2Level ?? 0.7, 0, 1);
-      const l3 = clamp(p.fmOp3Level ?? 0.5, 0, 1);
-      const l4 = clamp(p.fmOp4Level ?? 0.35, 0, 1);
-      const r2 = clamp(p.fmOp2Ratio ?? 1, 0.25, 16);
-      const r3 = clamp(p.fmOp3Ratio ?? 2, 0.25, 16);
-      const r4 = clamp(p.fmOp4Ratio ?? 3, 0.25, 16);
+      // Progressive topology (Modulation Clarity):
+      // Alg 0–3 ≈ serial-ish index stacks with audible carrier weight.
+      // Alg 4–7 ≈ parallel-ish modulator blends into the carrier.
+      const corners = p.fmVectorCorners;
+      const vx = clamp(p.fmVectorX ?? 0.5, 0, 1);
+      const vy = clamp(p.fmVectorY ?? 0.5, 0, 1);
+      const lerp4 = (a: number, b: number, c: number, d: number) => {
+        const top = a + (b - a) * vx;
+        const bot = c + (d - c) * vx;
+        return top + (bot - top) * vy;
+      };
+      let l1 = clamp(p.fmOp1Level ?? 1, 0, 1);
+      let l2 = clamp(p.fmOp2Level ?? 0.7, 0, 1);
+      let l3 = clamp(p.fmOp3Level ?? 0.5, 0, 1);
+      let l4 = clamp(p.fmOp4Level ?? 0.35, 0, 1);
+      let r2 = clamp(p.fmOp2Ratio ?? 1, 0.25, 16);
+      let r3 = clamp(p.fmOp3Ratio ?? 2, 0.25, 16);
+      let r4 = clamp(p.fmOp4Ratio ?? 3, 0.25, 16);
+      let fb = clamp(p.fmFeedback ?? 0, 0, 1);
+      if (corners && corners.length >= 4) {
+        const c0 = corners[0]!, c1 = corners[1]!, c2 = corners[2]!, c3 = corners[3]!;
+        l1 = lerp4(c0.levels[0], c1.levels[0], c2.levels[0], c3.levels[0]);
+        l2 = lerp4(c0.levels[1], c1.levels[1], c2.levels[1], c3.levels[1]);
+        l3 = lerp4(c0.levels[2], c1.levels[2], c2.levels[2], c3.levels[2]);
+        l4 = lerp4(c0.levels[3], c1.levels[3], c2.levels[3], c3.levels[3]);
+        r2 = lerp4(c0.ratios[0], c1.ratios[0], c2.ratios[0], c3.ratios[0]);
+        r3 = lerp4(c0.ratios[1], c1.ratios[1], c2.ratios[1], c3.ratios[1]);
+        r4 = lerp4(c0.ratios[2], c1.ratios[2], c2.ratios[2], c3.ratios[2]);
+        fb = lerp4(c0.feedback, c1.feedback, c2.feedback, c3.feedback);
+      }
       const alg = Math.round(clamp(p.fmAlg ?? 0, 0, 7));
-      // Algorithm blends how much stacked modulators feed the carrier index.
-      const modIdx = (l2 * r2 + l3 * r3 * (alg >= 2 ? 1 : 0.35) + l4 * r4 * (alg >= 4 ? 1 : 0.2)) / 3;
+      // Serial-ish (0–3): deeper stack weighting; Parallel-ish (4–7): flatter mix.
+      let modIdx: number;
+      if (alg <= 3) {
+        const stack = [0.55, 0.85, 1.1, 1.35][alg] ?? 1;
+        modIdx = (l2 * r2 * 0.55 + l3 * r3 * (alg >= 1 ? 0.55 : 0.15) + l4 * r4 * (alg >= 3 ? 0.55 : 0.1)) * stack / 3;
+      } else {
+        const parallel = [1.0, 1.15, 1.25, 1.35][alg - 4] ?? 1;
+        modIdx = ((l2 * r2) + (l3 * r3) + (l4 * r4)) * parallel / 4.5;
+      }
       this.fmOsc.frequency.setValueAtTime(this.baseFreq * r2, t);
       this.fmGain.gain.setValueAtTime((0.15 + l1 * 0.85) * modIdx * this.baseFreq * (4 + fb * 4), t);
       const xm = (p.fmBtoA ?? 0.15 + fb * 0.5) * this.baseFreq * 4 / this.unisonCount;
       this.xmodGain.gain.setTargetAtTime(xm, t, 0.02);
+      const abAmt = Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.45 : 0);
+      this.xmodGainAB.gain.setTargetAtTime(abAmt * this.baseFreq * 4 / this.unisonCount, t, 0.02);
       return;
     }
     if (!fmOn) {
       this.fmGain.gain.setValueAtTime(0, t);
       const chipOn = p.moduleEnable?.["chip"] !== false;
-      const syncBoost = chipOn && p.hardSync ? Math.max(p.fmBtoA ?? 0, 0.88) : 0;
+      const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
+      const syncBoost = chipOn && p.hardSync && acidMix > 0.25
+        ? Math.max(p.fmBtoA ?? 0, 0.55 + acidMix * 0.4)
+        : 0;
       this.xmodGain.gain.setTargetAtTime(syncBoost * this.baseFreq * 10 / this.unisonCount, t, 0.02);
+      const ab = (p.fmAtoB ?? 0) > 0.001 || p.oscBInherit === "fm" ? Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.55 : 0) : 0;
+      this.xmodGainAB.gain.setTargetAtTime(ab * this.baseFreq * 4 / this.unisonCount, t, 0.02);
       return;
     }
-    const fmAmt = p.hardSync ? Math.max(p.fmAmount, 0.22) : p.fmAmount;
+    const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
+    const syncWanted = p.hardSync && (p.moduleEnable?.["chip"] === false ? true : acidMix > 0.2);
+    const fmAmt = syncWanted ? Math.max(p.fmAmount, 0.22) : p.fmAmount;
+    const fbClassic = clamp(p.fmFeedback ?? 0, 0, 0.85);
     this.fmOsc.frequency.setValueAtTime(this.baseFreq * p.fmRatio, t);
-    this.fmGain.gain.setValueAtTime(fmAmt * this.baseFreq * (p.hardSync ? 9 : 6), t);
+    this.fmGain.gain.setValueAtTime(fmAmt * this.baseFreq * ((syncWanted ? 9 : 6) + fbClassic * 5), t);
     // Hard sync feel: strong B→A cross-mod (PeriodicWave can't hard-reset phase).
-    const syncBoost = p.hardSync ? Math.max(p.fmBtoA ?? 0, 0.88) : (p.fmBtoA ?? 0);
-    const xm = syncBoost * this.baseFreq * (p.hardSync ? 10 : 4) / this.unisonCount;
+    const syncBoost = syncWanted ? Math.max(p.fmBtoA ?? 0, 0.88) : (p.fmBtoA ?? 0);
+    const xm = syncBoost * this.baseFreq * (syncWanted ? 10 : 4) / this.unisonCount;
     this.xmodGain.gain.setTargetAtTime(xm, t, 0.02);
+    const abAmt = Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.55 : 0);
+    this.xmodGainAB.gain.setTargetAtTime(abAmt * this.baseFreq * 4 / this.unisonCount, t, 0.02);
   }
 
   private baseCutoff(p: FirePatch): number {
@@ -835,69 +1346,131 @@ class Voice {
     this.velocity = velocity;
     this.releaseAt = null;
     this.startedAt = t;
+    this.modLevelAtRelease = 0;
     // velAmount scales how much velocity moves the amp peak: 1 = full
     // tracking (legacy), 0 = every note lands at full level.
     const va = clamp(p.velAmount ?? 1, 0, 1);
-    const peak = clamp(1 - va * (1 - clamp(velocity, 0, 1)), 0, 1);
+    let peak = clamp(1 - va * (1 - clamp(velocity, 0, 1)), 0, 1);
+    const overshoot = clamp(p.ampOvershoot ?? 0, 0, 1);
+    const peakPunch = clamp(peak * (1 + overshoot * 0.35), 0, 1.35);
 
     if (p.lpgOn && p.moduleEnable?.["pluck"] !== false) {
-      // ── Lowpass gate (v1.7): a struck vactrol drives BOTH the VCA and the
-      // cutoff instead of the ADSR pair. 1–3 ms strike (harder hits snap
-      // faster, like a real photoresistor), exponential ring-out, and the
-      // filter tracking the envelope scaled by lpgColor — loud is bright,
-      // quiet is dark, which is the entire Buchla/Aalto sound.
-      const decay = clamp(p.lpgDecay ?? 0.4, 0.05, 2.5);
-      const color = clamp(p.lpgColor ?? 0.7, 0, 1);
-      const strike = 0.001 + (1 - clamp(velocity, 0, 1)) * 0.002; // 1..3 ms
+      const model = lpgModelTimes(p.lpgModel ?? "classic", p.lpgDecay ?? 0.4, velocity);
+      const strikeAmt = clamp(p.lpgStrike ?? 1, 0, 1);
+      const ring = clamp(p.lpgRing ?? 1, 0, 1);
+      const leak = clamp(p.lpgLeakage ?? 0, 0, 1);
+      const color = clamp((p.lpgColor ?? 0.7) + model.colorBias, 0, 1);
+      const decay = model.decay * (0.55 + ring * 0.7);
+      const strike = model.strike;
+      const strikePeak = peak * (0.35 + strikeAmt * 0.65);
+      const from = (p.lpgChoke !== false)
+        ? 0
+        : Math.max(0, this.ampEnv.offset.value);
 
       this.ampEnv.offset.cancelScheduledValues(t);
-      this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
-      this.ampEnv.offset.linearRampToValueAtTime(peak, t + strike);
-      this.ampEnv.offset.setTargetAtTime(0, t + strike, decay / 3);
+      this.ampEnv.offset.setValueAtTime(from, t);
+      this.ampEnv.offset.linearRampToValueAtTime(strikePeak, t + strike);
+      this.ampEnv.offset.setTargetAtTime(leak * 0.08, t + strike, decay / 3);
 
       const base = this.baseCutoff(p);
-      // Fully-open peak brightens with velocity; the closed floor darkens
-      // with color. At color 0 the gate is a plain VCA (cutoff stays put).
-      const openHz = clamp(base * Math.pow(2, (1 + 2 * clamp(velocity, 0, 1)) * color), 20, 18000);
+      const couple = clamp(p.lpgResoCouple ?? 0, 0, 1);
+      if (couple > 0.02) {
+        this.filter.Q.setValueAtTime(clamp(p.filterResonance + couple * 12 * velocity, 0.0001, 30), t);
+      }
+      const openHz = clamp(base * Math.pow(2, (1 + 2 * clamp(velocity, 0, 1)) * color * strikeAmt), 20, 18000);
       const floorHz = clamp(base * Math.pow(2, -4.5 * color), 30, 18000);
       this.filter.frequency.setValueAtTime(base, t);
+      for (const extra of this.filterExtra) {
+        extra.frequency.setValueAtTime(base, t);
+        extra.Q.setValueAtTime(clamp(p.filterResonance, 0.0001, 30) * 0.55, t);
+      }
       this.filterEnv.offset.cancelScheduledValues(t);
       this.filterEnv.offset.setValueAtTime(floorHz - base, t);
       this.filterEnv.offset.linearRampToValueAtTime(openHz - base, t + strike);
-      // The filter closes slightly ahead of the amplitude — vactrol lag.
       this.filterEnv.offset.setTargetAtTime(floorHz - base, t + strike, (decay / 3) * 0.8);
     } else {
       const jitter = clamp(p.envVariance ?? 0, 0, 1);
-      const j = (base: number) => Math.max(0.001, base * (1 + (Math.random() * 2 - 1) * jitter * 0.95));
-      // Live keyboard attack override (tight feel) — sequencer notes leave this null.
-      const ampAtk = this.liveAttackSec != null ? this.liveAttackSec : j(p.ampAttack);
+      const choirSpread = clamp(p.unisonEnvSpread ?? 0, 0, 1) * Math.max(0, this.unisonCount - 1) / 15;
+      const lifeOn = p.moduleEnable?.["analog.life"] !== false;
+      const lifeCouple = lifeOn ? clamp(p.drift ?? 0, 0, 1) * 0.35 : 0;
+      const j = (base: number) =>
+        Math.max(
+          0.001,
+          base *
+            (1 + (Math.random() * 2 - 1) * jitter * 0.95) *
+            (1 + (Math.random() * 2 - 1) * choirSpread * 0.8) *
+            (1 + voiceIdentityUnit(p.analogDnaSeed ?? 1, this.voiceSlot, 3) * lifeCouple * 0.25),
+        );
+      const velAtk = clamp(p.velAttack ?? 0, 0, 1);
+      let ampAtk = this.liveAttackSec != null ? this.liveAttackSec : j(p.ampAttack);
+      ampAtk = Math.max(0.001, ampAtk * (1 - velAtk * clamp(velocity, 0, 1) * 0.85));
       const ampDec = j(p.ampDecay);
+      const hold = Math.max(0, p.ampHold ?? 0);
       const filtAtk = this.liveAttackSec != null
         ? Math.min(j(p.filtAttack), Math.max(0.002, this.liveAttackSec * 1.25))
         : j(p.filtAttack);
       const filtDec = j(p.filtDecay);
+      // Curve shapes approximated via ramp vs setTarget tau.
+      const atkCurve = p.ampCurveAttack ?? "lin";
+      const decCurve = p.ampCurveDecay ?? "exp";
+      const retrig = p.ampRetrigger ?? "zero";
+      const startLvl = retrig === "current" || retrig === "legato"
+        ? Math.max(0, this.ampEnv.offset.value)
+        : 0;
+      const gateish = (p.ampModel ?? "vca") === "gate";
+      const susLvl = gateish ? peak : peak * p.ampSustain;
+
       this.ampEnv.offset.cancelScheduledValues(t);
-      this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
-      this.ampEnv.offset.linearRampToValueAtTime(peak, t + ampAtk);
-      this.ampEnv.offset.setTargetAtTime(peak * p.ampSustain, t + ampAtk, Math.max(0.005, ampDec / 3));
+      this.ampEnv.offset.setValueAtTime(startLvl, t);
+      if (atkCurve === "lin" || atkCurve === "step") {
+        this.ampEnv.offset.linearRampToValueAtTime(peakPunch, t + ampAtk);
+      } else {
+        this.ampEnv.offset.setTargetAtTime(peakPunch, t, Math.max(0.003, ampAtk / (atkCurve === "exp" ? 2.2 : 3.5)));
+      }
+      const afterAtk = t + ampAtk + hold;
+      if (overshoot > 0.02) {
+        this.ampEnv.offset.setValueAtTime(peakPunch, t + ampAtk);
+        this.ampEnv.offset.linearRampToValueAtTime(peak, t + ampAtk + Math.min(0.04, ampAtk * 0.5));
+      }
+      const decTau = Math.max(0.005, ampDec / (decCurve === "lin" ? 8 : 3));
+      this.ampEnv.offset.setTargetAtTime(susLvl, afterAtk, decTau);
 
       const base = this.baseCutoff(p);
       this.filter.frequency.setValueAtTime(base, t);
-      // Acid accent: high velocity opens filter harder when accentAmount > 0.
-      const accent = clamp(p.accentAmount ?? 0, 0, 1) * clamp(velocity, 0, 1);
-      const envAmt = p.filterEnvAmount + accent * 1.15;
+      for (const extra of this.filterExtra) {
+        extra.type = p.filterType;
+        extra.frequency.setValueAtTime(base, t);
+        extra.Q.setValueAtTime(clamp(p.filterResonance, 0.0001, 30) * 0.55, t);
+      }
+      const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
+      const accent = clamp(p.accentAmount ?? 0, 0, 1) * clamp(velocity, 0, 1) * (0.15 + acidMix * 0.85);
+      let envAmt = p.filterEnvAmount + accent * 1.15;
+      // Filter-type-aware sweep scaling.
+      if (p.filterType === "bandpass" || p.filterType === "notch") envAmt *= 0.85;
       const peakOff = clamp(base * Math.pow(2, envAmt * 4.5), 20, 20000) - base;
       this.filterEnv.offset.cancelScheduledValues(t);
       this.filterEnv.offset.setValueAtTime(0, t);
       this.filterEnv.offset.linearRampToValueAtTime(peakOff, t + filtAtk);
       this.filterEnv.offset.setTargetAtTime(peakOff * p.filtSustain, t + filtAtk, Math.max(0.005, filtDec / 3));
-      // Accent also lifts amp peak.
+      // Dual destination: resonance follows filter envelope.
+      const resoAmt = clamp(p.filterEnvResoAmount ?? 0, -1, 1);
+      if (Math.abs(resoAmt) > 0.02) {
+        const qPeak = clamp(p.filterResonance + resoAmt * 14, 0.0001, 30);
+        this.filter.Q.cancelScheduledValues(t);
+        this.filter.Q.setValueAtTime(clamp(p.filterResonance, 0.0001, 30), t);
+        this.filter.Q.linearRampToValueAtTime(qPeak, t + filtAtk);
+        this.filter.Q.setTargetAtTime(
+          clamp(p.filterResonance + resoAmt * 14 * p.filtSustain, 0.0001, 30),
+          t + filtAtk,
+          Math.max(0.005, filtDec / 3),
+        );
+      }
       if (accent > 0.04) {
         const boosted = clamp(peak * (1 + accent * 0.4), 0, 1.25);
         this.ampEnv.offset.cancelScheduledValues(t);
-        this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
-        this.ampEnv.offset.linearRampToValueAtTime(boosted, t + ampAtk);
-        this.ampEnv.offset.setTargetAtTime(boosted * p.ampSustain, t + ampAtk, Math.max(0.005, ampDec / 3));
+        this.ampEnv.offset.setValueAtTime(startLvl, t);
+        this.ampEnv.offset.linearRampToValueAtTime(boosted * (1 + overshoot * 0.25), t + ampAtk);
+        this.ampEnv.offset.setTargetAtTime(boosted * (gateish ? 1 : p.ampSustain), afterAtk, decTau);
       }
     }
 
@@ -917,10 +1490,10 @@ class Voice {
     const now = this.ctx.currentTime;
     const t = Math.max(now, when ?? now);
     this.releaseAt = t;
+    this.modLevelAtRelease = this.synth.peekModEnvLevel(this, t);
     if (p.lpgOn && p.moduleEnable?.["pluck"] !== false) {
-      // LPG notes ring out on their own strike decay — note-off doesn't cut
-      // them, it just schedules cleanup once the vactrol has fully closed.
-      const decay = clamp(p.lpgDecay ?? 0.4, 0.05, 2.5);
+      const model = lpgModelTimes(p.lpgModel ?? "classic", p.lpgDecay ?? 0.4, this.velocity);
+      const decay = model.decay * (0.55 + clamp(p.lpgRing ?? 1, 0, 1) * 0.7);
       const tail = (t - now) + decay * 4 + 0.15;
       if (!this.synth.offlineSafe) {
         this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
@@ -941,7 +1514,9 @@ class Voice {
       }
     };
     hold(this.ampEnv.offset);
-    this.ampEnv.offset.setTargetAtTime(0, t, rel / 4);
+    const relCurve = p.ampCurveRelease ?? "exp";
+    const relTau = rel / (relCurve === "lin" ? 8 : relCurve === "s" ? 3.5 : 4);
+    this.ampEnv.offset.setTargetAtTime(0, t, Math.max(0.004, relTau));
     hold(this.filterEnv.offset);
     this.filterEnv.offset.setTargetAtTime(0, t, Math.max(0.01, p.filtRelease) / 4);
     const tail = (t - now) + rel * 4 + 0.15;
@@ -962,7 +1537,7 @@ class Voice {
     // stolen oscillators rendering for seconds as zombies.
     const hardAt = t + 0.045;
     const srcs: AudioScheduledSourceNode[] = [
-      ...this.allOscs(), this.sub, this.fmOsc, this.noise,
+      ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise,
       this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
     ];
     for (const n of srcs) {
@@ -976,8 +1551,9 @@ class Voice {
     if (this.stopped) return;
     this.stopped = true;
     if (this.endTimer) { clearTimeout(this.endTimer); this.endTimer = null; }
+    try { this.ampEnv.disconnect(this.noiseBurst.gain); } catch { /* ignore */ }
     const srcs: AudioScheduledSourceNode[] = [
-      ...this.allOscs(), this.sub, this.fmOsc, this.noise, this.ampEnv, this.filterEnv, this.pitchEnv,
+      ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise, this.ampEnv, this.filterEnv, this.pitchEnv,
       this.modDetune, this.modCutoff,
     ];
     for (const n of srcs) {
@@ -993,8 +1569,8 @@ class Voice {
     }
     const others: AudioNode[] = [
       ...this.groupA.pans, ...this.groupB.pans, this.groupA.level, this.groupB.level,
-      this.gSub, this.gNoise, this.noiseFilt, this.fmGain, this.xmodGain,
-      this.mix, this.filter, this.fdPad, this.fdShaper, this.vca,
+      this.gSub, this.gSubHarm, this.gNoise, this.noiseBurst, this.noiseFilt, this.fmGain, this.xmodGain, this.xmodGainAB,
+      this.mix, this.filter, ...this.filterExtra, this.carveFilt, this.fdPad, this.fdShaper, this.vca,
     ];
     if (this.groupC) others.push(...this.groupC.pans, this.groupC.level);
     for (const n of others) { try { n.disconnect(); } catch { /* ignore */ } }
@@ -1009,20 +1585,47 @@ class Voice {
     const modOn = (id: string) => p.moduleEnable?.[id] !== false;
     const noiseOn = modOn("noise");
     const subOn = modOn("sub");
+    const mode = p.noiseMode ?? "bed";
+    const dens = clamp(p.noiseDensity ?? 0.45, 0, 1);
+    const grain = clamp(p.noiseGrain ?? 0.35, 0, 1);
     // Noise is ONLY what the Noise knob says — never a hidden chip "bed".
-    // (Previously non-white chipNoise forced ~3.5% noise on every note = hi-hat tick.)
-    const noise = (!noiseOn || mute) ? 0 : clamp(p.noiseLevel, 0, 1);
+    let noise = (!noiseOn || mute) ? 0 : clamp(p.noiseLevel, 0, 1);
+    if (mode === "storm" && noise > 0.0005) {
+      // Stochastic storm gate — density opens grains; grain holds them open longer.
+      this.stormPhase += 0.016 * (3 + dens * 22);
+      if (this.stormPhase >= 1) {
+        this.stormPhase -= 1;
+        this.stormOpen = Math.random() < (0.18 + dens * 0.72);
+      }
+      noise *= this.stormOpen ? (0.55 + grain * 0.45) : (1 - dens) * 0.12;
+    }
     const oscAOn = modOn("osc.a");
     const oscBOn = modOn("osc.b");
     const oscCOn = modOn("osc.c");
     this.groupA.level.gain.setTargetAtTime((oscAOn ? p.oscALevel : 0) * this.uNorm * nMul, t, 0.02);
     this.groupB.level.gain.setTargetAtTime((oscBOn ? p.oscBLevel : 0) * this.uNorm * nMul, t, 0.02);
     if (this.groupC) this.groupC.level.gain.setTargetAtTime((oscCOn ? p.oscCLevel : 0) * this.uNorm * nMul, t, 0.02);
-    this.gSub.gain.setTargetAtTime((subOn ? p.subLevel : 0) * nMul, t, 0.02);
+    const subLvl = (subOn ? p.subLevel : 0) * nMul;
+    this.gSub.gain.setTargetAtTime(subLvl, t, 0.02);
+    const translate = clamp(p.subTranslate ?? 0, 0, 1);
+    this.gSubHarm.gain.setTargetAtTime(subLvl * translate * 0.55, t, 0.03);
+    // Burst: ampEnv drives noiseBurst (note body); Bed: unity.
+    if (mode === "burst") {
+      if (!this.burstWired) {
+        this.noiseBurst.gain.value = 0;
+        try { this.ampEnv.connect(this.noiseBurst.gain); this.burstWired = true; } catch { /* */ }
+      }
+    } else if (this.burstWired) {
+      try { this.ampEnv.disconnect(this.noiseBurst.gain); } catch { /* */ }
+      this.burstWired = false;
+      this.noiseBurst.gain.setTargetAtTime(1, t, 0.02);
+    } else {
+      this.noiseBurst.gain.setTargetAtTime(1, t, 0.02);
+    }
     // Snap noise off immediately so a prior noisy preset can't bleed a hat-tick
     // into the next note via setTargetAtTime lag.
     if (noise < 0.0005) this.gNoise.gain.setValueAtTime(0, t);
-    else this.gNoise.gain.setTargetAtTime(noise, t, 0.02);
+    else this.gNoise.gain.setTargetAtTime(noise, t, mode === "storm" ? 0.008 : 0.02);
     this.applyNoiseColor(p);
   }
 
@@ -1050,19 +1653,87 @@ class Voice {
       this.filter.type = "lowpass";
       this.filter.Q.setTargetAtTime(0.0001, t, 0.02);
       this.filter.frequency.setTargetAtTime(20000, t, 0.03);
+      for (const extra of this.filterExtra) {
+        extra.type = "lowpass";
+        extra.Q.setTargetAtTime(0.0001, t, 0.02);
+        extra.frequency.setTargetAtTime(20000, t, 0.03);
+      }
+      this.carveFilt.type = "allpass";
       return;
     }
+    const base = this.baseCutoff(p);
+    const lifeOn = p.moduleEnable?.["analog.life"] !== false;
+    const cal =
+      lifeOn
+        ? 1 + voiceIdentityUnit(p.analogDnaSeed ?? 1, this.voiceSlot, 5) * clamp(p.drift ?? 0, 0, 1) * 0.08
+        : 1;
+    const cut = clamp(base * cal, 20, 20000);
     this.filter.type = p.filterType;
     this.filter.Q.setTargetAtTime(clamp(p.filterResonance, 0.0001, 30), t, 0.02);
-    this.filter.frequency.setTargetAtTime(this.baseCutoff(p), t, 0.03);
+    this.filter.frequency.setTargetAtTime(cut, t, 0.03);
+    for (const extra of this.filterExtra) {
+      extra.type = p.filterType;
+      extra.Q.setTargetAtTime(clamp(p.filterResonance, 0.0001, 30) * 0.55, t, 0.02);
+      extra.frequency.setTargetAtTime(cut, t, 0.03);
+    }
+    // Harmonic carve via notch / peaking near fundamental or partials.
+    const carve = p.filterCarve ?? "off";
+    const amt = clamp(p.filterCarveAmount ?? 0, 0, 1);
+    if (carve === "off" || amt < 0.02) {
+      this.carveFilt.type = "allpass";
+      this.carveFilt.Q.setTargetAtTime(0.7, t, 0.03);
+      this.carveFilt.frequency.setTargetAtTime(1000, t, 0.03);
+    } else {
+      const f0 = clamp(this.baseFreq, 40, 4000);
+      if (carve === "fundamental") {
+        this.carveFilt.type = "notch";
+        this.carveFilt.frequency.setTargetAtTime(f0, t, 0.03);
+        this.carveFilt.Q.setTargetAtTime(0.7 + amt * 8, t, 0.03);
+      } else if (carve === "odds") {
+        this.carveFilt.type = "peaking";
+        this.carveFilt.frequency.setTargetAtTime(f0 * 3, t, 0.03);
+        this.carveFilt.Q.setTargetAtTime(1 + amt * 6, t, 0.03);
+        this.carveFilt.gain.setTargetAtTime(-amt * 18, t, 0.03);
+      } else if (carve === "evens") {
+        this.carveFilt.type = "peaking";
+        this.carveFilt.frequency.setTargetAtTime(f0 * 2, t, 0.03);
+        this.carveFilt.Q.setTargetAtTime(1 + amt * 6, t, 0.03);
+        this.carveFilt.gain.setTargetAtTime(-amt * 18, t, 0.03);
+      } else {
+        // noise-ish: high shelf cut of hiss region
+        this.carveFilt.type = "highshelf";
+        this.carveFilt.frequency.setTargetAtTime(4500, t, 0.03);
+        this.carveFilt.gain.setTargetAtTime(-amt * 14, t, 0.03);
+      }
+    }
   }
 
   /** Slow random per-voice detune wander (analog instability), in cents. */
-  advanceDrift(amount: number, rate = 0.35): number {
+  advanceDrift(amount: number, rate = 0.35, scales?: { tremor?: number; breath?: number; climate?: number; events?: number }): number {
     if (amount <= 0.001) return 0;
     const r = clamp(rate, 0.05, 1);
-    if (Math.random() < 0.04 + r * 0.1) this.driftTarget = (Math.random() * 2 - 1) * amount * (22 + r * 28);
-    this.driftCur += (this.driftTarget - this.driftCur) * (0.06 + r * 0.12);
+    const tremor = clamp(scales?.tremor ?? 0.55, 0, 1);
+    const breath = clamp(scales?.breath ?? 0.45, 0, 1);
+    const climate = clamp(scales?.climate ?? 0.3, 0, 1);
+    const events = clamp(scales?.events ?? 0, 0, 1);
+    // Tremor: rapid micro updates
+    if (Math.random() < 0.12 * tremor * r) {
+      this.driftTarget += (Math.random() * 2 - 1) * amount * 4 * tremor;
+    }
+    // Breath: medium wander
+    if (Math.random() < 0.03 + r * 0.08 * breath) {
+      this.driftTarget = (Math.random() * 2 - 1) * amount * (18 + r * 24) * breath;
+    }
+    // Climate: slow bias
+    if (Math.random() < 0.008 * climate) {
+      this.driftTarget += (Math.random() * 2 - 1) * amount * 12 * climate;
+    }
+    // Events: occasional spikes
+    if (events > 0.02 && Math.random() < events * 0.015) {
+      this.driftTarget = (Math.random() * 2 - 1) * amount * 55;
+    }
+    const slew = 0.04 + r * 0.1 * tremor + breath * 0.04;
+    this.driftCur += (this.driftTarget - this.driftCur) * slew;
     return this.driftCur;
   }
 
@@ -1146,6 +1817,7 @@ export class FireCommandSynth {
   private readonly drivePre: GainNode;
   private readonly driveShaper: WaveShaperNode;
   private readonly drivePost: GainNode;
+  private readonly driveDcHp: BiquadFilterNode;
   private readonly crushShaper: WaveShaperNode;
   private readonly crushDry: GainNode;
   private readonly crushWet: GainNode;
@@ -1156,6 +1828,7 @@ export class FireCommandSynth {
   private readonly ringCarrier: OscillatorNode;
   private readonly ringDepth: GainNode;
   private readonly ringOut: GainNode;
+  private readonly lowProtectHp: BiquadFilterNode;
   private readonly chorusIn: GainNode;
   private readonly chorusDry: GainNode;
   private readonly chorusWet: GainNode;
@@ -1189,8 +1862,14 @@ export class FireCommandSynth {
   private readonly tone: BiquadFilterNode;
   private readonly punchComp: DynamicsCompressorNode;
   private readonly punchMakeup: GainNode;
+  private readonly punchDry: GainNode;
+  private readonly punchWet: GainNode;
+  private readonly punchIn: GainNode;
+  private readonly punchOut: GainNode;
+  private readonly airIn: GainNode;
   private readonly airLow: BiquadFilterNode;
   private readonly airHigh: BiquadFilterNode;
+  private readonly airOut: GainNode;
   private readonly reverbIn: GainNode;
   private readonly reverbPredelay: DelayNode;
   private readonly reverbConv: ConvolverNode;
@@ -1211,9 +1890,12 @@ export class FireCommandSynth {
   private readonly widthMid: GainNode;
   private readonly widthSideL: GainNode;
   private readonly widthSideR: GainNode;
+  private readonly widthSideHp: BiquadFilterNode;
   private readonly widthSideAmt: GainNode;
   private readonly widthSideInv: GainNode;
   private readonly widthMerge: ChannelMergerNode;
+  private readonly widthOutGain: GainNode;
+  private lastMasterChain: MasterChainScene = "glueAirWidth";
   private readonly master: GainNode;
   /** 1/CLIP_RANGE pad into the soft clipper — see makeSoftClipCurve. */
   private readonly clipPre: GainNode;
@@ -1255,6 +1937,17 @@ export class FireCommandSynth {
   /** A matrix route can drive reverb above a 0 base mix — keep the convolver
    *  alive in that case even though the patch's own reverbMix is silent. */
   private mtxHasReverbRoute = false;
+  /** Per-slot smooth memory for route transforms (Phase 5). */
+  private readonly mtxSmooth = new Float32Array(MOD_SLOTS);
+  /** Macro response smoothed values (macroResponse === "smoothed"). */
+  private readonly macroSmooth = new Float32Array(4);
+  /** Macro baselines captured when entering `relative` response mode. */
+  private readonly macroBaseline = new Float32Array(4);
+  /** Host/sequencer BPM for delaySync (and future tempo-linked FX). */
+  private hostBpm = 120;
+  /** Twin Orbit follow-lag state for LFO2. */
+  private lfo2Follow = 0;
+  private twinDriftPhase = 0;
   private readonly mtxA = { reso: false, fm: false, lvlA: false, lvlB: false, lvlC: false };
   // Reusable per-voice modulation payload — mutated and handed to applyMatrix
   // each voice so the hot loop allocates nothing.
@@ -1288,6 +1981,10 @@ export class FireCommandSynth {
     this.driveShaper = ctx.createWaveShaper();
     this.driveShaper.oversample = "2x";
     this.drivePost = ctx.createGain();
+    this.driveDcHp = ctx.createBiquadFilter();
+    this.driveDcHp.type = "highpass";
+    this.driveDcHp.frequency.value = 5;
+    this.driveDcHp.Q.value = 0.7;
     this.crushShaper = ctx.createWaveShaper();
     this.crushDry = ctx.createGain();
     this.crushWet = ctx.createGain();
@@ -1300,6 +1997,10 @@ export class FireCommandSynth {
     this.ringCarrier.type = "sine";
     this.ringDepth = ctx.createGain();
     this.ringOut = ctx.createGain();
+    this.lowProtectHp = ctx.createBiquadFilter();
+    this.lowProtectHp.type = "highpass";
+    this.lowProtectHp.frequency.value = 20;
+    this.lowProtectHp.Q.value = 0.707;
     this.chorusIn = ctx.createGain();
     this.chorusDry = ctx.createGain();
     this.chorusWet = ctx.createGain();
@@ -1355,6 +2056,13 @@ export class FireCommandSynth {
     this.punchComp.attack.value = 0.004;
     this.punchComp.release.value = 0.12;
     this.punchMakeup = ctx.createGain();
+    this.punchDry = ctx.createGain();
+    this.punchWet = ctx.createGain();
+    this.punchIn = ctx.createGain();
+    this.punchOut = ctx.createGain();
+    this.punchDry.gain.value = 0;
+    this.punchWet.gain.value = 1;
+    this.airIn = ctx.createGain();
     this.airLow = ctx.createBiquadFilter();
     this.airLow.type = "lowshelf";
     this.airLow.frequency.value = 180;
@@ -1363,6 +2071,7 @@ export class FireCommandSynth {
     this.airHigh.type = "highshelf";
     this.airHigh.frequency.value = 6500;
     this.airHigh.gain.value = 0;
+    this.airOut = ctx.createGain();
     this.reverbIn = ctx.createGain();
     this.reverbPredelay = ctx.createDelay(0.25);
     this.reverbPredelay.delayTime.value = 0;
@@ -1390,11 +2099,17 @@ export class FireCommandSynth {
     this.widthSideL.gain.value = 0.5;
     this.widthSideR = ctx.createGain();
     this.widthSideR.gain.value = -0.5;
+    this.widthSideHp = ctx.createBiquadFilter();
+    this.widthSideHp.type = "highpass";
+    this.widthSideHp.frequency.value = 20;
+    this.widthSideHp.Q.value = 0.7;
     this.widthSideAmt = ctx.createGain();
     this.widthSideAmt.gain.value = 1;
     this.widthSideInv = ctx.createGain();
     this.widthSideInv.gain.value = -1;
     this.widthMerge = ctx.createChannelMerger(2);
+    this.widthOutGain = ctx.createGain();
+    this.widthOutGain.gain.value = 1;
     this.master = ctx.createGain();
     this.clipPre = ctx.createGain();
     this.clipPre.gain.value = 1 / CLIP_RANGE;
@@ -1408,7 +2123,8 @@ export class FireCommandSynth {
     // bus wiring
     this.voiceBus.connect(this.drivePre);
     this.drivePre.connect(this.driveShaper);
-    this.driveShaper.connect(this.drivePost);
+    this.driveShaper.connect(this.driveDcHp);
+    this.driveDcHp.connect(this.drivePost);
     this.drivePost.connect(this.crushDry).connect(this.crushOut);
     this.drivePost.connect(this.crushShaper).connect(this.crushWet).connect(this.crushOut);
     // Vintage Age sits between crush and ring — dry wire when all params off.
@@ -1417,7 +2133,8 @@ export class FireCommandSynth {
     this.vintage.output.connect(this.ringWet).connect(this.ringOut);
     this.ringCarrier.connect(this.ringDepth).connect(this.ringWet.gain);
     this.ringDepth.gain.value = 1;
-    this.ringOut.connect(this.chorusIn);
+    this.ringOut.connect(this.lowProtectHp);
+    this.lowProtectHp.connect(this.chorusIn);
     this.chorusIn.connect(this.chorusDry).connect(this.chorusOut);
     this.chorusIn.connect(this.cDelayL).connect(this.cPanL).connect(this.chorusWet);
     this.chorusIn.connect(this.cDelayR).connect(this.cPanR).connect(this.chorusWet);
@@ -1444,7 +2161,11 @@ export class FireCommandSynth {
     this.dR.connect(this.dFbRL).connect(this.dL);
     this.delayWet.connect(this.delayOut);
     this.delayOut.connect(this.tone);
-    this.tone.connect(this.punchComp).connect(this.punchMakeup).connect(this.airLow).connect(this.airHigh).connect(this.reverbIn);
+    this.tone.connect(this.punchIn);
+    this.punchIn.connect(this.punchComp).connect(this.punchWet).connect(this.punchOut);
+    this.punchIn.connect(this.punchDry).connect(this.punchOut);
+    this.punchOut.connect(this.punchMakeup).connect(this.airIn);
+    this.airIn.connect(this.airLow).connect(this.airHigh).connect(this.airOut).connect(this.reverbIn);
     this.reverbIn.connect(this.reverbDry).connect(this.reverbOut);
     this.reverbIn.connect(this.reverbPredelay).connect(this.reverbConv).connect(this.reverbWet).connect(this.reverbOut);
     // Spectral FX sits between reverb and autopan (freezing reverb tails is
@@ -1461,14 +2182,16 @@ export class FireCommandSynth {
     this.widthSplit.connect(this.widthMid, 1);          // M = (L+R)/2
     this.widthSplit.connect(this.widthSideL, 0);
     this.widthSplit.connect(this.widthSideR, 1);        // S = (L−R)/2
-    this.widthSideL.connect(this.widthSideAmt);
-    this.widthSideR.connect(this.widthSideAmt);         // S × width
+    this.widthSideL.connect(this.widthSideHp);
+    this.widthSideR.connect(this.widthSideHp);
+    this.widthSideHp.connect(this.widthSideAmt);         // S × width (mono-below HPF)
     this.widthMid.connect(this.widthMerge, 0, 0);
     this.widthMid.connect(this.widthMerge, 0, 1);
     this.widthSideAmt.connect(this.widthMerge, 0, 0);   // L' = M + wS
     this.widthSideAmt.connect(this.widthSideInv);
     this.widthSideInv.connect(this.widthMerge, 0, 1);   // R' = M − wS
-    this.widthMerge.connect(this.master);
+    this.widthMerge.connect(this.widthOutGain);
+    this.widthOutGain.connect(this.master);
     this.master.connect(this.clipPre);
     this.clipPre.connect(this.softClip);
     this.softClip.connect(this.output);
@@ -1677,6 +2400,8 @@ export class FireCommandSynth {
 
   private hasWarp(p: FirePatch): boolean {
     if (p.moduleEnable?.["fire.sec.warp"] === false) return false;
+    const amt = Math.abs(p.warpAmount ?? 1);
+    if (amt < 0.001) return false;
     return Math.abs(p.warpStretch ?? 0) > 0.001
       || Math.abs(p.warpTilt ?? 0) > 0.001
       || (p.warpComb ?? 0) > 0.001;
@@ -1685,7 +2410,11 @@ export class FireCommandSynth {
   private activeBankFor(id: string): PeriodicWave[] {
     const p = this.patch;
     if (!this.hasWarp(p)) return this.baseBankFor(id);
-    const sig = `${p.warpStretch}|${p.warpTilt}|${p.warpComb}`;
+    const amt = clamp(p.warpAmount ?? 1, -1, 1);
+    const stretch = (p.warpStretch ?? 0) * amt;
+    const tilt = (p.warpTilt ?? 0) * amt;
+    const comb = (p.warpComb ?? 0) * Math.abs(amt);
+    const sig = `${stretch}|${tilt}|${comb}|${amt}`;
     if (sig !== this.warpedSig) {
       this.warpedBanks.clear();
       this.warpedSig = sig;
@@ -1697,7 +2426,7 @@ export class FireCommandSynth {
       for (let k = 0; k < SUBFRAMES; k++) {
         const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
         const { real, imag } = harmonicsAt(key, f);
-        const warped = applyWarp(imag, p.warpStretch, p.warpTilt, p.warpComb);
+        const warped = applyWarp(imag, stretch, tilt, comb);
         bank.push(this.ctx.createPeriodicWave(real, warped, { disableNormalization: false }));
       }
       this.warpedBanks.set(key, bank);
@@ -1731,7 +2460,9 @@ export class FireCommandSynth {
       routes.push(r);
       switch (r.dest) {
         case "reverb": hasGlobal = true; hasReverb = true; break;
-        case "pan": case "volume": case "delay": hasGlobal = true; break;
+        case "pan": case "volume": case "delay":
+        case "chorusMix": case "phaserMix": case "drive": case "spectral":
+          hasGlobal = true; break;
         case "resonance": A.reso = true; hasPerVoice = true; break;
         case "fm": A.fm = true; hasPerVoice = true; break;
         case "levelA": A.lvlA = true; hasPerVoice = true; break;
@@ -1753,14 +2484,31 @@ export class FireCommandSynth {
    */
   private modSource(src: ModSource, lfo1: number, lfo2: number, me: number, v: Voice | null): number {
     const macrosOn = this.patch.moduleEnable?.["macros"] !== false;
+    const mapMacro = (raw: number, idx: number): number => {
+      if (!macrosOn) return 0;
+      const mode = this.patch.macroResponse ?? "absolute";
+      let x = clamp(raw, 0, 1);
+      if (mode === "smoothed") {
+        const a = 0.12;
+        this.macroSmooth[idx] += (x - this.macroSmooth[idx]) * a;
+        x = this.macroSmooth[idx];
+      }
+      if (mode === "bipolar") return x * 2 - 1;
+      if (mode === "relative") {
+        // Delta from the values captured when Relative was armed.
+        return clamp(x - this.macroBaseline[idx], -1, 1);
+      }
+      // absolute — matrix already scales by amount
+      return x;
+    };
     switch (src) {
       case "lfo1": return lfo1;
       case "lfo2": return lfo2;
       case "random": return this.mtxRandVal;
-      case "macro1": return macrosOn ? this.patch.macro1 : 0;
-      case "macro2": return macrosOn ? this.patch.macro2 : 0;
-      case "macro3": return macrosOn ? this.patch.macro3 : 0;
-      case "macro4": return macrosOn ? this.patch.macro4 : 0;
+      case "macro1": return mapMacro(this.patch.macro1, 0);
+      case "macro2": return mapMacro(this.patch.macro2, 1);
+      case "macro3": return mapMacro(this.patch.macro3, 2);
+      case "macro4": return mapMacro(this.patch.macro4, 3);
       case "modenv": return v ? me : 0;
       case "velocity": return v ? v.velocity : 0;
       case "keytrack": return v ? clamp((v.midi - 60) / 36, -1, 1) : 0;
@@ -1809,28 +2557,58 @@ export class FireCommandSynth {
     const rstep = Math.floor(now * 6);
     if (rstep !== this.mtxRandStep) { this.mtxRandStep = rstep; this.mtxRandVal = Math.random() * 2 - 1; }
 
-    const lfo1 = this.jsLfoValue(p.lfo1Wave, p.lfo1Rate, this.sh1Val, now);
-    const lfo2 = this.jsLfoValue(p.lfo2Wave, p.lfo2Rate, this.sh2Val, now);
+    const lfoPair = this.computeTwinLfos(p, now);
+    const lfo1 = lfoPair.lfo1;
+    const lfo2 = lfoPair.lfo2;
     const routes = this.mtxRoutes;
     const matrixOn = p.moduleEnable?.["matrix"] !== false;
+
+    // Helper: amount × transformed source, with optional slew.
+    const routeContrib = (r: ModRoute, slotHint: number, src: number): number => {
+      const s = applyRouteSource(src, r);
+      let out = r.amount * s;
+      const sm = r.smooth ?? 0;
+      if (sm > 0.02) {
+        const idx = Math.max(0, Math.min(MOD_SLOTS - 1, slotHint));
+        const a = 0.04 + (1 - sm) * 0.35;
+        this.mtxSmooth[idx] += (out - this.mtxSmooth[idx]) * a;
+        out = this.mtxSmooth[idx];
+      }
+      return out;
+    };
 
     // ── global (bus) destinations ──
     let gPan = false, gVol = false, gRev = false, gDly = false;
     if (matrixOn && this.mtxHasGlobal) {
       let accPan = 0, accVol = 0, accRev = 0, accDly = 0;
+      let accCh = 0, accPh = 0, accDr = 0, accSp = 0;
+      let gCh = false, gPh = false, gDr = false, gSp = false;
       for (let i = 0; i < routes.length; i++) {
         const r = routes[i];
+        const src = this.modSource(r.source, lfo1, lfo2, 0, null);
+        const c = routeContrib(r, i, src);
         switch (r.dest) {
-          case "pan": accPan += r.amount * this.modSource(r.source, lfo1, lfo2, 0, null); gPan = true; break;
-          case "volume": accVol += r.amount * this.modSource(r.source, lfo1, lfo2, 0, null); gVol = true; break;
-          case "reverb": accRev += r.amount * this.modSource(r.source, lfo1, lfo2, 0, null); gRev = true; break;
-          case "delay": accDly += r.amount * this.modSource(r.source, lfo1, lfo2, 0, null); gDly = true; break;
+          case "pan": accPan += c; gPan = true; break;
+          case "volume": accVol += c; gVol = true; break;
+          case "reverb": accRev += c; gRev = true; break;
+          case "delay": accDly += c; gDly = true; break;
+          case "chorusMix": accCh += c; gCh = true; break;
+          case "phaserMix": accPh += c; gPh = true; break;
+          case "drive": accDr += c; gDr = true; break;
+          case "spectral": accSp += c; gSp = true; break;
         }
       }
       if (gPan) this.autopan.pan.setTargetAtTime(clamp(accPan, -1, 1), now, 0.02);
       if (gVol) this.master.gain.setTargetAtTime(clamp(p.masterGain * (1 + accVol), 0, 1.4), now, 0.02);
       if (gRev) this.reverbWet.gain.setTargetAtTime(clamp(p.reverbMix + accRev, 0, 1), now, 0.03);
       if (gDly) this.delayWet.gain.setTargetAtTime(clamp(p.delayMix + accDly, 0, 1), now, 0.03);
+      if (gCh) this.chorusWet.gain.setTargetAtTime(clamp(p.chorusMix + accCh, 0, 1), now, 0.03);
+      if (gPh) this.phaserWet.gain.setTargetAtTime(clamp(p.phaserMix + accPh, 0, 1), now, 0.03);
+      if (gDr) this.drivePre.gain.setTargetAtTime(clamp((p.driveInGain ?? 1) * (1 + (p.drive + accDr) * 1.2) / DRIVE_RANGE, 0.05, 2), now, 0.03);
+      if (gSp && p.spectralMode !== "off") {
+        /* spectral mix modulated in applySpectral on next set — store soft */
+        this.spectralSend.gain.setTargetAtTime(clamp((p.spectralMix ?? 0.5) + accSp, 0, 1), now, 0.04);
+      }
     }
     // Restore the bus base value exactly once when a global route is removed.
     if (!gPan && this.gPanWas) this.autopan.pan.setTargetAtTime(0, now, 0.05);
@@ -1841,14 +2619,15 @@ export class FireCommandSynth {
 
     // ── trance gate ── (only touch the param when the target actually moves)
     let gateTarget = 1;
-    if (p.gateOn && p.moduleEnable?.["gate"] !== false) {
+    if (p.gateOn && p.moduleEnable?.["gate"] !== false && (p.gateDest ?? "volume") === "volume") {
       const steps = Math.max(1, Math.min(16, Math.round(p.gateSteps)));
       const idx = Math.floor(now * clamp(p.gateRate, 0.25, 24)) % steps;
-      gateTarget = (p.gatePattern[idx] ?? 1) > 0.5 ? 1 : clamp(1 - p.gateDepth, 0, 1);
+      const openAmt = clamp(p.gatePattern[idx] ?? 1, 0, 1);
+      // Continuous per-step depth: openAmt=1 → full; 0 → cut by gateDepth.
+      gateTarget = clamp(1 - p.gateDepth * (1 - openAmt), 0, 1);
     }
     if (gateTarget !== this.lastGateTarget) {
-      // gateSmooth stretches the edge time-constant: 4 ms (legacy chop) up to
-      // ~60 ms (sidechain-style pump).
+      // gateSmooth (Edge) stretches the edge time-constant: 4 ms → ~60 ms.
       const tc = 0.004 + clamp(p.gateSmooth ?? 0, 0, 1) * 0.056;
       this.gateGain.gain.setTargetAtTime(gateTarget, now, p.gateOn ? tc : 0.02);
       this.lastGateTarget = gateTarget;
@@ -1871,7 +2650,7 @@ export class FireCommandSynth {
           m.pitch = 0; m.cutoff = 0; m.reso = 0; m.fm = 0; m.lvlA = 0; m.lvlB = 0; m.lvlC = 0;
           for (let i = 0; i < routes.length; i++) {
             const r = routes[i];
-            const c = r.amount * this.modSource(r.source, lfo1, lfo2, me, v);
+            const c = routeContrib(r, i, this.modSource(r.source, lfo1, lfo2, me, v));
             switch (r.dest) {
               case "pitch": m.pitch += c; break;
               case "cutoff": m.cutoff += c; break;
@@ -1909,15 +2688,20 @@ export class FireCommandSynth {
           ? Math.sin(now * vRate * Math.PI * 2) * vDepth * 0.45
           : 0;
         const syncTilt = p.hardSync ? 0.22 : 0;
-        const posA = dutyMorph(
-          p.oscATable,
-          clamp(p.oscAPos + envMod * p.oscAEnv + lfoMod * p.oscALfo + matrixWA + vec + syncTilt, 0, 1),
-        );
-        const posB = dutyMorph(
-          p.oscBTable,
-          clamp(p.oscBPos + envMod * p.oscBEnv + lfoMod * p.oscBLfo + matrixWB - vec, 0, 1),
-        );
-        v.setWtA(posA);
+        let baseA = clamp(p.oscAPos + envMod * p.oscAEnv + lfoMod * p.oscALfo + matrixWA + vec + syncTilt, 0, 1);
+        let baseB = clamp(p.oscBPos + envMod * p.oscBEnv + lfoMod * p.oscBLfo + matrixWB - vec, 0, 1);
+        // Twin continuous inheritance from Prime
+        const inherit = p.oscBInherit ?? "off";
+        if (inherit === "morph") baseB = baseA;
+        else if (inherit === "mirror") baseB = 1 - baseA;
+        else if (inherit === "offset") baseB = clamp(baseA + 0.25, 0, 1);
+        else if (inherit === "family") {
+          // Follow A's table morph character but keep B's own offset relative to default
+          baseB = clamp(baseA * 0.85 + p.oscBPos * 0.15, 0, 1);
+        }
+        const posA = dutyMorph(p.oscATable, baseA);
+        const posB = dutyMorph(p.oscBTable, baseB);
+        v.setWtA(posA, p.oscAContinuity ?? 0.72);
         v.setWtB(posB);
         dispA = posA;
         dispB = posB;
@@ -1929,12 +2713,21 @@ export class FireCommandSynth {
           v.setWtC(posC);
           dispC = posC;
         }
+        // Keep noise storm / burst / translate live while notes hold
+        if ((p.noiseMode ?? "bed") !== "bed" || (p.subTranslate ?? 0) > 0.01) {
+          v.setOscLevels(p);
+        }
         if (pvActive) {
           const lifeAmt = lifeOn
             ? Math.max(p.drift, (p.voiceInstability ?? 0) * 0.55, (p.tuneVariance ?? 0) * 0.25)
             : 0;
           m.driftCents = lifeOn
-            ? ((lifeAmt > 0 ? v.advanceDrift(lifeAmt, p.driftRate ?? 0.35) : 0)
+            ? ((lifeAmt > 0 ? v.advanceDrift(lifeAmt, p.driftRate ?? 0.35, {
+                tremor: p.analogTremor,
+                breath: p.analogBreath,
+                climate: p.analogClimate,
+                events: p.analogEvents,
+              }) : 0)
               + v.getTuneCents()
               + v.advanceInstability(p.voiceInstability ?? 0))
             : 0;
@@ -1973,19 +2766,129 @@ export class FireCommandSynth {
     return s;
   }
 
+  peekModEnvLevel(v: Voice, now: number): number {
+    return this.modEnvValue(v, now);
+  }
+
   private modEnvValue(v: Voice, now: number): number {
     const p = this.patch;
-    const a = Math.max(0.001, p.modAttack);
-    const d = Math.max(0.001, p.modDecay);
-    const s = clamp(p.modSustain, 0, 1);
-    // releaseAt may be scheduled in the future (sequencer) — until it arrives
-    // the voice is still in its AD(S) phase.
+    const points = normalizeModEnvPoints(
+      p.modEnvPoints?.length
+        ? p.modEnvPoints
+        : adsrToModEnvPoints(p.modAttack, p.modDecay, p.modSustain, p.modRelease),
+    );
+    const susIdx = p.modEnvSustainIndex ?? points.length - 1;
+    const loop = !!p.modEnvLoop;
     if (v.releaseAt == null || now < v.releaseAt) {
-      return FireCommandSynth.adLevel(now - v.startedAt, a, d, s);
+      return evalModEnvHeld(points, susIdx, now - v.startedAt, loop).level;
     }
     const r = Math.max(0.001, p.modRelease);
-    const lvl = FireCommandSynth.adLevel(v.releaseAt - v.startedAt, a, d, s);
-    return clamp(lvl * (1 - (now - v.releaseAt) / r), 0, 1);
+    const atRel = v["modLevelAtRelease"] as number;
+    return evalModEnvRelease(points, susIdx, atRel || 0.3, r, now - v.releaseAt).level;
+  }
+
+  private envTelemetryFor(
+    kind: "amp" | "mod" | "filt" | "pluck",
+    v: Voice | null,
+    now: number,
+  ): import("./toneDifferentiation").ToneEnvTelemetry {
+    if (!v) return idleTelemetry();
+    const p = this.patch;
+    const releasing = !!(v.releaseAt != null && now >= v.releaseAt);
+    if (kind === "mod") {
+      const points = normalizeModEnvPoints(
+        p.modEnvPoints?.length
+          ? p.modEnvPoints
+          : adsrToModEnvPoints(p.modAttack, p.modDecay, p.modSustain, p.modRelease),
+      );
+      const susIdx = p.modEnvSustainIndex ?? points.length - 1;
+      if (!releasing) {
+        const e = evalModEnvHeld(points, susIdx, now - v.startedAt, !!p.modEnvLoop);
+        return {
+          level: e.level,
+          phase: e.phase,
+          stage: e.stage,
+          releasing: false,
+          startedAt: v.startedAt,
+          releaseAt: v.releaseAt,
+        };
+      }
+      const e = evalModEnvRelease(
+        points,
+        susIdx,
+        (v as unknown as { modLevelAtRelease: number }).modLevelAtRelease || 0.3,
+        Math.max(0.001, p.modRelease),
+        now - (v.releaseAt ?? now),
+      );
+      return { ...e, releasing: true, startedAt: v.startedAt, releaseAt: v.releaseAt };
+    }
+    if (kind === "pluck" || (kind === "amp" && p.lpgOn)) {
+      const model = lpgModelTimes(p.lpgModel ?? "classic", p.lpgDecay ?? 0.4, v.velocity);
+      const decay = model.decay * (0.55 + clamp(p.lpgRing ?? 1, 0, 1) * 0.7);
+      const strike = model.strike;
+      const elapsed = now - v.startedAt;
+      let stage: import("./toneDifferentiation").ToneEnvTelemetry["stage"] = "strike";
+      let level = 0;
+      let phase = 0;
+      if (elapsed < strike) {
+        stage = "strike";
+        level = elapsed / Math.max(strike, 0.0001);
+        phase = level * 0.15;
+      } else if (elapsed < strike + decay * 0.35) {
+        stage = "ring";
+        const u = (elapsed - strike) / Math.max(decay * 0.35, 0.001);
+        level = Math.exp(-u * 1.8);
+        phase = 0.15 + u * 0.35;
+      } else {
+        stage = "decay_out";
+        const u = (elapsed - strike) / Math.max(decay, 0.001);
+        level = Math.exp(-u * 2.4) * (1 - clamp(p.lpgLeakage ?? 0, 0, 1) * 0.15 + clamp(p.lpgLeakage ?? 0, 0, 1) * 0.15);
+        phase = clamp(0.5 + u * 0.5, 0, 1);
+      }
+      if (!(p.lpgOn && p.moduleEnable?.["pluck"] !== false) && kind === "pluck") {
+        return idleTelemetry();
+      }
+      return { level: clamp(level, 0, 1), phase, stage, releasing, startedAt: v.startedAt, releaseAt: v.releaseAt };
+    }
+    // Amp / filt classic ADSR approximation from patch times
+    const a = kind === "amp" ? Math.max(0.001, p.ampAttack) : Math.max(0.001, p.filtAttack);
+    const d = kind === "amp" ? Math.max(0.001, p.ampDecay) : Math.max(0.001, p.filtDecay);
+    const s = kind === "amp" ? clamp(p.ampSustain, 0, 1) : clamp(p.filtSustain, 0, 1);
+    const r = kind === "amp" ? Math.max(0.001, p.ampRelease) : Math.max(0.001, p.filtRelease);
+    if (!releasing) {
+      const elapsed = now - v.startedAt;
+      const level = FireCommandSynth.adLevel(elapsed, a, d, s);
+      const stage = elapsed < a ? "attack" : elapsed < a + d ? "decay" : "sustain";
+      const phase = clamp(elapsed / Math.max(a + d + 0.35, 0.001), 0, 0.85);
+      return { level, phase, stage, releasing: false, startedAt: v.startedAt, releaseAt: v.releaseAt };
+    }
+    const lvl = FireCommandSynth.adLevel((v.releaseAt ?? now) - v.startedAt, a, d, s);
+    const since = now - (v.releaseAt ?? now);
+    const level = clamp(lvl * (1 - since / r), 0, 1);
+    return {
+      level,
+      phase: clamp(0.75 + 0.25 * (since / r), 0, 1),
+      stage: "release",
+      releasing: true,
+      startedAt: v.startedAt,
+      releaseAt: v.releaseAt,
+    };
+  }
+
+  /** Live Tone envelope telemetry for StageViz cursors. */
+  getToneTelemetry(): ToneVoiceTelemetry {
+    const now = this.ctx.currentTime;
+    let best: Voice | null = null;
+    for (const v of this.voices) {
+      if (!best || v.startedAt > best.startedAt) best = v;
+    }
+    return {
+      voiceCount: this.voices.size,
+      amp: this.envTelemetryFor("amp", best, now),
+      mod: this.envTelemetryFor("mod", best, now),
+      filt: this.envTelemetryFor("filt", best, now),
+      pluck: this.envTelemetryFor("pluck", best, now),
+    };
   }
 
   getMorphPositions(): { a: number; b: number; c: number } {
@@ -2004,9 +2907,83 @@ export class FireCommandSynth {
   getLfoValue(idx: 1 | 2): number {
     const p = this.patch;
     const now = this.ctx.currentTime;
-    return idx === 1
-      ? this.jsLfoValue(p.lfo1Wave, p.lfo1Rate, this.sh1Val, now)
-      : this.jsLfoValue(p.lfo2Wave, p.lfo2Rate, this.sh2Val, now);
+    const pair = this.computeTwinLfos(p, now);
+    return idx === 1 ? pair.lfo1 : pair.lfo2;
+  }
+
+  /**
+   * Twin Orbit: derive LFO1/LFO2 samples with relation modes + optional Analog Life coupling.
+   */
+  private computeTwinLfos(p: FirePatch, now: number): { lfo1: number; lfo2: number } {
+    const lifeOn = p.moduleEnable?.["analog.life"] !== false;
+    const life = lifeOn ? clamp(p.drift ?? 0, 0, 1) : 0;
+    // Correlated Analog Life → slight rate/phase wander on both LFOs (clamped).
+    const lifeRateJitter = life > 0.01 ? 1 + Math.sin(now * 0.37) * life * 0.04 * (p.analogBreath ?? 0.45) : 1;
+    const lifePhase = life > 0.01 ? Math.sin(now * 0.11) * life * 0.03 : 0;
+
+    let rate1 = clamp(p.lfo1Rate, 0.01, 40) * lifeRateJitter;
+    let wave1 = p.lfo1Wave;
+    let lfo1 = this.jsLfoValue(wave1, rate1, this.sh1Val, now + lifePhase);
+
+    const relation = p.lfo2Relation ?? "independent";
+    const driftMode = p.lfo2DriftMode ?? "locked";
+    let driftAmt = 0;
+    if (driftMode === "elastic") {
+      this.twinDriftPhase += 0.01;
+      driftAmt = Math.sin(this.twinDriftPhase * 0.7) * 0.08;
+    } else if (driftMode === "wandering") {
+      this.twinDriftPhase += 0.017 + Math.random() * 0.004;
+      driftAmt = Math.sin(this.twinDriftPhase) * 0.14 + Math.sin(this.twinDriftPhase * 0.31) * 0.06;
+    }
+
+    let rate2 = clamp(p.lfo2Rate, 0.01, 40) * lifeRateJitter;
+    let wave2 = p.lfo2Wave;
+    let phaseOff = ((p.lfo2PhaseOffset ?? 0) / 360) + driftAmt * 0.5 + lifePhase;
+    let ratio = clamp((p.lfo2Ratio ?? 1) * (1 + driftAmt * 0.25), 0.125, 8);
+
+    if (relation === "mirror" || relation === "invert" || relation === "phaseOffset" || relation === "ratio" || relation === "followLag") {
+      wave2 = wave1;
+    }
+    if (relation === "ratio" || relation === "mirror" || relation === "invert" || relation === "phaseOffset") {
+      rate2 = rate1 * (relation === "ratio" ? ratio : 1);
+    }
+    if (relation === "followLag") {
+      rate2 = rate1;
+    }
+
+    let lfo2: number;
+    if (relation === "independent") {
+      lfo2 = this.jsLfoValue(wave2, rate2, this.sh2Val, now + lifePhase);
+    } else if (relation === "followLag") {
+      const target = lfo1;
+      const lag = 0.08 + clamp(Math.abs(driftAmt), 0, 0.2);
+      this.lfo2Follow += (target - this.lfo2Follow) * lag;
+      lfo2 = this.lfo2Follow;
+    } else {
+      // Shared phase clock from LFO1 rate, with optional offset.
+      const phase = ((now * rate1) + phaseOff) % 1;
+      lfo2 = this.jsLfoAtPhase(wave2, phase, this.sh2Val);
+      if (relation === "invert") lfo2 = -lfo2;
+      if (relation === "mirror") {
+        /* same as LFO1 shape/phase (phaseOff may still apply via drift) */
+        if (Math.abs(phaseOff) < 1e-6) lfo2 = lfo1;
+      }
+    }
+
+    // Soft-disable when module off is handled by depth in applyLfoParams; values still flow for matrix/viz.
+    return { lfo1, lfo2 };
+  }
+
+  private jsLfoAtPhase(wave: LfoWave, phase: number, shVal: number): number {
+    if (wave === "sample-hold") return shVal;
+    const p = ((phase % 1) + 1) % 1;
+    switch (wave) {
+      case "sine": return Math.sin(p * Math.PI * 2);
+      case "triangle": return 1 - 4 * Math.abs(p - 0.5);
+      case "sawtooth": return 1 - 2 * p;
+      case "square": return p < 0.5 ? 1 : -1;
+      default: return 0;
+    }
   }
 
   // ── notes ──
@@ -2019,8 +2996,9 @@ export class FireCommandSynth {
     if (p.mono) {
       const v = this.monoVoice;
       if (v && !v.releasing) {
+        const fromMidi = v.midi;
         v.midi = midi;
-        v.applyTuning(p, t, false);
+        v.applyTuning(p, t, false, fromMidi);
         v.applyFm(p);
         v.triggerEnvelopes(p, velocity, t);
         this.held.set(midi, v);
@@ -2028,7 +3006,7 @@ export class FireCommandSynth {
       }
     }
     const cap = this.effectiveMaxVoices(p);
-    while (this.voices.size >= cap) this.stealOldest();
+    while (this.voices.size >= cap) this.stealVoice();
     // Re-trigger of the same MIDI must release the previous voice or it orphans.
     const prev = this.held.get(midi);
     if (prev && !p.mono) {
@@ -2074,7 +3052,7 @@ export class FireCommandSynth {
     this.startModTimer();
     const p = this.patch;
     const cap = this.effectiveMaxVoices(p);
-    while (this.voices.size >= cap) this.stealOldest();
+    while (this.voices.size >= cap) this.stealVoice();
     const voice = new Voice(
       this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
       this.bankFor(p.oscATable), this.bankFor(p.oscBTable), this.bankFor(p.oscCTable),
@@ -2128,26 +3106,42 @@ export class FireCommandSynth {
     this.voiceBus.gain.setTargetAtTime(g, this.ctx.currentTime, 0.06);
   }
 
-  private stealOldest(): void {
+  private stealVoice(): void {
     // Prefer voices already audibly fading out (least noticeable theft), else
-    // the oldest sounding voice. A sequencer one-shot pre-schedules its
-    // release, so check against the clock — not just the `releasing` flag —
-    // or long piano-roll notes would be first in line for theft.
+    // pick by voiceSteal policy among remaining voices.
     const now = this.ctx.currentTime;
-    let oldest: Voice | null = null;
+    const policy = this.patch.voiceSteal ?? "oldest";
+    const score = (v: Voice): number => {
+      switch (policy) {
+        case "newest": return -v.startedAt;
+        case "lowest": return v.midi;
+        case "highest": return -v.midi;
+        default: return v.startedAt; // oldest
+      }
+    };
+    let pick: Voice | null = null;
     for (const v of this.voices) {
       if (!(v.releasing && (v.releaseAt === null || v.releaseAt <= now))) continue;
-      if (!oldest || v.startedAt < oldest.startedAt) oldest = v;
+      if (!pick || score(v) < score(pick)) pick = v;
     }
-    if (!oldest) for (const v of this.voices) if (!oldest || v.startedAt < oldest.startedAt) oldest = v;
-    if (!oldest) return;
-    for (const [k, vv] of this.held) if (vv === oldest) this.held.delete(k);
-    // Remove from the poly set immediately so steal loops can exit; fastRelease
-    // now also schedules AudioParam/source stop() on the audio clock so
-    // wall-clock timer throttling can't leave zombies rendering.
-    this.voices.delete(oldest);
-    oldest.fastRelease();
+    if (!pick) {
+      for (const v of this.voices) {
+        if (!pick || score(v) < score(pick)) pick = v;
+      }
+    }
+    if (!pick) return;
+    for (const [k, vv] of this.held) if (vv === pick) this.held.delete(k);
+    this.voices.delete(pick);
+    pick.fastRelease();
     this.updatePolyGain();
+  }
+
+  /** Keep delaySync (and tempo-linked FX) locked to the sequencer/host BPM. */
+  setHostBpm(bpm: number): void {
+    const next = clamp(bpm, 40, 240);
+    if (Math.abs(next - this.hostBpm) < 0.05) return;
+    this.hostBpm = next;
+    if (this.patch.delaySync) this.applyBusParams(this.patch);
   }
 
   // ── patch ──
@@ -2162,6 +3156,12 @@ export class FireCommandSynth {
     this.lastCrushBits = -1;
     this.lastSpectralMsg = "";
     this.lastBusVoiceSyncKey = "";
+    if ((this.patch.macroResponse ?? "absolute") === "relative") {
+      this.macroBaseline[0] = this.patch.macro1;
+      this.macroBaseline[1] = this.patch.macro2;
+      this.macroBaseline[2] = this.patch.macro3;
+      this.macroBaseline[3] = this.patch.macro4;
+    }
     this.recomputeMatrix();
     this.applyBusParams(this.patch);
     this.applyLfoParams(this.patch);
@@ -2235,20 +3235,40 @@ export class FireCommandSynth {
     const p = this.patch;
     switch (key) {
       case "masterGain": case "drive": case "driveMode": case "crush": case "punch":
-      case "ringAmount": case "ringFreq":
+      case "driveBias": case "driveSymmetry": case "driveInGain": case "driveOutGain":
+      case "driveAutoGain": case "driveDcBlock": case "driveTonePos":
+      case "fxQuality": case "fxSharedMod": case "fxDeltaAudition":
+      case "lowProtect": case "lowProtectHz":
+      case "ringAmount": case "ringFreq": case "ringMode":
       case "phaserRate": case "phaserDepth": case "phaserMix":
+      case "phaserStages": case "phaserCenter": case "phaserStereo": case "phaserFeedback":
       case "chorusRate": case "chorusDepth": case "chorusMix":
+      case "chorusVoices": case "chorusDelay": case "chorusSpread": case "chorusLowCut": case "chorusModel":
       case "delayTime": case "delayFeedback": case "delayMix": case "tone":
+      case "delaySync": case "delayFreeze": case "delayDuck": case "delayFbFilter":
+      case "delayFbDrive": case "delayCascadeMode":
       case "reverbSize": case "reverbMix": case "reverbDamp": case "reverbPredelay": case "reverbDiffusion":
-      case "stereoWidth": case "airLow": case "airHigh": case "airAmount": case "punch":
+      case "reverbFreeze": case "reverbEarly": case "reverbLowDecay": case "reverbHighCut":
+      case "reverbInGain": case "reverbOutGain":
+      case "stereoWidth": case "airLow": case "airHigh": case "airAmount":
+      case "glueInGain": case "glueOutGain": case "glueAutoGain": case "glueMode":
+      case "glueThreshold": case "glueRatio": case "glueAttack": case "glueRelease":
+      case "glueKnee": case "glueMakeup": case "glueMix": case "glueUseAdvanced":
+      case "mixDeltaAudition": case "masterChainScene":
+      case "widthInGain": case "widthOutGain": case "monoBelow": case "widthMechanism":
+      case "airInGain": case "airOutGain": case "airArch": case "airMsMode":
       case "cassetteGen": case "tapeSpeed": case "wowFlutter": case "vhsColor":
       case "bitDepth": case "sampleRateReduce": case "bbdChorus": case "analogComp":
       case "dust": case "hiss": case "hum": case "printThrough":
+      case "ageMacro": case "ageEvolve": case "ageInGain": case "ageOutGain":
+      case "ageLockMedium": case "ageLockMotion": case "ageLockWear": case "ageLockResolution":
       case "pathOsc": case "pathFilter": case "pathDrive": case "pathAge":
       case "pathFx": case "pathMix": case "pathScope": case "moduleEnable":
         this.applyBusParams(p); break;
       case "lfo1Wave": case "lfo1Rate": case "lfo1Depth": case "lfo1Dest":
       case "lfo2Wave": case "lfo2Rate": case "lfo2Depth": case "lfo2Dest":
+      case "lfo2Relation": case "lfo2PhaseOffset": case "lfo2Ratio": case "lfo2DriftMode":
+      case "lfo1RateDisplay": case "lfo2RateDisplay":
         this.applyLfoParams(p); break;
       case "oscATable":
         for (const v of this.voices) v.setBankA(this.bankFor(p.oscATable)); break;
@@ -2257,8 +3277,9 @@ export class FireCommandSynth {
       case "oscCTable":
         for (const v of this.voices) v.setBankC(this.bankFor(p.oscCTable)); break;
       case "spectralMode": case "spectralAmount": case "spectralMix":
+      case "spectralLow": case "spectralHigh": case "spectralWetOnly":
         this.applySpectral(p); break;
-      case "warpStretch": case "warpTilt": case "warpComb":
+      case "warpStretch": case "warpTilt": case "warpComb": case "warpAmount":
         // Debounced: knob scrubs settle before the warped banks re-render.
         if (this.warpTimer) clearTimeout(this.warpTimer);
         this.warpTimer = setTimeout(() => {
@@ -2269,20 +3290,26 @@ export class FireCommandSynth {
       case "subWave":
         for (const v of this.voices) v.setSubWave(p.subWave); break;
       case "oscALevel": case "oscBLevel": case "oscCLevel": case "subLevel": case "noiseLevel":
-      case "noiseColor":
+      case "noiseColor": case "noiseMode": case "noiseDensity": case "noiseGrain":
+      case "subTranslate": case "subPhaseAlign":
         for (const v of this.voices) v.setOscLevels(p); break;
       case "oscAOctave": case "oscBOctave": case "oscCOctave": case "subOctave":
+      case "oscBPhaseLock": case "oscBInherit":
         for (const v of this.voices) v.applyTuning(p, this.ctx.currentTime, false); break;
       case "oscADetune": case "oscBDetune": case "oscCDetune": case "unisonDetune": case "unisonWidth":
+      case "unisonMix": case "unisonAnchor": case "unisonDistribution": case "unisonPhase":
+      case "unisonTemporalSpread": case "unisonTemporalMode":
         for (const v of this.voices) v.applyUnisonSpread(p); break;
-      case "fmAmount": case "fmRatio": case "fmBtoA":
+      case "fmAmount": case "fmRatio": case "fmBtoA": case "fmAtoB":
       case "fmEngine": case "fmAlg": case "fmFeedback":
       case "fmOp1Level": case "fmOp2Level": case "fmOp3Level": case "fmOp4Level":
       case "fmOp2Ratio": case "fmOp3Ratio": case "fmOp4Ratio":
-      case "hardSync":
+      case "fmVectorCorners": case "fmVectorX": case "fmVectorY":
+      case "hardSync": case "chipAcidMix":
         for (const v of this.voices) v.applyFm(p); break;
       case "filterType": case "filterCutoff": case "filterResonance":
-      case "filterEnvAmount": case "filterKeyTrack":
+      case "filterEnvAmount": case "filterEnvResoAmount": case "filterKeyTrack":
+      case "filterCarve": case "filterCarveAmount": case "filterSlope": case "filterDrivePos":
         for (const v of this.voices) v.setFilterLive(p); break;
       case "filterDrive":
         this.filterDriveCurve = makeFilterDriveCurve(p.filterDrive);
@@ -2300,6 +3327,24 @@ export class FireCommandSynth {
           v.setOscLevels(p);
           v.applyFm(p);
           v.clearMod();
+        }
+        break;
+      case "macroResponse":
+        if ((value as FirePatch["macroResponse"]) === "relative") {
+          this.macroBaseline[0] = p.macro1;
+          this.macroBaseline[1] = p.macro2;
+          this.macroBaseline[2] = p.macro3;
+          this.macroBaseline[3] = p.macro4;
+        }
+        break;
+      case "unison":
+        // Unison voice count is baked into each Voice at construction — rebuild.
+        this.setPatch(p);
+        break;
+      case "mono":
+        if (value) {
+          // Collapse poly stack so mono mode doesn't leave dangling voices.
+          this.allNotesOff();
         }
         break;
       default:
@@ -2321,13 +3366,24 @@ export class FireCommandSynth {
 
     const driveAmt = pathDrive ? p.drive : 0;
     const crushAmt = pathDrive ? clamp(p.crush, 0, 1) : 0;
-    const driveKey = `${p.driveMode}|${driveAmt.toFixed(3)}`;
+    const bias = pathDrive ? (p.driveBias ?? 0) : 0;
+    const sym = pathDrive ? (p.driveSymmetry ?? 0) : 0;
+    const driveKey = `${p.driveMode}|${driveAmt.toFixed(3)}|${bias.toFixed(2)}|${sym.toFixed(2)}|${p.fxQuality ?? "live"}`;
     if (driveKey !== this.lastDriveKey) {
-      this.driveShaper.curve = makeDriveCurve(driveAmt, p.driveMode);
+      this.driveShaper.curve = makeDriveCurve(driveAmt, p.driveMode, bias, sym);
+      const q = p.fxQuality ?? "live";
+      this.driveShaper.oversample = q === "eco" ? "none" : q === "live" ? "2x" : "4x";
       this.lastDriveKey = driveKey;
     }
-    this.drivePre.gain.setTargetAtTime((1 + driveAmt * 1.2) / DRIVE_RANGE, t, 0.02);
-    this.drivePost.gain.setTargetAtTime(1 / (1 + driveAmt * 0.7), t, 0.02);
+    const inG = pathDrive ? clamp(p.driveInGain ?? 1, 0, 2) : 1;
+    const outG = pathDrive ? clamp(p.driveOutGain ?? 1, 0, 2) : 1;
+    const auto = pathDrive && (p.driveAutoGain !== false);
+    // Pre-pad into shaper domain + user input trim
+    this.drivePre.gain.setTargetAtTime(inG * (1 + driveAmt * 1.2) / DRIVE_RANGE, t, 0.02);
+    // Auto-gain pulls output back as drive rises
+    const ag = auto ? 1 / (1 + driveAmt * 0.85) : 1;
+    this.drivePost.gain.setTargetAtTime(outG * ag, t, 0.02);
+    this.driveDcHp.frequency.setTargetAtTime(pathDrive && (p.driveDcBlock !== false) ? 18 : 5, t, 0.05);
     const crushBits = 16 - crushAmt * 13;
     if (Math.abs(crushBits - this.lastCrushBits) > 0.02) {
       this.crushShaper.curve = makeCrushCurve(crushBits);
@@ -2336,84 +3392,246 @@ export class FireCommandSynth {
     this.crushDry.gain.setTargetAtTime(1 - crushAmt, t, 0.02);
     this.crushWet.gain.setTargetAtTime(crushAmt, t, 0.02);
 
+    // Low-frequency protection across FX rack
+    const lpHz = (() => {
+      const mode = p.lowProtect ?? "off";
+      if (mode === "off") return 20;
+      if (mode === "custom") return clamp(p.lowProtectHz ?? 100, 20, 500);
+      if (mode === "80") return 80;
+      if (mode === "120") return 120;
+      if (mode === "200") return 200;
+      return 20;
+    })();
+    this.lowProtectHp.frequency.setTargetAtTime(lpHz, t, 0.05);
+
     // Vintage Age bus — force neutral when path Age or module is off.
+    // AGE macro scales unlocked groups; evolve adds light wow wander.
+    const ageMacro = clamp(p.ageMacro ?? 0, 0, 1);
+    const evolve = clamp(p.ageEvolve ?? 0, 0, 1) * (0.85 + 0.15 * Math.sin(t * 0.17));
+    const scaleAge = (v: number, locked: boolean | undefined) =>
+      locked ? v : clamp(v + ageMacro * (0.35 - v * 0.2) + evolve * 0.04, 0, 1);
+    // Groups: Medium (cass/vhs/comp) · Motion (speed/wow/bbd) · Wear · Resolution
     this.vintage.apply(pathAge ? {
-      cassetteGen: p.cassetteGen ?? 0,
-      tapeSpeed: p.tapeSpeed ?? 0,
-      wowFlutter: p.wowFlutter ?? 0,
-      vhsColor: p.vhsColor ?? 0,
+      cassetteGen: scaleAge(p.cassetteGen ?? 0, p.ageLockMedium),
+      vhsColor: scaleAge(p.vhsColor ?? 0, p.ageLockMedium),
+      analogComp: scaleAge(p.analogComp ?? 0, p.ageLockMedium),
+      tapeSpeed: scaleAge(p.tapeSpeed ?? 0, p.ageLockMotion),
+      wowFlutter: scaleAge((p.wowFlutter ?? 0) + evolve * 0.08, p.ageLockMotion),
+      bbdChorus: scaleAge(p.bbdChorus ?? 0, p.ageLockMotion),
       bitDepth: p.bitDepth ?? "off",
-      sampleRateReduce: p.sampleRateReduce ?? 0,
-      bbdChorus: p.bbdChorus ?? 0,
-      analogComp: p.analogComp ?? 0,
-      dust: p.dust ?? 0,
-      hiss: p.hiss ?? 0,
-      hum: p.hum ?? 0,
-      printThrough: p.printThrough ?? 0,
+      sampleRateReduce: scaleAge(p.sampleRateReduce ?? 0, p.ageLockResolution),
+      dust: scaleAge(p.dust ?? 0, p.ageLockWear) * (1 + evolve * 0.3 * Math.random()),
+      hiss: scaleAge(p.hiss ?? 0, p.ageLockWear),
+      hum: scaleAge(p.hum ?? 0, p.ageLockWear),
+      printThrough: scaleAge(p.printThrough ?? 0, p.ageLockWear),
     } : {
       cassetteGen: 0, tapeSpeed: 0, wowFlutter: 0, vhsColor: 0, bitDepth: "off",
       sampleRateReduce: 0, bbdChorus: 0, analogComp: 0, dust: 0, hiss: 0, hum: 0, printThrough: 0,
     });
+    // Age in/out trim via crushOut / ring — approximate with vintage wet path identity
+    const ageIn = pathAge ? clamp(p.ageInGain ?? 1, 0, 2) : 1;
+    const ageOut = pathAge ? clamp(p.ageOutGain ?? 1, 0, 2) : 1;
+    this.crushOut.gain.setTargetAtTime(ageIn, t, 0.03);
+    this.ringOut.gain.setTargetAtTime(ageOut, t, 0.03);
 
     // Glue module owns bus compress (punch knob). Age analogComp still layers lightly.
-    const glueAmt = on("glue") ? clamp(p.punch, 0, 1) : 0;
+    const glueOn = on("glue");
+    const glueAmt = glueOn ? clamp(p.punch, 0, 1) : 0;
     const ac = pathAge ? clamp(p.analogComp ?? 0, 0, 1) : 0;
-    const glue = clamp(glueAmt + ac * 0.55, 0, 1);
-    this.punchComp.threshold.setTargetAtTime(-glue * 30, t, 0.05);
-    this.punchComp.ratio.setTargetAtTime(1 + glue * 7, t, 0.05);
-    this.punchMakeup.gain.setTargetAtTime(1 + glue * 0.3, t, 0.05);
+    const glueMode = (p.glueMode ?? "glue") as GlueMode;
+    const macro = punchMacroToGlue(glueAmt, glueMode);
+    const useAdv = !!(p.glueUseAdvanced);
+    const thr = useAdv ? clamp(p.glueThreshold ?? -18, -60, 0) : macro.threshDb - ac * 8;
+    const ratio = useAdv ? clamp(p.glueRatio ?? 3, 1, 20) : 1 + (macro.ratio - 1) + ac * 2;
+    const atk = useAdv ? clamp(p.glueAttack ?? 0.008, 0.001, 0.1) : macro.attack;
+    const rel = useAdv ? clamp(p.glueRelease ?? 0.18, 0.02, 1) : macro.release;
+    const knee = useAdv ? clamp(p.glueKnee ?? 6, 0, 40) : macro.knee;
+    const makeupLin = useAdv ? clamp(p.glueMakeup ?? 1, 0.5, 4) : macro.makeup;
+    const glueMix = glueOn ? clamp(p.glueMix ?? 1, 0, 1) : 0;
+    const gIn = glueOn ? clamp(p.glueInGain ?? 1, 0, 2) : 1;
+    const gOut = glueOn ? clamp(p.glueOutGain ?? 1, 0, 2) : 1;
+    const autoG = glueOn && (p.glueAutoGain !== false);
+    this.punchIn.gain.setTargetAtTime(gIn, t, 0.03);
+    this.punchComp.threshold.setTargetAtTime(thr, t, 0.05);
+    this.punchComp.ratio.setTargetAtTime(ratio, t, 0.05);
+    this.punchComp.attack.setTargetAtTime(atk, t, 0.05);
+    this.punchComp.release.setTargetAtTime(rel, t, 0.05);
+    this.punchComp.knee.setTargetAtTime(knee, t, 0.05);
+    const mixDelta = !!(p.mixDeltaAudition);
+    // Parallel: dry bypasses compressor; delta solos the wet contribution.
+    this.punchDry.gain.setTargetAtTime(mixDelta ? 0 : (1 - glueMix), t, 0.03);
+    this.punchWet.gain.setTargetAtTime(glueMix, t, 0.03);
+    const glueAg = autoG ? 1 / (1 + glueAmt * 0.25) : 1;
+    this.punchMakeup.gain.setTargetAtTime(makeupLin * gOut * glueAg, t, 0.05);
+
+    this.applyMasterChainScene(p.masterChainScene ?? "glueAirWidth");
 
     const phaserOn = pathFx && on("fx.phaser");
     const phMix = phaserOn ? clamp(p.phaserMix, 0, 1) : 0;
     const phDepth = clamp(p.phaserDepth, 0, 1);
-    this.phaserLfo.frequency.setTargetAtTime(clamp(p.phaserRate, 0.02, 12), t, 0.02);
-    this.phaserDepth.gain.setTargetAtTime(560 * phDepth, t, 0.02);
-    this.phaserDry.gain.setTargetAtTime(1, t, 0.02);
-    this.phaserWet.gain.setTargetAtTime(phMix, t, 0.02);
-    this.phaserFb.gain.setTargetAtTime(phMix * 0.55, t, 0.02);
+    const shared = !!(p.fxSharedMod);
+    const phRate = shared ? clamp(p.chorusRate, 0.02, 12) * 0.85 : clamp(p.phaserRate, 0.02, 12);
+    this.phaserLfo.frequency.setTargetAtTime(phRate, t, 0.02);
+    const center = clamp(p.phaserCenter ?? 800, 100, 8000);
+    const stageScale = clamp((p.phaserStages ?? 4) / 4, 0.5, 3);
+    this.phaserDepth.gain.setTargetAtTime(center * 0.7 * phDepth * stageScale, t, 0.02);
+    for (let i = 0; i < this.phaserAP.length; i++) {
+      const ap = this.phaserAP[i]!;
+      ap.frequency.setTargetAtTime(center * (0.7 + i * 0.18), t, 0.05);
+    }
+    const stereo = p.phaserStereo ?? "linked";
+    // Opposed/quadrature: skew R-side allpass via feedback polarity / wet
+    const fbAmt = clamp(p.phaserFeedback ?? 0.35, 0, 0.9);
+    const delta = !!(p.fxDeltaAudition);
+    this.phaserDry.gain.setTargetAtTime(delta ? 0 : 1, t, 0.02);
+    this.phaserWet.gain.setTargetAtTime(phMix * (delta ? 1.4 : 1) * (stereo === "opposed" ? 1.1 : 1), t, 0.02);
+    this.phaserFb.gain.setTargetAtTime(phMix * fbAmt * (stereo === "quadrature" ? 0.75 : 1), t, 0.02);
 
     // Ring lives under FM · Ring module.
     const ringOn = on("fm");
     const ring = ringOn ? clamp(p.ringAmount, 0, 1) : 0;
     this.ringDry.gain.setTargetAtTime(1 - ring, t, 0.02);
     this.ringDepth.gain.setTargetAtTime(ring, t, 0.02);
-    this.ringCarrier.frequency.setTargetAtTime(clamp(p.ringFreq, 1, 8000), t, 0.02);
+    let ringHz = clamp(p.ringFreq, 1, 8000);
+    if ((p.ringMode ?? "ratio") === "ratio") {
+      let base = 220;
+      for (const v of this.voices) { base = v.baseFreq; break; }
+      const ratio = p.ringFreq > 32 ? clamp(p.ringFreq / 220, 0.25, 16) : clamp(p.ringFreq, 0.25, 16);
+      ringHz = clamp(base * ratio, 1, 8000);
+    }
+    this.ringCarrier.frequency.setTargetAtTime(ringHz, t, 0.02);
 
     const chorusOn = pathFx && on("fx.chorus");
     const chMix = chorusOn ? clamp(p.chorusMix, 0, 1) : 0;
-    this.chorusDry.gain.setTargetAtTime(1 - chMix * 0.5, t, 0.02);
-    this.chorusWet.gain.setTargetAtTime(chMix, t, 0.02);
-    this.cLfoL.frequency.setTargetAtTime(clamp(p.chorusRate, 0.05, 8), t, 0.02);
-    this.cLfoR.frequency.setTargetAtTime(clamp(p.chorusRate, 0.05, 8) * 1.18, t, 0.02);
-    this.cDepthL.gain.setTargetAtTime(p.chorusDepth * 0.006, t, 0.02);
-    this.cDepthR.gain.setTargetAtTime(p.chorusDepth * 0.006, t, 0.02);
+    this.chorusDry.gain.setTargetAtTime(delta ? 0 : (1 - chMix * 0.5), t, 0.02);
+    this.chorusWet.gain.setTargetAtTime(chMix * (delta ? 1.35 : 1), t, 0.02);
+    const model = p.chorusModel ?? "dual";
+    const voices = clamp(Math.round(p.chorusVoices ?? 2), 1, 4);
+    const baseDelay = clamp(p.chorusDelay ?? 0.012, 0.004, 0.04);
+    const spread = clamp(p.chorusSpread ?? 0.7, 0, 1);
+    const rateMul = model === "tape" ? 0.55 : model === "ensemble" ? 1.4 : model === "dimension" ? 0.9 : 1;
+    const depthMul = model === "triple" || voices >= 3 ? 1.25 : model === "single" ? 0.7 : 1;
+    const chRate = shared ? clamp(p.phaserRate, 0.05, 8) : clamp(p.chorusRate, 0.05, 8);
+    this.cLfoL.frequency.setTargetAtTime(chRate * rateMul, t, 0.02);
+    this.cLfoR.frequency.setTargetAtTime(chRate * rateMul * (model === "dimension" ? 1.01 : 1.18), t, 0.02);
+    this.cDepthL.gain.setTargetAtTime(p.chorusDepth * 0.006 * depthMul, t, 0.02);
+    this.cDepthR.gain.setTargetAtTime(p.chorusDepth * 0.006 * depthMul * (0.85 + spread * 0.3), t, 0.02);
+    this.cDelayL.delayTime.setTargetAtTime(baseDelay, t, 0.03);
+    this.cDelayR.delayTime.setTargetAtTime(baseDelay * (1.05 + spread * 0.25), t, 0.03);
+    this.cPanL.pan.setTargetAtTime(-0.8 * spread, t, 0.03);
+    this.cPanR.pan.setTargetAtTime(0.8 * spread, t, 0.03);
+    // Mono-below / chorus low cut via lowProtect + chorusLowCut
+    const chCut = Math.max(lpHz, clamp(p.chorusLowCut ?? 0, 0, 400));
+    if (chCut > 30) this.lowProtectHp.frequency.setTargetAtTime(chCut, t, 0.05);
 
-    this.dL.delayTime.setTargetAtTime(clamp(p.delayTime, 0.001, 2), t, 0.02);
-    this.dR.delayTime.setTargetAtTime(clamp(p.delayTime, 0.001, 2) * 1.5, t, 0.02);
-    const fb = clamp(p.delayFeedback, 0, 0.92);
-    this.dFbLR.gain.setTargetAtTime(fb, t, 0.02);
-    this.dFbRL.gain.setTargetAtTime(fb, t, 0.02);
+    const mode = p.delayCascadeMode ?? "echo";
+    let dTime = clamp(p.delayTime, 0.001, 2);
+    if (p.delaySync) {
+      const bpm = clamp(this.hostBpm || 120, 40, 240);
+      // delayTime as beat fractions when sync (0.25 ≈ 1/4 note)
+      dTime = clamp((60 / bpm) * Math.max(0.125, dTime * 4), 0.001, 2);
+    }
+    if (mode === "slap") dTime = Math.min(dTime, 0.12);
+    if (mode === "long" || mode === "infinite") dTime = Math.max(dTime, 0.45);
+    const rRatio = mode === "bounce" ? 1.5 : mode === "dub" ? 1.35 : 1.5;
+    this.dL.delayTime.setTargetAtTime(dTime, t, 0.02);
+    this.dR.delayTime.setTargetAtTime(dTime * rRatio, t, 0.02);
+    let fb = clamp(p.delayFeedback, 0, 0.92);
+    if (mode === "infinite") fb = Math.min(0.98, Math.max(fb, 0.92));
+    if (mode === "slap") fb = Math.min(fb, 0.25);
+    if (p.delayFreeze) fb = 0.97;
+    // Feedback-path filter/drive stability
+    const fbDrive = clamp(p.delayFbDrive ?? 0, 0, 1);
+    const fbFilt = clamp(p.delayFbFilter ?? 0.35, 0, 1);
+    fb = clamp(fb * (1 - fbDrive * 0.08), 0, 0.97);
+    this.dFbLR.gain.setTargetAtTime(fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
+    this.dFbRL.gain.setTargetAtTime(fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
     const delayOn = pathFx && on("fx.delay");
-    this.delayWet.gain.setTargetAtTime(delayOn ? clamp(p.delayMix, 0, 1) : 0, t, 0.02);
-    this.tone.frequency.setTargetAtTime(clamp(p.tone, 200, 20000), t, 0.02);
+    let dMix = delayOn ? clamp(p.delayMix, 0, 1) : 0;
+    // Simple duck: reduce wet when voices loud (voice count proxy)
+    const duck = clamp(p.delayDuck ?? 0, 0, 1);
+    if (duck > 0.01 && this.voices.size > 0) dMix *= 1 - duck * Math.min(1, this.voices.size / 4) * 0.7;
+    this.delayWet.gain.setTargetAtTime(delta ? dMix * 1.3 : dMix, t, 0.02);
+    this.delayDry.gain.setTargetAtTime(delta ? 0 : 1, t, 0.02);
+    // Tone LPF: post-delay bus (or both if driveTonePos says both — pre handled as mild lowpass via protect)
+    const tonePos = p.driveTonePos ?? "post";
+    const toneHz = clamp(p.tone, 200, 20000);
+    this.tone.frequency.setTargetAtTime(tonePos === "pre" ? 20000 : toneHz, t, 0.02);
+    // Feedback filter feel via delay wet tone approximation
+    if (fbFilt > 0.01) {
+      this.tone.frequency.setTargetAtTime(Math.min(toneHz, 18000 - fbFilt * 10000), t, 0.04);
+    }
 
     const reverbOn = pathFx && on("fx.reverb");
-    const revMix = reverbOn ? clamp(p.reverbMix, 0, 1) : 0;
-    this.reverbDry.gain.setTargetAtTime(1 - revMix * 0.4, t, 0.04);
-    this.reverbWet.gain.setTargetAtTime(revMix, t, 0.04);
+    let revMix = reverbOn ? clamp(p.reverbMix, 0, 1) : 0;
+    const revIn = clamp(p.reverbInGain ?? 1, 0, 2);
+    const revOut = clamp(p.reverbOutGain ?? 1, 0, 2);
+    this.reverbIn.gain.setTargetAtTime(revIn, t, 0.03);
+    const early = clamp(p.reverbEarly ?? 0.45, 0, 1);
+    // Early vs tail: more early → higher dry remainder + shorter perceived wet
+    this.reverbDry.gain.setTargetAtTime(delta ? 0 : ((1 - revMix * 0.4) * (0.7 + early * 0.3)), t, 0.04);
+    if (p.reverbFreeze) revMix = Math.max(revMix, 0.85);
+    this.reverbWet.gain.setTargetAtTime(revMix * revOut * (delta ? 1.25 : 1) * (0.65 + (1 - early) * 0.45), t, 0.04);
     const pre = clamp(p.reverbPredelay ?? 0, 0, 0.2);
     if (Math.abs(pre - this.lastPredelay) > 0.0005) {
       this.reverbPredelay.delayTime.setTargetAtTime(pre, t, 0.03);
       this.lastPredelay = pre;
     }
+    // Low decay / high cut fold into tone LPF ceiling when reverb engaged
+    const lowDec = clamp(p.reverbLowDecay ?? 0.55, 0, 1);
+    const hiCut = clamp(p.reverbHighCut ?? 12000, 1000, 18000);
+    if (reverbOn) {
+      const dampTilt = clamp(p.reverbDamp ?? 0.45, 0, 1) * (1.15 - lowDec * 0.4);
+      this.tone.frequency.setTargetAtTime(Math.min(hiCut, clamp(p.tone, 200, 20000) * (1.1 - dampTilt * 0.35)), t, 0.05);
+    }
 
     const widthOn = on("width");
-    this.widthSideAmt.gain.setTargetAtTime(widthOn ? clamp(p.stereoWidth ?? 1, 0, 1.4) : 1, t, 0.03);
+    const wIn = widthOn ? clamp(p.widthInGain ?? 1, 0, 2) : 1;
+    const wOut = widthOn ? clamp(p.widthOutGain ?? 1, 0, 2) : 1;
+    let w = widthOn ? clamp(p.stereoWidth ?? 1, 0, 1.4) : 1;
+    const mech = p.widthMechanism ?? "ms";
+    if (mech === "microdelay") w = 1 + (w - 1) * 0.85;
+    if (mech === "decorrelate") w = Math.min(1.4, w * 1.08);
+    if (mixDelta) {
+      // Delta: exaggerate side vs mid (processed difference feel)
+      this.widthSideAmt.gain.setTargetAtTime(Math.max(0, w - 1) * 2, t, 0.03);
+    } else {
+      this.widthSideAmt.gain.setTargetAtTime(w, t, 0.03);
+    }
+    this.widthIn.gain.setTargetAtTime(wIn, t, 0.03);
+    this.widthOutGain.gain.setTargetAtTime(wOut, t, 0.03);
+    const monoBelow = widthOn ? clamp(p.monoBelow ?? 0, 0, 400) : 0;
+    this.widthSideHp.frequency.setTargetAtTime(monoBelow > 20 ? monoBelow : 20, t, 0.05);
 
     const airOn = on("air");
     const airAmt = airOn ? clamp(p.airAmount ?? 0, 0, 1) : 0;
-    this.airLow.gain.setTargetAtTime(clamp(p.airLow ?? 0, -1, 1) * 12 * airAmt, t, 0.04);
-    this.airHigh.gain.setTargetAtTime(clamp(p.airHigh ?? 0, -1, 1) * 10 * airAmt, t, 0.04);
+    const aIn = airOn ? clamp(p.airInGain ?? 1, 0, 2) : 1;
+    const aOut = airOn ? clamp(p.airOutGain ?? 1, 0, 2) : 1;
+    this.airIn.gain.setTargetAtTime(aIn, t, 0.03);
+    this.airOut.gain.setTargetAtTime(aOut, t, 0.03);
+    let lowG = clamp(p.airLow ?? 0, -1, 1) * 12 * airAmt;
+    let highG = clamp(p.airHigh ?? 0, -1, 1) * 10 * airAmt;
+    if ((p.airArch ?? "dual") === "tilt") {
+      // Tilt: opposite shelves from a single gesture (airHigh drives tilt)
+      const tilt = clamp(p.airHigh ?? 0, -1, 1) * 8 * airAmt;
+      lowG = -tilt;
+      highG = tilt;
+    }
+    if (mixDelta) {
+      // Solo the shelf delta vs flat
+      this.airLow.gain.setTargetAtTime(lowG, t, 0.04);
+      this.airHigh.gain.setTargetAtTime(highG, t, 0.04);
+    } else {
+      this.airLow.gain.setTargetAtTime(lowG, t, 0.04);
+      this.airHigh.gain.setTargetAtTime(highG, t, 0.04);
+    }
+    // airMsMode: sides-only high shelf approximation — reduce mid via lower low shelf when M/S
+    if (airOn && p.airMsMode) {
+      this.airLow.gain.setTargetAtTime(lowG * 0.35, t, 0.04);
+      this.airHigh.frequency.setTargetAtTime(4500, t, 0.05);
+    } else {
+      this.airHigh.frequency.setTargetAtTime(6500, t, 0.05);
+    }
 
     this.updateReverbConvolver(p, pathFx && reverbOn);
 
@@ -2494,7 +3712,11 @@ export class FireCommandSynth {
    */
   private applySpectral(p: FirePatch): void {
     const mode = p.spectralMode ?? "off";
-    const mix = clamp(p.spectralMix ?? 0, 0, 1);
+    // Wet-only: process when delay/reverb wet is present (SpecTail routing scene).
+    const wetGate = p.spectralWetOnly
+      ? Math.max(clamp(p.delayMix ?? 0, 0, 1), clamp(p.reverbMix ?? 0, 0, 1))
+      : 1;
+    const mix = clamp((p.spectralMix ?? 0) * wetGate, 0, 1);
     const active = mode !== "off" && mix > 0.001;
     if (active && this.spectralState === "idle") {
       this.spectralState = "loading";
@@ -2525,7 +3747,7 @@ export class FireCommandSynth {
     const on = active && this.spectralState === "ready" && this.spectralNode !== null;
     this.spectralDry.gain.setTargetAtTime(on ? 0 : 1, t, 0.03);
     this.spectralSend.gain.setTargetAtTime(on ? 1 : 0, t, 0.03);
-    const msgKey = `${mode}|${(p.spectralAmount ?? 0.6).toFixed(3)}|${mix.toFixed(3)}|${on ? 1 : 0}`;
+    const msgKey = `${mode}|${(p.spectralAmount ?? 0.6).toFixed(3)}|${mix.toFixed(3)}|${on ? 1 : 0}|${(p.spectralLow ?? 0).toFixed(2)}|${(p.spectralHigh ?? 1).toFixed(2)}`;
     if (msgKey !== this.lastSpectralMsg) {
       this.lastSpectralMsg = msgKey;
       this.spectralNode?.port.postMessage({
@@ -2533,6 +3755,8 @@ export class FireCommandSynth {
         amount: clamp(p.spectralAmount ?? 0.6, 0, 1),
         mix,
         bypass: !on,
+        binLow: clamp(p.spectralLow ?? 0, 0, 1),
+        binHigh: clamp(p.spectralHigh ?? 1, 0, 1),
       });
     }
   }
@@ -2540,8 +3764,29 @@ export class FireCommandSynth {
   private applyLfoParams(p: FirePatch): void {
     const d1 = p.moduleEnable?.["lfo.1"] === false ? 0 : p.lfo1Depth;
     const d2 = p.moduleEnable?.["lfo.2"] === false ? 0 : p.lfo2Depth;
+    const relation = p.lfo2Relation ?? "independent";
+    // Audio-rate LFO banks: when Twin Orbit locks LFO2 to LFO1, mirror rate into bank 2.
+    let rate2 = p.lfo2Rate;
+    let wave2 = p.lfo2Wave;
+    if (relation !== "independent") {
+      wave2 = p.lfo1Wave;
+      if (relation === "ratio") rate2 = clamp(p.lfo1Rate * clamp(p.lfo2Ratio ?? 1, 0.125, 8), 0.01, 40);
+      else rate2 = p.lfo1Rate;
+    }
     this.applyOneLfo(this.lfo1, p.lfo1Wave, p.lfo1Rate, d1, p.lfo1Dest);
-    this.applyOneLfo(this.lfo2, p.lfo2Wave, p.lfo2Rate, d2, p.lfo2Dest);
+    const dest2 = relation === "invert" && p.lfo2Dest === "off" ? p.lfo1Dest : p.lfo2Dest;
+    // Invert polarity for dedicated dest gains when relation is invert.
+    const depth2 = relation === "invert" ? d2 : d2;
+    this.applyOneLfo(this.lfo2, wave2, rate2, depth2, dest2);
+    if (relation === "invert") {
+      // Flip dedicated dest by negating depth on bank 2.
+      const t = this.ctx.currentTime;
+      const d = clamp(depth2, 0, 1);
+      this.lfo2.filterDepth.gain.setTargetAtTime(dest2 === "filter" ? -d * 5000 : 0, t, 0.02);
+      this.lfo2.pitchDepth.gain.setTargetAtTime(dest2 === "pitch" ? -d * 1200 : 0, t, 0.02);
+      this.lfo2.panDepth.gain.setTargetAtTime(dest2 === "pan" ? -d : 0, t, 0.02);
+      this.lfo2.ampDepth.gain.setTargetAtTime(dest2 === "volume" ? -d * 0.9 : 0, t, 0.02);
+    }
   }
 
   private applyOneLfo(bank: LfoBank, wave: LfoWave, rate: number, depth: number, dest: LfoDest): void {
@@ -2559,35 +3804,107 @@ export class FireCommandSynth {
   }
 
   getActiveVoiceCount(): number { return this.voices.size; }
+
+  /** Live Glue compressor reduction in dB (≤ 0). */
+  getPunchReduction(): number {
+    return this.punchComp.reduction;
+  }
+
+  /**
+   * Phase 6 — reconnect Glue ↔ Air order (Width stays post-gate for stability;
+   * width-early scenes swap Air past Glue only; full Width relocate is soft).
+   */
+  private applyMasterChainScene(scene: MasterChainScene): void {
+    if (scene === this.lastMasterChain) return;
+    this.lastMasterChain = scene;
+    try {
+      this.tone.disconnect();
+      this.punchMakeup.disconnect();
+      this.airOut.disconnect();
+    } catch { /* ignore */ }
+    // Always: tone → punchIn … punchMakeup → airIn … airOut → reverbIn
+    // Scenes that put Air before Glue:
+    if (scene === "airGlueWidth") {
+      this.tone.connect(this.airIn);
+      this.airOut.connect(this.punchIn);
+      this.punchMakeup.connect(this.reverbIn);
+    } else {
+      // glueAirWidth | glueWidthAir | widthGlueAir — keep Glue before Air
+      this.tone.connect(this.punchIn);
+      this.punchMakeup.connect(this.airIn);
+      this.airOut.connect(this.reverbIn);
+    }
+  }
 }
 
 export const DEFAULT_FIRE_PATCH: FirePatch = {
   // Neutral Init — one oscillator, no FX wet, no unison stack.
   // Presets that want color must set it explicitly (via P(overrides)).
   oscATable: "basic", oscAPos: 0.66, oscAEnv: 0, oscALfo: 0, oscAOctave: 0, oscADetune: 0, oscALevel: 0.75,
+  oscAContinuity: 0.72,
   oscBTable: "saw", oscBPos: 0.4, oscBEnv: 0, oscBLfo: 0, oscBOctave: 0, oscBDetune: 0, oscBLevel: 0,
+  oscBInherit: "off", oscBPhaseLock: false, fmAtoB: 0,
   oscCTable: "harmonic", oscCPos: 0.4, oscCEnv: 0, oscCLfo: 0, oscCOctave: -1, oscCDetune: 0, oscCLevel: 0,
-  warpStretch: 0, warpTilt: 0, warpComb: 0,
+  warpStretch: 0, warpTilt: 0, warpComb: 0, warpAmount: 1,
   unison: 1, unisonDetune: 0, unisonWidth: 0.5,
-  subWave: "sine", subLevel: 0, noiseLevel: 0, noiseColor: 0,
+  unisonMix: 1, unisonAnchor: true, unisonDistribution: "linear", unisonPhase: "locked",
+  unisonTemporalSpread: 0, unisonTemporalMode: "ltr", unisonEnvSpread: 0,
+  subWave: "sine", subLevel: 0, subPhaseAlign: true, subTranslate: 0,
+  noiseLevel: 0, noiseColor: 0, noiseMode: "bed", noiseDensity: 0.45, noiseGrain: 0.35,
   fmAmount: 0, fmRatio: 2, fmBtoA: 0, ringAmount: 0, ringFreq: 220,
-  filterType: "lowpass", filterCutoff: 2600, filterResonance: 0.7, filterEnvAmount: 0, filterKeyTrack: 0.3,
-  filterDrive: 0,
-  ampAttack: 0.01, ampDecay: 0.25, ampSustain: 0.8, ampRelease: 0.35, velAmount: 1,
-  lpgOn: false, lpgDecay: 0.4, lpgColor: 0.7,
+  filterType: "lowpass", filterCutoff: 2600, filterResonance: 0.7, filterEnvAmount: 0, filterEnvResoAmount: 0,
+  filterKeyTrack: 0.3,
+  filterDrive: 0, filterDrivePos: "post", filterSlope: 1, filterCarve: "off", filterCarveAmount: 0,
+  ampAttack: 0.01, ampDecay: 0.25, ampSustain: 0.8, ampRelease: 0.35, velAmount: 1, velAttack: 0,
+  ampModel: "vca", ampCurveAttack: "lin", ampCurveDecay: "exp", ampCurveRelease: "exp",
+  ampRetrigger: "zero", ampHold: 0, ampOvershoot: 0,
+  lpgOn: false, lpgDecay: 0.4, lpgColor: 0.7, lpgModel: "classic",
+  lpgStrike: 1, lpgRing: 1, lpgLeakage: 0, lpgChoke: true, lpgResoCouple: 0,
   filtAttack: 0.01, filtDecay: 0.3, filtSustain: 0.5, filtRelease: 0.3,
+  filtCurveAttack: "lin", filtCurveDecay: "exp", filtCurveRelease: "exp",
   modAttack: 0.02, modDecay: 0.5, modSustain: 0.3, modRelease: 0.4,
+  modEnvPoints: [
+    { t: 0, level: 0, curve: "lin" },
+    { t: 0.02, level: 1, curve: "exp" },
+    { t: 0.52, level: 0.3, curve: "log" },
+  ],
+  modEnvSustainIndex: 2,
+  modEnvLoop: false,
   lfo1Wave: "sine", lfo1Rate: 5, lfo1Depth: 0, lfo1Dest: "off",
+  lfo1RateDisplay: "hz",
   lfo2Wave: "triangle", lfo2Rate: 0.5, lfo2Depth: 0, lfo2Dest: "off",
+  lfo2RateDisplay: "hz",
+  lfo2Relation: "independent",
+  lfo2PhaseOffset: 90,
+  lfo2Ratio: 1,
+  lfo2DriftMode: "locked",
   pitchEnvAmount: 0, pitchEnvTime: 0.2,
   mono: false, glide: 0,
+  glideMode: "legato",
+  glideCurve: "exp",
+  glideRateMode: "time",
   harmonyMode: "off", harmonyLevel: 0.6,
   drive: 0, driveMode: "soft", crush: 0, tone: 15000, punch: 0,
+  glueInGain: 1, glueOutGain: 1, glueAutoGain: true, glueMode: "glue",
+  glueThreshold: -18, glueRatio: 3, glueAttack: 0.008, glueRelease: 0.18, glueKnee: 6, glueMakeup: 1, glueMix: 1,
+  glueUseAdvanced: false, mixDeltaAudition: false, masterChainScene: "glueAirWidth",
+  driveInGain: 1, driveOutGain: 1, driveAutoGain: true,
+  driveBias: 0, driveSymmetry: 0, driveDcBlock: true, driveTonePos: "post",
   phaserRate: 0.4, phaserDepth: 0.6, phaserMix: 0,
+  phaserStages: 4, phaserFeedback: 0.35, phaserCenter: 800, phaserStereo: "linked",
   chorusRate: 0.6, chorusDepth: 0.4, chorusMix: 0,
+  chorusVoices: 2, chorusDelay: 0.012, chorusSpread: 0.7, chorusModel: "dual", chorusLowCut: 0,
   delayTime: 0.28, delayFeedback: 0.3, delayMix: 0,
+  delaySync: false, delayCascadeMode: "echo", delayDuck: 0, delayFbFilter: 0.35, delayFbDrive: 0, delayFreeze: false,
   reverbSize: 2.2, reverbMix: 0, reverbDamp: 0.45, reverbPredelay: 0.02, reverbDiffusion: 0.7,
+  reverbEarly: 0.45, reverbLowDecay: 0.55, reverbHighCut: 12000, reverbFreeze: false,
   spectralMode: "off", spectralAmount: 0.6, spectralMix: 0.5,
+  spectralLow: 0, spectralHigh: 1, spectralFftSize: 2048,
+  fxQuality: "live", lowProtect: "off", lowProtectHz: 100, fxDeltaAudition: false,
+  ageInGain: 1, ageOutGain: 1, reverbInGain: 1, reverbOutGain: 1, spectralInGain: 1, spectralOutGain: 1,
+  ageLockMedium: false, ageLockMotion: false, ageLockWear: false, ageLockResolution: false,
+  ageMacro: 0, ageEvolve: 0,
+  fxSharedMod: false, fxRoutingScene: "serial", spectralWetOnly: false,
   macro1: 0, macro2: 0, macro3: 0, macro4: 0,
   modMatrix: makeModMatrix(),
   drift: 0,
@@ -2595,6 +3912,13 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   voiceInstability: 0,
   tuneVariance: 0,
   envVariance: 0,
+  analogDnaSeed: 0x73a9c412,
+  analogDnaLock: false,
+  analogWake: 0,
+  analogTremor: 0.55,
+  analogBreath: 0.45,
+  analogClimate: 0.3,
+  analogEvents: 0,
   cassetteGen: 0,
   tapeSpeed: 0,
   wowFlutter: 0,
@@ -2613,6 +3937,7 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   chipVoiceLimit: 0,
   accentAmount: 0,
   slideOn: false,
+  chipAcidMix: 0.35,
   fmEngine: "classic",
   fmAlg: 0,
   fmOp1Level: 1,
@@ -2625,6 +3950,15 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   fmFeedback: 0,
   vectorRate: 0,
   vectorDepth: 0,
+  ringMode: "ratio",
+  fmVectorCorners: [
+    { levels: [1, 0.7, 0.5, 0.35], ratios: [1, 2, 3], feedback: 0 },
+    { levels: [1, 0.9, 0.4, 0.2], ratios: [1, 3, 5], feedback: 0.2 },
+    { levels: [0.8, 0.5, 0.7, 0.4], ratios: [2, 1, 4], feedback: 0.1 },
+    { levels: [1, 0.6, 0.6, 0.6], ratios: [1, 1.5, 2.5], feedback: 0.35 },
+  ],
+  fmVectorX: 0.5,
+  fmVectorY: 0.5,
   pathOsc: true,
   pathFilter: true,
   pathDrive: true,
@@ -2633,19 +3967,35 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   pathMix: true,
   pathScope: true,
   stereoWidth: 1,
+  widthInGain: 1, widthOutGain: 1, monoBelow: 0, widthMechanism: "ms", widthCorrWarn: 0.2,
   gateOn: false, gateRate: 8, gateDepth: 1, gateSteps: 16,
   gatePattern: [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
   gateSmooth: 0,
+  gateDest: "volume",
   masterGain: 0.72,
   subOctave: -1,
   airLow: 0,
   airHigh: 0,
   airAmount: 0,
+  airInGain: 1, airOutGain: 1, airArch: "dual", airMsMode: false,
+  scopeDisplayGain: 1,
+  voiceSteal: "oldest",
+  ceaseMode: "notes",
   scaleLock: false,
+  scaleMode: "guide",
+  scaleFollowers: { harmony: true, chord: true, arp: true, pianoRoll: false },
   chordMemoryOn: false,
+  chordMode: "memory",
   chordIntervals: [0, 4, 7],
   humanizeOn: false,
   humanizeTiming: 0.25,
   humanizeVelocity: 0.2,
+  humanizeSeed: 0x4f1ce,
+  humanizeSeedMode: "fixed",
+  humanizeProtectDownbeats: true,
+  macroResponse: "absolute",
+  harmonyVoiceLead: "parallel",
+  harmonyLow: 36,
+  harmonyHigh: 96,
   moduleEnable: {},
 };

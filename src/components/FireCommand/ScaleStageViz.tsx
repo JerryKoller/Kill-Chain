@@ -401,7 +401,7 @@ export function ScaleStageViz() {
         active: !!st.current.enabled,
         dragging: false,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 22 },
     );

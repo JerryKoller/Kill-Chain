@@ -97,20 +97,56 @@ function bilinear(x: number, y: number): Record<Corner, number> {
 const NUMERIC_KEYS = (Object.keys(DEFAULT_FIRE_PATCH) as (keyof FirePatch)[])
   .filter((k) => typeof DEFAULT_FIRE_PATCH[k] === "number");
 
+const MORPH_LOCK_KEYS = new Set<keyof FirePatch>([
+  "pitchEnvAmount", "pitchEnvTime", "masterGain",
+  "pathOsc", "pathFilter", "pathDrive", "pathAge", "pathFx", "pathMix", "pathScope",
+  "delayMix", "reverbMix", "chorusMix", "phaserMix", "spectralMix", "drive",
+]);
+
+type MorphInterp = "linear" | "equalPower" | "nearest";
+type MorphPadMode = "morph" | "crossfade";
+
+function equalPowerWeights(w: Record<Corner, number>): Record<Corner, number> {
+  const out = { ...w };
+  let sum = 0;
+  for (const c of CORNERS) {
+    const s = Math.sqrt(Math.max(0, w[c]));
+    out[c] = s;
+    sum += s;
+  }
+  if (sum > 1e-9) for (const c of CORNERS) out[c] /= sum;
+  return out;
+}
+
 function morphPatches(
   corners: Record<Corner, FirePatch>,
   x: number,
   y: number,
+  opts?: { interp?: MorphInterp; skipKeys?: Set<keyof FirePatch>; base?: FirePatch },
 ): FirePatch {
-  const w = bilinear(x, y);
+  let w = bilinear(x, y);
+  const interp = opts?.interp ?? "linear";
+  if (interp === "equalPower") w = equalPowerWeights(w);
   let nearest: Corner = "a";
   for (const c of CORNERS) if (w[c] > w[nearest]) nearest = c;
-  // Shallow copy: numeric fields are overwritten below; discrete/object
-  // fields (modMatrix, moduleEnable, gatePattern…) keep the corner's stable
-  // references so per-tick identity churn can't trigger engine re-applies.
-  // The commit path deep-clones in the store before it touches state.
+  if (interp === "nearest") {
+    const out = { ...corners[nearest] };
+    const skip = opts?.skipKeys;
+    const base = opts?.base;
+    if (skip && base) {
+      for (const k of skip) {
+        if (k in base) (out as unknown as Record<string, unknown>)[k as string] = (base as unknown as Record<string, unknown>)[k as string];
+      }
+    }
+    return out;
+  }
   const out = { ...corners[nearest] };
+  const skip = opts?.skipKeys;
   for (const key of NUMERIC_KEYS) {
+    if (skip?.has(key)) {
+      if (opts?.base) (out as unknown as Record<string, unknown>)[key as string] = (opts.base as unknown as Record<string, unknown>)[key as string];
+      continue;
+    }
     let sum = 0;
     for (const c of CORNERS) {
       const v = corners[c][key];
@@ -385,11 +421,44 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
     ?? userPresets.find((p) => p.id === id)?.name
     ?? "?";
 
+  const [padMode, setPadMode] = useState<MorphPadMode>("morph");
+  const [interp, setInterp] = useState<MorphInterp>("linear");
+  const [lockSafe, setLockSafe] = useState(true);
+  const [captureCorner, setCaptureCorner] = useState<Corner>("a");
+
   const applyAt = (x: number, y: number, commit: boolean) => {
+    const base = useFireCommandStore.getState().patch;
+    const skip = lockSafe ? MORPH_LOCK_KEYS : undefined;
+    if (padMode === "crossfade") {
+      // CROSSFADE: blend levels of A/B via corner weights when possible; else morph with clear copy.
+      const wts = bilinear(x, y);
+      const blended = morphPatches(cornerPatchesRef.current, x, y, { interp, skipKeys: skip, base });
+      // Prefer level-ish fields for crossfade feel
+      for (const key of ["oscALevel", "oscBLevel", "oscCLevel", "masterGain"] as (keyof FirePatch)[]) {
+        if (skip?.has(key)) continue;
+        let sum = 0;
+        for (const c of CORNERS) {
+          const v = cornerPatchesRef.current[c][key];
+          sum += (typeof v === "number" ? v : 0) * wts[c];
+        }
+        (blended as unknown as Record<string, unknown>)[key as string] = sum;
+      }
+      useFireCommandStore.getState().applyMorphPatch(blended, commit);
+      return;
+    }
     useFireCommandStore.getState().applyMorphPatch(
-      morphPatches(cornerPatchesRef.current, x, y),
+      morphPatches(cornerPatchesRef.current, x, y, { interp, skipKeys: skip, base }),
       commit,
     );
+  };
+
+  const captureCurrent = () => {
+    const id = useFireCommandStore.getState().savePreset(`Capture ${captureCorner.toUpperCase()}`);
+    const next = { ...cornerIds, [captureCorner]: id };
+    setCornerIds(next);
+    savePersist({ cornerIds: next, open: !collapsed });
+    bumpFlash();
+    applyAt(pos.x, pos.y, true);
   };
 
   // Flash drives the canvas glow only (flashRef, read by RAF) — no setState,
@@ -726,7 +795,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
           <span className="text-[11px] font-semibold uppercase tracking-[0.22em]" style={{ color: C }}>
             Morph Pad
           </span>
-          <span className="text-[9px] normal-case tracking-normal text-white/35">· Quad Loom</span>
+          <span className="text-[9px] normal-case tracking-normal text-white/35">· Patch morph · not FM Vector Lattice</span>
         </button>
         {!open && (
           <span className="text-[10px] text-white/35 italic truncate">
@@ -830,11 +899,102 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
             })}
           </div>
 
+          <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+            <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>Mode</span>
+            {([
+              { id: "morph" as MorphPadMode, label: "MORPH" },
+              { id: "crossfade" as MorphPadMode, label: "CROSSFADE" },
+            ]).map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => setPadMode(o.id)}
+                className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase"
+                style={
+                  padMode === o.id
+                    ? { borderColor: `${C}99`, background: `${C}33`, color: C_GLOW }
+                    : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }
+                }
+                title={o.id === "crossfade" ? "Blend mixer levels from corner weights" : "Interpolate FirePatch"}
+              >
+                {o.label}
+              </button>
+            ))}
+            <span className="mx-1 text-white/20">·</span>
+            <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>Interp</span>
+            {([
+              { id: "linear" as MorphInterp, label: "Linear" },
+              { id: "equalPower" as MorphInterp, label: "EqPow" },
+              { id: "nearest" as MorphInterp, label: "Nearest" },
+            ]).map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => setInterp(o.id)}
+                className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+                style={
+                  interp === o.id
+                    ? { borderColor: `${C}99`, background: `${C}33`, color: C_GLOW }
+                    : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }
+                }
+              >
+                {o.label}
+              </button>
+            ))}
+            <label className="ml-2 flex items-center gap-1 text-[9px] text-white/50">
+              <input type="checkbox" checked={lockSafe} onChange={(e) => setLockSafe(e.target.checked)} />
+              Lock pitch/master/path/FX
+            </label>
+          </div>
+
+          <div className="mb-2 flex items-end justify-center gap-3 flex-wrap">
+            {CORNERS.map((c) => (
+              <div key={c} className="flex flex-col items-center gap-0.5 min-w-[3.2rem]">
+                <span className="text-[18px] font-black tabular-nums leading-none" style={{ color: CORNER_META[c].color }}>
+                  {Math.round(w[c] * 100)}
+                  <span className="text-[10px] font-bold opacity-70">%</span>
+                </span>
+                <span className="text-[9px] font-black uppercase tracking-wider" style={{ color: `${CORNER_META[c].color}aa` }}>
+                  {c.toUpperCase()}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+            <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>Capture</span>
+            {CORNERS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setCaptureCorner(c)}
+                className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+                style={
+                  captureCorner === c
+                    ? { borderColor: `${CORNER_META[c].color}99`, background: `${CORNER_META[c].color}33`, color: C_GLOW }
+                    : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }
+                }
+              >
+                {c.toUpperCase()}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={captureCurrent}
+              className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase"
+              style={{ borderColor: `${C}88`, color: C_GLOW, background: `${C}28` }}
+              title="Capture current patch into selected corner"
+            >
+              Capture current patch
+            </button>
+          </div>
+
           <div className="mb-2 flex items-center justify-center gap-2.5 flex-wrap">
             {CORNERS.map((c) => (
               <MorphWeightMeter key={c} label={c.toUpperCase()} value={w[c]} color={CORNER_META[c].color} />
             ))}
           </div>
+
 
           <div className="flex flex-wrap gap-4 min-w-0">
             <div

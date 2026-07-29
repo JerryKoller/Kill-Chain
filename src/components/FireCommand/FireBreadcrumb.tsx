@@ -106,9 +106,9 @@ export function FireBreadcrumb({
               exitFocus();
               if (density === "focus") exitDensity();
             }}
-            title={focusActive ? "Exit Solo — show all modules" : "Exit Focus density — restore chrome"}
+            title={focusActive ? "Exit Δ Focus — show all modules" : "Exit Focus density — restore chrome"}
           >
-            {focusActive ? "Exit Solo" : "Exit Focus"}
+            {focusActive ? "Exit Δ" : "Exit Focus"}
           </button>
         )}
       </div>

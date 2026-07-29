@@ -76,6 +76,7 @@ export function WarpStageViz() {
   const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
   const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
   const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
+  const amount = useFireCommandStore((s) => s.patch.warpAmount) ?? 1;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -84,18 +85,20 @@ export function WarpStageViz() {
   const flashRef = useRef(0);
   const dragMode = useRef<"xy" | "comb" | null>(null);
   const prevKey = useRef("");
-  const st = useRef({ stretch, tilt, comb });
-  st.current = { stretch, tilt, comb };
+  const st = useRef({ stretch, tilt, comb, amount });
+  st.current = { stretch, tilt, comb, amount };
 
-  const active = Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01;
+  const active = Math.abs(amount) > 0.01 && (
+    Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01
+  );
 
   useEffect(() => {
-    const key = `${stretch.toFixed(3)}|${tilt.toFixed(3)}|${comb.toFixed(3)}`;
+    const key = `${stretch.toFixed(3)}|${tilt.toFixed(3)}|${comb.toFixed(3)}|${amount.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [stretch, tilt, comb]);
+  }, [stretch, tilt, comb, amount]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -162,11 +165,14 @@ export function WarpStageViz() {
     const stopLoop = startStageVizLoop(
       (now) => {
       const { w: W, h: Hh } = sizeRef.current;
-      const { stretch: S, tilt: T, comb: Cb } = st.current;
+      const { stretch: rawS, tilt: rawT, comb: rawCb, amount: amt = 1 } = st.current;
+      const S = rawS * amt;
+      const T = rawT * amt;
+      const Cb = rawCb * Math.abs(amt);
       flashRef.current *= 0.88;
 
       const warped = applyWarp(BASE_SAW, S, T, Cb);
-      const dormant = Math.abs(S) < 0.01 && Math.abs(T) < 0.01 && Cb < 0.01;
+      const dormant = Math.abs(amt) < 0.01 || (Math.abs(rawS) < 0.01 && Math.abs(rawT) < 0.01 && rawCb < 0.01);
       const energy = dormant ? 0.12 : 0.35 + (Math.abs(S) + Math.abs(T) + Cb) * 0.35;
 
       ctx.clearRect(0, 0, W, Hh);
@@ -234,7 +240,7 @@ export function WarpStageViz() {
         });
       }
 
-      // Ghost base (unwarped) contour
+      // Ghost base (unwarped) contour + input stems
       ctx.beginPath();
       for (let i = 0; i < nodes.length; i++) {
         const nd = nodes[i]!;
@@ -242,11 +248,27 @@ export function WarpStageViz() {
         if (i === 0) ctx.moveTo(nd.x, y);
         else ctx.lineTo(nd.x, y);
       }
-      ctx.strokeStyle = hexAlpha(C_MID, dormant ? 0.35 : 0.14);
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = hexAlpha(C_MID, dormant ? 0.45 : 0.28);
+      ctx.lineWidth = 1.5;
       ctx.setLineDash([3, 3]);
       ctx.stroke();
       ctx.setLineDash([]);
+
+      // Dim input partial stems (what exists before forge)
+      for (const nd of nodes) {
+        const barH = Math.max(1.5, nd.baseAmp * usableH * 0.85 * breath);
+        const y = baseY - barH;
+        const bw = Math.max(1.5, Math.min(4, usableW / (N * 1.6)));
+        ctx.fillStyle = hexAlpha(C_MID, dormant ? 0.35 : 0.22);
+        ctx.fillRect(nd.x - bw / 2 - 3, y, bw, barH);
+      }
+
+      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexAlpha(C_MID, 0.55);
+      ctx.fillText("IN", PAD, top + 10);
+      ctx.fillStyle = hexAlpha(C_GLOW, 0.75);
+      ctx.fillText("OUT", PAD + 22, top + 10);
 
       // Comb notch guides
       if (Cb > 0.05) {
@@ -410,10 +432,12 @@ export function WarpStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: Math.abs(st.current.amount ?? 1) > 0.01 && (
+          Math.abs(st.current.stretch ?? 0) > 0.02 || Math.abs(st.current.tilt ?? 0) > 0.02 || (st.current.comb ?? 0) > 0.02
+        ),
         dragging: false,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );
@@ -454,7 +478,7 @@ export function WarpStageViz() {
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
         style={{ color: hexAlpha(C_HOT, 0.7) }}
       >
-        {active ? "FORGING" : "IDLE"}
+        {active ? "ACTIVE" : "BYPASSED"}
       </div>
     </div>
   );

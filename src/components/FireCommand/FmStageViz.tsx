@@ -519,10 +519,13 @@ export function FmStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active:
+          (st.current.fm ?? 0) > 0.02 ||
+          (st.current.bToA ?? 0) > 0.02 ||
+          (st.current.ring ?? 0) > 0.02,
         dragging: !!dragRef.current,
         particles: sparks.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

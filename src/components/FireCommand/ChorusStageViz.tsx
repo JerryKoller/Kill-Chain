@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import type { ChorusModel } from "@/audio/dsp/FireCommandSynth";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 
@@ -81,6 +82,10 @@ export function ChorusStageViz() {
   const rate = useFireCommandStore((s) => s.patch.chorusRate) ?? 0.6;
   const depth = useFireCommandStore((s) => s.patch.chorusDepth) ?? 0.4;
   const mix = useFireCommandStore((s) => s.patch.chorusMix) ?? 0;
+  const voicesN = useFireCommandStore((s) => s.patch.chorusVoices) ?? 2;
+  const baseDelay = useFireCommandStore((s) => s.patch.chorusDelay) ?? 0.012;
+  const spread = useFireCommandStore((s) => s.patch.chorusSpread) ?? 0.7;
+  const model = (useFireCommandStore((s) => s.patch.chorusModel) ?? "dual") as ChorusModel;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -89,18 +94,18 @@ export function ChorusStageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef("");
-  const st = useRef({ rate, depth, mix });
-  st.current = { rate, depth, mix };
+  const st = useRef({ rate, depth, mix, voicesN, baseDelay, spread, model });
+  st.current = { rate, depth, mix, voicesN, baseDelay, spread, model };
 
   const live = mix > 0.02;
 
   useEffect(() => {
-    const key = `${rate.toFixed(3)}|${depth.toFixed(3)}|${mix.toFixed(3)}`;
+    const key = `${rate.toFixed(3)}|${depth.toFixed(3)}|${mix.toFixed(3)}|${voicesN}|${baseDelay.toFixed(4)}|${spread.toFixed(3)}|${model}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [rate, depth, mix]);
+  }, [rate, depth, mix, voicesN, baseDelay, spread, model]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -195,19 +200,39 @@ export function ChorusStageViz() {
       const energy = 0.1 + p.mix * 0.45 + p.depth * 0.22 + flashRef.current * 0.25;
       const PAD = 12;
       const stageH = Hh * 0.72;
-      const mid = stageH * 0.52;
-      const amp = stageH * 0.18 * (0.7 + p.depth * 0.45);
-      // R LFO runs 1.18× in DSP — mirror that asymmetry
-      const rateL = p.rate;
-      const rateR = p.rate * 1.18;
+      const mid = stageH * 0.42;
+      const delayLaneY = stageH * 0.78;
+      const nVoices = clamp(Math.round(p.voicesN ?? 2), 1, 4);
+      const spreadN = clamp(p.spread ?? 0.7, 0, 1);
+      const delayMs = clamp(p.baseDelay ?? 0.012, 0.004, 0.04) * 1000;
+      const model = p.model ?? "dual";
+      const rateMul = model === "tape" ? 0.55 : model === "ensemble" ? 1.4 : model === "dimension" ? 0.9 : 1;
+      const rateL = p.rate * rateMul;
+      const rateR = p.rate * rateMul * (model === "dimension" ? 1.01 : 1.18);
 
-      const voices = [
-        { det: -1, yOff: -16 * p.depth - 4, color: C_L, label: "L", rate: rateL, phase: 0 },
-        { det: -0.45, yOff: -8 * p.depth, color: C_MID, label: "", rate: rateL * 0.95, phase: 0.4 },
-        { det: 0, yOff: 0, color: C_GLOW, label: "C", rate: rateL, phase: 0.8 },
-        { det: 0.45, yOff: 8 * p.depth, color: C_HOT, label: "", rate: rateR * 0.97, phase: 1.2 },
-        { det: 1, yOff: 16 * p.depth + 4, color: C_R, label: "R", rate: rateR, phase: 1.6 },
-      ];
+      // Build voice set from chorusVoices + model
+      const voiceDefs: Array<{ pan: number; delayMul: number; label: string; color: string; rate: number; phase: number }> = [];
+      if (nVoices === 1 || model === "single") {
+        voiceDefs.push({ pan: 0, delayMul: 1, label: "C", color: C_GLOW, rate: rateL, phase: 0 });
+      } else if (nVoices === 2 || model === "dual") {
+        voiceDefs.push(
+          { pan: -spreadN, delayMul: 1, label: "L", color: C_L, rate: rateL, phase: 0 },
+          { pan: spreadN, delayMul: 1.05 + spreadN * 0.25, label: "R", color: C_R, rate: rateR, phase: 1.2 },
+        );
+      } else if (nVoices === 3 || model === "triple") {
+        voiceDefs.push(
+          { pan: -spreadN, delayMul: 1, label: "L", color: C_L, rate: rateL, phase: 0 },
+          { pan: 0, delayMul: 1.08, label: "C", color: C_GLOW, rate: rateL * 0.97, phase: 0.7 },
+          { pan: spreadN, delayMul: 1.05 + spreadN * 0.25, label: "R", color: C_R, rate: rateR, phase: 1.4 },
+        );
+      } else {
+        voiceDefs.push(
+          { pan: -spreadN, delayMul: 0.95, label: "L", color: C_L, rate: rateL, phase: 0 },
+          { pan: -spreadN * 0.35, delayMul: 1.05, label: "", color: C_MID, rate: rateL * 0.95, phase: 0.4 },
+          { pan: 0, delayMul: 1.12, label: "C", color: C_GLOW, rate: rateL, phase: 0.9 },
+          { pan: spreadN, delayMul: 1.05 + spreadN * 0.25, label: "R", color: C_R, rate: rateR, phase: 1.5 },
+        );
+      }
 
       ctx.clearRect(0, 0, W, Hh);
 
@@ -219,115 +244,88 @@ export function ChorusStageViz() {
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, W, Hh);
 
-      // Stereo field guides
-      ctx.strokeStyle = hexAlpha(C_L, 0.12 + p.mix * 0.15);
+      // Stereo field guides respond to spread
+      const fieldY = mid;
+      ctx.strokeStyle = hexAlpha(C_L, 0.12 + p.mix * 0.15 * spreadN);
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 4]);
       ctx.beginPath();
-      ctx.moveTo(PAD, mid - 18 - p.depth * 14);
-      ctx.lineTo(W - PAD, mid - 18 - p.depth * 14);
-      ctx.moveTo(PAD, mid + 18 + p.depth * 14);
-      ctx.lineTo(W - PAD, mid + 18 + p.depth * 14);
+      ctx.moveTo(PAD, fieldY - 10 - spreadN * 18);
+      ctx.lineTo(W - PAD, fieldY - 10 - spreadN * 18);
+      ctx.moveTo(PAD, fieldY + 10 + spreadN * 18);
+      ctx.lineTo(W - PAD, fieldY + 10 + spreadN * 18);
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Dry center ghost when mix low
-      if (p.mix < 0.85) {
+      // Per-voice delay trajectories (time on X, pan on Y)
+      const maxDelayVis = 40;
+      for (let vi = 0; vi < voiceDefs.length; vi++) {
+        const v = voiceDefs[vi]!;
+        const baseX = PAD + (delayMs * v.delayMul / maxDelayVis) * (W - PAD * 2) * 0.85;
+        const panY = mid + v.pan * (22 + spreadN * 16);
         ctx.beginPath();
-        for (let i = 0; i <= 80; i++) {
-          const u = i / 80;
-          const y = Math.sin(u * Math.PI * 3 + now / 450);
-          const px = PAD + u * (W - PAD * 2);
-          const py = mid - y * amp * 0.55;
+        for (let i = 0; i <= 60; i++) {
+          const u = i / 60;
+          const mod = Math.sin(now / 1000 * v.rate * 2 * Math.PI + v.phase + u * 2) * p.depth * (6 + delayMs * 0.4);
+          const px = baseX + u * (W - PAD * 2 - baseX) * 0.35 + mod;
+          const py = panY + Math.sin(u * Math.PI * 2 + now / 500 + v.phase) * (3 + p.depth * 6);
           if (i === 0) ctx.moveTo(px, py);
           else ctx.lineTo(px, py);
         }
-        ctx.strokeStyle = hexAlpha(C_MID, 0.12 + (1 - p.mix) * 0.2);
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-      }
-
-      // Voice gauze fills + strokes
-      for (const v of voices) {
-        const mod = Math.sin(now / 1000 * v.rate * 2 * Math.PI + v.phase) * p.depth * 0.55;
-        const alpha = (v.det === 0 ? 0.5 : 0.28 + p.mix * 0.45) * (0.55 + p.mix * 0.45);
-
-        // Gauze underfill
-        ctx.beginPath();
-        ctx.moveTo(PAD, mid + v.yOff);
-        for (let i = 0; i <= 90; i++) {
-          const u = i / 90;
-          const y = Math.sin(u * Math.PI * 3 + now / 400 + v.det * 0.9 + mod * 5 + v.phase);
-          const px = PAD + u * (W - PAD * 2);
-          const py = mid + v.yOff - y * amp * (0.7 + Math.abs(v.det) * 0.12);
-          ctx.lineTo(px, py);
-        }
-        ctx.lineTo(W - PAD, mid + v.yOff);
-        ctx.closePath();
-        const gauze = ctx.createLinearGradient(0, mid + v.yOff - amp, 0, mid + v.yOff + 6);
-        gauze.addColorStop(0, hexAlpha(v.color, alpha * 0.22 * (0.3 + p.mix)));
-        gauze.addColorStop(0.7, hexAlpha(v.color, alpha * 0.08 * p.mix));
-        gauze.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = gauze;
-        ctx.fill();
-
-        // Wave stroke
-        ctx.beginPath();
-        for (let i = 0; i <= 100; i++) {
-          const u = i / 100;
-          const y = Math.sin(u * Math.PI * 3 + now / 400 + v.det * 0.9 + mod * 5 + v.phase);
-          const px = PAD + u * (W - PAD * 2);
-          const py = mid + v.yOff - y * amp * (0.7 + Math.abs(v.det) * 0.12);
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.strokeStyle = hexAlpha(v.color, alpha + flashRef.current * 0.15);
-        ctx.lineWidth = v.det === 0 ? 1.8 : 2.1;
-        ctx.shadowBlur = v.det === 0 ? 4 : 8 + p.mix * 12 + p.depth * 6;
+        ctx.strokeStyle = hexAlpha(v.color, 0.35 + p.mix * 0.5);
+        ctx.lineWidth = v.label === "C" ? 1.6 : 2;
+        ctx.shadowBlur = 6 + p.mix * 8;
         ctx.shadowColor = C;
         ctx.stroke();
         ctx.shadowBlur = 0;
 
+        // Voice node
+        const nodeX = baseX + Math.sin(now / 1000 * v.rate * 2 * Math.PI + v.phase) * p.depth * 8;
+        const nodeY = panY;
+        ctx.fillStyle = hexAlpha(v.color, 0.85 + p.mix * 0.15);
+        ctx.beginPath();
+        ctx.arc(nodeX, nodeY, 3.5 + flashRef.current, 0, Math.PI * 2);
+        ctx.fill();
+
         if (v.label) {
-          ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-          ctx.fillStyle = hexAlpha(v.color, 0.75 + p.mix * 0.2);
-          ctx.textAlign = "left";
-          ctx.fillText(v.label, 8, mid + v.yOff + 3);
+          const labelA = 0.45 + spreadN * 0.5 + (v.label === "C" ? 0.2 : 0);
+          ctx.font = "800 9px ui-sans-serif, system-ui, sans-serif";
+          ctx.fillStyle = hexAlpha(v.color, clamp(labelA, 0.3, 1));
+          ctx.textAlign = "right";
+          ctx.fillText(v.label, Math.max(PAD + 14, nodeX - 8), nodeY + 3);
         }
 
-        // Shimmer from outer voices
-        if (Math.abs(v.det) > 0.8 && isLive && Math.random() < 0.1 * p.mix) {
-          const u = Math.random();
-          const y = Math.sin(u * Math.PI * 3 + now / 400 + v.det * 0.9 + mod * 5);
+        if (Math.abs(v.pan) > 0.5 && isLive && Math.random() < 0.1 * p.mix) {
           shimmer.push({
-            x: PAD + u * (W - PAD * 2),
-            y: mid + v.yOff - y * amp,
-            vx: v.det * (0.3 + Math.random() * 0.6),
+            x: nodeX,
+            y: nodeY,
+            vx: v.pan * (0.3 + Math.random() * 0.6),
             life: 1,
-            side: v.det > 0 ? 1 : -1,
+            side: v.pan > 0 ? 1 : -1,
           });
         }
       }
 
-      // Delay-line dots (modulation depth markers)
-      if (p.depth > 0.05) {
-        const delayMs = p.depth * 6;
-        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(C_DEPTH, 0.55 + p.depth * 0.3);
-        ctx.textAlign = "right";
-        ctx.fillText(`±${delayMs.toFixed(1)}ms`, W - 10, 22);
-      }
-
-      // L/R rate asymmetry readout when live
-      if (isLive) {
-        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "left";
-        ctx.fillStyle = hexAlpha(C_L, 0.65);
-        ctx.fillText(`L ${rateL < 1 ? rateL.toFixed(2) : rateL.toFixed(1)}`, 10, stageH - 4);
-        ctx.textAlign = "right";
-        ctx.fillStyle = hexAlpha(C_R, 0.65);
-        ctx.fillText(`R ${rateR < 1 ? rateR.toFixed(2) : rateR.toFixed(1)}`, W - 10, stageH - 4);
-      }
+      // Delay scale ticks
+      ctx.strokeStyle = hexAlpha(C_DEPTH, 0.2);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(PAD, delayLaneY);
+      ctx.lineTo(W - PAD, delayLaneY);
+      ctx.stroke();
+      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = hexAlpha(C_DEPTH, 0.65);
+      ctx.textAlign = "left";
+      ctx.fillText(`${delayMs.toFixed(1)}ms · ${model.toUpperCase()} · ${nVoices}v`, PAD, delayLaneY - 4);
+      ctx.textAlign = "right";
+      ctx.fillStyle = hexAlpha(C_L, 0.55 + spreadN * 0.4);
+      ctx.fillText("L", PAD + 10, mid - 10 - spreadN * 18);
+      ctx.fillStyle = hexAlpha(C_GLOW, 0.5 + (1 - Math.abs(spreadN - 0.5)) * 0.3);
+      ctx.textAlign = "center";
+      ctx.fillText("C", W * 0.5, mid - 14);
+      ctx.fillStyle = hexAlpha(C_R, 0.55 + spreadN * 0.4);
+      ctx.textAlign = "right";
+      ctx.fillText("R", W - PAD, mid + 10 + spreadN * 18);
 
       // Shimmer particles
       for (let i = shimmer.length - 1; i >= 0; i--) {
@@ -358,7 +356,7 @@ export function ChorusStageViz() {
       ctx.stroke();
 
       // Status chip
-      const chip = !isLive ? "BYPASS" : p.rate < 0.25 ? "SLOW" : p.rate > 3 ? "WIDE" : "ENSEMBLE";
+      const chip = !isLive ? "BYPASS" : model === "ensemble" ? "WIDE" : model === "tape" ? "TAPE" : "ENSEMBLE";
       ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
       const chipW = ctx.measureText(chip).width + 12;
       const chipX = W * 0.5 - chipW * 0.5;
@@ -397,7 +395,7 @@ export function ChorusStageViz() {
       ctx.textAlign = "right";
       const status = !isLive
         ? "BYPASS"
-        : `${p.rate < 1 ? p.rate.toFixed(2) : p.rate.toFixed(1)}Hz · D${Math.round(p.depth * 100)} · M${Math.round(p.mix * 100)}`;
+        : `${nVoices}v · ${delayMs.toFixed(1)}ms · S${Math.round(spreadN * 100)}`;
       ctx.fillStyle = hexAlpha(isLive ? C_HOT : C_MID, 0.88);
       ctx.fillText(status, W - 12, Hh - 2);
     
@@ -407,7 +405,7 @@ export function ChorusStageViz() {
         active: (st.current.mix ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: shimmer.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

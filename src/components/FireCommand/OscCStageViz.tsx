@@ -6,8 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
-import { getEngine } from "@/audio/AudioEngine";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
@@ -173,7 +172,7 @@ export function OscCStageViz() {
 
       let livePos = p.pos;
       try {
-        livePos = getEngine().fireCommand.getMorphPositions().c;
+        livePos = activeFireEngine().getMorphPositions().c;
       } catch { /* offline / boot */ }
 
       ensure(p.table);
@@ -404,7 +403,28 @@ export function OscCStageViz() {
         ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + Math.sin(now / 500) * 0.1);
-        ctx.fillText("DORMANT · raise Level to wake", W * 0.5, Hh * 0.48);
+        ctx.fillText("DISABLED — raise Level to wake", W * 0.5, Hh * 0.48);
+      }
+
+      // Frequency territory — Depth body vs Sub bedrock
+      {
+        const zoneY = 22;
+        const zones = [
+          { label: "SUB", w: 0.18, col: FC.sub },
+          { label: "DEPTH BODY", w: 0.32, col: C },
+          { label: "MID", w: 0.5, col: C_MID },
+        ];
+        let zx = 12;
+        for (const z of zones) {
+          const zw = (W - 24) * z.w;
+          ctx.fillStyle = hexAlpha(z.col, dormant ? 0.08 : 0.14);
+          ctx.fillRect(zx, zoneY, zw - 2, 10);
+          ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
+          ctx.fillStyle = hexAlpha(z.col, 0.55);
+          ctx.textAlign = "center";
+          ctx.fillText(z.label, zx + zw / 2, zoneY + 8);
+          zx += zw;
+        }
       }
 
       if (tf > 0.05) {
@@ -437,10 +457,10 @@ export function OscCStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: (st.current.level ?? 0) > 0.01,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );

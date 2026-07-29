@@ -26,8 +26,18 @@ const BPM_MAX = 300;
 const GATE_MIN = 0.1;
 const GATE_MAX = 1;
 
+/** Includes distinctive cascade/orbit modes (converge · diverge · pedal). */
 const MODE_CYCLE: ArpMode[] = [
-  "up", "down", "updown", "downup", "converge", "diverge", "pedal", "random", "walk", "asplayed",
+  "up",
+  "down",
+  "updown",
+  "downup",
+  "converge",
+  "diverge",
+  "pedal",
+  "random",
+  "walk",
+  "asplayed",
 ];
 
 function hexAlpha(hex: string, a: number): string {
@@ -85,7 +95,7 @@ function useHiDpi(
 }
 
 type DragMode = "xy" | "swing" | null;
-type Pt = { x: number; y: number; midi: number; accented: boolean; i: number };
+type Pt = { x: number; y: number; midi: number; accented: boolean; i: number; vel: number };
 type Bloom = { x: number; y: number; life: number; accented: boolean };
 
 export function ArpStageViz() {
@@ -286,13 +296,31 @@ export function ArpStageViz() {
         const pts: Pt[] = [];
         for (let i = 0; i < n; i++) {
           const midi = seq[i]!;
+          // Time → X, pitch → Y
           const t = n === 1 ? 0.5 : i / (n - 1);
           const swingNudge = (i % 2 === 1 ? swing : -swing * 0.35) * (usableW / Math.max(1, n)) * 0.9;
           const x = PAD_X + t * usableW + swingNudge;
           const y = PAD_Y + (1 - (midi - lo) / span) * usableH;
           const accented = accentAmt > 0 && every > 0 && i % every === 0;
-          pts.push({ x, y, midi, accented, i });
+          // Velocity brightness proxy: accents punch, live step peaking
+          const vel = clamp(0.35 + (accented ? accentAmt * 0.55 : 0) + (ratchet > 0.2 && i % 2 === 0 ? ratchet * 0.2 : 0), 0, 1);
+          pts.push({ x, y, midi, accented, i, vel });
         }
+
+        // Axis hints — pitch Y / time X
+        ctx.strokeStyle = hexAlpha(C_MID, 0.18);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(PAD_X, PAD_Y);
+        ctx.lineTo(PAD_X, PAD_Y + usableH);
+        ctx.lineTo(PAD_X + usableW, PAD_Y + usableH);
+        ctx.stroke();
+        ctx.font = "700 6px ui-sans-serif, system-ui, sans-serif";
+        ctx.fillStyle = hexAlpha(C_MID, 0.55);
+        ctx.textAlign = "left";
+        ctx.fillText("PITCH", PAD_X + 2, PAD_Y + 8);
+        ctx.textAlign = "right";
+        ctx.fillText("TIME →", PAD_X + usableW, PAD_Y + usableH - 3);
 
         // Contour fill
         if (pts.length > 1) {
@@ -317,14 +345,14 @@ export function ArpStageViz() {
           ctx.shadowBlur = 0;
         }
 
-        // Gate columns + nodes
+        // Gate columns + nodes — brightness from velocity; playhead via arpStepIndex
         const colW = Math.max(4, Math.min(16, (usableW / n) * 0.5));
         for (const p of pts) {
           const isLive = running && stepIdx === p.i;
           const barH = Math.max(8, (Hh * 0.72 - p.y) * (0.35 + a.gate * 0.65));
+          const bright = ghost ? 0.08 * breath : isLive ? 0.55 + p.vel * 0.35 : 0.1 + p.vel * 0.35;
           const cg = ctx.createLinearGradient(p.x, p.y, p.x, p.y + barH);
-          const baseA = ghost ? 0.06 * breath : isLive ? 0.45 : 0.12;
-          cg.addColorStop(0, hexAlpha(p.accented ? C_ACCENT : C_HOT, baseA));
+          cg.addColorStop(0, hexAlpha(p.accented ? C_ACCENT : C_HOT, bright));
           cg.addColorStop(1, hexAlpha(C_HOT, 0));
           ctx.fillStyle = cg;
           const hw = colW / 2;
@@ -336,9 +364,9 @@ export function ArpStageViz() {
           ctx.closePath();
           ctx.fill();
 
-          const r = isLive ? 6 : p.accented ? 4.5 : 3.4;
-          ctx.fillStyle = hexAlpha(isLive ? C_GLOW : p.accented ? C_ACCENT : C_HOT, ghost ? 0.35 * breath : 0.9);
-          ctx.shadowBlur = isLive ? 14 : p.accented ? 8 : 0;
+          const r = isLive ? 6.5 : p.accented ? 4.5 : 3.2 + p.vel;
+          ctx.fillStyle = hexAlpha(isLive ? C_GLOW : p.accented ? C_ACCENT : C_HOT, ghost ? 0.35 * breath : 0.55 + p.vel * 0.45);
+          ctx.shadowBlur = isLive ? 16 : p.accented ? 8 : p.vel * 4;
           ctx.shadowColor = p.accented ? C_ACCENT : C;
           ctx.beginPath();
           ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
@@ -485,10 +513,10 @@ export function ArpStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: !!(st.current.arp && st.current.arp.enabled),
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );

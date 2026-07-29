@@ -5,8 +5,8 @@
  */
 
 import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
-import type { LfoWave, LfoDest } from "@/audio/dsp/FireCommandSynth";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
+import type { LfoWave } from "@/audio/dsp/FireCommandSynth";
 import { getEngine } from "@/audio/AudioEngine";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
@@ -123,13 +123,18 @@ export function Lfo1StageViz() {
   const st = useRef({ wave, rate, depth, dest, lfoA, lfoB, lfoC });
   st.current = { wave, rate, depth, dest, lfoA, lfoB, lfoC };
 
-  const live = depth > 0.02 || Math.abs(lfoA) > 0.04 || Math.abs(lfoB) > 0.04 || Math.abs(lfoC) > 0.04 || dest !== "off";
+  const live =
+    depth > 0.02 ||
+    Math.abs(lfoA) > 0.04 ||
+    Math.abs(lfoB) > 0.04 ||
+    Math.abs(lfoC) > 0.04 ||
+    dest !== "off";
 
   useEffect(() => {
     const key = `${wave}|${rate.toFixed(3)}|${depth.toFixed(3)}|${dest}|${lfoA.toFixed(3)}|${lfoB.toFixed(3)}|${lfoC.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
-      flashRef.current = 1;
+      flashRef.current = 1; // retrigger flash on any param change
     }
   }, [wave, rate, depth, dest, lfoA, lfoB, lfoC]);
 
@@ -300,14 +305,18 @@ export function Lfo1StageViz() {
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Phase tracer locked to audio clock when possible
+      // Phase tracer — engine-true LFO sample when available
       let engT = now / 1000;
+      let engVal: number | null = null;
       try {
-        engT = getEngine().ctx.currentTime;
-      } catch { /* */ }
-      const ph = (engT * p.rate) % 1;
+        const eng = getEngine();
+        engT = eng.ctx.currentTime;
+        engVal = activeFireEngine().getLfoValue(1);
+      } catch { /* fallback: local time math below */ }
+      const ph = ((engT * p.rate) % 1 + 1) % 1;
       const px = xL + ph * span;
-      const py = mid - lfoShape(p.wave, ph) * amp;
+      const liveSample = engVal ?? lfoShape(p.wave, ph);
+      const py = mid - liveSample * amp;
 
       for (let hist = 18; hist > 0; hist--) {
         const histPh = ((ph - hist * 0.02) % 1 + 1) % 1;
@@ -401,7 +410,7 @@ export function Lfo1StageViz() {
         ctx.fillRect(s.x, s.y, 2, 2);
       }
 
-      // Wave chip
+      // Wave chip + retrigger flash rim
       const waveLabel = String(p.wave).toUpperCase().replace("SAMPLE-HOLD", "S&H");
       ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
       const modeW = ctx.measureText(waveLabel).width + 12;
@@ -413,6 +422,12 @@ export function Lfo1StageViz() {
       ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
       ctx.textAlign = "center";
       ctx.fillText(waveLabel, W * 0.5, 16);
+
+      if (flashRef.current > 0.15) {
+        ctx.fillStyle = hexAlpha(C_GLOW, flashRef.current * 0.22);
+        ctx.fillRect(0, 0, W, 3);
+        ctx.fillRect(0, Hh - 3, W, 3);
+      }
 
       // →WT rail
       const railY = Hh - 16;
@@ -456,10 +471,15 @@ export function Lfo1StageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active:
+          (st.current.depth ?? 0) > 0.02 ||
+          st.current.dest !== "off" ||
+          Math.abs(st.current.lfoA ?? 0) > 0.04 ||
+          Math.abs(st.current.lfoB ?? 0) > 0.04 ||
+          Math.abs(st.current.lfoC ?? 0) > 0.04,
         dragging: !!dragRef.current,
         particles: shards.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 18 },
     );
@@ -498,9 +518,12 @@ export function Lfo1StageViz() {
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
-        style={{ color: hexAlpha(C_HOT, 0.75) }}
+        style={{
+          color: hexAlpha(live ? C_HOT : C_MID, live ? 0.9 : 0.7),
+          textShadow: live ? `0 0 10px ${hexAlpha(C, 0.65)}` : undefined,
+        }}
       >
-        {dest === "off" ? "IDLE" : dest}
+        {live ? "ACTIVE" : "IDLE"}
       </div>
     </div>
   );

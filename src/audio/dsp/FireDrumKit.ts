@@ -18,7 +18,7 @@ export const DRUM_LANES: { id: DrumLane; name: string; color: string }[] = [
   { id: "kick",  name: "Kick",     color: "#ff5c2e" },
   { id: "snare", name: "Snare",    color: "#ffb648" },
   { id: "clap",  name: "Clap",     color: "#ffd166" },
-  { id: "chat",  name: "Hat",      color: "#9be564" },
+  { id: "chat",  name: "Closed Hat", color: "#9be564" },
   { id: "ohat",  name: "Open Hat", color: "#5ad1a5" },
   { id: "tom",   name: "Tom",      color: "#62b6ff" },
   { id: "rim",   name: "Rim",      color: "#c98bff" },
@@ -136,19 +136,56 @@ export class FireDrumKit {
     velocity = 1,
     level = 1,
     toSampleBus = false,
+    pan = 0,
+    /** When true, this buffer is tracked as the open-hat voice for choke. */
+    asOpenHat = false,
+    /** −1 inverts phase (kick polarity). */
+    polarity = 1,
   ): void {
     const t = Math.max(this.ctx.currentTime, when);
-    const v = clamp(velocity, 0.05, 1) * clamp(level, 0, 1.5);
+    const v = clamp(Math.abs(velocity), 0.05, 1) * clamp(level, 0, 1.5) * (polarity < 0 ? -1 : 1);
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     const g = this.ctx.createGain();
     g.gain.value = v;
-    src.connect(g).connect(toSampleBus ? this.sampleOutput : this.output);
+    if (asOpenHat) this.ohatGain = g;
+    const bus = toSampleBus ? this.sampleOutput : this.output;
+    const dest = Math.abs(pan) > 0.01 ? this.pannedInto(bus, pan) : bus;
+    const nodes: AudioNode[] = [src, g];
+    src.connect(g).connect(dest);
+    if (dest !== bus) nodes.push(dest);
     src.onended = () => {
-      try { src.disconnect(); } catch { /* ignore */ }
-      try { g.disconnect(); } catch { /* ignore */ }
+      if (asOpenHat && this.ohatGain === g) this.ohatGain = null;
+      for (const n of nodes) {
+        try { n.disconnect(); } catch { /* ignore */ }
+      }
     };
     src.start(t);
+  }
+
+  private ohatGain: GainNode | null = null;
+
+  private pannedInto(bus: AudioNode, pan: number): AudioNode {
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = clamp(pan, -1, 1);
+    p.connect(bus);
+    return p;
+  }
+
+  private panned(pan: number): AudioNode {
+    if (Math.abs(pan) < 0.01) return this.output;
+    return this.pannedInto(this.output, pan);
+  }
+
+  private chokeOpenHat(when: number): void {
+    const g = this.ohatGain;
+    if (!g) return;
+    const t = Math.max(this.ctx.currentTime, when);
+    try {
+      g.gain.cancelScheduledValues(t);
+      g.gain.setValueAtTime(g.gain.value, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+    } catch { /* ignore */ }
   }
 
   /** Lazily built 1s white-noise loop shared by all noise-based hits. */
@@ -162,24 +199,37 @@ export class FireDrumKit {
     return buf;
   }
 
-  trigger(lane: DrumLane, when: number, velocity = 1): void {
+  trigger(lane: DrumLane, when: number, velocity = 1, opts?: {
+    pan?: number;
+    polarity?: number;
+    chokeOpenHat?: boolean;
+  }): void {
+    if (opts?.chokeOpenHat) this.chokeOpenHat(when);
     // A loaded user sample replaces the synthesized hit for this lane.
     const sample = this.samples.get(lane);
     if (sample) {
-      this.playBuffer(sample, when, velocity);
+      const polarity = opts?.polarity === -1 ? -1 : 1;
+      this.playBuffer(
+        sample, when, velocity, 1, false, opts?.pan ?? 0,
+        lane === "ohat",
+        lane === "kick" ? polarity : 1,
+      );
       return;
     }
     const t = Math.max(this.ctx.currentTime, when);
     const v = clamp(velocity, 0.05, 1);
+    const polarity = opts?.polarity === -1 ? -1 : 1;
+    const pan = opts?.pan ?? 0;
+    const dest = this.panned(pan);
     switch (lane) {
-      case "kick": this.kick(t, v); break;
-      case "snare": this.snare(t, v); break;
-      case "clap": this.clap(t, v); break;
-      case "chat": this.hat(t, v, false); break;
-      case "ohat": this.hat(t, v, true); break;
-      case "tom": this.tom(t, v); break;
-      case "rim": this.rim(t, v); break;
-      case "crash": this.crash(t, v); break;
+      case "kick": this.kick(t, Math.abs(v) * (polarity < 0 ? -1 : 1), dest); break;
+      case "snare": this.snare(t, v, dest); break;
+      case "clap": this.clap(t, v, dest); break;
+      case "chat": this.hat(t, v, false, dest); break;
+      case "ohat": this.hat(t, v, true, dest); break;
+      case "tom": this.tom(t, v, dest); break;
+      case "rim": this.rim(t, v, dest); break;
+      case "crash": this.crash(t, v, dest); break;
     }
   }
 
@@ -194,15 +244,19 @@ export class FireDrumKit {
 
   // ── voices ──
 
-  private kick(t: number, v: number): void {
+  private kick(t: number, v: number, dest: AudioNode = this.output): void {
     const ctx = this.ctx;
+    const pol = v < 0 ? -1 : 1;
+    const av = Math.abs(v);
+    const polGain = ctx.createGain();
+    polGain.gain.value = pol;
     // Body: deep sine pitch drop — longer sustain for club weight.
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = "sine";
     osc.frequency.setValueAtTime(110, t);
     osc.frequency.exponentialRampToValueAtTime(38, t + 0.14);
-    g.gain.setValueAtTime(1.05 * v, t);
+    g.gain.setValueAtTime(1.05 * av, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.58);
     // Sub layer — fat bottom without raising the click.
     const sub = ctx.createOscillator();
@@ -210,7 +264,7 @@ export class FireDrumKit {
     sub.type = "sine";
     sub.frequency.setValueAtTime(70, t);
     sub.frequency.exponentialRampToValueAtTime(32, t + 0.18);
-    sg.gain.setValueAtTime(0.55 * v, t);
+    sg.gain.setValueAtTime(0.55 * av, t);
     sg.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
     // Short hard click (not hissy noise)
     const click = ctx.createOscillator();
@@ -218,18 +272,19 @@ export class FireDrumKit {
     click.type = "triangle";
     click.frequency.setValueAtTime(2400, t);
     click.frequency.exponentialRampToValueAtTime(400, t + 0.018);
-    cg.gain.setValueAtTime(0.28 * v, t);
+    cg.gain.setValueAtTime(0.28 * av, t);
     cg.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
-    osc.connect(g).connect(this.output);
-    sub.connect(sg).connect(this.output);
-    click.connect(cg).connect(this.output);
+    osc.connect(g).connect(polGain);
+    sub.connect(sg).connect(polGain);
+    click.connect(cg).connect(polGain);
+    polGain.connect(dest);
     osc.start(t); osc.stop(t + 0.65);
     sub.start(t); sub.stop(t + 0.55);
     click.start(t); click.stop(t + 0.04);
-    this.disposeOnEnd(osc, [osc, g, sub, sg, click, cg]);
+    this.disposeOnEnd(osc, [osc, g, sub, sg, click, cg, polGain]);
   }
 
-  private snare(t: number, v: number): void {
+  private snare(t: number, v: number, dest: AudioNode = this.output): void {
     const ctx = this.ctx;
     // Body thud
     const body = ctx.createOscillator();
@@ -257,9 +312,9 @@ export class FireDrumKit {
     const ng = ctx.createGain();
     ng.gain.setValueAtTime(0.55 * v, t);
     ng.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
-    body.connect(bg).connect(this.output);
-    o1.connect(og); o2.connect(og); og.connect(this.output);
-    n.connect(nf).connect(ng).connect(this.output);
+    body.connect(bg).connect(dest);
+    o1.connect(og); o2.connect(og); og.connect(dest);
+    n.connect(nf).connect(ng).connect(dest);
     body.start(t); body.stop(t + 0.2);
     o1.start(t); o1.stop(t + 0.15);
     o2.start(t); o2.stop(t + 0.15);
@@ -267,7 +322,7 @@ export class FireDrumKit {
     this.disposeOnEnd(n, [body, bg, o1, o2, og, n, nf, ng]);
   }
 
-  private clap(t: number, v: number): void {
+  private clap(t: number, v: number, dest: AudioNode = this.output): void {
     const ctx = this.ctx;
     // Classic 3-burst clap: gated noise re-triggered at ~11 ms, then a tail.
     const n = ctx.createBufferSource();
@@ -286,12 +341,12 @@ export class FireDrumKit {
     }
     g.gain.setValueAtTime(0.75 * v, t + 3 * burst);
     g.gain.exponentialRampToValueAtTime(0.001, t + 3 * burst + 0.24);
-    n.connect(f).connect(g).connect(this.output);
+    n.connect(f).connect(g).connect(dest);
     n.start(t); n.stop(t + 0.32);
     this.disposeOnEnd(n, [n, f, g]);
   }
 
-  private hat(t: number, v: number, open: boolean): void {
+  private hat(t: number, v: number, open: boolean, dest: AudioNode = this.output): void {
     const ctx = this.ctx;
     const n = ctx.createBufferSource();
     n.buffer = this.noise();
@@ -308,12 +363,13 @@ export class FireDrumKit {
     const dur = open ? 0.42 : 0.045;
     g.gain.setValueAtTime((open ? 0.42 : 0.4) * v, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    n.connect(hp).connect(pk).connect(g).connect(this.output);
+    if (open) this.ohatGain = g;
+    n.connect(hp).connect(pk).connect(g).connect(dest);
     n.start(t); n.stop(t + dur + 0.03);
     this.disposeOnEnd(n, [n, hp, pk, g]);
   }
 
-  private tom(t: number, v: number): void {
+  private tom(t: number, v: number, dest: AudioNode = this.output): void {
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
@@ -330,14 +386,14 @@ export class FireDrumKit {
     const ng = ctx.createGain();
     ng.gain.setValueAtTime(0.12 * v, t);
     ng.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
-    osc.connect(g).connect(this.output);
-    n.connect(nf).connect(ng).connect(this.output);
+    osc.connect(g).connect(dest);
+    n.connect(nf).connect(ng).connect(dest);
     osc.start(t); osc.stop(t + 0.4);
     n.start(t); n.stop(t + 0.1);
     this.disposeOnEnd(osc, [osc, g, n, nf, ng]);
   }
 
-  private rim(t: number, v: number): void {
+  private rim(t: number, v: number, dest: AudioNode = this.output): void {
     const ctx = this.ctx;
     // Short square blip through a tight bandpass — woody click.
     const osc = ctx.createOscillator();
@@ -350,12 +406,12 @@ export class FireDrumKit {
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.9 * v, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
-    osc.connect(f).connect(g).connect(this.output);
+    osc.connect(f).connect(g).connect(dest);
     osc.start(t); osc.stop(t + 0.06);
     this.disposeOnEnd(osc, [osc, f, g]);
   }
 
-  private crash(t: number, v: number): void {
+  private crash(t: number, v: number, dest: AudioNode = this.output): void {
     const ctx = this.ctx;
     const n = ctx.createBufferSource();
     n.buffer = this.noise();
@@ -371,7 +427,7 @@ export class FireDrumKit {
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.55 * v, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 1.4);
-    n.connect(hp).connect(shimmer).connect(g).connect(this.output);
+    n.connect(hp).connect(shimmer).connect(g).connect(dest);
     n.start(t); n.stop(t + 1.5);
     this.disposeOnEnd(n, [n, hp, shimmer, g]);
   }

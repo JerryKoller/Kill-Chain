@@ -442,7 +442,7 @@ export function WidthStageViz() {
         active: !!st.current.enabled,
         dragging: !!dragRef.current,
         particles: particles.current.length,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 22 },
     );

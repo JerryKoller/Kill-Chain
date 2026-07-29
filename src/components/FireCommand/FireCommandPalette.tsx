@@ -125,7 +125,7 @@ export function FireCommandPalette({
       },
       {
         id: "exit-focus",
-        label: "Exit Solo",
+        label: "Exit Δ Focus",
         hint: "Show all modules",
         run: () => exitFocus(),
       },

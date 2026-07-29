@@ -95,7 +95,7 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
 
   if (compact) {
     return (
-      <div className="relative flex w-full flex-col justify-center gap-1.5 min-w-0 min-h-[56px]">
+      <div className="relative flex h-full w-full flex-col justify-center gap-1.5 min-w-0">
         <div className="flex items-center gap-2 min-w-0 h-8">
           <DiceMark spinning={spinning} size={18} />
           <div className="min-w-0 flex-1">

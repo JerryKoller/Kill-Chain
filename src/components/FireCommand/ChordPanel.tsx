@@ -160,6 +160,7 @@ export function ChordDegreeStrip() {
 
 export function ChordQuickActions() {
   const on = useFireCommandStore((s) => s.patch.chordMemoryOn);
+  const chordMode = useFireCommandStore((s) => s.patch.chordMode) ?? "memory";
   const ivs = useFireCommandStore((s) => s.patch.chordIntervals);
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["chord"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
@@ -200,6 +201,15 @@ export function ChordQuickActions() {
 
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
+      <button
+        type="button"
+        onClick={() => setParam("chordMode", chordMode === "builder" ? "memory" : "builder")}
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        style={{ borderColor: `${CHORD_C}55`, color: CHORD_C_GLOW, background: `${CHORD_C}1c` }}
+        title="Builder constructs intervals · Memory learns and replays"
+      >
+        {chordMode === "builder" ? "Builder" : "Memory"}
+      </button>
       <button
         type="button"
         onClick={() => cycle(-1)}
@@ -290,10 +300,10 @@ export function ChordQuickActions() {
 }
 
 export function chordStageLabel(on: boolean, enabled: boolean, ivs: number[]): string {
-  if (!enabled) return "Bypass";
-  if (!on) return "Idle";
+  if (!enabled) return "Bypass — module offline";
+  if (!on) return "Idle — enabled, no activity";
   const n = normalizeChordIvs(ivs).length;
-  if (n <= 2) return "Power";
-  if (n >= 4) return "Rich";
-  return chordPresetLabel(ivs);
+  if (n <= 2) return "Power — active under play";
+  if (n >= 4) return "Rich — active under play";
+  return `${chordPresetLabel(ivs)} — active under play`;
 }

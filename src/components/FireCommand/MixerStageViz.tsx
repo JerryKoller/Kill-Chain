@@ -389,7 +389,7 @@ export function MixerStageViz({ liveRef }: Props) {
         active: false,
         dragging: false,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );

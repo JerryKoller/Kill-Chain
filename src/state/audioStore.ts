@@ -199,12 +199,17 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   setBypass: (bypass) => {
     set({ bypass });
     getEngine().setBypass(bypass);
+    // Keep Fire Command "route through Kill-Chain FX" aligned with the global bypass.
+    void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
+      const fire = useFireCommandStore.getState();
+      if (fire.routeThroughFx === !bypass) return;
+      useFireCommandStore.setState({ routeThroughFx: !bypass });
+    });
   },
 
   toggleBypass: () => {
     const next = !get().bypass;
-    set({ bypass: next });
-    getEngine().setBypass(next);
+    get().setBypass(next);
   },
 
   setCorrectionEnabled: (enabled) => {

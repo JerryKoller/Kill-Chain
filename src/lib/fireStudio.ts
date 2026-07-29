@@ -21,6 +21,7 @@ import { getEngine, type FireMixPart } from "@/audio/AudioEngine";
 import { FireCommandSynth } from "@/audio/dsp/FireCommandSynth";
 import { FireDrumKit, makeSafetyClipCurve, SAFETY_CLIP_RANGE, DRUM_LANES } from "@/audio/dsp/FireDrumKit";
 import { useFireCommandStore, slotsFromState } from "@/state/fireCommandStore";
+import { useAudioStore } from "@/state/audioStore";
 import {
   useFireSequencerStore,
   serializePattern,
@@ -32,7 +33,7 @@ import {
   MIXER_PARTS,
 } from "@/state/fireSequencerStore";
 
-const PROJECT_VERSION = 2;
+const PROJECT_VERSION = 3;
 
 export type ExportFormat = "wav" | "mp3";
 
@@ -307,6 +308,8 @@ async function offlineDryBounce(
   fireCommandB.setPatch(patchB);
   fireCommand.setMaxVoices(fire.maxVoices);
   fireCommandB.setMaxVoices(fire.maxVoices);
+  fireCommand.setHostBpm(seq.bpm);
+  fireCommandB.setHostBpm(seq.bpm);
 
   // Mixer levels (immediate — offline clock starts at 0).
   const anySolo = MIXER_PARTS.some((p) => seq.mixer[p].solo);
@@ -572,8 +575,17 @@ export async function saveProject(): Promise<string | null> {
     savedAt: new Date().toISOString(),
     patch: patchA,
     patchB,
+    presetId: fire.presetId,
     presetIdB: fire.presetIdB,
+    editTarget: fire.editTarget,
     arp: fire.arp,
+    routeThroughFx: fire.routeThroughFx,
+    octave: fire.octave,
+    maxVoices: fire.maxVoices,
+    scenes: fire.scenes,
+    sceneMeta: fire.sceneMeta,
+    sceneTransition: fire.sceneTransition,
+    sceneMorphMs: fire.sceneMorphMs,
     // Full arrangement: sections (with the live edits folded in), clips,
     // play mode, lanes, scale — everything the loader needs.
     pattern: serializePattern(),
@@ -599,8 +611,17 @@ export async function openProject(): Promise<{ ok: boolean; error?: string }> {
       kind?: string;
       patch?: unknown;
       patchB?: unknown;
+      presetId?: string;
       presetIdB?: string;
+      editTarget?: string;
       arp?: unknown;
+      routeThroughFx?: boolean;
+      octave?: number;
+      maxVoices?: number;
+      scenes?: unknown;
+      sceneMeta?: unknown;
+      sceneTransition?: string;
+      sceneMorphMs?: number;
       pattern?: unknown;
     };
     if (data.kind !== "kill-chain-project") {
@@ -616,6 +637,30 @@ export async function openProject(): Promise<{ ok: boolean; error?: string }> {
         const preset = FIRE_PRESETS.find((p) => p.id === pid);
         if (preset) useFireCommandStore.getState().importPatchB(preset.patch, pid);
       }
+    }
+    // Restore Fire session fields that aren't part of importPatch/B.
+    const fireExtra: Record<string, unknown> = {};
+    if (typeof data.presetId === "string") fireExtra.presetId = data.presetId;
+    if (typeof data.routeThroughFx === "boolean") {
+      fireExtra.routeThroughFx = data.routeThroughFx;
+      useAudioStore.getState().setBypass(!data.routeThroughFx);
+    }
+    if (typeof data.octave === "number") fireExtra.octave = data.octave;
+    if (typeof data.maxVoices === "number") {
+      fireExtra.maxVoices = data.maxVoices;
+      try {
+        const eng = getEngine();
+        eng.fireCommand.setMaxVoices(data.maxVoices);
+        eng.fireCommandB.setMaxVoices(data.maxVoices);
+      } catch { /* */ }
+    }
+    if (Array.isArray(data.scenes)) fireExtra.scenes = data.scenes;
+    if (Array.isArray(data.sceneMeta)) fireExtra.sceneMeta = data.sceneMeta;
+    if (typeof data.sceneTransition === "string") fireExtra.sceneTransition = data.sceneTransition;
+    if (typeof data.sceneMorphMs === "number") fireExtra.sceneMorphMs = data.sceneMorphMs;
+    if (Object.keys(fireExtra).length) useFireCommandStore.setState(fireExtra);
+    if (data.editTarget === "a" || data.editTarget === "b") {
+      useFireCommandStore.getState().setEditTarget(data.editTarget);
     }
     if (data.pattern) useFireSequencerStore.getState().importPattern(data.pattern);
     return { ok: true };

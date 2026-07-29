@@ -159,7 +159,7 @@ export function HarmLevelStrip() {
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
       <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${HARM_C}66` }}>
-        Level
+        Harmony Mix
       </span>
       {HARM_LEVEL_SNAPS.map((p) => {
         const on = near(level, p.v, 0.04);
@@ -300,12 +300,12 @@ export function HarmScaleBadge() {
 }
 
 export function harmStageLabel(mode: HarmonyMode, enabled: boolean, level: number): string {
-  if (!enabled) return "Bypass";
-  if (mode === "off") return "Silent";
-  if (level < 0.08) return "Whisper";
-  if (mode === "triad" && level > 0.7) return "Choir";
-  if (mode === "octave") return "Octave";
-  if (mode === "fifth") return "Power";
-  if (mode === "third") return "Kin";
-  return "Live";
+  if (!enabled) return "Bypass — module offline";
+  if (mode === "off") return "Silent — wet level at zero";
+  if (level < 0.08) return "Whisper — wet level at zero";
+  if (mode === "triad" && level > 0.7) return "Choir — active under play";
+  if (mode === "octave") return "Octave — active under play";
+  if (mode === "fifth") return "Power — active under play";
+  if (mode === "third") return "Kin — active under play";
+  return "Live — active under play";
 }

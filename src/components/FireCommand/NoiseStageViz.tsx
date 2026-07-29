@@ -72,37 +72,45 @@ export function NoiseStageViz() {
   const level = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
   const color = useFireCommandStore((s) => s.patch.noiseColor) ?? 0;
   const mode = useFireCommandStore((s) => s.patch.chipNoise) ?? "white";
+  const stormMode = useFireCommandStore((s) => s.patch.noiseMode) ?? "bed";
+  const density = useFireCommandStore((s) => s.patch.noiseDensity) ?? 0.45;
+  const grain = useFireCommandStore((s) => s.patch.noiseGrain) ?? 0.35;
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const sizeRef = useRef({ w: 420, h: H });
   const flashRef = useRef(0);
-  const dragRef = useRef(false);
+  const dragRef = useRef<"xy" | "grain" | null>(null);
   const prevKey = useRef("");
-  const st = useRef({ level, color, mode });
-  st.current = { level, color, mode };
+  const st = useRef({ level, color, mode, stormMode, density, grain });
+  st.current = { level, color, mode, stormMode, density, grain };
 
   const silent = level < 0.02;
 
   useEffect(() => {
-    const key = `${level.toFixed(3)}|${color.toFixed(3)}|${mode}`;
+    const key = `${level.toFixed(3)}|${color.toFixed(3)}|${mode}|${stormMode}|${density.toFixed(3)}|${grain.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [level, color, mode]);
+  }, [level, color, mode, stormMode, density, grain]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
   const applyFromPointer = useCallback(
-    (clientX: number, clientY: number) => {
+    (clientX: number, clientY: number, kind: "xy" | "grain") => {
       const wrap = wrapRef.current;
       if (!wrap) return;
       const rect = wrap.getBoundingClientRect();
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       const y = clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1);
-      // X → color (−1..1), Y → level (1 at top)
+      if (kind === "grain") {
+        setParam("noiseDensity", Math.round(x * 1000) / 1000);
+        setParam("noiseGrain", Math.round((1 - y) * 1000) / 1000);
+        return;
+      }
+      // X → color (−1..1), Y → level (1 at top) — particle editor mapping
       setParam("noiseColor", Math.round((x * 2 - 1) * 1000) / 1000);
       setParam("noiseLevel", Math.round((1 - y) * 1000) / 1000);
     },
@@ -113,9 +121,11 @@ export function NoiseStageViz() {
     (e: ReactPointerEvent<HTMLDivElement>) => {
       const wrap = wrapRef.current;
       if (!wrap) return;
-      dragRef.current = true;
+      const rect = wrap.getBoundingClientRect();
+      const kind = e.shiftKey || e.clientY - rect.top > H * 0.82 ? "grain" : "xy";
+      dragRef.current = kind;
       wrap.setPointerCapture(e.pointerId);
-      applyFromPointer(e.clientX, e.clientY);
+      applyFromPointer(e.clientX, e.clientY, kind);
     },
     [applyFromPointer],
   );
@@ -123,14 +133,14 @@ export function NoiseStageViz() {
   const onPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       if (!dragRef.current) return;
-      applyFromPointer(e.clientX, e.clientY);
+      applyFromPointer(e.clientX, e.clientY, dragRef.current);
     },
     [applyFromPointer],
   );
 
   const onPointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragRef.current) return;
-    dragRef.current = false;
+    dragRef.current = null;
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
@@ -139,6 +149,8 @@ export function NoiseStageViz() {
   const onDoubleClick = useCallback(() => {
     setParam("noiseLevel", 0);
     setParam("noiseColor", 0);
+    setParam("noiseDensity", 0.45);
+    setParam("noiseGrain", 0.35);
   }, [setParam]);
 
   useEffect(() => {
@@ -162,9 +174,12 @@ export function NoiseStageViz() {
 
       const lvl = clamp(p.level, 0, 1);
       const tilt = clamp(p.color, -1, 1);
+      const dens = clamp(p.density ?? 0.45, 0, 1);
+      const grain = clamp(p.grain ?? 0.35, 0, 1);
+      const storm = p.stormMode ?? "bed";
       const dormant = lvl < 0.02;
       const energy = dormant ? 0.08 : 0.2 + lvl * 0.8;
-      const szBase = gritSize(p.mode);
+      const szBase = gritSize(p.mode) * (0.55 + grain * 1.1);
 
       ctx.clearRect(0, 0, W, Hh);
 
@@ -194,10 +209,12 @@ export function NoiseStageViz() {
         ctx.fillRect(0, 0, W, Hh);
       }
 
-      // Living grain storm
-      const dens = Math.floor(40 + lvl * 280);
+      // Living grain storm — density drives count; grain drives size
+      const densN = Math.floor((storm === "bed" ? 40 : storm === "burst" ? 55 : 70) + dens * 280 * lvl);
       const breathe = 0.88 + 0.12 * Math.sin(now * 0.003);
-      for (let i = 0; i < dens; i++) {
+      for (let i = 0; i < densN; i++) {
+        if (storm === "storm" && Math.random() > 0.35 + dens * 0.55) continue;
+        if (storm === "burst" && Math.sin(now * 0.008 + i) < 0.15) continue;
         const x = Math.random() * W;
         const yBias =
           tilt < 0
@@ -302,14 +319,15 @@ export function NoiseStageViz() {
         ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
         ctx.textAlign = "center";
         ctx.fillStyle = hexAlpha(C_GLOW, 0.5 + Math.sin(now / 500) * 0.1);
-        ctx.fillText("SILENT BED · drag to raise storm", W * 0.5, Hh * 0.5);
+        ctx.fillText("MUTED — drag up to raise storm", W * 0.5, Hh * 0.5);
       }
 
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
+      ctx.font = "700 11px ui-sans-serif, system-ui, sans-serif";
       ctx.textAlign = "left";
       ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
+      const stormLabel = storm === "bed" ? "BED" : storm === "burst" ? "BURST" : "STORM";
       const modeLabel = p.mode === "periodic" ? "PER" : p.mode === "nes" ? "HOLD" : p.mode === "gb" ? "SOFT" : "WHT";
-      ctx.fillText(`NOISE · ${modeLabel}`, 12, Hh - 6);
+      ctx.fillText(`NOISE · ${stormLabel} · ${modeLabel}`, 12, Hh - 6);
       ctx.textAlign = "right";
       if (dormant) {
         ctx.fillStyle = hexAlpha(C_MID, 0.5);
@@ -326,10 +344,10 @@ export function NoiseStageViz() {
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: (st.current.level ?? 0) > 0.02,
         dragging: !!dragRef.current,
-        particles: particles.length,
-        motionKey: "",
+        particles: 0,
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 20 },
     );
@@ -351,7 +369,7 @@ export function NoiseStageViz() {
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={onDoubleClick}
-      title="Drag: Color ↔ / Level ↕ · Double-click: silence"
+      title="Drag: Color ↔ / Level ↕ · Shift or bottom: Density ↔ / Grain ↕ · Double-click: silence"
       role="img"
       aria-label="Noise bed grain storm"
     >

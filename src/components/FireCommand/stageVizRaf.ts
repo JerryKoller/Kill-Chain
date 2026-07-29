@@ -1,12 +1,13 @@
 /**
- * Shared StageViz RAF loop — throttles, pauses when idle, wakes on activity.
+ * Shared StageViz RAF loop — one global pump for all module visualizers.
  *
  * Expanded modules used to paint forever (breath/sin) at ~45fps even when
  * knobs were still. This helper:
  *  - respects document.hidden
- *  - throttles to minIntervalMs
- *  - after idleGrace quiet frames, pauses RAF entirely
- *  - polls cheaply while paused so flash/param/playhead changes wake it
+ *  - throttles each entry to minIntervalMs
+ *  - after idleGrace quiet frames, pauses painting for that entry
+ *  - keeps a cheap global probe so flash / motionKey / active wake within 1 frame
+ *    (the old 250ms setInterval left canvases frozen on outside-knob changes)
  */
 
 export type StageVizIdleHints = {
@@ -18,18 +19,91 @@ export type StageVizIdleHints = {
   dragging?: boolean;
   /** Particle / trail count still decaying. */
   particles?: number;
-  /** Telemetry that must repaint when it changes (playStep, voiceCount…). */
+  /** Telemetry that must repaint when it changes (params, playStep, voiceCount…). */
   motionKey?: string | number;
 };
 
 export type StageVizLoopOptions = {
   /** Minimum ms between paints. Default 22 (~45fps cap). */
   minIntervalMs?: number;
-  /** Quiet frames before pausing RAF. Default 10. */
+  /** Quiet frames before pausing paint. Default 10. */
   idleGrace?: number;
-  /** While paused, poll hints this often (ms). Default 250. */
+  /**
+   * @deprecated Idle wake is now a global rAF probe (1-frame latency).
+   * Kept so existing call sites compile; ignored.
+   */
   idlePollMs?: number;
 };
+
+type Entry = {
+  onFrame: (now: number) => void;
+  hints: () => StageVizIdleHints;
+  minMs: number;
+  idleGrace: number;
+  last: number;
+  quiet: number;
+  paused: boolean;
+  lastMotion: string;
+};
+
+const entries = new Set<Entry>();
+let pumpRaf = 0;
+
+function isBusy(e: Entry): boolean {
+  const h = e.hints();
+  const motion = String(h.motionKey ?? "");
+  const motionChanged = motion !== e.lastMotion;
+  e.lastMotion = motion;
+  return (
+    !!h.active ||
+    !!h.dragging ||
+    (h.particles ?? 0) > 0 ||
+    h.flash > 0.025 ||
+    motionChanged
+  );
+}
+
+function pump(t: number) {
+  pumpRaf = 0;
+  if (entries.size === 0) return;
+  pumpRaf = requestAnimationFrame(pump);
+  if (document.hidden) return;
+
+  for (const e of entries) {
+    if (e.paused) {
+      // Probe every frame — param/flash changes resume without a 250ms wait.
+      if (isBusy(e)) {
+        e.paused = false;
+        e.quiet = 0;
+        e.last = t;
+        e.onFrame(t);
+      }
+      continue;
+    }
+
+    if (t - e.last < e.minMs) continue;
+
+    const busy = isBusy(e);
+    if (!busy) {
+      e.quiet++;
+      if (e.quiet >= e.idleGrace) {
+        e.last = t;
+        e.onFrame(t);
+        e.paused = true;
+        continue;
+      }
+    } else {
+      e.quiet = 0;
+    }
+
+    e.last = t;
+    e.onFrame(t);
+  }
+}
+
+function ensurePump() {
+  if (!pumpRaf) pumpRaf = requestAnimationFrame(pump);
+}
 
 /**
  * Start a stage viz frame loop. `onFrame` should decay flash itself
@@ -40,98 +114,34 @@ export function startStageVizLoop(
   hints: () => StageVizIdleHints,
   opts: StageVizLoopOptions = {},
 ): () => void {
-  const minMs = opts.minIntervalMs ?? 22;
-  const idleGrace = opts.idleGrace ?? 10;
-  const idlePollMs = opts.idlePollMs ?? 250;
-
-  let raf = 0;
-  let poll = 0 as ReturnType<typeof setInterval> | 0;
-  let last = 0;
-  let quiet = 0;
-  let paused = false;
-  let lastMotion = "\u0000";
-
-  const busyNow = (): boolean => {
-    const h = hints();
-    const motion = String(h.motionKey ?? "");
-    const motionChanged = motion !== lastMotion;
-    lastMotion = motion;
-    return (
-      !!h.active ||
-      !!h.dragging ||
-      (h.particles ?? 0) > 0 ||
-      h.flash > 0.025 ||
-      motionChanged
-    );
+  const entry: Entry = {
+    onFrame,
+    hints,
+    minMs: opts.minIntervalMs ?? 22,
+    idleGrace: opts.idleGrace ?? 10,
+    last: 0,
+    quiet: 0,
+    paused: false,
+    lastMotion: "\u0000",
   };
 
-  const stopPoll = () => {
-    if (poll) {
-      clearInterval(poll);
-      poll = 0;
-    }
-  };
-
-  const startPoll = () => {
-    if (poll) return;
-    poll = setInterval(() => {
-      if (!paused) return;
-      if (document.hidden) return;
-      if (busyNow()) {
-        quiet = 0;
-        paused = false;
-        stopPoll();
-        raf = requestAnimationFrame(tick);
-      }
-    }, idlePollMs);
-  };
-
-  const tick = (t: number) => {
-    raf = 0;
-    if (paused) return;
-    raf = requestAnimationFrame(tick);
-    if (document.hidden) return;
-    if (t - last < minMs) return;
-
-    const busy = busyNow();
-    if (!busy) {
-      quiet++;
-      if (quiet >= idleGrace) {
-        // Final rest frame, then park the loop.
-        last = t;
-        onFrame(t);
-        paused = true;
-        if (raf) cancelAnimationFrame(raf);
-        raf = 0;
-        startPoll();
-        return;
-      }
-    } else {
-      quiet = 0;
-    }
-
-    last = t;
-    onFrame(t);
-  };
+  entries.add(entry);
+  ensurePump();
 
   const onVis = () => {
-    if (document.hidden || !paused) return;
-    if (busyNow()) {
-      quiet = 0;
-      paused = false;
-      stopPoll();
-      raf = requestAnimationFrame(tick);
-    }
+    if (document.hidden) return;
+    entry.quiet = 0;
+    if (entry.paused && isBusy(entry)) entry.paused = false;
+    ensurePump();
   };
   document.addEventListener("visibilitychange", onVis);
 
-  raf = requestAnimationFrame(tick);
-
   return () => {
     document.removeEventListener("visibilitychange", onVis);
-    stopPoll();
-    if (raf) cancelAnimationFrame(raf);
-    raf = 0;
-    paused = true;
+    entries.delete(entry);
+    if (entries.size === 0 && pumpRaf) {
+      cancelAnimationFrame(pumpRaf);
+      pumpRaf = 0;
+    }
   };
 }

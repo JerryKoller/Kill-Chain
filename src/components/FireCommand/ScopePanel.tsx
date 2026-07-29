@@ -4,8 +4,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { useFireCommandStore } from "@/state/fireCommandStore";
-import { getEngine } from "@/audio/AudioEngine";
+import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import type { ScopeVizState } from "./ScopeStageViz";
@@ -254,7 +253,7 @@ export function ScopeOscWave({ group, color }: { group: "a" | "b" | "c"; color: 
       flashRef.current *= 0.92;
       let pos = 0.5;
       try {
-        pos = getEngine().fireCommand.getMorphPositions()[group];
+        pos = activeFireEngine().getMorphPositions()[group];
       } catch { /* */ }
       if (lastPos >= 0 && Math.abs(pos - lastPos) < 0.0008 && flashRef.current < 0.02) return;
       lastPos = pos;
@@ -406,7 +405,7 @@ export function ScopeVoiceBadge() {
       if (!ref.current) return;
       let n = 0;
       try {
-        n = getEngine().fireCommand.getActiveVoiceCount();
+        n = activeFireEngine().getActiveVoiceCount();
       } catch {
         n = 0;
       }

@@ -427,7 +427,7 @@ export function HarmonyStageViz() {
         active: !!st.current.enabled,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: "",
+        motionKey: JSON.stringify(st.current),
       }),
       { minIntervalMs: 22 },
     );
