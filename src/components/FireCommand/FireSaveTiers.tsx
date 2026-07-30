@@ -9,6 +9,7 @@ import { useFireCommandStore, SCENE_SLOTS } from "@/state/fireCommandStore";
 import { useFireSequencerStore, serializePattern } from "@/state/fireSequencerStore";
 import { useUIStore } from "@/state/uiStore";
 import { saveProject, openProject } from "@/lib/fireStudio";
+import { toastFireMissingOnOpen } from "@/lib/fireSampleRepair";
 
 const SAVE_BTN =
   "h-8 px-2.5 rounded-md text-[10px] font-bold uppercase tracking-[0.06em] transition bg-white/[0.04] text-white/65 hover:bg-white/[0.09] hover:text-white/90 ring-1 ring-white/10 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] cursor-pointer";
@@ -75,16 +76,10 @@ export function FireSaveTiers() {
         const res = await openProject();
         if (!res.ok && res.error) toast(res.error);
         else if (res.ok) {
-          const n = res.missingSamples?.length ?? 0;
+          const paths = res.missingSamples ?? [];
+          const n = paths.length;
           if (n > 0) {
-            const names = (res.missingSamples ?? [])
-              .slice(0, 3)
-              .map((p) => p.split(/[\\/]/).pop() ?? p)
-              .join(", ");
-            toast(
-              `${n} sample${n === 1 ? "" : "s"} missing (${names}${n > 3 ? "…" : ""}) — re-link on this machine`,
-              "warn",
-            );
+            toastFireMissingOnOpen(toast, n, paths);
           } else {
             toast("Project opened", "success");
           }

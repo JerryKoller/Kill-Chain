@@ -1,6 +1,7 @@
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { APP_VERSION, PRODUCT_TAGLINE, PRODUCT_DESCRIPTION } from "@/lib/appVersion";
 import { LEGAL_VERSION, isLegalAccepted } from "@/lib/legal";
+import { RELEASES_URL } from "@/lib/retailHelp";
 import { useSettingsStore } from "@/state/settingsStore";
 
 /** Placeholder URLs — replace with attorney-approved pages before commercial sale. */
@@ -29,6 +30,29 @@ export function LegalAboutSection() {
         sub={`v${APP_VERSION} — ${PRODUCT_TAGLINE}`}
       />
       <p className="mt-3 text-sm text-white/80 leading-relaxed">{PRODUCT_DESCRIPTION}</p>
+
+      <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-[12px] text-white/75 leading-relaxed space-y-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.25em] text-dim mb-1">Installed version</div>
+          <span className="font-mono text-white/90">v{APP_VERSION}</span>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.25em] text-dim mb-1">Updates</div>
+          Kill-Chain does not auto-update. When a new build is available, download the latest{" "}
+          <span className="font-mono">Kill-Chain-Setup</span> installer from the project page and
+          run it over your existing install — your Library folders, presets, and settings stay on
+          this machine.
+        </div>
+        <div className="flex flex-wrap gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() => void window.playground?.shellOpen?.(RELEASES_URL)}
+            className="kc-btn kc-btn--sm kc-btn--ghost"
+          >
+            Get latest build
+          </button>
+        </div>
+      </div>
 
       <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-[12px] text-white/75 leading-relaxed space-y-3">
         <div>
@@ -66,7 +90,7 @@ export function LegalAboutSection() {
           rel="noopener noreferrer"
           className="kc-btn kc-btn--ghost kc-btn--sm"
         >
-          EULA (draft)
+          EULA{accepted ? "" : " (draft)"}
         </a>
         <a
           href={PRIVACY_URL}
@@ -74,7 +98,7 @@ export function LegalAboutSection() {
           rel="noopener noreferrer"
           className="kc-btn kc-btn--ghost kc-btn--sm"
         >
-          Privacy Policy (draft)
+          Privacy Policy{accepted ? "" : " (draft)"}
         </a>
         <a
           href={THIRD_PARTY_URL}
@@ -87,8 +111,9 @@ export function LegalAboutSection() {
       </div>
 
       <p className="mt-3 text-[10px] text-dim leading-relaxed">
-        Commercial licensing, refund policy, tax, and distribution terms are tracked separately —
-        see repository <span className="font-mono">LEGAL/</span> before selling copies.
+        {accepted
+          ? "Your license acceptance is recorded above. Attorney-reviewed distribution terms may still evolve — see repository LEGAL/ for the latest reference copies."
+          : "Commercial licensing, refund policy, tax, and distribution terms are tracked separately — see repository LEGAL/ before selling copies."}
       </p>
     </GlassPanel>
   );

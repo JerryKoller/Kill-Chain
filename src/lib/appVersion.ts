@@ -19,6 +19,10 @@ export const WHATS_NEW: { title: string; body: string }[] = [
     body: "Legal agree gate, a 7-step basic tour (Library → Sculptor → Tractor → Armory), and Kill-Chain backup for Settings + Library + Mission Log.",
   },
   {
+    title: "Retail help & updates",
+    body: "Settings → Appearance has a First 60 seconds card; About explains manual updates and where to download new installers.",
+  },
+  {
     title: "Library repair",
     body: "Missing-file badges, prune orphans, Reveal in Explorer, and clearer playback errors when a track was moved.",
   },

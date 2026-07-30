@@ -22,6 +22,13 @@ import {
   fireExportPreflight,
   type ExportFormat,
 } from "@/lib/fireStudio";
+import {
+  retryHydrateFireSamples,
+  toastFireMissingOnExport,
+  toastFireMissingOnOpen,
+  toastFireRetryResult,
+} from "@/lib/fireSampleRepair";
+import { FIRE_MISSING_SAMPLES_TERM } from "@/lib/retailHelp";
 import { FireExportToLibraryModal } from "./FireExportToLibraryModal";
 import { RollFitProvider } from "./useRollFit";
 import { PIANO_GUTTER } from "./PianoRoll";
@@ -104,7 +111,10 @@ export const SequencerPanel = memo(function SequencerPanel({
   const [libraryExportOpen, setLibraryExportOpen] = useState(false);
   const [variationsOpen, setVariationsOpen] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [missingSamples, setMissingSamples] = useState<string[]>([]);
+  const [retryingSamples, setRetryingSamples] = useState(false);
   const toast = useUIStore((s) => s.toast);
+  const openGlossary = useUIStore((s) => s.openGlossary);
   const [editorCollapsed, toggleEditor] = useFireCollapsed("seq.editor", false);
   const [editorFullscreen, setEditorFullscreen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -167,10 +177,7 @@ export const SequencerPanel = memo(function SequencerPanel({
       return;
     }
     if (gate.missingSamples.length > 0) {
-      toast(
-        `${gate.missingSamples.length} sample${gate.missingSamples.length === 1 ? "" : "s"} missing — export may be incomplete`,
-        "warn",
-      );
+      toastFireMissingOnExport(toast, gate.missingSamples.length, "wav");
     }
     setExporting("arming…");
     try {
@@ -199,10 +206,7 @@ export const SequencerPanel = memo(function SequencerPanel({
       return;
     }
     if (gate.missingSamples.length > 0) {
-      toast(
-        `${gate.missingSamples.length} sample${gate.missingSamples.length === 1 ? "" : "s"} missing — stems may be incomplete`,
-        "warn",
-      );
+      toastFireMissingOnExport(toast, gate.missingSamples.length, "stems");
     }
     setExporting("arming…");
     try {
@@ -232,16 +236,27 @@ export const SequencerPanel = memo(function SequencerPanel({
   const doOpenProject = async () => {
     const res = await openProject();
     if (res.ok) {
-      const n = res.missingSamples?.length ?? 0;
+      const paths = res.missingSamples ?? [];
+      const n = paths.length;
+      setMissingSamples(paths);
       if (n > 0) {
-        toast(
-          `Project loaded — ${n} sample${n === 1 ? "" : "s"} missing on this machine`,
-          "warn",
-        );
+        toastFireMissingOnOpen(toast, n, paths);
       } else {
         toast("Project loaded — patch, pattern, samples", "success");
       }
     } else if (res.error) toast(res.error, "error");
+  };
+
+  const doRetrySamples = async () => {
+    if (retryingSamples) return;
+    setRetryingSamples(true);
+    try {
+      const stillMissing = await retryHydrateFireSamples();
+      setMissingSamples(stillMissing);
+      toastFireRetryResult(toast, stillMissing);
+    } finally {
+      setRetryingSamples(false);
+    }
   };
 
   const presetId = useFireCommandStore((s) => s.presetId);
@@ -346,6 +361,45 @@ export const SequencerPanel = memo(function SequencerPanel({
   const body = (
     <div ref={panelRef} tabIndex={-1} className="outline-none flex flex-col flex-1 min-h-0">
       <ArrangementPlaylist flush={flush} />
+
+      {missingSamples.length > 0 && (
+        <div
+          className={
+            flush
+              ? "flex flex-wrap items-center gap-2 px-3 py-2 border-b border-amber-400/25 bg-amber-500/10 text-[11px] text-amber-100/90"
+              : "mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100/90"
+          }
+        >
+          <span>
+            {missingSamples.length} sample{missingSamples.length === 1 ? "" : "s"} not found on disk
+          </span>
+          <button
+            type="button"
+            onClick={() => void doRetrySamples()}
+            disabled={retryingSamples}
+            className="kc-btn kc-btn--sm kc-btn--ghost"
+          >
+            {retryingSamples ? "Retrying…" : "Retry sample load"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTab("drums");
+              openGlossary(FIRE_MISSING_SAMPLES_TERM);
+            }}
+            className="kc-btn kc-btn--sm kc-btn--ghost"
+          >
+            Repair tip
+          </button>
+          <button
+            type="button"
+            onClick={() => setMissingSamples([])}
+            className="ml-auto text-[10px] uppercase tracking-widest text-amber-200/60 hover:text-amber-100"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* D — Editor toolbar */}
       <div

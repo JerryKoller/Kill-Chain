@@ -16,6 +16,7 @@ import {
 import { openHeadphoneWizard } from "@/components/Settings/HeadphoneWizard";
 import { HotkeysSection } from "@/components/Settings/HotkeysSection";
 import { LegalAboutSection } from "@/components/Settings/LegalAboutSection";
+import { RetailHelpCard } from "@/components/Settings/RetailHelpCard";
 import { useCustomHeadphonesStore } from "@/state/customHeadphonesStore";
 import { openWhatsNew } from "@/components/shared/WhatsNewPanel";
 import { APP_VERSION } from "@/lib/appVersion";
@@ -151,6 +152,8 @@ export function SettingsView() {
       </div>
 
       {tab === "appearance" && (<>
+      <RetailHelpCard />
+
       {/* THEMES — live miniature previews */}
       <GlassPanel intense className="p-5">
         <Section title="Theme" sub="Six curated looks — each card is a live preview" />

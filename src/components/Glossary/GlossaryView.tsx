@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { ActionBar } from "@/components/shared/ActionBar";
+import { FIRST_60_SECONDS_STEPS, FIRE_MISSING_SAMPLES_TERM } from "@/lib/retailHelp";
+import { useUIStore } from "@/state/uiStore";
 
 type Category =
   | "Product"
@@ -40,6 +42,16 @@ const ENTRIES: Entry[] = [
     short: "Your local music arsenal — folders, playlists, favorites.",
     long:
       "Add folders from your PC; Kill-Chain indexes supported audio files and plays them into the engine. Empty Library? Use Add folders, Load a file, or drop files onto the window. Library needs the desktop app (Electron) — the web build cannot scan folders. Paths are absolute: if you move or rename a folder on disk, tracks show MISSING. Use Check missing, Prune orphans, Reveal in Explorer, or Rescan after re-adding the new location. A Kill-Chain backup stores folder paths and meta (favorites, playlists, play counts) — not the audio files themselves — so after wipe/reinstall you may need to re-add folders if files moved.",
+  },
+  {
+    term: "First 60 seconds",
+    category: "Product",
+    short: "Add music → hear through the chain → sculpt.",
+    long: [
+      "The everyday loop you can repeat on every session:",
+      ...FIRST_60_SECONDS_STEPS.map((s, i) => `${i + 1}. ${s.title} — ${s.body}`),
+      "Fire Command, Airspace, and Morph Lab wait until you want them. Settings → Appearance has this card; the first-run tour stays short on purpose.",
+    ].join(" "),
   },
   {
     term: "Kill-Chain backup",
@@ -520,6 +532,13 @@ const ENTRIES: Entry[] = [
       "Up to six operator-loaded samples (risers, chops, FX) become sequencer lanes with their own level and steps — saved with the project, hydrated from disk on load. Missing samples on another machine show on project open.",
   },
   {
+    term: FIRE_MISSING_SAMPLES_TERM,
+    category: "Tools",
+    short: "Project paths that no longer exist on this PC.",
+    long:
+      "Fire Command .kcproj files store absolute paths to your drum hits and Sample Deck WAVs. After moving machines or folders, lanes may load silent. On project open you'll see a warning — use Retry sample load in the sequencer bar, or Drums tab → click each lane to re-pick the file. Copying the original folders back to the same path also works. Export may skip missing lanes until you re-link.",
+  },
+  {
     term: "Airspace",
     category: "Tools",
     short: "The in-app browser wired into the DSP chain.",
@@ -627,8 +646,17 @@ const CATEGORIES = [
 ] as const;
 
 export function GlossaryView() {
+  const glossaryFocusTerm = useUIStore((s) => s.glossaryFocusTerm);
+  const clearGlossaryFocus = useUIStore((s) => s.clearGlossaryFocus);
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<(typeof CATEGORIES)[number]>("All");
+
+  useEffect(() => {
+    if (!glossaryFocusTerm) return;
+    setQ(glossaryFocusTerm);
+    setCat("All");
+    clearGlossaryFocus();
+  }, [glossaryFocusTerm, clearGlossaryFocus]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();

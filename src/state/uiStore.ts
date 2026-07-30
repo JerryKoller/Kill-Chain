@@ -23,6 +23,10 @@ export type ToastKind = "info" | "success" | "warn" | "error";
 interface UIState {
   view: View;
   setView: (view: View) => void;
+  /** Pre-fill Glossary search when opening from Settings / Fire repair tips. */
+  glossaryFocusTerm: string | null;
+  openGlossary: (term?: string) => void;
+  clearGlossaryFocus: () => void;
   toastMessage: string | null;
   toastKind: ToastKind;
   /** Re-keyed per toast so a repeat message still replays the entrance. */
@@ -56,6 +60,12 @@ export const useUIStore = create<UIState>((set, get) => ({
     set({ view });
     try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ }
   },
+  glossaryFocusTerm: null,
+  openGlossary: (term) => {
+    set({ view: "glossary", glossaryFocusTerm: term ?? null });
+    try { window.localStorage.setItem(VIEW_KEY, "glossary"); } catch { /* ignore */ }
+  },
+  clearGlossaryFocus: () => set({ glossaryFocusTerm: null }),
   toastMessage: null,
   toastKind: "info",
   toastSeq: 0,
