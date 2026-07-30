@@ -19,7 +19,11 @@
 import {
   WAVETABLE_IDS,
   SUBFRAMES,
+  MIP_PARTIALS,
   harmonicsAt,
+  harmonicsForWave,
+  normalizeSpectrum,
+  mipLevelForFreq,
   applyWarp,
 } from "./wavetables";
 import { FireVintageAge } from "./FireVintageAge";
@@ -881,6 +885,8 @@ interface LfoBank {
 
 interface Group {
   osc: OscillatorNode[];
+  /** Per-unison polarity / level (alternating phase uses gain = -1). */
+  gains: GainNode[];
   pans: StereoPannerNode[];
   level: GainNode;
   bank: PeriodicWave[];
@@ -955,6 +961,10 @@ class Voice {
   private liveAttackSec: number | null = null;
   /** Cached mod-env level at release for MSEG release stage. */
   private modLevelAtRelease = 0;
+  /** Pitch-mip indices last bound to each osc group (-1 = unset). */
+  private mipA = -1;
+  private mipB = -1;
+  private mipC = -1;
 
   constructor(
     private readonly synth: FireCommandSynth,
@@ -1113,15 +1123,26 @@ class Voice {
     const dnaSeed = (p.analogDnaSeed ?? 1) >>> 0;
     const spreadSec = p.moduleEnable?.["mixer.unison"] === false ? 0 : (p.unisonTemporalSpread ?? 0);
     const mode = p.unisonTemporalMode ?? "ltr";
+    const phaseMode = p.unisonPhase ?? "locked";
+    const phases = unisonPhaseOffsets(this.unisonCount, phaseMode, dnaSeed);
     const anchor = p.unisonAnchor !== false;
     const mid = (this.unisonCount - 1) / 2;
+    // Phase stagger via delayed start: Δt = φ / (2π f). Alternating uses
+    // polarity invert on the per-voice gain instead (works mid-note too).
+    const fA0 = Math.max(30, this.baseFreq * Math.pow(2, p.oscAOctave));
+    const phaseLock = !!(p.oscBPhaseLock || p.oscBInherit === "lock");
+    const fB0 = Math.max(30, phaseLock ? fA0 * Math.pow(2, p.oscBOctave - p.oscAOctave)
+      : this.baseFreq * Math.pow(2, p.oscBOctave));
+    const fC0 = Math.max(30, this.baseFreq * Math.pow(2, p.oscCOctave));
     for (let i = 0; i < this.unisonCount; i++) {
       const isAnchor = anchor && this.unisonCount > 1 && Math.abs(i - mid) < 0.51;
       const delay = isAnchor ? 0 : unisonDelaySec(i, this.unisonCount, spreadSec, mode, dnaSeed);
       const st = t + delay;
-      this.groupA.osc[i].start(st);
-      this.groupB.osc[i].start(st);
-      if (this.groupC) this.groupC.osc[i].start(st);
+      const usePhase = !isAnchor && phaseMode !== "locked" && phaseMode !== "alternating";
+      const phi = usePhase ? phases[i]! : 0;
+      this.groupA.osc[i].start(st + phi / (2 * Math.PI * fA0));
+      this.groupB.osc[i].start(st + phi / (2 * Math.PI * fB0));
+      if (this.groupC) this.groupC.osc[i].start(st + phi / (2 * Math.PI * fC0));
     }
     this.sub.start(t);
     this.subHarm.start(t);
@@ -1138,17 +1159,21 @@ class Voice {
 
   private makeGroup(ctx: AudioContext, count: number, bank: PeriodicWave[]): Group {
     const osc: OscillatorNode[] = [];
+    const gains: GainNode[] = [];
     const pans: StereoPannerNode[] = [];
     const level = ctx.createGain();
     for (let i = 0; i < count; i++) {
       const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      g.gain.value = 1;
       const pan = ctx.createStereoPanner();
       o.setPeriodicWave(bank[0]);
-      o.connect(pan).connect(level);
+      o.connect(g).connect(pan).connect(level);
       osc.push(o);
+      gains.push(g);
       pans.push(pan);
     }
-    return { osc, pans, level, bank, lastK: -1 };
+    return { osc, gains, pans, level, bank, lastK: -1 };
   }
 
   private allOscs(): OscillatorNode[] {
@@ -1191,28 +1216,30 @@ class Voice {
     const count = unisonOn ? this.unisonCount : 1;
     const dist = p.unisonDistribution ?? "linear";
     const spread = unisonSpread(this.unisonCount, dist);
-    const phases = unisonPhaseOffsets(this.unisonCount, p.unisonPhase ?? "locked", p.analogDnaSeed ?? 1);
     const t = this.ctx.currentTime;
     const detune = unisonOn ? p.unisonDetune : 0;
     const width = unisonOn ? p.unisonWidth : 0;
     const mix = clamp(p.unisonMix ?? 1, 0, 1);
     const anchor = p.unisonAnchor !== false;
     const mid = (this.unisonCount - 1) / 2;
+    const phaseMode = p.unisonPhase ?? "locked";
     for (let i = 0; i < this.unisonCount; i++) {
       const isAnchor = anchor && this.unisonCount > 1 && Math.abs(i - mid) < 0.51;
       const choirScale = isAnchor ? 0 : mix;
-      const pan = (count <= 1 || isAnchor ? 0 : spread[i]) * width * (isAnchor ? 0 : 1);
-      const det = isAnchor ? 0 : spread[i] * detune * choirScale;
-      // Alternating polarity approximated as inverted detune + slight opposite pan bias.
-      const pol = (p.unisonPhase === "alternating" && i % 2 === 1 && !isAnchor) ? -1 : 1;
-      this.groupA.pans[i].pan.setTargetAtTime(pan * pol, t, 0.02);
-      this.groupB.pans[i].pan.setTargetAtTime(pan * pol, t, 0.02);
-      const phaseCents = (phases[i] / (Math.PI * 2)) * 0.01; // tiny unique offset
-      this.groupA.osc[i].detune.setValueAtTime(p.oscADetune + (unisonOn ? det : 0) + phaseCents, t);
-      this.groupB.osc[i].detune.setValueAtTime(p.oscBDetune + (unisonOn ? det : 0) + phaseCents, t);
+      const pan = (count <= 1 || isAnchor ? 0 : spread[i]!) * width * (isAnchor ? 0 : 1);
+      const det = isAnchor ? 0 : spread[i]! * detune * choirScale;
+      // Real alternating polarity (was a fake pan flip + microscopic detune).
+      const pol = (phaseMode === "alternating" && i % 2 === 1 && !isAnchor) ? -1 : 1;
+      this.groupA.gains[i].gain.setValueAtTime(pol, t);
+      this.groupB.gains[i].gain.setValueAtTime(pol, t);
+      this.groupA.pans[i].pan.setTargetAtTime(pan, t, 0.02);
+      this.groupB.pans[i].pan.setTargetAtTime(pan, t, 0.02);
+      this.groupA.osc[i].detune.setValueAtTime(p.oscADetune + (unisonOn ? det : 0), t);
+      this.groupB.osc[i].detune.setValueAtTime(p.oscBDetune + (unisonOn ? det : 0), t);
       if (this.groupC) {
-        this.groupC.pans[i].pan.setTargetAtTime(pan * pol, t, 0.02);
-        this.groupC.osc[i].detune.setValueAtTime(p.oscCDetune + (unisonOn ? det : 0) + phaseCents, t);
+        this.groupC.gains[i].gain.setValueAtTime(pol, t);
+        this.groupC.pans[i].pan.setTargetAtTime(pan, t, 0.02);
+        this.groupC.osc[i].detune.setValueAtTime(p.oscCDetune + (unisonOn ? det : 0), t);
       }
     }
   }
@@ -1277,7 +1304,34 @@ class Voice {
     const fSub = this.baseFreq * Math.pow(2, p.subOctave ?? -1);
     setFreq(this.sub, fSub);
     setFreq(this.subHarm, fSub * 2);
+    this.refreshMipBanks(p, fA, fB, fC);
     this.applyUnisonSpread(p);
+  }
+
+  /** Swap PeriodicWave banks when pitch crosses a mip boundary (glide / retune). */
+  refreshMipBanks(p: FirePatch, fA: number, fB: number, fC: number): void {
+    const sr = this.ctx.sampleRate;
+    const mA = mipLevelForFreq(fA, sr);
+    const mB = mipLevelForFreq(fB, sr);
+    const mC = mipLevelForFreq(fC, sr);
+    if (mA !== this.mipA) {
+      this.mipA = mA;
+      this.setBankA(this.synth.bankAtMip(p.oscATable, mA));
+    }
+    if (mB !== this.mipB) {
+      this.mipB = mB;
+      this.setBankB(this.synth.bankAtMip(p.oscBTable, mB));
+    }
+    if (this.groupC && mC !== this.mipC) {
+      this.mipC = mC;
+      this.setBankC(this.synth.bankAtMip(p.oscCTable, mC));
+    }
+  }
+
+  /** Force-rebind all osc banks for current tables at given fundamentals. */
+  rebindBanks(p: FirePatch, fA: number, fB: number, fC: number): void {
+    this.mipA = this.mipB = this.mipC = -1;
+    this.refreshMipBanks(p, fA, fB, fC);
   }
 
   applyFm(p: FirePatch): void {
@@ -1936,7 +1990,7 @@ export class FireCommandSynth {
   private nesNoiseBuffer: AudioBuffer | null = null;
   private gbNoiseBuffer: AudioBuffer | null = null;
   private periodicNoiseBuffer: AudioBuffer | null = null;
-  private readonly banks = new Map<string, PeriodicWave[]>();
+  private readonly banks = new Map<string, PeriodicWave[][]>();
   private readonly voices = new Set<Voice>();
   private readonly held = new Map<number, Voice>();
   private monoVoice: Voice | null = null;
@@ -1994,14 +2048,20 @@ export class FireCommandSynth {
     this.patch = { ...DEFAULT_FIRE_PATCH };
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
 
-    // Pre-render every wavetable into a dense band-limited bank.
+    // Pre-render every wavetable into pitch-mip × subframe PeriodicWave banks.
+    // Energy-normalized (disableNormalization) so bright frames stay bright.
     for (const id of WAVETABLE_IDS) {
-      const frames: PeriodicWave[] = [];
-      for (let k = 0; k < SUBFRAMES; k++) {
-        const { real, imag } = harmonicsAt(id, SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0);
-        frames.push(ctx.createPeriodicWave(real, imag, { disableNormalization: false }));
+      const mips: PeriodicWave[][] = [];
+      for (const maxP of MIP_PARTIALS) {
+        const frames: PeriodicWave[] = [];
+        for (let k = 0; k < SUBFRAMES; k++) {
+          const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+          const { real, imag } = harmonicsForWave(id, f, maxP);
+          frames.push(ctx.createPeriodicWave(real, imag, { disableNormalization: true }));
+        }
+        mips.push(frames);
       }
-      this.banks.set(id, frames);
+      this.banks.set(id, mips);
     }
 
     this.output = ctx.createGain();
@@ -2434,20 +2494,27 @@ export class FireCommandSynth {
     this.lastIrKey = `${size.toFixed(2)}|${damp.toFixed(2)}|${diff.toFixed(2)}`;
   }
 
-  private bankFor(id: string): PeriodicWave[] {
-    return this.activeBankFor(id);
+  private bankFor(id: string, f0 = 220): PeriodicWave[] {
+    return this.activeBankFor(id, mipLevelForFreq(f0, this.ctx.sampleRate));
   }
 
-  private baseBankFor(id: string): PeriodicWave[] {
-    return this.banks.get(id) ?? this.banks.get("saw")!;
+  /** Pitch-mip bank for a table (used by Voice on glide / retune). */
+  bankAtMip(id: string, mip: number): PeriodicWave[] {
+    return this.activeBankFor(id, mip);
+  }
+
+  private baseBankFor(id: string, mip = 0): PeriodicWave[] {
+    const mips = this.banks.get(id) ?? this.banks.get("saw")!;
+    const i = clamp(mip | 0, 0, mips.length - 1);
+    return mips[i]!;
   }
 
   // ── Spectral warps (v1.7) ──
   // Base banks stay cached forever; a non-zero warp lazily renders a WARPED
-  // bank per in-use table (32 createPeriodicWave calls each), invalidated
-  // whenever the warp signature changes. Knob drags are debounced (~80 ms)
-  // so scrubbing doesn't re-render 96 waves per mousemove.
-  private readonly warpedBanks = new Map<string, PeriodicWave[]>();
+  // mip×subframe bank per in-use table, invalidated whenever the warp
+  // signature changes. Knob drags are debounced (~80 ms) so scrubbing doesn't
+  // re-render hundreds of waves per mousemove.
+  private readonly warpedBanks = new Map<string, PeriodicWave[][]>();
   private warpedSig = "";
   private warpTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2460,9 +2527,10 @@ export class FireCommandSynth {
       || (p.warpComb ?? 0) > 0.001;
   }
 
-  private activeBankFor(id: string): PeriodicWave[] {
+  private activeBankFor(id: string, mip = 0): PeriodicWave[] {
     const p = this.patch;
-    if (!this.hasWarp(p)) return this.baseBankFor(id);
+    const mipI = clamp(mip | 0, 0, MIP_PARTIALS.length - 1);
+    if (!this.hasWarp(p)) return this.baseBankFor(id, mipI);
     const amt = clamp(p.warpAmount ?? 1, -1, 1);
     const stretch = (p.warpStretch ?? 0) * amt;
     const tilt = (p.warpTilt ?? 0) * amt;
@@ -2473,26 +2541,36 @@ export class FireCommandSynth {
       this.warpedSig = sig;
     }
     const key = this.banks.has(id) ? id : "saw";
-    let bank = this.warpedBanks.get(key);
-    if (!bank) {
-      bank = [];
-      for (let k = 0; k < SUBFRAMES; k++) {
-        const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
-        const { real, imag } = harmonicsAt(key, f);
-        const warped = applyWarp(imag, stretch, tilt, comb);
-        bank.push(this.ctx.createPeriodicWave(real, warped, { disableNormalization: false }));
+    let mips = this.warpedBanks.get(key);
+    if (!mips) {
+      mips = [];
+      for (const maxP of MIP_PARTIALS) {
+        const bank: PeriodicWave[] = [];
+        for (let k = 0; k < SUBFRAMES; k++) {
+          const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+          const { real, imag } = harmonicsAt(key, f, maxP);
+          const warped = applyWarp(imag, stretch, tilt, comb);
+          normalizeSpectrum(warped);
+          bank.push(this.ctx.createPeriodicWave(real, warped, { disableNormalization: true }));
+        }
+        mips.push(bank);
       }
-      this.warpedBanks.set(key, bank);
+      this.warpedBanks.set(key, mips);
     }
-    return bank;
+    return mips[mipI]!;
   }
 
   /** Swap all live voices onto the (possibly warped) banks for the current patch. */
   private applyWarpBanks(): void {
     for (const v of this.voices) {
-      v.setBankA(this.activeBankFor(this.patch.oscATable));
-      v.setBankB(this.activeBankFor(this.patch.oscBTable));
-      v.setBankC(this.activeBankFor(this.patch.oscCTable));
+      const f0 = v.baseFreq;
+      const p = this.patch;
+      v.rebindBanks(
+        p,
+        f0 * Math.pow(2, p.oscAOctave),
+        f0 * Math.pow(2, p.oscBOctave),
+        f0 * Math.pow(2, p.oscCOctave),
+      );
     }
   }
 
@@ -3039,6 +3117,26 @@ export class FireCommandSynth {
     }
   }
 
+  /** Pitch-aware banks for a note (each osc may sit on a different mip). */
+  private banksForNote(p: FirePatch, midi: number): [PeriodicWave[], PeriodicWave[], PeriodicWave[]] {
+    const f0 = midiToFreq(midi);
+    return [
+      this.bankFor(p.oscATable, f0 * Math.pow(2, p.oscAOctave)),
+      this.bankFor(p.oscBTable, f0 * Math.pow(2, p.oscBOctave)),
+      this.bankFor(p.oscCTable, f0 * Math.pow(2, p.oscCOctave)),
+    ];
+  }
+
+  private rebindVoiceBanks(v: Voice, p: FirePatch): void {
+    const f0 = v.baseFreq;
+    v.rebindBanks(
+      p,
+      f0 * Math.pow(2, p.oscAOctave),
+      f0 * Math.pow(2, p.oscBOctave),
+      f0 * Math.pow(2, p.oscCOctave),
+    );
+  }
+
   // ── notes ──
   /** `when` (ctx clock) enables sample-accurate sequencing; omit for live play.
    *  `liveAttackSec` tightens amp/filter attack for keyboard / MIDI only. */
@@ -3067,9 +3165,10 @@ export class FireCommandSynth {
       this.held.delete(midi);
       prev.fastRelease();
     }
+    const [bankA, bankB, bankC] = this.banksForNote(p, midi);
     const voice = new Voice(
       this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
-      this.bankFor(p.oscATable), this.bankFor(p.oscBTable), this.bankFor(p.oscCTable), p, midi, velocity, when,
+      bankA, bankB, bankC, p, midi, velocity, when,
       liveAttackSec,
     );
     this.voices.add(voice);
@@ -3122,9 +3221,10 @@ export class FireCommandSynth {
         return;
       }
       while (this.voices.size > 0) this.stealVoice();
+      const [bankA, bankB, bankC] = this.banksForNote(p, midi);
       const voice = new Voice(
         this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
-        this.bankFor(p.oscATable), this.bankFor(p.oscBTable), this.bankFor(p.oscCTable),
+        bankA, bankB, bankC,
         p, midi, velocity, when,
       );
       this.voices.add(voice);
@@ -3135,14 +3235,17 @@ export class FireCommandSynth {
     }
     const cap = this.effectiveMaxVoices(p);
     while (this.voices.size >= cap) this.stealVoice();
-    const voice = new Voice(
-      this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
-      this.bankFor(p.oscATable), this.bankFor(p.oscBTable), this.bankFor(p.oscCTable),
-      p, midi, velocity, when,
-    );
-    this.voices.add(voice);
-    this.updatePolyGain();
-    voice.noteOff(p, releaseAt);
+    {
+      const [bankA, bankB, bankC] = this.banksForNote(p, midi);
+      const voice = new Voice(
+        this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
+        bankA, bankB, bankC,
+        p, midi, velocity, when,
+      );
+      this.voices.add(voice);
+      this.updatePolyGain();
+      voice.noteOff(p, releaseAt);
+    }
   }
 
   allNotesOff(): void {
@@ -3294,9 +3397,7 @@ export class FireCommandSynth {
     this.applyLfoParams(this.patch);
     this.applySpectral(this.patch);
     for (const v of this.voices) {
-      v.setBankA(this.bankFor(this.patch.oscATable));
-      v.setBankB(this.bankFor(this.patch.oscBTable));
-      v.setBankC(this.bankFor(this.patch.oscCTable));
+      this.rebindVoiceBanks(v, this.patch);
       v.setSubWave(this.patch.subWave);
       v.setOscLevels(this.patch);
       v.setFilterLive(this.patch);
@@ -3344,9 +3445,7 @@ export class FireCommandSynth {
     this.applyLfoParams(merged);
     for (const v of this.voices) {
       if (tablesChanged) {
-        if (merged.oscATable !== cur.oscATable) v.setBankA(this.bankFor(merged.oscATable));
-        if (merged.oscBTable !== cur.oscBTable) v.setBankB(this.bankFor(merged.oscBTable));
-        if (merged.oscCTable !== cur.oscCTable) v.setBankC(this.bankFor(merged.oscCTable));
+        this.rebindVoiceBanks(v, merged);
         if (merged.subWave !== cur.subWave) v.setSubWave(merged.subWave);
       }
       v.setOscLevels(merged);
@@ -3398,11 +3497,9 @@ export class FireCommandSynth {
       case "lfo1RateDisplay": case "lfo2RateDisplay":
         this.applyLfoParams(p); break;
       case "oscATable":
-        for (const v of this.voices) v.setBankA(this.bankFor(p.oscATable)); break;
       case "oscBTable":
-        for (const v of this.voices) v.setBankB(this.bankFor(p.oscBTable)); break;
       case "oscCTable":
-        for (const v of this.voices) v.setBankC(this.bankFor(p.oscCTable)); break;
+        for (const v of this.voices) this.rebindVoiceBanks(v, p); break;
       case "spectralMode": case "spectralAmount": case "spectralMix":
       case "spectralLow": case "spectralHigh": case "spectralWetOnly":
         this.applySpectral(p); break;

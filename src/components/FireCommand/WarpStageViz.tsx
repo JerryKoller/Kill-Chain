@@ -11,7 +11,7 @@ import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 
 const H = 168;
-const N = Math.min(32, NUM_PARTIALS);
+const N = Math.min(64, NUM_PARTIALS);
 const C = FC.warp;
 const C_DEEP = bandShade(FC.sources, 0.35);
 const C_MID = bandShade(FC.sources, 0.48);

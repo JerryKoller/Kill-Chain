@@ -405,8 +405,8 @@ function randomPatch(): FirePatch {
     unisonMix: chance(0.7) ? 1 : rand(0.6, 1),
     unisonAnchor: chance(0.8),
     unisonDistribution: pick(["linear", "linear", "gaussian", "center", "edge", "alternating"] as const),
-    unisonPhase: pick(["locked", "locked", "random", "even", "alternating"] as const),
-    unisonTemporalSpread: chance(0.15) ? rand(0.005, 0.025) : 0,
+    unisonPhase: pick(["even", "even", "random", "alternating", "locked"] as const),
+    unisonTemporalSpread: chance(0.22) ? rand(0.003, 0.02) : (chance(0.35) ? rand(0.001, 0.008) : 0),
     unisonTemporalMode: pick(["ltr", "ltr", "center", "random"] as const),
     unisonEnvSpread: chance(0.2) ? rand(0.1, 0.55) : 0,
     warpStretch: chance(0.18) ? rand(-0.5, 0.6) : 0,
@@ -745,7 +745,7 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
     if (pWild(0.35)) p.oscCOctave = pick([-2, -1, 0, 1]);
     if (pWild(0.4)) p.unison = pick([1, 1, 3, 3, 5, 7]);
     if (pWild(0.3)) p.unisonDistribution = pick(["linear", "gaussian", "center", "edge", "alternating"] as const);
-    if (pWild(0.28)) p.unisonPhase = pick(["locked", "random", "even", "alternating"] as const);
+    if (pWild(0.28)) p.unisonPhase = pick(["even", "random", "alternating", "locked"] as const);
     if (pWild(0.25)) p.oscBInherit = pick(["off", "morph", "mirror", "offset", "fm"] as const);
     if (pWild(0.22)) p.spectralMode = pick(["off", "freeze", "smear", "gate", "shift"] as const);
     if (pWild(0.2)) p.fxRoutingScene = pick(["serial", "driveAgePrint", "spaceCascade", "spectralTail"] as const);

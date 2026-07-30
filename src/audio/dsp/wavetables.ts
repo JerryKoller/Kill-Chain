@@ -33,9 +33,36 @@ export const WAVETABLES: WavetableDef[] = [
 
 export const WAVETABLE_IDS = WAVETABLES.map((w) => w.id);
 export const FRAME_COUNT = 8;
-export const NUM_PARTIALS = 32;
+
+/**
+ * Harmonic resolution baseline. Prefer 64; bump toward 128 only if CPU
+ * headroom allows (bank build scales with this × mips × subframes).
+ */
+export const WT_PARTIAL_QUALITY = 64;
+export const NUM_PARTIALS = WT_PARTIAL_QUALITY;
+
 /** Resolution of the pre-interpolated wave bank the engine plays back. */
-export const SUBFRAMES = 32;
+export const SUBFRAMES = 48;
+
+/**
+ * Pitch mipmap partial counts (finest → coarsest). At note-on / when f0 moves
+ * enough, the engine picks the finest level whose highest partial stays under
+ * ~0.45 · sampleRate / f0 so lows keep detail without aliasing highs.
+ */
+export const MIP_PARTIALS: readonly number[] = (() => {
+  const levels: number[] = [];
+  for (let n = NUM_PARTIALS; n >= 4; n = Math.floor(n / 2)) levels.push(n);
+  return levels;
+})();
+
+/** Nyquist safety fraction for mip selection / bandlimiting. */
+export const WT_BANDLIMIT_FRAC = 0.45;
+
+/** Target ∑ aₙ² after RMS normalize (sine fundamental → a₁ = 1). */
+export const WT_TARGET_ENERGY = 1;
+
+/** Soft cap on ∑|aₙ| so pathological bright frames don't clip pre-filter. */
+const WT_PEAK_BOUND = 1.75;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -51,6 +78,7 @@ const triAmp = (n: number) => (n % 2 === 1 ? 1 / (n * n) : 0);
  */
 export function partialAmp(tableId: string, f: number, n: number): number {
   f = clamp(f, 0, 1);
+  const P = NUM_PARTIALS;
   switch (tableId) {
     case "basic": {
       // sine → triangle → saw → square across the morph.
@@ -60,7 +88,7 @@ export function partialAmp(tableId: string, f: number, n: number): number {
     }
     case "saw": {
       // mellow (few partials) → buzzy (many partials) with a soft knee.
-      const maxN = 1 + f * 30;
+      const maxN = 1 + f * (P - 2);
       const roll = clamp(maxN - n + 1, 0, 1);
       return (1 / n) * roll;
     }
@@ -71,15 +99,15 @@ export function partialAmp(tableId: string, f: number, n: number): number {
     }
     case "harmonic": {
       // a moving band of emphasised harmonics.
-      const center = 1 + f * 22;
-      const width = 3.5;
+      const center = 1 + f * (P * 0.7);
+      const width = 3.5 + f * 2;
       const g = Math.exp(-(((n - center) / width) ** 2));
       return g + (0.12 / n);
     }
     case "vocal": {
       // two formant peaks sweeping like a vowel morph.
-      const f1 = lerp(3, 9, f);
-      const f2 = lerp(7, 20, f);
+      const f1 = lerp(3, Math.min(12, P * 0.2), f);
+      const f2 = lerp(7, P * 0.55, f);
       const w1 = 1.6;
       const w2 = 2.6;
       const peak =
@@ -89,19 +117,19 @@ export function partialAmp(tableId: string, f: number, n: number): number {
     case "metallic": {
       // shifting comb over the harmonics → clangy / digital.
       const comb = 0.5 + 0.5 * Math.cos(n * (1 + f * 3.2));
-      const tilt = clamp((n - 1) / 18, 0, 1) * 0.6 + 0.4;
+      const tilt = clamp((n - 1) / (P * 0.55), 0, 1) * 0.6 + 0.4;
       return (1 / Math.sqrt(n)) * comb * tilt;
     }
     case "growl": {
       // warm low harmonics that thicken into a mid-rich growl.
-      const maxN = 2 + f * 12;
+      const maxN = 2 + f * (P * 0.4);
       const roll = clamp(maxN - n + 1, 0, 1);
       const midBump = 1 + f * 1.4 * Math.exp(-(((n - (3 + f * 6)) / 3) ** 2));
       return (1 / Math.pow(n, 1 - f * 0.25)) * roll * midBump;
     }
     case "bell": {
       // sparse, FM/bell-like partials that gain overtones as the morph rises.
-      const set = [1, 2, 3, 5, 7, 11, 13];
+      const set = [1, 2, 3, 5, 7, 11, 13, 17, 19, 23];
       const idx = set.indexOf(n);
       if (idx === -1) return 0;
       const appear = clamp(f * set.length - idx + 1, 0, 1);
@@ -109,13 +137,13 @@ export function partialAmp(tableId: string, f: number, n: number): number {
     }
     case "sync": {
       // a saw with a moving resonant emphasis — hard-sync-style sweep.
-      const center = 1 + f * 16;
+      const center = 1 + f * (P * 0.5);
       const w = 2 + f * 4;
       return (1 / n) * (0.4 + Math.exp(-(((n - center) / w) ** 2)));
     }
     case "additive": {
       // organ-style drawbars filling in as the morph rises.
-      const set = [1, 2, 3, 4, 5, 6, 8, 10];
+      const set = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16];
       const idx = set.indexOf(n);
       if (idx === -1) return 0;
       const appear = clamp(f * set.length - idx + 1, 0, 1);
@@ -124,7 +152,7 @@ export function partialAmp(tableId: string, f: number, n: number): number {
     case "formant2": {
       // two sweeping formant peaks — a different vowel character to "vocal".
       const f1 = 3 + f * 5;
-      const f2 = 9 + f * 10;
+      const f2 = 9 + f * (P * 0.35);
       const w = 2.2;
       return (1 / Math.sqrt(n)) * (Math.exp(-(((n - f1) / w) ** 2)) + 0.7 * Math.exp(-(((n - f2) / (w * 1.6)) ** 2)) + 0.04);
     }
@@ -143,11 +171,84 @@ export function partialAmp(tableId: string, f: number, n: number): number {
   }
 }
 
-/** Continuous-morph harmonic coefficients for any position `f` ∈ [0,1]. */
-export function harmonicsAt(tableId: string, f: number): { real: Float32Array; imag: Float32Array } {
-  const real = new Float32Array(NUM_PARTIALS + 1);
-  const imag = new Float32Array(NUM_PARTIALS + 1);
-  for (let n = 1; n <= NUM_PARTIALS; n++) imag[n] = partialAmp(tableId, f, n);
+/**
+ * Max harmonic index that stays below the bandlimit for fundamental `f0`.
+ */
+export function maxPartialForFreq(f0: number, sampleRate: number): number {
+  const f = Math.max(20, f0);
+  return Math.max(1, Math.floor((WT_BANDLIMIT_FRAC * sampleRate) / f));
+}
+
+/**
+ * Index into `MIP_PARTIALS` for a fundamental — finest level that won't alias.
+ */
+export function mipLevelForFreq(f0: number, sampleRate: number): number {
+  const maxN = maxPartialForFreq(f0, sampleRate);
+  for (let i = 0; i < MIP_PARTIALS.length; i++) {
+    if (MIP_PARTIALS[i]! <= maxN) return i;
+  }
+  return MIP_PARTIALS.length - 1;
+}
+
+/**
+ * Energy (RMS-style) normalize of a sine-series imag buffer, with a soft peak
+ * bound so bright frames stay bright relative to dull ones without clipping.
+ * Prefers musical loudness over peak-flattening via createPeriodicWave.
+ */
+export function normalizeSpectrum(
+  imag: Float32Array,
+  targetEnergy = WT_TARGET_ENERGY,
+): void {
+  const N = imag.length - 1;
+  let e = 0;
+  for (let n = 1; n <= N; n++) e += imag[n]! * imag[n]!;
+  if (e > 1e-12) {
+    const g = Math.sqrt(targetEnergy / e);
+    for (let n = 1; n <= N; n++) imag[n]! *= g;
+  } else {
+    imag[1] = Math.sqrt(targetEnergy);
+  }
+  let peakBound = 0;
+  for (let n = 1; n <= N; n++) peakBound += Math.abs(imag[n]!);
+  if (peakBound > WT_PEAK_BOUND) {
+    const g = WT_PEAK_BOUND / peakBound;
+    for (let n = 1; n <= N; n++) imag[n]! *= g;
+  }
+}
+
+/** Zero partials above `maxPartials` (1-based inclusive keep). */
+export function bandlimitSpectrum(imag: Float32Array, maxPartials: number): void {
+  const keep = Math.max(1, Math.min(imag.length - 1, maxPartials | 0));
+  for (let n = keep + 1; n < imag.length; n++) imag[n] = 0;
+}
+
+/**
+ * Continuous-morph harmonic coefficients for any position `f` ∈ [0,1].
+ * `maxPartials` truncates the series (mip / bandlimit); does not normalize —
+ * call `normalizeSpectrum` before `createPeriodicWave(..., { disableNormalization: true })`.
+ */
+export function harmonicsAt(
+  tableId: string,
+  f: number,
+  maxPartials: number = NUM_PARTIALS,
+): { real: Float32Array; imag: Float32Array } {
+  const N = Math.max(1, Math.min(NUM_PARTIALS, maxPartials | 0));
+  const real = new Float32Array(N + 1);
+  const imag = new Float32Array(N + 1);
+  for (let n = 1; n <= N; n++) imag[n] = partialAmp(tableId, f, n);
+  return { real, imag };
+}
+
+/**
+ * Engine-ready coeffs: morph → optional bandlimit → energy normalize.
+ */
+export function harmonicsForWave(
+  tableId: string,
+  f: number,
+  maxPartials: number = NUM_PARTIALS,
+): { real: Float32Array; imag: Float32Array } {
+  const { real, imag } = harmonicsAt(tableId, f, maxPartials);
+  normalizeSpectrum(imag);
   return { real, imag };
 }
 
@@ -162,6 +263,7 @@ export function frameHarmonics(tableId: string, frameIndex: number): { real: Flo
 /**
  * Render one cycle of a frame to `count` samples for the UI display.
  * `f` is a continuous morph position (0..1), interpolated across frames.
+ * Peak-normalized for visual clarity (engine uses energy normalize instead).
  */
 export function frameSamples(tableId: string, f: number, count: number): Float32Array {
   const out = new Float32Array(count);
@@ -229,8 +331,8 @@ export function applyWarp(
     const lo = Math.floor(src);
     const hi = lo + 1;
     const t = src - lo;
-    const aLo = lo >= 1 && lo <= N ? imag[lo] : 0;
-    const aHi = hi >= 1 && hi <= N ? imag[hi] : 0;
+    const aLo = lo >= 1 && lo <= N ? imag[lo]! : 0;
+    const aHi = hi >= 1 && hi <= N ? imag[hi]! : 0;
     out[m] = aLo * (1 - t) + aHi * t;
   }
 
@@ -239,7 +341,7 @@ export function applyWarp(
     for (let n = 2; n <= N; n++) {
       const even = n % 2 === 0;
       const cut = even ? Math.max(0, tilt) : Math.max(0, -tilt);
-      out[n] *= 1 - cut * 0.96;
+      out[n]! *= 1 - cut * 0.96;
     }
   }
 
@@ -247,21 +349,21 @@ export function applyWarp(
   if (comb > 0) {
     for (let n = 2; n <= N; n++) {
       const notch = 0.5 + 0.5 * Math.cos((2 * Math.PI * n) / 4.3);
-      out[n] *= 1 - comb * notch;
+      out[n]! *= 1 - comb * notch;
     }
   }
 
   // Keep overall energy in the same ballpark so warping doesn't duck the osc
-  // (createPeriodicWave normalizes peak, but relative frame loudness matters).
+  // (engine uses disableNormalization + RMS; relative frame loudness matters).
   let eIn = 0;
   let eOut = 0;
   for (let n = 1; n <= N; n++) {
-    eIn += imag[n] * imag[n];
-    eOut += out[n] * out[n];
+    eIn += imag[n]! * imag[n]!;
+    eOut += out[n]! * out[n]!;
   }
   if (eOut > 1e-9) {
     const g = Math.sqrt(eIn / eOut);
-    for (let n = 1; n <= N; n++) out[n] *= g;
+    for (let n = 1; n <= N; n++) out[n]! *= g;
   } else {
     out[1] = imag[1] || 1; // fully notched-out frame — keep a fundamental
   }
