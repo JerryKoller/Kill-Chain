@@ -10,11 +10,21 @@ interface Step {
   title: string;
   body: string;
   cta?: string;
-  view?: "playground" | "tractor" | "calibration" | "presets" | "settings";
+  view?:
+    | "playground"
+    | "library"
+    | "tractor"
+    | "calibration"
+    | "presets"
+    | "settings"
+    | "fire"
+    | "glossary";
   /** Custom CTA side effect (used instead of / alongside a view switch). */
   action?: () => void;
   /** Render the output-setup picker (headphones / speakers / TV / etc.). */
   outputSetup?: boolean;
+  /** Library-first-run CTAs (add folders / load a file). */
+  libraryCta?: boolean;
 }
 
 const OUTPUT_CHOICES: Array<{
@@ -30,6 +40,10 @@ const OUTPUT_CHOICES: Array<{
   { label: "Not sure", sub: "Neutral — no correction curve", profileId: "neutral" },
 ];
 
+/**
+ * 7-step BASIC program. Legal gate runs separately before this.
+ * In-depth explanations live in the Glossary — keep these short.
+ */
 const STEPS: Step[] = [
   {
     title: "Welcome to Kill-Chain",
@@ -38,41 +52,44 @@ const STEPS: Step[] = [
   {
     title: "What are you listening on?",
     body:
-      "Pick a starting correction profile for your output device. Headphones, speakers, soundbars, and TVs each get their own compatibility curves. You can change this any time under Settings → Playback Correction.",
+      "Pick a starting correction profile for your headphones, speakers, soundbar, or TV. You can change this any time under Settings → Playback Correction.",
     outputSetup: true,
   },
   {
-    title: "Sculptor — your fire-control bench",
+    title: "Load some music",
     body:
-      "A configurable parametric EQ (add or remove 1-20 bands), quick tone knobs, dynamic effects, A/B compare, and save it all as a preset. Drag an EQ node to move it, double-click empty space to add one.",
-    cta: "Take me there",
+      "The Library is where your tracks live. Add folders from your PC, or drop audio files onto the window. Play anything straight into the sculpting engine.",
+    cta: "Open Library",
+    view: "library",
+    libraryCta: true,
+  },
+  {
+    title: "Sculptor — reshape sound",
+    body:
+      "Your main bench: parametric EQ, tone knobs, dynamics, space, and color. Drag EQ nodes, tweak by ear, A/B compare — no Fire Command required.",
+    cta: "Open Sculptor",
     view: "playground",
   },
   {
-    title: "Tractor Beam auto-tunes to a track",
+    title: "Tractor Beam — auto-tune a track",
     body:
-      "Drop in a song and Tractor Beam analyses its spectral balance, then crafts an EQ voiced for your output profile and that style of music. One click to apply.",
+      "Drop in a song and Tractor analyses its balance, then crafts an EQ voiced for your output. One click to apply. Dig deeper anytime in the Glossary.",
     cta: "Open Tractor Beam",
     view: "tractor",
   },
   {
-    title: "Calibration finds YOUR profile",
+    title: "Armory — presets",
     body:
-      "30 quick A/B questions build a personal sound signature. Or jump straight to the direct-edit sliders on the right.",
-    cta: "Open Calibration",
-    view: "calibration",
-  },
-  {
-    title: "Presets blend, morph, and stack",
-    body:
-      "Pick two presets, drag the slider to morph between them. Save your favourites - they live in localStorage forever.",
-    cta: "Show Presets",
+      "Save what you like, morph between two presets, and stack favourites. Your Armory lives on this machine until you export a Kill-Chain backup.",
+    cta: "Show Armory",
     view: "presets",
   },
   {
-    title: "Press ? any time",
+    title: "Advanced tools & shortcuts",
     body:
-      "Brings up the keyboard cheat sheet. Spacebar plays/pauses, A/B snapshot the tuning, number keys jump between tools. Briefing complete — drop an audio file on the window to start.",
+      "When you're ready: Fire Command (synth + sequencer), Airspace (in-app browser into the chain), and Morph Lab. Press ? for the keyboard cheat sheet — Space plays/pauses. Field Manual (Glossary) has the deep dive.",
+    cta: "Open Glossary",
+    view: "glossary",
   },
 ];
 
@@ -102,13 +119,36 @@ export function OnboardingTour() {
     setStep(step + 1);
   };
 
+  const addLibraryFolders = () => {
+    setView("library");
+    void import("@/state/libraryStore").then(({ useLibraryStore }) => {
+      void useLibraryStore.getState().addFolders();
+    });
+  };
+
+  const loadAudioFile = () => {
+    void (async () => {
+      const path = await window.playground?.openAudioFile?.();
+      if (!path) {
+        toast("No file selected", "warn");
+        return;
+      }
+      const { usePlayerStore } = await import("@/state/playerStore");
+      const name = path.split(/[\\/]/).pop() || "Track";
+      const src = `playground-audio:///lib?p=${encodeURIComponent(path)}`;
+      await usePlayerStore.getState().setQueue([{ id: path, src, name }], 0);
+      await usePlayerStore.getState().play();
+      toast(`Loaded "${name}"`, "success");
+    })();
+  };
+
   // Keyboard navigation: Esc skips, arrows/Enter advance.
   useEffect(() => {
     if (closed) return;
     const s = STEPS[step];
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();
-      else if (s.outputSetup) return;
+      else if (s.outputSetup || s.libraryCta) return;
       else if (e.key === "ArrowRight" || e.key === "Enter") setStep((v) => Math.min(v + 1, STEPS.length - 1));
       else if (e.key === "ArrowLeft") setStep((v) => Math.max(v - 1, 0));
     };
@@ -161,6 +201,34 @@ export function OnboardingTour() {
             </div>
           )}
 
+          {s.libraryCta && (
+            <div className="mb-5 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  addLibraryFolders();
+                  setStep(step + 1);
+                }}
+                className="kc-btn kc-btn--accent w-full justify-center"
+              >
+                Add folders
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  loadAudioFile();
+                  setStep(step + 1);
+                }}
+                className="kc-btn kc-btn--ghost w-full justify-center"
+              >
+                Load a file
+              </button>
+              <p className="text-[10px] text-dim leading-relaxed">
+                You can also drop files onto the window any time.
+              </p>
+            </div>
+          )}
+
           <div className="flex items-center justify-between gap-2">
             <button
               onClick={close}
@@ -177,19 +245,22 @@ export function OnboardingTour() {
                   Back
                 </button>
               )}
-              {s.cta && (s.view || s.action) && (
+              {s.cta && (s.view || s.action) && !s.libraryCta && (
                 <>
-                  <button
-                    onClick={() => setStep(step + 1)}
-                    className="kc-btn kc-btn--sm kc-btn--ghost"
-                  >
-                    Next
-                  </button>
+                  {step < STEPS.length - 1 && (
+                    <button
+                      onClick={() => setStep(step + 1)}
+                      className="kc-btn kc-btn--sm kc-btn--ghost"
+                    >
+                      Next
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       if (s.view) setView(s.view);
                       s.action?.();
-                      setStep(step + 1);
+                      if (step === STEPS.length - 1) close();
+                      else setStep(step + 1);
                     }}
                     className="kc-btn kc-btn--sm kc-btn--accent"
                   >
@@ -197,7 +268,18 @@ export function OnboardingTour() {
                   </button>
                 </>
               )}
-              {step < STEPS.length - 1 && !s.cta && !s.outputSetup && (
+              {s.libraryCta && (
+                <button
+                  onClick={() => {
+                    setView("library");
+                    setStep(step + 1);
+                  }}
+                  className="kc-btn kc-btn--sm kc-btn--ghost"
+                >
+                  Next
+                </button>
+              )}
+              {step < STEPS.length - 1 && !s.cta && !s.outputSetup && !s.libraryCta && (
                 <button
                   onClick={() => setStep(step + 1)}
                   className="kc-btn kc-btn--sm kc-btn--accent"
@@ -205,12 +287,20 @@ export function OnboardingTour() {
                   Next
                 </button>
               )}
-              {step === STEPS.length - 1 && (
+              {step === STEPS.length - 1 && !s.cta && (
                 <button
                   onClick={close}
                   className="kc-btn kc-btn--sm kc-btn--primary"
                 >
-                  Begin operations
+                  Start playing
+                </button>
+              )}
+              {step === STEPS.length - 1 && s.cta && (
+                <button
+                  onClick={close}
+                  className="kc-btn kc-btn--sm kc-btn--primary"
+                >
+                  Start playing
                 </button>
               )}
             </div>

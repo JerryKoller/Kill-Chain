@@ -481,7 +481,7 @@ export function SettingsView() {
           <button
             onClick={() => {
               settings.set("onboardingDone", false);
-              toast("Onboarding will run next launch (or now)");
+              toast("Tour will run again — legal agreement is kept");
             }}
             className="w-full text-xs text-dim hover:text-cyan mt-1"
           >
@@ -621,6 +621,61 @@ function AutomationSection() {
             className="rounded-lg border border-white/15 hover:bg-white/5 px-3 py-1.5 text-xs"
           >
             Import session
+          </button>
+        </div>
+      </GlassPanel>
+
+      <GlassPanel intense className="p-5">
+        <Section
+          title="Kill-Chain backup"
+          sub="Settings + Library folders/meta + Mission Log. Does not include Fire Command projects (optional later). After restore, re-add folders if files moved."
+        />
+        <div className="mt-3 flex gap-2 flex-wrap">
+          <button
+            onClick={() => {
+              void import("@/lib/killChainBackup").then(({ exportKillChainBackup }) =>
+                exportKillChainBackup().then((ok) =>
+                  toast(
+                    ok ? "Backup exported (.kcbackup)" : "Export unavailable — use the desktop app",
+                    ok ? "success" : "warn",
+                  ),
+                ),
+              );
+            }}
+            className="rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 px-3 py-1.5 text-xs text-cyan font-semibold"
+          >
+            Export Kill-Chain backup
+          </button>
+          <button
+            onClick={() => {
+              void import("@/lib/killChainBackup").then(({ importKillChainBackup }) =>
+                importKillChainBackup("merge").then((r) =>
+                  toast(r.detail, r.ok ? "success" : "warn"),
+                ),
+              );
+            }}
+            className="rounded-lg border border-white/15 hover:bg-white/5 px-3 py-1.5 text-xs"
+          >
+            Import (merge)
+          </button>
+          <button
+            onClick={() => {
+              if (
+                !window.confirm(
+                  "Replace Settings, Library index/meta, and Mission Log with the backup? This overwrites local data for those areas.",
+                )
+              ) {
+                return;
+              }
+              void import("@/lib/killChainBackup").then(({ importKillChainBackup }) =>
+                importKillChainBackup("replace").then((r) =>
+                  toast(r.detail, r.ok ? "success" : "warn"),
+                ),
+              );
+            }}
+            className="rounded-lg border border-plasma/40 hover:bg-plasma/10 px-3 py-1.5 text-xs text-plasma"
+          >
+            Import (replace)
           </button>
         </div>
       </GlassPanel>

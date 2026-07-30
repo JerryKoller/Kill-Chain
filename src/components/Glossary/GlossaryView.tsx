@@ -3,6 +3,7 @@ import { GlassPanel } from "@/components/shared/GlassPanel";
 import { ActionBar } from "@/components/shared/ActionBar";
 
 type Category =
+  | "Product"
   | "Tone"
   | "Dynamics"
   | "Space"
@@ -11,7 +12,8 @@ type Category =
   | "Lo-Fi"
   | "Calibration"
   | "Tools"
-  | "Metering";
+  | "Metering"
+  | "Pipeline";
 
 interface Entry {
   term: string;
@@ -24,6 +26,50 @@ interface Entry {
 // tone bands, the Dynamics/Space/Color knobs, the Pro Tools and Lo-Fi panels,
 // every feature in the sidebar, and the read-outs in the Scope.
 const ENTRIES: Entry[] = [
+  // ── Product identity & care ────────────────────────────────────────────────
+  {
+    term: "Kill-Chain",
+    category: "Product",
+    short: "A place to play with and reshape your audio.",
+    long:
+      "Kill-Chain is a desktop playground for loading music, sculpting tone, fixing damaged tracks, and routing sound through a full DSP chain. Everyday work happens in Library → Sculptor → Tractor → Armory. Fire Command, Airspace, and Morph Lab are advanced tools — deep when you want them, never required for a first listen. The Field Manual (this Glossary) is where the in-depth explanations live; the first-run tour stays basic on purpose.",
+  },
+  {
+    term: "Library",
+    category: "Product",
+    short: "Your local music arsenal — folders, playlists, favorites.",
+    long:
+      "Add folders from your PC; Kill-Chain indexes supported audio files and plays them into the engine. Empty Library? Use Add folders, Load a file, or drop files onto the window. Library needs the desktop app (Electron) — the web build cannot scan folders. Paths are absolute: if you move or rename a folder on disk, tracks show MISSING. Use Check missing, Prune orphans, Reveal in Explorer, or Rescan after re-adding the new location. A Kill-Chain backup stores folder paths and meta (favorites, playlists, play counts) — not the audio files themselves — so after wipe/reinstall you may need to re-add folders if files moved.",
+  },
+  {
+    term: "Kill-Chain backup",
+    category: "Product",
+    short: "Portable Settings + Library meta + Mission Log (.kcbackup).",
+    long:
+      "Settings → Kill-Chain backup exports a .kcbackup with appearance/playback settings, Library folders and track index/meta, and Mission Log source memories. Import with Merge (combine) or Replace (overwrite those areas). Fire Command .kcproj projects are NOT included in v1 backup — save those separately. After restore, if music folders moved on disk, re-add them and Rescan; Mission Log memories still key off paths when possible.",
+  },
+  {
+    term: "Mission Log",
+    category: "Product",
+    short: "Per-source memory of the DSP chain you liked.",
+    long:
+      "When you save a chain for a track, album, playlist, or Airspace source, Mission Log stores it. With Restore saved source memory on, playing that source again reapplies the chain (after Manual override priority). Separate from Kill-Chain backup's sibling .kcsession export, which also bundles referenced Tractor locks.",
+  },
+  {
+    term: "Sound pipeline",
+    category: "Pipeline",
+    short: "How audio flows from source → DSP → output.",
+    long:
+      "A source (Library file, drop, Exterior Audio loopback, or Airspace capture) feeds the AudioEngine. Correction (headphone/speaker profile) sits early; Sculptor EQ + tone/dynamics/space/color/pro/lo-fi shape the program; Restoration/Clarity can repair; 3rd Dimension can spatialize; output gain and sink device finish the path. Mission State automation (saved memory → Auto-Lock → Auto-Flatten) may rewrite the chain when the source changes — manual knob touches put the source on manual hold until the next source.",
+  },
+  {
+    term: "Playback Correction",
+    category: "Pipeline",
+    short: "Output-device curves (headphones, speakers, TV…).",
+    long:
+      "Compatibility profiles counteract typical tonal bumps of a device class or model so the rest of the chain starts from a more neutral place. Pick during onboarding or Settings. Not a brand endorsement. Toggle off anytime for a raw A/B against Windows.",
+  },
+
   // ── Tone (the friendly EQ band stack in the Sculptor) ──────────────────────
   {
     term: "Sub Bass",
@@ -324,7 +370,14 @@ const ENTRIES: Entry[] = [
     category: "Tools",
     short: "The main workbench — bands, knobs and toggles.",
     long:
-      "Where you shape the sound: the parametric EQ, the Tone / Dynamics / Space / Color knobs, Pro Tools and the Lo-Fi deck. Everything here becomes part of a savable preset.",
+      "Where you reshape everyday listening: parametric EQ (1–20 bands), Tone / Dynamics / Space / Color knobs, Pro Tools, Lo-Fi deck, A/B compare, and Bounce/Restore panels. Save the result to the Armory (Presets). You do not need Fire Command to hear sculpted music — load a Library track and work here.",
+  },
+  {
+    term: "Armory (Presets)",
+    category: "Tools",
+    short: "Saved looks — morph, blend, and stack favourites.",
+    long:
+      "The Presets view (Armory) stores Sculptor states locally. Morph between two presets with a slider, commit blends, and keep favourites across sessions. Included in Kill-Chain backup via settings persistence of related stores where applicable; treat Armory as part of your local app data.",
   },
   {
     term: "Parametric EQ band",
@@ -345,7 +398,7 @@ const ENTRIES: Entry[] = [
     category: "Tools",
     short: "Blend four presets in 2D — plus Quick Sculpts.",
     long:
-      "Drag the puck (or let autopilot orbit) to morph between four corner presets, then Commit to keep it. Quick Sculpts (Make-it moves + the morph pad) now live here too.",
+      "Advanced morphing: drag the puck (or let autopilot orbit) between four corner presets, then Commit. Quick Sculpts (Make-it moves + morph pad) live here too. Optional depth after you are comfortable in Sculptor + Armory.",
   },
   {
     term: "Quick Sculpts",
@@ -373,7 +426,7 @@ const ENTRIES: Entry[] = [
     category: "Tools",
     short: "Auto-EQ that matches a track to your headphones.",
     long:
-      "Analyses the loaded track with high-resolution (1/3-octave) measurement and retunes your Sculptor bands toward a balanced target voiced for your headphones — keeping your band count and layout.",
+      "Analyses the loaded track with high-resolution (1/3-octave) measurement and retunes your Sculptor bands toward a balanced target voiced for your output profile — keeping your band count and layout. Smart Lock / Live Lock / Auto-Lock / Full Chain extend Tractor for content-aware and hands-free workflows. Primary 'fix/shape' beat in the basic tour.",
   },
   {
     term: "Spectral Lock",
@@ -383,11 +436,11 @@ const ENTRIES: Entry[] = [
       "Shows the net EQ move Tractor Beam is applying — positive means it lifted that end, negative means it cut it — so the numbers match the curve you see.",
   },
   {
-    term: "Library",
+    term: "Library (tool)",
     category: "Tools",
-    short: "Your local music browser inside the app.",
+    short: "Sidebar Library view — browse and deploy tracks.",
     long:
-      "Add folders from your computer to scan, then sort and group by artist or album, see durations and cover art, and play any track straight into the engine.",
+      "See Product → Library for the full story: folder scan, missing-file repair, playlists, Mission Log hooks, and desktop-only gating.",
   },
   {
     term: "Smart Lock",
@@ -455,30 +508,30 @@ const ENTRIES: Entry[] = [
   {
     term: "Fire Command",
     category: "Tools",
-    short: "The synth deck — twin synths, drums, sequencer, sample deck.",
+    short: "Advanced synth deck — twin synths, drums, sequencer, samples.",
     long:
-      "A playable wavetable synth (plus a second voice), an FL-style drum grid where every lane can fire YOUR samples, a scale-aware piano roll, Euclidean rhythm tools, WAV export and .kcproj project files.",
+      "Power-user territory: playable wavetable synth (plus second voice), FL-style drum grid with your samples, scale-aware piano roll, Euclidean tools, WAV export, and .kcproj projects. The basic tour only points here — full depth lives in What's New notes and this Glossary. Not required to sculpt Library music. Save projects separately; not part of Kill-Chain backup v1.",
   },
   {
     term: "Sample Deck",
     category: "Tools",
     short: "Rack your own sounds and paint them on the step grid.",
     long:
-      "Up to six operator-loaded samples (risers, chops, FX) become sequencer lanes with their own level and steps — saved with the project, hydrated from disk on load.",
+      "Up to six operator-loaded samples (risers, chops, FX) become sequencer lanes with their own level and steps — saved with the project, hydrated from disk on load. Missing samples on another machine show on project open.",
   },
   {
     term: "Airspace",
     category: "Tools",
     short: "The in-app browser wired into the DSP chain.",
     long:
-      "Stream YouTube or anything else and route it through Kill-Chain ('Route through Kill-Chain'). Cinema/Music voicings layer on top, the transport deck mirrors the video, and the capture self-heals when the page navigates.",
+      "Advanced routing: stream YouTube or anything else and Route through Kill-Chain. Cinema/Music voicings layer on top; the transport mirrors the video; capture self-heals on navigation. Optional ad/tracker blocking has separate legal considerations — see Settings → About.",
   },
   {
     term: "Exterior Audio",
     category: "Tools",
     short: "Capture system/desktop audio into the chain (loopback).",
     long:
-      "Grabs Windows audio — games, another browser, anything — and runs it through the engine. Pair with a virtual cable or a second output device to avoid feedback.",
+      "Grabs Windows audio — games, another browser, anything — and runs it through the engine. Pair with a virtual cable or a second output device to avoid feedback. Device loss surfaces in the Mission HUD.",
   },
   {
     term: "Visualizer",

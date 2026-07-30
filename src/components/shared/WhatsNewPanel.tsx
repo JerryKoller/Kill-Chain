@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { APP_VERSION, WHATS_NEW } from "@/lib/appVersion";
+import { isLegalAccepted } from "@/lib/legal";
 import { useSettingsStore } from "@/state/settingsStore";
 
 /**
@@ -16,16 +17,19 @@ export function openWhatsNew(): void {
 
 export function WhatsNewPanel() {
   const onboardingDone = useSettingsStore((s) => s.onboardingDone);
+  const legalAcceptedAt = useSettingsStore((s) => s.legalAcceptedAt);
+  const legalAcceptedVersion = useSettingsStore((s) => s.legalAcceptedVersion);
   const lastSeenVersion = useSettingsStore((s) => s.lastSeenVersion);
   const setSetting = useSettingsStore((s) => s.set);
   const [open, setOpen] = useState(false);
+  const legalOk = isLegalAccepted(legalAcceptedVersion, legalAcceptedAt);
 
-  // Auto-open once per version (never on top of the onboarding tour).
+  // Auto-open once per version (never on top of legal gate or onboarding).
   useEffect(() => {
-    if (onboardingDone && lastSeenVersion !== APP_VERSION) {
+    if (legalOk && onboardingDone && lastSeenVersion !== APP_VERSION) {
       setOpen(true);
     }
-  }, [onboardingDone, lastSeenVersion]);
+  }, [legalOk, onboardingDone, lastSeenVersion]);
 
   useEffect(() => {
     openExternal = () => setOpen(true);

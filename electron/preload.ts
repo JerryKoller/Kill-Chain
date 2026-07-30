@@ -66,6 +66,9 @@ const bridge = {
       filePath: string,
     ): Promise<{ path: string; name: string; ext: string; size: number; mtimeMs: number } | null> =>
       ipcRenderer.invoke("library:statFile", filePath),
+    /** Reveal a track in Explorer (or open its parent if missing). */
+    revealInFolder: (filePath: string): Promise<boolean> =>
+      ipcRenderer.invoke("library:revealInFolder", filePath),
   },
 
   airspace: {

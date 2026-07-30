@@ -276,6 +276,13 @@ interface LibraryState {
   lastPlayed: Record<string, number>;
   playlists: Playlist[];
 
+  /**
+   * Paths known missing on disk (after verify / failed play).
+   * Cleared when a rescan finds the file again.
+   */
+  missingPaths: Record<string, true>;
+  verifying: boolean;
+
   available: () => boolean;
   addFolders: () => Promise<void>;
   rescan: () => Promise<void>;
@@ -311,6 +318,33 @@ interface LibraryState {
   removeFromPlaylist: (id: string, path: string) => void;
   /** Move a track within a playlist (drag-to-reorder). */
   movePlaylistItem: (id: string, from: number, to: number) => void;
+
+  /** Mark a path missing (e.g. after a failed play). */
+  markMissing: (path: string) => void;
+  /** Clear missing flag for a path. */
+  clearMissing: (path: string) => void;
+  /** Stat every track (or a subset) and refresh missingPaths. */
+  verifyMissing: (paths?: string[]) => Promise<number>;
+  /** Drop tracks (and playlist refs) whose files are missing. */
+  pruneMissing: () => number;
+  /** Reveal a file in Explorer when the desktop bridge is available. */
+  revealInExplorer: (path: string) => Promise<boolean>;
+  /** Apply a Kill-Chain backup payload (folders / tracks / meta). */
+  applyBackup: (
+    data: {
+      folders: string[];
+      tracks: LibraryTrack[];
+      sortKey?: string;
+      sortDir?: string;
+      groupBy?: string;
+      viewMode?: string;
+      favorites: string[];
+      playCounts: Record<string, number>;
+      lastPlayed: Record<string, number>;
+      playlists: Playlist[];
+    },
+    mode: "merge" | "replace",
+  ) => void;
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => {
@@ -338,6 +372,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         );
       } catch (err) {
         console.warn("[library] persist failed:", err);
+        void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+          reportStorageFailure("Library", err),
+        );
       }
     }, 600);
   };
@@ -358,6 +395,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         localStorage.setItem(META_KEY, JSON.stringify(meta));
       } catch (err) {
         console.warn("[library] meta persist failed:", err);
+        void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+          reportStorageFailure("Library meta", err),
+        );
       }
     }, 400);
   };
@@ -446,6 +486,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     playCounts: initialMeta.playCounts,
     lastPlayed: initialMeta.lastPlayed,
     playlists: initialMeta.playlists,
+    missingPaths: {},
+    verifying: false,
 
     available: () => !!window.playground?.library,
 
@@ -546,6 +588,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         });
         set({ tracks });
         schedulePersist();
+        // Rescan only returns files that still exist — clear all missing flags.
+        set({ missingPaths: {} });
         void runEnrichment();
       } catch (err) {
         console.error("[library] scan failed:", err);
@@ -675,6 +719,143 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         }),
       }));
       schedulePersistMeta();
+    },
+
+    markMissing: (path) => {
+      if (!path) return;
+      set((s) => {
+        if (s.missingPaths[path]) return s;
+        return { missingPaths: { ...s.missingPaths, [path]: true as const } };
+      });
+    },
+
+    clearMissing: (path) => {
+      set((s) => {
+        if (!s.missingPaths[path]) return s;
+        const missingPaths = { ...s.missingPaths };
+        delete missingPaths[path];
+        return { missingPaths };
+      });
+    },
+
+    verifyMissing: async (paths) => {
+      const api = window.playground?.library;
+      if (!api?.statFile) return 0;
+      const targets = paths?.length ? paths : get().tracks.map((t) => t.path);
+      if (targets.length === 0) {
+        set({ missingPaths: {} });
+        return 0;
+      }
+      set({ verifying: true });
+      const missing: Record<string, true> = { ...get().missingPaths };
+      // Only re-check requested paths; drop flags that come back healthy.
+      for (const p of targets) delete missing[p];
+      const CONCURRENCY = 8;
+      let idx = 0;
+      const worker = async () => {
+        while (idx < targets.length) {
+          const p = targets[idx++];
+          try {
+            const st = await api.statFile!(p);
+            if (!st) missing[p] = true;
+          } catch {
+            missing[p] = true;
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+      set({ missingPaths: missing, verifying: false });
+      return Object.keys(missing).length;
+    },
+
+    pruneMissing: () => {
+      const missing = get().missingPaths;
+      const gone = new Set(Object.keys(missing));
+      if (gone.size === 0) return 0;
+      const tracks = get().tracks.filter((t) => !gone.has(t.path));
+      const removed = get().tracks.length - tracks.length;
+      const favorites = { ...get().favorites };
+      const playCounts = { ...get().playCounts };
+      const lastPlayed = { ...get().lastPlayed };
+      for (const p of gone) {
+        delete favorites[p];
+        delete playCounts[p];
+        delete lastPlayed[p];
+      }
+      const playlists = get().playlists.map((pl) => ({
+        ...pl,
+        paths: pl.paths.filter((p) => !gone.has(p)),
+      }));
+      set({ tracks, favorites, playCounts, lastPlayed, playlists, missingPaths: {} });
+      schedulePersist();
+      schedulePersistMeta();
+      return removed;
+    },
+
+    revealInExplorer: async (path) => {
+      const reveal = window.playground?.library?.revealInFolder;
+      if (!reveal || !path) return false;
+      try {
+        await reveal(path);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    applyBackup: (data, mode) => {
+      const asTracks = (Array.isArray(data.tracks) ? data.tracks : []).filter(
+        (t): t is LibraryTrack =>
+          !!t && typeof (t as LibraryTrack).path === "string" && typeof (t as LibraryTrack).id === "string",
+      );
+      const asPlaylists = (Array.isArray(data.playlists) ? data.playlists : []).filter(
+        (p): p is Playlist =>
+          !!p && typeof (p as Playlist).id === "string" && Array.isArray((p as Playlist).paths),
+      );
+
+      if (mode === "replace") {
+        set({
+          folders: [...(data.folders ?? [])],
+          tracks: asTracks,
+          sortKey: (data.sortKey as LibrarySortKey) || get().sortKey,
+          sortDir: (data.sortDir as SortDir) || get().sortDir,
+          groupBy: (data.groupBy as LibraryGroupBy) || get().groupBy,
+          viewMode: (data.viewMode as LibraryViewMode) || get().viewMode,
+          favorites: Object.fromEntries((data.favorites ?? []).map((f) => [f, true as const])),
+          playCounts: { ...(data.playCounts ?? {}) },
+          lastPlayed: { ...(data.lastPlayed ?? {}) },
+          playlists: asPlaylists,
+          missingPaths: {},
+        });
+      } else {
+        const folderSet = new Set([...get().folders, ...(data.folders ?? [])]);
+        const byPath = new Map(get().tracks.map((t) => [t.path, t]));
+        for (const t of asTracks) byPath.set(t.path, t);
+        const favs = { ...get().favorites };
+        for (const f of data.favorites ?? []) favs[f] = true;
+        const playCounts = { ...get().playCounts, ...(data.playCounts ?? {}) };
+        const lastPlayed = { ...get().lastPlayed, ...(data.lastPlayed ?? {}) };
+        const plById = new Map(get().playlists.map((p) => [p.id, p]));
+        for (const pl of asPlaylists) {
+          const prev = plById.get(pl.id);
+          if (!prev) plById.set(pl.id, pl);
+          else {
+            const paths = Array.from(new Set([...prev.paths, ...pl.paths]));
+            plById.set(pl.id, { ...prev, paths, name: pl.name || prev.name });
+          }
+        }
+        set({
+          folders: Array.from(folderSet),
+          tracks: Array.from(byPath.values()),
+          favorites: favs,
+          playCounts,
+          lastPlayed,
+          playlists: Array.from(plById.values()),
+        });
+      }
+      schedulePersist();
+      schedulePersistMeta();
+      void runEnrichment();
     },
   };
 });

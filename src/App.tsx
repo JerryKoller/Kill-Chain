@@ -29,6 +29,8 @@ const AirspaceView = lazy(() => import("@/components/Airspace/AirspaceView").the
 import { MiniPlayer } from "@/components/Layout/MiniPlayer";
 import { KCToastHost } from "@/components/kcds";
 import { OnboardingTour } from "@/components/Onboarding/OnboardingTour";
+import { LegalGateModal } from "@/components/Onboarding/LegalGateModal";
+import { isLegalAccepted } from "@/lib/legal";
 // Side effect: injects user-imported headphone profiles into the catalog
 // before anything looks up HEADPHONES[settings.headphone].
 import { HeadphoneWizard } from "@/components/Settings/HeadphoneWizard";
@@ -65,6 +67,9 @@ export default function App() {
   const uiScale = useSettingsStore((s) => s.uiScale);
   const miniMode = useSettingsStore((s) => s.miniMode);
   const onboardingDone = useSettingsStore((s) => s.onboardingDone);
+  const legalAcceptedAt = useSettingsStore((s) => s.legalAcceptedAt);
+  const legalAcceptedVersion = useSettingsStore((s) => s.legalAcceptedVersion);
+  const legalOk = isLegalAccepted(legalAcceptedVersion, legalAcceptedAt);
   const bgFx = useSettingsStore((s) => s.bgFx);
   const forceReduced = useSettingsStore((s) => s.forceReducedMotion);
   const moduleColor = useSettingsStore((s) => s.moduleColor);
@@ -158,7 +163,37 @@ export default function App() {
   }, [ensureReady]);
 
   if (miniMode) {
+    // Mini-player still requires legal acceptance on this install.
+    if (!legalOk) {
+      return (
+        <div className="h-screen w-screen bg-ink relative">
+          <LegalGateModal />
+        </div>
+      );
+    }
     return <MiniPlayer />;
+  }
+
+  // Retail desktop: block the main chrome until legal is accepted.
+  if (!legalOk) {
+    return (
+      <div className="h-screen w-screen flex flex-col overflow-hidden bg-ink relative">
+        {bgFx && (
+          <>
+            <div className="absolute inset-0 -z-10 grid-bg" />
+            <div className="absolute inset-0 -z-10 bg-gridFade" />
+          </>
+        )}
+        <TitleBar />
+        <div className="flex-1 grid place-items-center px-6">
+          <div className="text-center max-w-md opacity-40 pointer-events-none select-none">
+            <div className="text-2xl font-semibold neon-text mb-2">Kill-Chain</div>
+            <div className="text-sm text-dim">Agree to the license to continue.</div>
+          </div>
+        </div>
+        <LegalGateModal />
+      </div>
+    );
   }
 
   return (
@@ -272,7 +307,7 @@ export default function App() {
       <HotkeyOverlay />
       <HeadphoneWizard />
       <WhatsNewPanel />
-      {!onboardingDone && <OnboardingTour />}
+      {legalOk && !onboardingDone && <OnboardingTour />}
     </div>
   );
 }

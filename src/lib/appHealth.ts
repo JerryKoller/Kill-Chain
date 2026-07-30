@@ -15,7 +15,8 @@ export type HealthIssueId =
   | "device-lost"
   | "export-failed"
   | "webview-crash"
-  | "no-signal";
+  | "no-signal"
+  | "playback";
 
 export interface HealthIssue {
   id: HealthIssueId;
@@ -110,6 +111,25 @@ export function reportDeviceLost(reverted: boolean): void {
         useUIStore.getState().setView("settings");
         useAppHealthStore.getState().clear("device-lost");
       });
+    },
+  });
+}
+
+/** Playback failed (missing file, decode error, etc.). */
+export function reportPlaybackFailure(detail: string, path?: string | null): void {
+  useAppHealthStore.getState().raise({
+    id: "playback",
+    severity: "error",
+    title: "Playback failed",
+    detail,
+    actionLabel: path ? "Open Library" : "Dismiss",
+    action: () => {
+      if (path) {
+        void import("@/state/uiStore").then(({ useUIStore }) => {
+          useUIStore.getState().setView("library");
+        });
+      }
+      useAppHealthStore.getState().clear("playback");
     },
   });
 }

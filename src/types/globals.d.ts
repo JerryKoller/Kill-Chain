@@ -55,6 +55,7 @@ declare global {
         scan: (folders: string[]) => Promise<LibraryFileEntry[]>;
         getExportDir?: () => Promise<string>;
         statFile?: (filePath: string) => Promise<LibraryFileEntry | null>;
+        revealInFolder?: (filePath: string) => Promise<boolean>;
       };
       audioDevices?: {
         getDefaultOutputName: () => Promise<string | null>;

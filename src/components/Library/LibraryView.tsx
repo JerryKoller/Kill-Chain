@@ -133,6 +133,10 @@ export function LibraryView() {
   const rescan = useLibraryStore((s) => s.rescan);
   const removeFolder = useLibraryStore((s) => s.removeFolder);
   const clearAll = useLibraryStore((s) => s.clearAll);
+  const missingPaths = useLibraryStore((s) => s.missingPaths);
+  const verifying = useLibraryStore((s) => s.verifying);
+  const verifyMissing = useLibraryStore((s) => s.verifyMissing);
+  const pruneMissing = useLibraryStore((s) => s.pruneMissing);
   const setSort = useLibraryStore((s) => s.setSort);
   const setGroupBy = useLibraryStore((s) => s.setGroupBy);
   const setViewMode = useLibraryStore((s) => s.setViewMode);
@@ -327,9 +331,15 @@ export function LibraryView() {
         <GlassPanel intense className="p-8 text-center">
           <div className="text-5xl mb-3 opacity-70">♫</div>
           <div className="text-lg font-semibold">Library needs the desktop app</div>
-          <div className="text-sm text-dim mt-1 max-w-md mx-auto">
-            Folder scanning uses the Electron shell. Launch Kill-Chain as
-            the desktop app to build your library.
+          <div className="text-sm text-dim mt-2 max-w-lg mx-auto leading-relaxed">
+            Folder scanning and local file playback use the Electron shell.
+            You&apos;re running the web build — install or launch the Kill-Chain
+            desktop app to add music folders, repair missing paths, and hear
+            tracks through the sculpting engine.
+          </div>
+          <div className="text-[11px] text-dim mt-3 max-w-md mx-auto leading-relaxed">
+            Tip: you can still drop a single audio file onto this window in some
+            browsers, but the full Library arsenal is desktop-only.
           </div>
         </GlassPanel>
       ) : (
@@ -432,7 +442,50 @@ export function LibraryView() {
                   : pendingTags > 0
                     ? `Reading tags… ${pendingTags} left`
                     : `${orderedTracks.length}${collectionLabel ? ` ${collectionLabel}` : ""} track${orderedTracks.length === 1 ? "" : "s"}`}
+                {Object.keys(missingPaths).length > 0 && (
+                  <span className="text-plasma ml-2">
+                    · {Object.keys(missingPaths).length} missing
+                  </span>
+                )}
               </div>
+              {folders.length > 0 && (
+                <>
+                  <button
+                    onClick={() => {
+                      void verifyMissing().then((n) =>
+                        toast(
+                          n > 0
+                            ? `${n} missing file${n === 1 ? "" : "s"} — prune or re-add folders`
+                            : "All indexed files are still on disk",
+                          n > 0 ? "warn" : "success",
+                        ),
+                      );
+                    }}
+                    disabled={verifying || scanning || tracks.length === 0}
+                    className="btn-ghost text-xs disabled:opacity-40"
+                    title="Check whether indexed files still exist on disk"
+                  >
+                    {verifying ? "Checking…" : "Check missing"}
+                  </button>
+                  {Object.keys(missingPaths).length > 0 && (
+                    <button
+                      onClick={() => {
+                        const n = pruneMissing();
+                        toast(
+                          n > 0
+                            ? `Removed ${n} orphan${n === 1 ? "" : "s"} from Library`
+                            : "Nothing to prune",
+                          n > 0 ? "success" : "info",
+                        );
+                      }}
+                      className="btn-ghost text-xs text-plasma"
+                      title="Remove tracks whose files are missing (disk untouched)"
+                    >
+                      Prune orphans
+                    </button>
+                  )}
+                </>
+              )}
               {folders.length > 0 && (
                 <button
                   onClick={() => {
@@ -727,6 +780,9 @@ function CollectionBar({
   const createPlaylist = useLibraryStore((s) => s.createPlaylist);
   const renamePlaylist = useLibraryStore((s) => s.renamePlaylist);
   const deletePlaylist = useLibraryStore((s) => s.deletePlaylist);
+  const missingPaths = useLibraryStore((s) => s.missingPaths);
+  const rescan = useLibraryStore((s) => s.rescan);
+  const removeFromPlaylist = useLibraryStore((s) => s.removeFromPlaylist);
   const toast = useUIStore((s) => s.toast);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -775,6 +831,7 @@ function CollectionBar({
           {playlists.map((pl) => {
             const id: LibraryCollection = `pl:${pl.id}`;
             const active = collection === id;
+            const missingCount = pl.paths.filter((p) => missingPaths[p]).length;
             if (renamingId === pl.id) {
               return (
                 <input
@@ -804,14 +861,42 @@ function CollectionBar({
                       ? "bg-violet/20 text-white"
                       : "text-white/60 hover:text-white/90"
                   }`}
-                  title={`${pl.paths.length} track${pl.paths.length === 1 ? "" : "s"} — double-click to rename`}
+                  title={`${pl.paths.length} track${pl.paths.length === 1 ? "" : "s"}${
+                    missingCount ? ` · ${missingCount} missing` : ""
+                  } — double-click to rename`}
                 >
                   ≡ {pl.name}
                   <span className="text-dim ml-1 tabular-nums">{pl.paths.length}</span>
+                  {missingCount > 0 && (
+                    <span className="text-plasma ml-1 tabular-nums">{missingCount} missing</span>
+                  )}
                 </button>
                 {active && (
                   <>
                     <PlaylistChainControls id={pl.id} name={pl.name} />
+                    {missingCount > 0 && (
+                      <>
+                        <button
+                          onClick={() => {
+                            for (const p of pl.paths) {
+                              if (missingPaths[p]) removeFromPlaylist(pl.id, p);
+                            }
+                            toast(`Removed ${missingCount} orphan${missingCount === 1 ? "" : "s"} from playlist`);
+                          }}
+                          className="btn-ghost text-[10px] text-plasma px-1.5"
+                          title="Remove missing tracks from this playlist only"
+                        >
+                          Remove orphans
+                        </button>
+                        <button
+                          onClick={() => void rescan()}
+                          className="btn-ghost text-[10px] px-1.5"
+                          title="Rescan folders — may rediscover moved files if they stayed under a watched folder"
+                        >
+                          Rescan folder
+                        </button>
+                      </>
+                    )}
                     <button
                       onClick={() => {
                         if (confirmDeleteId === pl.id) {
@@ -1129,6 +1214,7 @@ function TrackRow({
   const cover = useCoverStore((s) => s.covers[track.path]);
   const requestCover = useCoverStore((s) => s.requestCover);
   const logEntry = useMissionLogStore((s) => s.entries[trackKey(track.path)]);
+  const isMissing = useLibraryStore((s) => !!s.missingPaths[track.path]);
   useEffect(() => {
     requestCover(track.path);
   }, [track.path, requestCover]);
@@ -1153,7 +1239,9 @@ function TrackRow({
           ? "bg-cyan/10"
           : isSelected
             ? "bg-white/[0.07]"
-            : "hover:bg-white/[0.04]"
+            : isMissing
+              ? "bg-plasma/5 hover:bg-plasma/10"
+              : "hover:bg-white/[0.04]"
       }`}
       style={{ position: "absolute", top, left: 0, right: 0, height: ROW_H }}
     >
@@ -1212,6 +1300,14 @@ function TrackRow({
             }
           >
             {logEntry.chain.tractor ? "◎LOCK" : "◎"}
+          </span>
+        )}
+        {isMissing && (
+          <span
+            className="shrink-0 rounded-[3px] border border-plasma/50 bg-plasma/15 text-plasma text-[8px] font-bold leading-none px-1 py-[2px]"
+            title="File not found on disk — was it moved? Use Reveal in Explorer, Rescan, or Prune orphans."
+          >
+            MISSING
           </span>
         )}
       </div>
@@ -1333,6 +1429,20 @@ function TrackMenu({
         }}
       >
         ＋ Add to queue
+      </button>
+      <button
+        className={item}
+        onClick={() => {
+          void useLibraryStore.getState().revealInExplorer(track.path).then((ok) => {
+            toast(
+              ok ? "Revealed in Explorer" : "Could not reveal — file or folder may be gone",
+              ok ? "success" : "warn",
+            );
+          });
+          onClose();
+        }}
+      >
+        ⌕ Reveal in Explorer
       </button>
 
       {divider}
@@ -1518,8 +1628,22 @@ function EmptyState({
     sub = "Those folders didn't contain supported audio files.";
   } else {
     title = "Your library is empty";
-    sub = "Add folders from your computer and Kill-Chain will index every track inside.";
+    sub =
+      "Library is your music arsenal — add folders so Kill-Chain can index tracks, or drop audio files onto the window to hear them sculpted.";
   }
+
+  const loadFile = () => {
+    void (async () => {
+      const path = await window.playground?.openAudioFile?.();
+      if (!path) return;
+      const { usePlayerStore } = await import("@/state/playerStore");
+      const name = path.split(/[\\/]/).pop() || "Track";
+      const src = `playground-audio:///lib?p=${encodeURIComponent(path)}`;
+      await usePlayerStore.getState().setQueue([{ id: path, src, name }], 0);
+      await usePlayerStore.getState().play();
+      useUIStore.getState().toast(`Loaded "${name}"`, "success");
+    })();
+  };
 
   return (
     <div className="h-full grid place-items-center p-8">
@@ -1528,9 +1652,19 @@ function EmptyState({
         <div className="text-sm font-semibold text-white/80">{title}</div>
         <div className="text-xs text-dim max-w-sm leading-relaxed">{sub}</div>
         {!hasFolders && !scanning && collection === "all" && !searching && (
-          <button onClick={onAdd} className="kc-btn kc-btn--primary mt-2">
-            ＋ Add folders
-          </button>
+          <div className="mt-3 flex flex-col sm:flex-row gap-2 items-center justify-center">
+            <button onClick={onAdd} className="kc-btn kc-btn--primary">
+              ＋ Add folders
+            </button>
+            <button onClick={loadFile} className="kc-btn kc-btn--ghost">
+              Load a file
+            </button>
+          </div>
+        )}
+        {!hasFolders && !scanning && collection === "all" && !searching && (
+          <div className="text-[10px] text-dim mt-2">
+            Or drop files / folders onto the Kill-Chain window
+          </div>
         )}
       </div>
     </div>

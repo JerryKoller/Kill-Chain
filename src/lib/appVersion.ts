@@ -3,14 +3,22 @@ export const APP_VERSION = "3.2.1";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
-  "Kill Chain — a universal Windows audio engine for headphones, speakers, and home theater.";
+  "Kill-Chain — a place to play with and reshape your audio.";
 
 /** Secondary description for About and README surfaces. */
 export const PRODUCT_DESCRIPTION =
-  "Correction profiles for headphones, portable speakers, soundbars, and TVs; spatial processing for headphone and room layouts; full DSP, analysis, and restoration.";
+  "Load music, sculpt tone, fix and restore tracks, and route sound through a full DSP chain — with Fire Command, Airspace, and Morph waiting when you want to go deeper.";
 
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
+  {
+    title: "Retail first-run",
+    body: "Legal agree gate, a 7-step basic tour (Library → Sculptor → Tractor → Armory), and Kill-Chain backup for Settings + Library + Mission Log.",
+  },
+  {
+    title: "Library repair",
+    body: "Missing-file badges, prune orphans, Reveal in Explorer, and clearer playback errors when a track was moved.",
+  },
   {
     title: "Fire Command stability audit",
     body: "Live keys follow Edit A/B, morph/scene scrub no longer corrupts patches, FX knobs update the bus live, and project open while editing B loads A correctly.",

@@ -65,6 +65,16 @@ export interface SettingsState {
   companionMode: boolean;
   /** Onboarding tour shown / dismissed. */
   onboardingDone: boolean;
+  /**
+   * ISO timestamp when the user accepted the current legal package.
+   * Null until first-run agree. Re-run tour does not clear this.
+   */
+  legalAcceptedAt: string | null;
+  /**
+   * LEGAL_VERSION string that was accepted. Must match the current package
+   * or the gate re-opens (version bump).
+   */
+  legalAcceptedVersion: string | null;
   /** Mini-player mode (compact always-on-top strip). */
   miniMode: boolean;
   /** Show tooltips on hover. */
@@ -154,6 +164,8 @@ const DEFAULTS: Omit<SettingsState, "set" | "toggle"> = {
   headphone: "neutral",
   companionMode: false,
   onboardingDone: false,
+  legalAcceptedAt: null,
+  legalAcceptedVersion: null,
   miniMode: false,
   tooltipsEnabled: true,
   uiSounds: true,

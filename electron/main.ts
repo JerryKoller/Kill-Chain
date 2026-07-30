@@ -551,6 +551,30 @@ ipcMain.handle("library:statFile", async (_e, filePath: string): Promise<LibFile
   }
 });
 
+/** Reveal a library file (or its parent folder) in Explorer. */
+ipcMain.handle("library:revealInFolder", async (_e, filePath: string): Promise<boolean> => {
+  try {
+    if (typeof filePath !== "string" || !filePath) return false;
+    try {
+      await fs.access(filePath);
+      shell.showItemInFolder(filePath);
+      return true;
+    } catch {
+      // File missing — open the parent folder if it still exists.
+      const parent = path.dirname(filePath);
+      try {
+        await fs.access(parent);
+        await shell.openPath(parent);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  } catch {
+    return false;
+  }
+});
+
 /** Image picker for album artwork (Fire → Library export). */
 ipcMain.handle(
   "dialog:openImage",

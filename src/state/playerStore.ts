@@ -197,6 +197,36 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       console.error(
         `[player] <audio> error: code=${err?.code} message="${err?.message ?? ""}"`,
       );
+      const src = el.currentSrc || el.src || get().src || "";
+      let path: string | null = null;
+      try {
+        if (src.includes("?p=")) path = decodeURIComponent(src.split("?p=")[1]);
+      } catch {
+        path = null;
+      }
+      const code = err?.code ?? 0;
+      // MEDIA_ERR_SRC_NOT_SUPPORTED (4) / NETWORK (2) usually mean a moved file.
+      const moved =
+        code === 2 ||
+        code === 4 ||
+        /not found|failed to load|no supported/i.test(err?.message ?? "");
+      const detail = moved
+        ? "File not found — was it moved or renamed? Re-add the folder or prune missing tracks in Library."
+        : code === 3
+          ? "Could not decode this file. The format may be unsupported or the file is damaged."
+          : `Playback error${err?.message ? `: ${err.message}` : ""}.`;
+      void import("@/state/uiStore").then(({ useUIStore }) => {
+        useUIStore.getState().toast(detail, "error");
+      });
+      void import("@/lib/appHealth").then(({ reportPlaybackFailure }) => {
+        reportPlaybackFailure(detail, path);
+      });
+      if (path) {
+        void import("@/state/libraryStore").then(({ useLibraryStore }) => {
+          useLibraryStore.getState().markMissing(path!);
+        });
+      }
+      set({ status: get().src ? "loaded" : "empty" });
     });
     el.addEventListener("ended", () => {
       const s = get();
@@ -746,6 +776,29 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       set({ status: "playing" });
     } catch (err) {
       console.error("[player] el.play() REJECTED:", err);
+      const msg =
+        err instanceof DOMException && err.name === "NotSupportedError"
+          ? "File not found — was it moved or renamed?"
+          : err instanceof Error
+            ? err.message
+            : "Playback was blocked";
+      void import("@/state/uiStore").then(({ useUIStore }) => {
+        useUIStore.getState().toast(msg, "error");
+      });
+      void import("@/lib/appHealth").then(({ reportPlaybackFailure }) => {
+        reportPlaybackFailure(msg, get().src);
+      });
+      const src = get().src;
+      if (src?.includes("?p=")) {
+        try {
+          const path = decodeURIComponent(src.split("?p=")[1]);
+          void import("@/state/libraryStore").then(({ useLibraryStore }) => {
+            useLibraryStore.getState().markMissing(path);
+          });
+        } catch {
+          /* ignore */
+        }
+      }
     }
   },
 

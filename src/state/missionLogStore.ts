@@ -245,6 +245,11 @@ interface MissionLogState {
   exportSession: () => Promise<boolean>;
   /** Import a `.kcsession` pack — returns how many records landed. */
   importSession: () => Promise<number>;
+  /** Apply a Kill-Chain backup Mission Log slice. */
+  applyBackup: (
+    data: { entries: Record<string, SourceMemory>; autoRestore?: boolean },
+    mode: "merge" | "replace",
+  ) => void;
 }
 
 export const useMissionLogStore = create<MissionLogState>((set, get) => {
@@ -426,6 +431,36 @@ export const useMissionLogStore = create<MissionLogState>((set, get) => {
       } catch {
         return 0;
       }
+    },
+
+    applyBackup: (data, mode) => {
+      const incoming: Record<string, SourceMemory> = {};
+      if (data.entries && typeof data.entries === "object") {
+        for (const [key, raw] of Object.entries(data.entries)) {
+          const s = sanitizeSourceMemory(key, raw);
+          if (s) incoming[key] = s;
+        }
+      }
+      let entries: Record<string, SourceMemory>;
+      if (mode === "replace") {
+        entries = enforceCap(incoming);
+      } else {
+        entries = { ...get().entries };
+        for (const [key, s] of Object.entries(incoming)) {
+          const prev = entries[key];
+          entries[key] = {
+            ...s,
+            savedAt: prev?.savedAt ?? s.savedAt,
+            pinned: prev?.pinned || s.pinned,
+            updatedAt: Date.now(),
+          };
+        }
+        entries = enforceCap(entries);
+      }
+      const autoRestore =
+        typeof data.autoRestore === "boolean" ? data.autoRestore : get().autoRestore;
+      set({ entries, autoRestore });
+      schedulePersist({ entries, autoRestore });
     },
   };
 });

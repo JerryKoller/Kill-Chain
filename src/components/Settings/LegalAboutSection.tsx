@@ -1,5 +1,7 @@
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { APP_VERSION, PRODUCT_TAGLINE, PRODUCT_DESCRIPTION } from "@/lib/appVersion";
+import { LEGAL_VERSION, isLegalAccepted } from "@/lib/legal";
+import { useSettingsStore } from "@/state/settingsStore";
 
 /** Placeholder URLs — replace with attorney-approved pages before commercial sale. */
 const EULA_URL = "https://github.com/JerryKoller/Kill-Chain/blob/main/LEGAL/EULA.md";
@@ -16,6 +18,10 @@ function Section({ title, sub }: { title: string; sub?: string }) {
 }
 
 export function LegalAboutSection() {
+  const legalAcceptedAt = useSettingsStore((s) => s.legalAcceptedAt);
+  const legalAcceptedVersion = useSettingsStore((s) => s.legalAcceptedVersion);
+  const accepted = isLegalAccepted(legalAcceptedVersion, legalAcceptedAt);
+
   return (
     <GlassPanel intense className="p-5">
       <Section
@@ -25,6 +31,17 @@ export function LegalAboutSection() {
       <p className="mt-3 text-sm text-white/80 leading-relaxed">{PRODUCT_DESCRIPTION}</p>
 
       <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-[12px] text-white/75 leading-relaxed space-y-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.25em] text-dim mb-1">License acceptance</div>
+          {accepted ? (
+            <span>
+              Accepted {LEGAL_VERSION}
+              {legalAcceptedAt ? ` · ${new Date(legalAcceptedAt).toLocaleString()}` : ""}
+            </span>
+          ) : (
+            <span className="text-plasma">Not accepted for {LEGAL_VERSION}</span>
+          )}
+        </div>
         <div>
           <div className="text-[10px] uppercase tracking-[0.25em] text-dim mb-1">Trademark notice</div>
           Kill Chain is not affiliated with, endorsed by, or sponsored by Sony, Bose, Apple, JBL,
