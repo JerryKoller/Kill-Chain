@@ -40,6 +40,9 @@ const OUTPUT_CHOICES: Array<{
   { label: "Not sure", sub: "Neutral — no correction curve", profileId: "neutral" },
 ];
 
+const LIBRARY_STEP_WEB_BODY =
+  "The full Library (folder scan and playlists) needs the Kill-Chain desktop app. In the browser, drop an audio file onto the window to start sculpting.";
+
 /**
  * 7-step BASIC program. Legal gate runs separately before this.
  * In-depth explanations live in the Glossary — keep these short.
@@ -87,7 +90,7 @@ const STEPS: Step[] = [
   {
     title: "Advanced tools & shortcuts",
     body:
-      "When you're ready: Fire Command (synth + sequencer), Airspace (in-app browser into the chain), and Morph Lab. Press ? for the keyboard cheat sheet — Space plays/pauses. Field Manual (Glossary) has the deep dive.",
+      "When you're ready: Fire Command (synth + sequencer), Airspace (in-app browser into the chain), and Morph Lab. Press ? for the keyboard cheat sheet — Space plays/pauses. The Glossary has the deep dive.",
     cta: "Open Glossary",
     view: "glossary",
   },
@@ -96,6 +99,7 @@ const STEPS: Step[] = [
 export function OnboardingTour() {
   const [step, setStep] = useState(0);
   const [closed, setClosed] = useState(false);
+  const libraryAvailable = !!window.playground?.library;
   const setOnboardingDone = useSettingsStore((s) => s.set);
   const setHeadphone = useSettingsStore((s) => s.set);
   const setHeadphoneProfile = useAudioStore((s) => s.setHeadphoneProfile);
@@ -159,6 +163,8 @@ export function OnboardingTour() {
 
   if (closed) return null;
   const s = STEPS[step];
+  const bodyText =
+    s.libraryCta && !libraryAvailable ? LIBRARY_STEP_WEB_BODY : s.body;
 
   return (
     <AnimatePresence>
@@ -180,7 +186,7 @@ export function OnboardingTour() {
             Step {step + 1} / {STEPS.length}
           </div>
           <div className="text-2xl font-semibold neon-text mb-3">{s.title}</div>
-          <div className="text-sm text-white/85 leading-relaxed mb-5">{s.body}</div>
+          <div className="text-sm text-white/85 leading-relaxed mb-5">{bodyText}</div>
 
           {s.outputSetup && (
             <div className="mb-5 flex flex-col gap-2">
@@ -201,7 +207,7 @@ export function OnboardingTour() {
             </div>
           )}
 
-          {s.libraryCta && (
+          {s.libraryCta && libraryAvailable && (
             <div className="mb-5 flex flex-col gap-2">
               <button
                 type="button"
@@ -227,6 +233,13 @@ export function OnboardingTour() {
                 You can also drop files onto the window any time.
               </p>
             </div>
+          )}
+
+          {s.libraryCta && !libraryAvailable && (
+            <p className="mb-5 text-[11px] text-dim leading-relaxed rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+              Library folder scan is desktop-only. Continue the tour to sculpt
+              with Sculptor, or drop a file onto the window when you&apos;re ready.
+            </p>
           )}
 
           <div className="flex items-center justify-between gap-2">

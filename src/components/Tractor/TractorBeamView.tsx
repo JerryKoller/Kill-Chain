@@ -1369,8 +1369,8 @@ function EmptyState() {
       <KCEmptyState
         className="w-full max-w-md"
         icon={<IconTractor width={40} height={40} />}
-        title="No target acquired"
-        hint="Hit LOCK while something plays, load a file, or pick a library track. Tractor Command reads its health, prepares the full correction manifest, and waits for your go."
+        title="Nothing playing yet"
+        hint="Load a file, pick a Library track, or play something while Tractor listens. It reads the track's balance and suggests an EQ curve for your output."
       />
     </div>
   );

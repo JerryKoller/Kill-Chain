@@ -9,6 +9,9 @@ export const PRODUCT_TAGLINE =
 export const PRODUCT_DESCRIPTION =
   "Load music, sculpt tone, fix and restore tracks, and route sound through a full DSP chain — with Fire Command, Airspace, and Morph waiting when you want to go deeper.";
 
+/** Boot splash subtitle — keep in sync with index.html `.boot-sub`. */
+export const PRODUCT_BOOT_SUBTITLE = "Play & reshape audio";
+
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {

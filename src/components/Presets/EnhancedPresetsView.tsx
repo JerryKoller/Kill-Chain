@@ -10,6 +10,7 @@ import { usePreviewSession } from "@/hooks/usePreviewSession";
 import { useUserPresetsStore, type UserPreset } from "@/state/userPresetsStore";
 import { useFavoritesStore } from "@/state/favoritesStore";
 import { SessionSnapshotsPanel } from "./SessionSnapshotsPanel";
+import { KCEmptyState, IconArmory } from "@/components/kcds";
 
 type AnyPreset = Preset | UserPreset;
 
@@ -240,12 +241,21 @@ export function EnhancedPresetsView() {
           </div>
 
           {presetsInActive.length === 0 && (
-            <div className="text-center py-12">
-              <div className="text-white/40 text-sm">
-                {activeCollection?.id === "favorites"
-                  ? "No favorites yet — click the heart to add presets"
-                  : "This collection is empty"}
-              </div>
+            <div className="py-12">
+              <KCEmptyState
+                className="w-full max-w-md mx-auto"
+                icon={<IconArmory width={36} height={36} className="opacity-60" />}
+                title={
+                  activeCollection?.id === "favorites"
+                    ? "No favorites yet"
+                    : "This collection is empty"
+                }
+                hint={
+                  activeCollection?.id === "favorites"
+                    ? "Click the heart on any preset to pin it here."
+                    : "Save a Sculptor state or browse factory presets to fill this collection."
+                }
+              />
             </div>
           )}
         </GlassPanel>

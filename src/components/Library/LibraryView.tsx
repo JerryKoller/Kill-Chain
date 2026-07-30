@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { ActionBar } from "@/components/shared/ActionBar";
 import { NeonButton } from "@/components/shared/NeonButton";
@@ -8,6 +8,7 @@ import { usePlayerStore } from "@/state/playerStore";
 import { useCoverStore, raiseCoverCapacity } from "@/state/coverStore";
 import { useVisualizerStore } from "@/state/visualizerStore";
 import { MissionLogPanel } from "@/components/MissionLog/MissionLogPanel";
+import { KCEmptyState, IconLibrary } from "@/components/kcds";
 import {
   useMissionLogStore,
   trackKey,
@@ -324,23 +325,28 @@ export function LibraryView() {
       <ActionBar
         title="Library"
         code="KC-02"
-        subtitle="Your arsenal — point it at folders, then sort, search, and deploy any track"
+        subtitle="Your music — add folders, then browse, search, and play into the sculpting engine"
       />
 
       {!available ? (
-        <GlassPanel intense className="p-8 text-center">
-          <div className="text-5xl mb-3 opacity-70">♫</div>
-          <div className="text-lg font-semibold">Library needs the desktop app</div>
-          <div className="text-sm text-dim mt-2 max-w-lg mx-auto leading-relaxed">
-            Folder scanning and local file playback use the Electron shell.
-            You&apos;re running the web build — install or launch the Kill-Chain
-            desktop app to add music folders, repair missing paths, and hear
-            tracks through the sculpting engine.
-          </div>
-          <div className="text-[11px] text-dim mt-3 max-w-md mx-auto leading-relaxed">
-            Tip: you can still drop a single audio file onto this window in some
-            browsers, but the full Library arsenal is desktop-only.
-          </div>
+        <GlassPanel intense className="p-8">
+          <KCEmptyState
+            className="w-full max-w-lg mx-auto"
+            icon={<IconLibrary width={40} height={40} className="opacity-60" />}
+            title="Library needs the desktop app"
+            hint={
+              <>
+                Folder scanning and local file playback use the Electron shell.
+                You&apos;re on the web build — install or launch the Kill-Chain
+                desktop app to add music folders, repair missing paths, and hear
+                tracks through the sculpting engine.
+                <span className="block mt-2 text-[11px]">
+                  Tip: you can still drop a single audio file onto this window in
+                  some browsers, but the full Library is desktop-only.
+                </span>
+              </>
+            }
+          />
         </GlassPanel>
       ) : (
         <>
@@ -1599,37 +1605,37 @@ function EmptyState({
   searching: boolean;
   onAdd: () => void;
 }) {
-  let icon = "♫";
+  let icon: ReactNode = <IconLibrary width={40} height={40} className="opacity-60" />;
   let title: string;
-  let sub: string;
+  let hint: string;
 
   if (scanning) {
-    icon = "⟳";
+    icon = <span className="text-4xl opacity-60">⟳</span>;
     title = "Scanning your folders…";
-    sub = "Indexing every audio file it can find.";
+    hint = "Indexing every audio file it can find.";
   } else if (searching) {
-    icon = "⌕";
+    icon = <span className="text-4xl opacity-60">⌕</span>;
     title = "No matches";
-    sub = "Nothing in this view matches your search.";
+    hint = "Nothing in this view matches your search.";
   } else if (collection === "favorites") {
-    icon = "☆";
+    icon = <span className="text-4xl opacity-60">☆</span>;
     title = "No favorites yet";
-    sub = "Hover a track and click the star to pin it here.";
+    hint = "Hover a track and click the star to pin it here.";
   } else if (collection === "recent") {
-    icon = "◷";
+    icon = <span className="text-4xl opacity-60">◷</span>;
     title = "Nothing played yet";
-    sub = "Tracks you play will show up here, newest first.";
+    hint = "Tracks you play will show up here, newest first.";
   } else if (playlistName) {
-    icon = "≡";
+    icon = <span className="text-4xl opacity-60">≡</span>;
     title = `"${playlistName}" is empty`;
-    sub = "Right-click any track (or use its ⋯ menu) and choose Add to playlist.";
+    hint = "Right-click any track (or use its ⋯ menu) and choose Add to playlist.";
   } else if (hasFolders) {
     title = "No audio files found";
-    sub = "Those folders didn't contain supported audio files.";
+    hint = "Those folders didn't contain supported audio files.";
   } else {
     title = "Your library is empty";
-    sub =
-      "Library is your music arsenal — add folders so Kill-Chain can index tracks, or drop audio files onto the window to hear them sculpted.";
+    hint =
+      "Add folders so Kill-Chain can index tracks, or drop audio files onto the window to hear them sculpted.";
   }
 
   const loadFile = () => {
@@ -1645,28 +1651,34 @@ function EmptyState({
     })();
   };
 
+  const showAdd =
+    !hasFolders && !scanning && collection === "all" && !searching && !!window.playground?.library;
+
   return (
     <div className="h-full grid place-items-center p-8">
-      <div className="kc-empty w-full max-w-md">
-        <div className="text-4xl opacity-60">{icon}</div>
-        <div className="text-sm font-semibold text-white/80">{title}</div>
-        <div className="text-xs text-dim max-w-sm leading-relaxed">{sub}</div>
-        {!hasFolders && !scanning && collection === "all" && !searching && (
-          <div className="mt-3 flex flex-col sm:flex-row gap-2 items-center justify-center">
-            <button onClick={onAdd} className="kc-btn kc-btn--primary">
-              ＋ Add folders
-            </button>
-            <button onClick={loadFile} className="kc-btn kc-btn--ghost">
-              Load a file
-            </button>
-          </div>
-        )}
-        {!hasFolders && !scanning && collection === "all" && !searching && (
-          <div className="text-[10px] text-dim mt-2">
-            Or drop files / folders onto the Kill-Chain window
-          </div>
-        )}
-      </div>
+      <KCEmptyState
+        className="w-full max-w-md"
+        icon={icon}
+        title={title}
+        hint={hint}
+        action={
+          showAdd ? (
+            <>
+              <div className="flex flex-col sm:flex-row gap-2 items-center justify-center">
+                <button onClick={onAdd} className="kc-btn kc-btn--primary">
+                  ＋ Add folders
+                </button>
+                <button onClick={loadFile} className="kc-btn kc-btn--ghost">
+                  Load a file
+                </button>
+              </div>
+              <div className="text-[10px] text-dim mt-2">
+                Or drop files / folders onto the Kill-Chain window
+              </div>
+            </>
+          ) : undefined
+        }
+      />
     </div>
   );
 }

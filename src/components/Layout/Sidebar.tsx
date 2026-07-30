@@ -30,18 +30,16 @@ interface NavDef {
 }
 
 /**
- * Tools grouped by battlefield role:
+ * Tools grouped by role:
  *   Generators  — things that PRODUCE sound
  *   Modulators  — things that SHAPE the sound passing through
- *   Utilities   — recon, training and stored loadouts
- * v2.2: custom KCDS SVG icons replace the emoji glyphs, and each entry
- * lights in its own module accent when active.
+ *   Utilities   — inspect, train, and saved presets
  */
 const GROUPS: { title: string; items: NavDef[] }[] = [
   {
     title: "Generators",
     items: [
-      { id: "library", label: "Library", sub: "Track arsenal", Icon: IconLibrary },
+      { id: "library", label: "Library", sub: "Browse & play tracks", Icon: IconLibrary },
       { id: "fire", label: "Fire Command", sub: "Tactical synthesizer", Icon: IconFire },
       { id: "airspace", label: "Airspace", sub: "Browse the web thru EQ", Icon: IconAirspace },
     ],
@@ -54,23 +52,23 @@ const GROUPS: { title: string; items: NavDef[] }[] = [
       { id: "calibration", label: "Calibration", sub: "Zero in to your ears", Icon: IconCalibration },
       { id: "morphlab", label: "Morph Lab", sub: "Blend in 2D", Icon: IconMorph },
       { id: "reactor", label: "Reactor", sub: "Perform live", Icon: IconReactor },
-      { id: "dimension", label: "3rd Dimension", sub: "Deploy sound in a room", Icon: IconDimension },
+      { id: "dimension", label: "3rd Dimension", sub: "Place sound in a room", Icon: IconDimension },
     ],
   },
   {
     title: "Utilities",
     items: [
       { id: "chain", label: "Kill Chain", sub: "Live signal flow map", Icon: IconChain },
-      { id: "scope", label: "Scope", sub: "Recon the signal", Icon: IconScope },
+      { id: "scope", label: "Scope", sub: "Watch the waveform", Icon: IconScope },
       { id: "trainer", label: "Golden Ears", sub: "Sharpen your hearing", Icon: IconEars },
-      { id: "presets", label: "Armory", sub: "Sound loadouts", Icon: IconArmory },
+      { id: "presets", label: "Armory", sub: "Saved Sculptor presets", Icon: IconArmory },
     ],
   },
 ];
 
 const SECONDARY: NavDef[] = [
-  { id: "glossary", label: "Glossary", sub: "Field manual", Icon: IconGlossary },
-  { id: "settings", label: "Settings", sub: "Comms · gear · theme", Icon: IconSettings },
+  { id: "glossary", label: "Glossary", sub: "Help & deep dives", Icon: IconGlossary },
+  { id: "settings", label: "Settings", sub: "Audio · gear · theme", Icon: IconSettings },
 ];
 
 /** Live output-device label for the profile card (falls back to "System default"). */
@@ -109,7 +107,7 @@ export function Sidebar() {
   return (
     <aside className="w-56 shrink-0 p-3 flex flex-col gap-2 min-h-0">
       <div className="px-3 pt-2 pb-3 shrink-0">
-        <div className="kc-label text-white/40">Universal Windows audio engine</div>
+        <div className="kc-label text-white/40">Play &amp; reshape audio</div>
         <div className="mt-1 text-lg font-display neon-text font-bold tracking-[0.12em] uppercase">
           Kill-Chain
         </div>
