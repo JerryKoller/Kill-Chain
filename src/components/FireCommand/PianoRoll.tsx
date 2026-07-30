@@ -38,6 +38,7 @@ import { useRollFit, ROLL_ZOOM_MAX, ROLL_ZOOM_MIN, setRollHScroll, subscribeRoll
 import { PatternBarsControls } from "./PatternBarsControls";
 import { ScopedPlayButton } from "./ScopedPlayButton";
 import { PatternSelect } from "./PatternSelect";
+import { ToolbarMenu } from "./ToolbarMenu";
 import { EditorToolbarGroup, EditorToolbarDivider } from "./EditorShell";
 
 export const PIANO_GUTTER = 46;
@@ -213,15 +214,17 @@ function readStoredSnap(): number {
   return 1; // default 1/16
 }
 
-/** True if a 1-step cell overlaps an existing note on the same pitch. */
+/** True if a 1-step cell overlaps an existing note on the same pitch (+ channel). */
 function cellOccupied(
   notes: RollNote[],
   pitch: number,
   cell: number,
   ignoreId?: string,
+  ch?: number,
 ): boolean {
   for (const n of notes) {
     if (ignoreId && n.id === ignoreId) continue;
+    if (ch != null && (n.ch ?? 0) !== ch) continue;
     if (n.midi !== pitch) continue;
     // Interval [step, step+len) vs cell [cell, cell+1)
     if (n.step < cell + 1 && n.step + n.len > cell) return true;
@@ -237,10 +240,12 @@ function clampLenBeforeNext(
   wanted: number,
   grid: number,
   ignoreId?: string,
+  ch?: number,
 ): number {
   let max = wanted;
   for (const n of notes) {
     if (ignoreId && n.id === ignoreId) continue;
+    if (ch != null && (n.ch ?? 0) !== ch) continue;
     if (n.midi !== pitch) continue;
     if (n.step >= step) max = Math.min(max, n.step - step);
   }
@@ -864,7 +869,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
     const grid = snapRef.current;
     const snapped = Math.max(0, quantizeTo(step, grid));
     const live = useFireSequencerStore.getState().notes;
-    const capped = clampLenBeforeNext(live, pitch, snapped, Math.max(grid, len), grid);
+    const capped = clampLenBeforeNext(live, pitch, snapped, Math.max(grid, len), grid, undefined, activeChannel);
     return {
       id: `__ghost_${snapped}_${pitch}_${Math.random().toString(36).slice(2, 7)}`,
       step: snapped,
@@ -1101,7 +1106,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         if (origin) {
           const live = useFireSequencerStore.getState().notes;
           const grid = snapRef.current;
-          origin.len = clampLenBeforeNext(live, origin.midi, origin.step, lastLenRef.current, grid);
+          origin.len = clampLenBeforeNext(live, origin.midi, origin.step, lastLenRef.current, grid, undefined, activeChannel);
           d.painted = new Set([`${origin.step}:${origin.midi}`]);
           d.ghosts = [origin];
           previewRef.current.ghosts = d.ghosts;
@@ -1117,7 +1122,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           d.painted = painted;
           if (!painted.has(key)) {
             const live = useFireSequencerStore.getState().notes;
-            const blocked = cellOccupied(live, pitch, snapped);
+            const blocked = cellOccupied(live, pitch, snapped, undefined, activeChannel);
             painted.add(key);
             if (!blocked) {
               const g = beginGhost(snapped, pitch, lastLenRef.current);
@@ -1146,7 +1151,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         const grid = snapRef.current;
         const end = Math.max(d.orig.step + grid, step);
         const rawLen = snapLenTo(end - d.orig.step, grid);
-        g.len = clampLenBeforeNext(live, g.midi, d.orig.step, rawLen, grid);
+        g.len = clampLenBeforeNext(live, g.midi, d.orig.step, rawLen, grid, undefined, activeChannel);
         g.step = d.orig.step;
         g.midi = d.orig.midi;
         previewRef.current.ghosts = d.ghosts ?? [g];
@@ -1201,7 +1206,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       const endStep = (x - GUTTER) / cw - (d.grabOffsetSteps ?? 0);
       const live = useFireSequencerStore.getState().notes;
       const rawLen = snapLenTo(endStep - d.orig.step, grid);
-      const len = clampLenBeforeNext(live, d.orig.midi, d.orig.step, rawLen, grid, d.noteId ?? undefined);
+      const len = clampLenBeforeNext(live, d.orig.midi, d.orig.step, rawLen, grid, d.noteId ?? undefined, activeChannel);
       previewRef.current.overrides.set(d.noteId!, { len });
       canvas.style.cursor = "ew-resize";
       schedulePaint();
@@ -1523,10 +1528,32 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   };
 
   useEffect(() => {
-    if (selectedIds.size === 0) return;
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
+      if (
+        target.tagName === "INPUT"
+        || target.tagName === "TEXTAREA"
+        || target.tagName === "SELECT"
+        || target.isContentEditable
+      ) return;
+      // Don't steal Del/Ctrl+A from the arrangement playlist.
+      const t = e.target instanceof Element ? e.target : null;
+      if (t?.closest("[data-fire-arrangement]")) return;
+      const inRoll = !!t?.closest("[data-fire-piano-roll]");
+      const rollHovered = !!document.querySelector("[data-fire-piano-roll]:hover");
+      if (!inRoll && !rollHovered) return;
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        const st = useFireSequencerStore.getState();
+        const ch = st.activeChannel;
+        setSelectedIds(new Set(
+          st.notes.filter((n) => (n.ch ?? 0) === ch).map((n) => n.id),
+        ));
+        return;
+      }
+
+      if (selectedIds.size === 0) return;
       const ids = [...selectedIds];
       if (e.key === "Delete" || e.key === "Backspace") {
         removeNotes(ids);
@@ -1592,7 +1619,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   };
 
   return (
-    <div>
+    <div data-fire-piano-roll>
       <div
         className="mb-2 editor-toolbar rounded-xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent"
         title="Draw: click places, drag stretches length, drag across pitches paints · edges resize · double-click / Alt-drag / RMB erase · Shift+drag velocity"
@@ -1603,250 +1630,265 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
             title="Play / pause this pattern only"
           />
           <PatternSelect />
-          <PatternBarsControls />
+          <ToolbarMenu label="Bars" value={`${bars}`} panelClassName="w-auto min-w-[16rem]">
+            <PatternBarsControls />
+          </ToolbarMenu>
         </EditorToolbarGroup>
         <EditorToolbarDivider />
-        <EditorToolbarGroup label="Tool">
-          <div className="inline-flex h-8 rounded-lg border border-white/12 bg-black/30 p-0.5">
+        <ToolbarMenu
+          label="Tool"
+          value={tool === "draw" ? "Draw" : tool === "select" ? "Select" : "Erase"}
+          panelClassName="w-44"
+        >
+          <div className="flex flex-col gap-0.5">
             {([
-              ["draw", "Draw"],
-              ["select", "Select"],
-              ["erase", "Erase"],
-            ] as const).map(([id, label]) => (
+              ["draw", "Draw", "Place a note, drag to set length; drag across pitches to paint. Alt-drag erases."],
+              ["select", "Select", "Select / move — drag empty to marquee, click empty to deselect"],
+              ["erase", "Erase", "Erase — left-drag deletes (right-drag always erases)"],
+            ] as const).map(([id, label, tip]) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setTool(id)}
-                className="h-7 px-2.5 text-[10px] font-bold rounded-md transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
+                className="w-full h-8 px-2.5 text-left text-[11px] font-bold rounded-md transition"
                 style={
                   tool === id
                     ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0", boxShadow: "inset 0 0 0 1px rgba(255,106,61,0.45)" }
-                    : { color: "rgba(255,255,255,0.45)" }
+                    : { color: "rgba(255,255,255,0.55)" }
                 }
                 aria-pressed={tool === id}
-                title={
-                  id === "draw"
-                    ? "Place a note, drag to set length; drag across pitches to paint. Alt-drag erases."
-                    : id === "select"
-                      ? "Select / move — drag empty to marquee, click empty to deselect"
-                      : "Erase — left-drag deletes (right-drag always erases)"
-                }
+                title={tip}
               >
                 {label}
               </button>
             ))}
           </div>
-        </EditorToolbarGroup>
+        </ToolbarMenu>
         <EditorToolbarDivider />
-        <EditorToolbarGroup label="Snap">
-        <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/30 p-0.5 h-8">
-          <span className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-white/48">Snap</span>
-          {SNAP_OPTIONS.map((opt) => (
-            <button
-              key={opt.label}
-              type="button"
-              onClick={() => setSnap(opt.steps)}
-              className="min-w-[26px] h-7 px-1 rounded-md text-[10px] font-mono transition"
-              style={
-                snapSteps === opt.steps
-                  ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0", fontWeight: 700 }
-                  : { color: "rgba(255,255,255,0.45)" }
-              }
-              aria-pressed={snapSteps === opt.steps}
-              title={
-                opt.label === "T"
-                  ? "NOTE SNAP: triplet 1/8"
-                  : opt.label === "Off"
-                    ? "NOTE SNAP: Off — free placement"
-                    : opt.label === "Auto"
-                      ? `NOTE SNAP: Adaptive → ${
-                          effectiveSnap === 16 ? "1" : effectiveSnap === 8 ? "1/2" : effectiveSnap === 4 ? "1/4" : effectiveSnap === 2 ? "1/8" : "1/16"
-                        } BAR`
-                      : `NOTE SNAP: ${opt.label} NOTE`
-              }
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        </EditorToolbarGroup>
+        <ToolbarMenu
+          label="Snap"
+          value={
+            SNAP_OPTIONS.find((o) => o.steps === snapSteps)?.label
+            ?? (snapSteps === -1 ? "Auto" : String(snapSteps))
+          }
+          panelClassName="w-52"
+        >
+          <div className="grid grid-cols-3 gap-1">
+            {SNAP_OPTIONS.map((opt) => (
+              <button
+                key={opt.label}
+                type="button"
+                onClick={() => setSnap(opt.steps)}
+                className="h-8 rounded-md text-[11px] font-mono transition"
+                style={
+                  snapSteps === opt.steps
+                    ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0", fontWeight: 700 }
+                    : { color: "rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.04)" }
+                }
+                aria-pressed={snapSteps === opt.steps}
+                title={
+                  opt.label === "T"
+                    ? "NOTE SNAP: triplet 1/8"
+                    : opt.label === "Off"
+                      ? "NOTE SNAP: Off — free placement"
+                      : opt.label === "Auto"
+                        ? `NOTE SNAP: Adaptive → ${
+                            effectiveSnap === 16 ? "1" : effectiveSnap === 8 ? "1/2" : effectiveSnap === 4 ? "1/4" : effectiveSnap === 2 ? "1/8" : "1/16"
+                          } BAR`
+                        : `NOTE SNAP: ${opt.label} NOTE`
+                }
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </ToolbarMenu>
         <EditorToolbarDivider />
-        <EditorToolbarGroup label="Key" className="editor-toolbar__advanced">
-        <div className="inline-flex rounded-lg border border-white/12 bg-black/30 p-0.5">
-          {([
-            ["all", "All"],
-            ["scale", "Scale"],
-            ["used", "Used"],
-          ] as const).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setFoldMode(id)}
-              className="px-2 py-1.5 text-[10px] font-bold rounded-md transition"
-              style={
-                foldMode === id
-                  ? { background: "rgba(120,220,170,0.18)", color: "#a8f0d0" }
-                  : { color: "rgba(255,255,255,0.4)" }
-              }
-              title={id === "all" ? "Show all rows" : id === "scale" ? "Dim out-of-scale rows" : "Highlight rows with notes"}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => setWideKeys(!wideKeys)}
-          className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
-            wideKeys
-              ? "border-cyan/40 bg-cyan/12 text-cyan"
-              : "border-white/10 bg-white/[0.03] text-white/55 hover:text-white/80"
-          }`}
-          title="Wider key labels — show note names on white keys"
+        <ToolbarMenu
+          label="Key"
+          value={`${NOTE_NAMES[scaleRoot]} ${SCALES.find((s) => s.id === scaleId)?.label ?? scaleId}`}
+          panelClassName="w-[22rem]"
         >
-          Keys+
-        </button>
-        <span className="uppercase tracking-[0.18em] text-white/40 text-[9px] font-semibold">Key</span>
-        <select
-          value={scaleRoot}
-          onChange={(e) => setScaleRoot(Number(e.target.value))}
-          className="bg-black/50 border border-white/12 rounded-lg px-2 py-1.5 text-[11px] font-mono outline-none focus:border-cyan/50 h-8"
-          title="Scale root note"
-        >
-          {NOTE_NAMES.map((n, i) => (
-            <option key={n} value={i}>{n}</option>
-          ))}
-        </select>
-        <select
-          value={scaleId}
-          onChange={(e) => setScaleId(e.target.value as ScaleId)}
-          className="bg-black/50 border border-white/12 rounded-lg px-2 py-1.5 text-[11px] outline-none focus:border-cyan/50 h-8"
-          title="Scale — in-scale rows glow in the roll"
-        >
-          {SCALES.map((s) => (
-            <option key={s.id} value={s.id}>{s.label}</option>
-          ))}
-        </select>
-        <button
-          onClick={() => setScaleSnap(!scaleSnap)}
-          data-ui-sound="toggle"
-          data-ui-on={scaleSnap ? "true" : "false"}
-          disabled={scaleId === "off"}
-          className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
-            scaleId === "off"
-              ? "border-white/8 text-white/25"
-              : scaleSnap
-                ? "border-[#efc53d]/40 bg-[#efc53d]/15 text-[#efc53d]"
-                : "border-white/10 bg-white/[0.03] text-white/50 hover:text-white/80"
-          }`}
-          title="Snap vertical moves / transpose to the scale. Drawing always uses the exact key you click (including sharps)."
-        >
-          {scaleSnap ? "Snap on" : "Snap"}
-        </button>
-        <button
-          onClick={() => {
-            const st = useFireSequencerStore.getState();
-            const alts = detectKeyAlternatives(st.notes);
-            const hit = detectKeyFromNotes(st.notes);
-            playUi("press");
-            if (!hit) {
-              useUIStore.getState().toast("Not enough notes to call a key yet");
-              return;
-            }
-            st.detectAndApplyKey();
-            const bestLabel = `${NOTE_NAMES[hit.root]} ${SCALES.find((s) => s.id === hit.scaleId)?.label ?? ""}`;
-            const altText = alts
-              .filter((a) => !(a.root === hit.root && a.scaleId === hit.scaleId))
-              .slice(0, 2)
-              .map((a) => `${NOTE_NAMES[a.root]} ${SCALES.find((s) => s.id === a.scaleId)?.label ?? ""} (${(a.confidence * 100).toFixed(0)}%)`)
-              .join(" · ");
-            useUIStore.getState().toast(
-              altText
-                ? `Detected ${bestLabel} (${(hit.confidence * 100).toFixed(0)}%) — also ${altText}`
-                : `Detected ${bestLabel} (${(hit.confidence * 100).toFixed(0)}%) — scale set`,
-            );
-          }}
-          className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-cyan text-[10px] uppercase tracking-[0.12em] transition"
-          title="Detect key from notes in the roll"
-        >
-          Detect key
-        </button>
-        {conformPreview && conformPreview.size > 0 ? (
-          <>
-            <button
-              onClick={acceptConform}
-              className="h-8 px-2.5 rounded-lg border border-[#efc53d]/50 bg-[#efc53d]/18 text-[#efc53d] text-[10px] uppercase tracking-[0.12em] transition"
-            >
-              Accept ({conformPreview.size})
-            </button>
-            <button
-              onClick={() => setConformPreview(null)}
-              className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[10px] uppercase tracking-[0.12em] transition"
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
-          <button
-            onClick={() => {
-              if (scaleId === "off") {
-                useUIStore.getState().toast("Pick a scale first");
-                return;
-              }
-              const preview = buildConformPreview(notes, scaleRoot, scaleId);
-              if (preview.size === 0) {
-                playUi("press");
-                useUIStore.getState().toast("Already all in scale");
-                return;
-              }
-              setConformPreview(preview);
-              playUi("press");
-              useUIStore.getState().toast(`Preview: ${preview.size} note${preview.size === 1 ? "" : "s"} would move — Accept or Cancel`);
-            }}
-            disabled={scaleId === "off"}
-            className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
-              scaleId === "off"
-                ? "border-white/8 text-white/25"
-                : "border-white/10 bg-white/[0.03] text-white/55 hover:text-[#efc53d]"
-            }`}
-            title="Preview moving out-of-scale notes to nearest scale tone"
-          >
-            Conform
-          </button>
-        )}
-        <button
-          onClick={() => { humanizeNotes(); playUi("press"); }}
-          className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[10px] uppercase tracking-[0.12em] transition"
-          title="Humanize velocity + micro-timing"
-        >
-          Humanize
-        </button>
-        {selectedIds.size > 0 && (
-          <span className="text-[10px] text-cyan/80">
-            {selectedIds.size} sel · Del · Ctrl+D · ↑↓ · ←→
-          </span>
-        )}
-        {(selectedIds.size > 0 || playScope === "selection") && (
-          <button
-            onClick={() => {
-              const st = useFireSequencerStore.getState();
-              st.setPlayScope(st.playScope === "selection" ? "pattern" : "selection");
-            }}
-            className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
-              playScope === "selection"
-                ? "border-[#e8b86d]/60 bg-[#e8b86d]/15 text-[#f5d9a8]"
-                : "border-white/10 bg-white/[0.03] text-white/55 hover:text-[#f5d9a8]"
-            }`}
-            title={
-              playScope === "selection"
-                ? "Open Fire loops the selected range — click to play the whole pattern"
-                : "Loop only the selected notes' range with Open Fire"
-            }
-          >
-            {playScope === "selection" ? "Looping sel" : "Loop sel"}
-          </button>
-        )}
-        </EditorToolbarGroup>
+          <div className="flex flex-col gap-2">
+            <div className="inline-flex rounded-lg border border-white/12 bg-black/30 p-0.5 self-start">
+              {([
+                ["all", "All"],
+                ["scale", "Scale"],
+                ["used", "Used"],
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setFoldMode(id)}
+                  className="px-2 py-1.5 text-[10px] font-bold rounded-md transition"
+                  style={
+                    foldMode === id
+                      ? { background: "rgba(120,220,170,0.18)", color: "#a8f0d0" }
+                      : { color: "rgba(255,255,255,0.4)" }
+                  }
+                  title={id === "all" ? "Show all rows" : id === "scale" ? "Dim out-of-scale rows" : "Highlight rows with notes"}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setWideKeys(!wideKeys)}
+                className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
+                  wideKeys
+                    ? "border-cyan/40 bg-cyan/12 text-cyan"
+                    : "border-white/10 bg-white/[0.03] text-white/55 hover:text-white/80"
+                }`}
+                title="Wider key labels — show note names on white keys"
+              >
+                Keys+
+              </button>
+              <select
+                value={scaleRoot}
+                onChange={(e) => setScaleRoot(Number(e.target.value))}
+                className="bg-black/50 border border-white/12 rounded-lg px-2 py-1.5 text-[11px] font-mono outline-none focus:border-cyan/50 h-8"
+                title="Scale root note"
+              >
+                {NOTE_NAMES.map((n, i) => (
+                  <option key={n} value={i}>{n}</option>
+                ))}
+              </select>
+              <select
+                value={scaleId}
+                onChange={(e) => setScaleId(e.target.value as ScaleId)}
+                className="bg-black/50 border border-white/12 rounded-lg px-2 py-1.5 text-[11px] outline-none focus:border-cyan/50 h-8"
+                title="Scale — in-scale rows glow in the roll"
+              >
+                {SCALES.map((s) => (
+                  <option key={s.id} value={s.id}>{s.label}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => setScaleSnap(!scaleSnap)}
+                data-ui-sound="toggle"
+                data-ui-on={scaleSnap ? "true" : "false"}
+                disabled={scaleId === "off"}
+                className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
+                  scaleId === "off"
+                    ? "border-white/8 text-white/25"
+                    : scaleSnap
+                      ? "border-[#efc53d]/40 bg-[#efc53d]/15 text-[#efc53d]"
+                      : "border-white/10 bg-white/[0.03] text-white/50 hover:text-white/80"
+                }`}
+                title="Snap vertical moves / transpose to the scale. Drawing always uses the exact key you click (including sharps)."
+              >
+                {scaleSnap ? "Snap on" : "Snap"}
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => {
+                  const st = useFireSequencerStore.getState();
+                  const alts = detectKeyAlternatives(st.notes);
+                  const hit = detectKeyFromNotes(st.notes);
+                  playUi("press");
+                  if (!hit) {
+                    useUIStore.getState().toast("Not enough notes to call a key yet");
+                    return;
+                  }
+                  st.detectAndApplyKey();
+                  const bestLabel = `${NOTE_NAMES[hit.root]} ${SCALES.find((s) => s.id === hit.scaleId)?.label ?? ""}`;
+                  const altText = alts
+                    .filter((a) => !(a.root === hit.root && a.scaleId === hit.scaleId))
+                    .slice(0, 2)
+                    .map((a) => `${NOTE_NAMES[a.root]} ${SCALES.find((s) => s.id === a.scaleId)?.label ?? ""} (${(a.confidence * 100).toFixed(0)}%)`)
+                    .join(" · ");
+                  useUIStore.getState().toast(
+                    altText
+                      ? `Detected ${bestLabel} (${(hit.confidence * 100).toFixed(0)}%) — also ${altText}`
+                      : `Detected ${bestLabel} (${(hit.confidence * 100).toFixed(0)}%) — scale set`,
+                  );
+                }}
+                className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-cyan text-[10px] uppercase tracking-[0.12em] transition"
+                title="Detect key from notes in the roll"
+              >
+                Detect key
+              </button>
+              {conformPreview && conformPreview.size > 0 ? (
+                <>
+                  <button
+                    onClick={acceptConform}
+                    className="h-8 px-2.5 rounded-lg border border-[#efc53d]/50 bg-[#efc53d]/18 text-[#efc53d] text-[10px] uppercase tracking-[0.12em] transition"
+                  >
+                    Accept ({conformPreview.size})
+                  </button>
+                  <button
+                    onClick={() => setConformPreview(null)}
+                    className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[10px] uppercase tracking-[0.12em] transition"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => {
+                    if (scaleId === "off") {
+                      useUIStore.getState().toast("Pick a scale first");
+                      return;
+                    }
+                    const preview = buildConformPreview(notes, scaleRoot, scaleId);
+                    if (preview.size === 0) {
+                      playUi("press");
+                      useUIStore.getState().toast("Already all in scale");
+                      return;
+                    }
+                    setConformPreview(preview);
+                    playUi("press");
+                    useUIStore.getState().toast(`Preview: ${preview.size} note${preview.size === 1 ? "" : "s"} would move — Accept or Cancel`);
+                  }}
+                  disabled={scaleId === "off"}
+                  className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition ${
+                    scaleId === "off"
+                      ? "border-white/8 text-white/25"
+                      : "border-white/10 bg-white/[0.03] text-white/55 hover:text-[#efc53d]"
+                  }`}
+                  title="Preview moving out-of-scale notes to nearest scale tone"
+                >
+                  Conform
+                </button>
+              )}
+              <button
+                onClick={() => { humanizeNotes(); playUi("press"); }}
+                className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[10px] uppercase tracking-[0.12em] transition"
+                title="Humanize velocity + micro-timing"
+              >
+                Humanize
+              </button>
+            </div>
+            {selectedIds.size > 0 && (
+              <span className="text-[10px] text-cyan/80">
+                {selectedIds.size} sel · Del · Ctrl+D · ↑↓ · ←→ · Ctrl+A
+              </span>
+            )}
+            {(selectedIds.size > 0 || playScope === "selection") && (
+              <button
+                onClick={() => {
+                  const st = useFireSequencerStore.getState();
+                  st.setPlayScope(st.playScope === "selection" ? "pattern" : "selection");
+                }}
+                className={`h-8 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.12em] transition self-start ${
+                  playScope === "selection"
+                    ? "border-[#e8b86d]/60 bg-[#e8b86d]/15 text-[#f5d9a8]"
+                    : "border-white/10 bg-white/[0.03] text-white/55 hover:text-[#f5d9a8]"
+                }`}
+                title={
+                  playScope === "selection"
+                    ? "Open Fire loops the selected range — click to play the whole pattern"
+                    : "Loop only the selected notes' range with Open Fire"
+                }
+              >
+                {playScope === "selection" ? "Looping sel" : "Loop sel"}
+              </button>
+            )}
+          </div>
+        </ToolbarMenu>
         <span className="editor-toolbar__spacer flex-1 min-w-[8px]" />
         <EditorToolbarGroup label="View">
         <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/30 p-0.5">

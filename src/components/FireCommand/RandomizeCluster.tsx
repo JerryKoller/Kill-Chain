@@ -118,10 +118,11 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
           <button
             onClick={deploy}
             disabled={spinning}
-            className="group h-8 flex-1 min-w-0 rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] text-[#ffe8dc] transition disabled:opacity-70 bg-[#ff6a3d]/22 hover:bg-[#ff6a3d]/35 ring-1 ring-[#ff6a3d]/45 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(255,106,61,0.65)]"
+            className="group relative h-8 flex-1 min-w-0 overflow-hidden rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] text-[#ffe8dc] transition disabled:opacity-70 bg-[#ff6a3d]/22 hover:bg-[#ff6a3d]/35 ring-1 ring-[#ff6a3d]/45 shadow-[0_0_16px_rgb(255_106_61/0.3)] hover:shadow-[0_0_22px_rgb(255_106_61/0.48)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(255,106,61,0.65)]"
             title="Deploy a random factory preset from the armory"
           >
-            <span className="inline-flex items-center justify-center gap-1.5">
+            <span className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,217,201,0.35),transparent_55%)] opacity-70 group-hover:opacity-100 transition" />
+            <span className="relative inline-flex items-center justify-center gap-1.5">
               <span className={spinning ? "animate-[dice-tumble_0.65s_ease-in-out]" : "group-hover:animate-[dice-tumble_0.65s_ease-in-out]"} aria-hidden>
                 🎲
               </span>

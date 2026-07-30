@@ -628,6 +628,60 @@
   overflow: auto;
 }
 
+/* Patterns management strip — fills horizontal space without stretching chips */
+.patterns-panel-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px 10px;
+  min-height: 38px;
+}
+.patterns-strip {
+  min-width: 0;
+  flex: 1 1 auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.patterns-strip::-webkit-scrollbar {
+  height: 6px;
+}
+.patterns-strip::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+.patterns-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.patterns-actions .patterns-action-label-short {
+  display: none;
+}
+.pattern-item {
+  max-width: 11rem;
+}
+.pattern-item[data-dragging="1"] {
+  cursor: grabbing;
+}
+.pattern-item__more {
+  /* Reserve width so hover reveal does not shift chip layout */
+  width: 1.75rem;
+}
+@media (max-width: 1366px) {
+  .patterns-panel-body {
+    gap: 8px;
+  }
+  .patterns-actions .patterns-action-label-long {
+    display: none;
+  }
+  .patterns-actions .patterns-action-label-short {
+    display: inline;
+  }
+}
+
 /* Drum step grid — bound cell width on ultrawide */
 .drum-step-grid {
   --drum-step-min: 18px;

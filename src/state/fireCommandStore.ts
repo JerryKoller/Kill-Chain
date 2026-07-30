@@ -1,7 +1,13 @@
 import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
 import { useAudioStore } from "@/state/audioStore";
-import { useFireSequencerStore, inScale, snapMidiToScale } from "@/state/fireSequencerStore";
+import {
+  useFireSequencerStore,
+  inScale,
+  snapMidiToScale,
+  stampLivePatchesOntoActiveSection,
+  stampLivePatchesOntoActiveSectionNow,
+} from "@/state/fireSequencerStore";
 import type { ScaleId } from "@/state/fireSequencerStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
 import {
@@ -1130,6 +1136,8 @@ export interface FireCommandState extends PersistShape {
 
   setEditTarget: (t: EditTarget) => void;
   setParam: <K extends keyof FirePatch>(key: K, value: FirePatch[K]) => void;
+  /** Apply several patch fields as one undo + one engine refresh (character strips). */
+  setParams: (partial: Partial<FirePatch>) => void;
   setModRoute: (index: number, partial: Partial<ModRoute>) => void;
   setGateStep: (index: number, on: boolean) => void;
   loadPreset: (id: string) => void;
@@ -1396,6 +1404,30 @@ export function clearSequencerArpLatches(): void {
   seqArpTimers.clear();
 }
 
+/**
+ * Full transport silence: stop arp wall-clock loop, clear latches/held order,
+ * note-off both synths, kill FX tails (delay/reverb hiss), mute drum kit.
+ */
+export function silenceTransportAudio(): void {
+  clearSequencerArpLatches();
+  stopArpScheduler();
+  clearLiveNoteMaps();
+  const engine = getEngine();
+  engine.fireCommand.allNotesOff();
+  engine.peekFireCommandB()?.allNotesOff();
+  engine.fireCommand.killFxTails();
+  engine.peekFireCommandB()?.killFxTails();
+  try {
+    engine.fireDrums.silence();
+  } catch { /* engine mid-teardown */ }
+  useFireCommandStore.setState({
+    heldNotes: [],
+    arpOrder: [],
+    arpCurrent: null,
+    arpStepIndex: -1,
+  });
+}
+
 export const SCENE_SLOTS = 8;
 
 export const useFireCommandStore = create<FireCommandState>((set, get) => {
@@ -1523,6 +1555,37 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       if (alsoMatrix) eng.set("modMatrix", patch.modMatrix);
       if (alsoLfoDest?.lfo1 != null) eng.set("lfo1Dest", alsoLfoDest.lfo1);
       if (alsoLfoDest?.lfo2 != null) eng.set("lfo2Dest", alsoLfoDest.lfo2);
+      // Reopen wet after Stop so Cave/etc. is audible on the next note.
+      eng.unsilenceFx();
+      // Keep active pattern sound-lock current (debounced) so arrangement /
+      // export don't resurrect a pre-Cave snapshot.
+      stampLivePatchesOntoActiveSection();
+      persist();
+    },
+
+    setParams: (partial) => {
+      if (!partial || Object.keys(partial).length === 0) return;
+      if (sceneMorphActive || padMorphActive) discardMorphBlend(get, set);
+      pushFireHistory("params");
+      const s = get();
+      const patch = { ...s.patch, ...partial } as FirePatch;
+      const { patchA, patchB } = commitActive(patch);
+      set({
+        patch,
+        patchA,
+        patchB,
+        presetId: s.editTarget === "a" ? "custom" : s.presetId,
+        presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
+        mutation: null,
+        mutateLineage: 0,
+      });
+      const eng = activeEngine();
+      for (const [k, v] of Object.entries(partial)) {
+        eng.set(k as keyof FirePatch, v as FirePatch[keyof FirePatch]);
+      }
+      // Character strips after Stop: reopen wet so Cave is audible before the next note.
+      eng.unsilenceFx();
+      stampLivePatchesOntoActiveSection();
       persist();
     },
 
@@ -1543,23 +1606,27 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       if (!src) return;
       pushFireHistory();
       cancelSceneRecall();
-      const patch = { ...DEFAULT_FIRE_PATCH, ...src.patch };
-      patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      const patch = normalizePatch(src.patch);
       patch.moduleEnable = src.patch.moduleEnable
         ? { ...src.patch.moduleEnable }
-        : {};
+        : patch.moduleEnable ?? {};
       const softened = applyPerformanceSafety(patch);
       const s = get();
+      // Always silence both engines — the non-edited layer may still be sounding.
+      clearLiveNoteMaps();
+      silenceTransportAudio();
       if (s.editTarget === "b") {
-        clearLiveNoteMaps();
-        getEngine().fireCommandB.allNotesOff();
         set({
           patch,
           patchB: patch,
           presetIdB: id,
           heldNotes: [],
+          mutation: null,
+          mutateLineage: 0,
         });
         getEngine().fireCommandB.setPatch(patch);
+        getEngine().fireCommandB.unsilenceFx();
+        stampLivePatchesOntoActiveSection();
         persist();
         if (softened) toastPerfGuard();
         return;
@@ -1580,11 +1647,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         mutateLineage: 0,
       });
       const fc = getEngine().fireCommand;
-      clearLiveNoteMaps();
-      fc.allNotesOff();
       fc.setPatch(patch);
+      fc.unsilenceFx();
       if (arp.enabled) startArpScheduler(get, set);
       else stopArpScheduler();
+      stampLivePatchesOntoActiveSection();
       persist();
       if (softened) toastPerfGuard();
     },
@@ -1662,6 +1729,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       }
       set(partial);
       getEngine().fireCommandB.setPatch(patch);
+      getEngine().fireCommandB.unsilenceFx();
+      stampLivePatchesOntoActiveSection();
       persist();
       if (softened) toastPerfGuard();
     },
@@ -1669,6 +1738,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     randomize: () => {
       pushFireHistory();
       const s = get();
+      cancelSceneRecall();
+      clearLiveNoteMaps();
+      silenceTransportAudio();
+      const eng = activeEngine();
       const patch = randomPatch();
       applyModuleLocks(patch, s.patch, s.moduleLocks);
       applyLoudnessSafety(patch);
@@ -1681,13 +1754,17 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
         mutation: s.editTarget === "a" ? null : s.mutation,
         mutateLineage: s.editTarget === "a" ? 0 : s.mutateLineage,
+        heldNotes: [],
       });
-      activeEngine().setPatch(patch);
+      eng.setPatch(patch);
+      eng.unsilenceFx();
+      stampLivePatchesOntoActiveSection();
       persist();
     },
 
     mutate: () => {
       pushFireHistory();
+      cancelSceneRecall();
       const s = get();
       const parent = s.patch;
       const generation = s.mutation
@@ -1711,7 +1788,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         presetId: s.editTarget === "a" ? "custom" : s.presetId,
         presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
       });
-      activeEngine().setPatch(get().patch);
+      const eng = activeEngine();
+      eng.setPatch(get().patch);
+      eng.unsilenceFx();
+      stampLivePatchesOntoActiveSection();
       persist();
     },
 
@@ -1721,6 +1801,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     auditionMutation: (which) => {
+      cancelSceneRecall();
       const s = get();
       const m = s.mutation;
       if (!m || m.listening === which) return;
@@ -1735,7 +1816,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         presetId: s.editTarget === "a" ? "custom" : s.presetId,
         presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
       });
-      activeEngine().setPatch(get().patch);
+      const eng = activeEngine();
+      eng.setPatch(get().patch);
+      eng.unsilenceFx();
+      stampLivePatchesOntoActiveSection();
       persist();
     },
 
@@ -1749,6 +1833,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         { generation: m.generation, kept: m.listening, at: Date.now() },
       ];
       set({ mutation: null, mutateLineage: m.generation, mutationGenealogy: genealogy });
+      stampLivePatchesOntoActiveSection();
       persist();
     },
 
@@ -1767,7 +1852,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         presetId: s.editTarget === "a" ? "custom" : s.presetId,
         presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
       });
-      activeEngine().setPatch(get().patch);
+      const eng = activeEngine();
+      eng.setPatch(get().patch);
+      eng.unsilenceFx();
+      stampLivePatchesOntoActiveSection();
       persist();
     },
 
@@ -1819,7 +1907,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const fc = getEngine().fireCommand;
       fc.allNotesOff();
       fc.setPatch(patch);
+      fc.unsilenceFx();
       if (arp.enabled && get().editTarget === "a") startArpScheduler(get, set);
+      stampLivePatchesOntoActiveSection();
       persist();
       if (softened) toastPerfGuard();
     },
@@ -1849,7 +1939,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         applyModuleLocks(merged, lockedFrom, locks);
         const { patchA, patchB } = commitActive(merged);
         set({ patch: merged, patchA, patchB });
-        activeEngine().setPatch(merged);
+        const eng = activeEngine();
+        eng.setPatch(merged);
+        eng.unsilenceFx();
+        stampLivePatchesOntoActiveSection();
         persist();
       }
       return preset;
@@ -1875,7 +1968,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         presetId: s.editTarget === "a" ? "custom" : s.presetId,
         presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
       });
-      activeEngine().setPatch(cloned);
+      const eng = activeEngine();
+      eng.setPatch(cloned);
+      eng.unsilenceFx();
+      stampLivePatchesOntoActiveSection();
       persist();
     },
 
@@ -1895,6 +1991,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
           heldNotes: [],
         });
         getEngine().fireCommandB.setPatch(patch);
+        stampLivePatchesOntoActiveSection();
         persist();
         if (softened) toastPerfGuard();
         return;
@@ -1920,6 +2017,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       fc.allNotesOff();
       fc.setPatch(patch);
       if (arp.enabled) startArpScheduler(get, set);
+      stampLivePatchesOntoActiveSection();
       persist();
       if (softened) toastPerfGuard();
     },
@@ -2016,7 +2114,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
           playMidi = snapMidiToScale(midi, seq.scaleRoot, seq.scaleId);
         }
       }
-      useFireSequencerStore.getState().recordNoteOn(midi, shapedVel);
+      useFireSequencerStore.getState().recordNoteOn(playMidi, shapedVel);
       livePitchHeld.set(midi, playMidi);
 
       let playVel = shapedVel;
@@ -2098,7 +2196,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
     noteOff: (midi) => {
       const s = get();
-      useFireSequencerStore.getState().recordNoteOff(midi);
+      // Match recordNoteOn pitch (scale fold/soft stores snapped MIDI).
+      const recordedMidi = livePitchHeld.get(midi) ?? midi;
+      useFireSequencerStore.getState().recordNoteOff(recordedMidi);
       const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
       if (s.editTarget === "a" && s.arp.enabled && arpModuleOn) {
         const heldNotes = s.heldNotes.filter((n) => n !== midi);
@@ -2132,20 +2232,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     panic: () => {
-      stopArpScheduler();
-      clearLiveNoteMaps();
-      const engine = getEngine();
-      engine.fireCommand.allNotesOff();
-      engine.peekFireCommandB()?.allNotesOff();
-      set({ heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
-      // Re-arm latch arp if still enabled (empty order parks until next note).
-      if (
-        get().editTarget === "a"
-        && get().arp.enabled
-        && get().patch.moduleEnable?.["arp"] !== false
-      ) {
-        startArpScheduler(get, set);
-      }
+      silenceTransportAudio();
+      // Do not re-arm the arp scheduler on panic — user explicitly wants silence.
+      // Next live noteOn / arp enable will start it again.
     },
 
     setOctave: (octave) => {
@@ -2306,6 +2395,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         presetIdB: s.editTarget === "b" ? "custom" : s.presetIdB,
       });
       activeEngine().set("moduleEnable", moduleEnable);
+      stampLivePatchesOntoActiveSection();
       if (s.editTarget === "a" && moduleId === "arp" && !on) {
         stopArpScheduler();
         set({ arpCurrent: null, arpStepIndex: -1 });
@@ -2350,7 +2440,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         }
       }
       const scenes = [...st.scenes];
-      scenes[i] = snap;
+      try {
+        scenes[i] = structuredClone(snap);
+      } catch {
+        scenes[i] = snap;
+      }
       set({ scenes, activeSceneSlot: i });
       persist();
     },
@@ -2391,7 +2485,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
           mutation: cur.editTarget === "a" ? null : cur.mutation,
           activeSceneSlot: i,
         });
-        activeEngine().setPatch(normalized);
+        const eng = activeEngine();
+        eng.setPatch(normalized);
+        eng.unsilenceFx();
+        stampLivePatchesOntoActiveSectionNow();
         persist();
       };
       const mode = get().sceneTransition;
@@ -2560,6 +2657,8 @@ registerFireHistoryProvider("fireCommand", {
         (p) => useFireCommandStore.setState(p),
       );
     }
+    // Undo restored A/B — flush sound-lock so arrangement/export match.
+    stampLivePatchesOntoActiveSectionNow();
     schedulePersist(useFireCommandStore.getState);
   },
 });

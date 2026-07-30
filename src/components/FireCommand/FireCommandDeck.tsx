@@ -4,6 +4,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import type { FirePatch, ModDest } from "@/audio/dsp/FireCommandSynth";
 import { getEngine } from "@/audio/AudioEngine";
@@ -294,7 +295,7 @@ function StageMenu({
   return (
     <div
       ref={ref}
-      className="absolute bottom-full left-1/2 z-40 mb-1 w-40 -translate-x-1/2 rounded-lg border border-white/15 bg-[#0c0c12]/98 py-1 shadow-xl backdrop-blur-md"
+      className="absolute bottom-full left-1/2 z-40 mb-1 w-40 -translate-x-1/2 rounded-lg border border-white/18 bg-[#12121a] py-1 shadow-xl"
     >
       {items.map((it) => (
         <button
@@ -352,7 +353,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
     fx: pathFx, mix: pathMix, scope: pathScope,
   };
 
-  const patchSlice = useFireCommandStore((s) => ({
+  const patchSlice = useFireCommandStore(useShallow((s) => ({
     filterCutoff: s.patch.filterCutoff,
     filterResonance: s.patch.filterResonance,
     filterEnvAmount: s.patch.filterEnvAmount,
@@ -368,7 +369,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
     pathDrive: s.patch.pathDrive,
     pathAge: s.patch.pathAge,
     pathFx: s.patch.pathFx,
-  }));
+  })));
 
   const status = useStageStatus(scopeFreeze);
 

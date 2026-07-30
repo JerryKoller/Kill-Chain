@@ -155,7 +155,7 @@ export function PresetSearchCombobox({
       {open && (
         <div
           ref={listRef}
-          className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 max-h-64 overflow-y-auto rounded-xl border border-white/12 bg-[#0a0a0e]/97 shadow-[0_16px_40px_rgba(0,0,0,0.65)] backdrop-blur-md"
+          className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 max-h-64 overflow-y-auto rounded-xl border border-white/18 bg-[#12121a] shadow-[0_16px_40px_rgba(0,0,0,0.65)]"
           role="listbox"
         >
           {results.length === 0 ? (

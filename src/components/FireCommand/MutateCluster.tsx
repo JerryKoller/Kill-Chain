@@ -252,14 +252,15 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
         <div className="flex h-8 min-w-0 items-center gap-1.5">
           <button
             onClick={breed}
-            className={`h-8 min-w-0 flex-1 overflow-hidden rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-300/60 ${
+            className={`group relative h-8 min-w-0 flex-1 overflow-hidden rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-300/60 shadow-[0_0_16px_rgb(52_211_153/0.3)] hover:shadow-[0_0_22px_rgb(52_211_153/0.48)] ${
               mutation
                 ? "bg-emerald-400/30 text-emerald-50 ring-1 ring-emerald-300/55"
-                : "bg-emerald-500/16 text-emerald-100 hover:bg-emerald-500/26 ring-1 ring-emerald-400/35"
+                : "bg-emerald-500/18 text-emerald-100 hover:bg-emerald-500/32 ring-1 ring-emerald-400/40"
             }`}
             title="Breed two offspring of the current sound"
           >
-            <span className="block truncate">{mutation ? "Breed" : "Mutate"}</span>
+            <span className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(167,243,208,0.35),transparent_55%)] opacity-70 group-hover:opacity-100 transition" />
+            <span className="relative block truncate">{mutation ? "Breed" : "Mutate"}</span>
           </button>
           <div className="flex h-8 w-[5.25rem] shrink-0 items-center justify-center gap-1 rounded-md bg-black/25 ring-1 ring-emerald-400/20">
             <PressureKnob value={amount} onChange={(v) => act().setMutateAmount(v)} size={24} />
@@ -348,10 +349,10 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
 
           <button
             onClick={breed}
-            className={`group relative h-8 overflow-hidden rounded-xl border text-[11px] font-black uppercase tracking-[0.12em] transition truncate ${
+            className={`group relative h-8 overflow-hidden rounded-xl border text-[11px] font-black uppercase tracking-[0.12em] transition truncate shadow-[0_0_16px_rgb(52_211_153/0.3)] hover:shadow-[0_0_22px_rgb(52_211_153/0.45)] ${
               mutation
-                ? "border-emerald-300/70 bg-emerald-400/25 text-emerald-50 shadow-[0_0_16px_rgb(52_211_153/0.35)] hover:bg-emerald-400/35"
-                : "border-emerald-400/55 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/25"
+                ? "border-emerald-300/70 bg-emerald-400/25 text-emerald-50 hover:bg-emerald-400/35"
+                : "border-emerald-400/55 bg-emerald-500/15 text-emerald-100 hover:bg-emerald-500/28"
             }`}
             title="Breed two offspring of the current sound. Audition A/B, keep a winner, mutate again to evolve."
           >

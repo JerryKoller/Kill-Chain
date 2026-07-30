@@ -10,6 +10,7 @@ import {
   getPlayheadStep,
   STEPS_PER_BAR,
   MAX_SAMPLE_LANES,
+  DRUM_GROOVE_OPTIONS,
   type DrumStep,
   type FillPersonality,
   type DrumFeel,
@@ -29,7 +30,8 @@ import { PatternBarsControls } from "./PatternBarsControls";
 import { ScopedPlayButton } from "./ScopedPlayButton";
 import { PatternSelect } from "./PatternSelect";
 import { EditorToolbarGroup, EditorToolbarDivider } from "./EditorShell";
-import { SEQ_PILL_DESTRUCTIVE } from "./seqChrome";
+import { useFireCollapsed } from "./useFireCollapsed";
+import { CollapseToggle } from "./CollapseToggle";
 
 const LABEL_W = 92;
 const TOOLS_W = 96;
@@ -56,8 +58,8 @@ type PaintMode = { value: DrumStep } | null;
 
 function beatLabel(s: number): string {
   if (s % STEPS_PER_BAR === 0) return String(Math.floor(s / STEPS_PER_BAR) + 1);
-  if (s % 4 === 0) return String(((s % STEPS_PER_BAR) / 4) + 1);
-  return "·";
+  if (s % 4 === 0) return "";
+  return "";
 }
 
 export function DrumMachine() {
@@ -85,6 +87,8 @@ export function DrumMachine() {
   const [expandedLane, setExpandedLane] = useState<DrumLane | null>(null);
   const [fillOpen, setFillOpen] = useState(false);
   const [laneMenu, setLaneMenu] = useState<DrumLane | null>(null);
+  const [grooveOpen, setGrooveOpen] = useState(false);
+  const [activeGroove, setActiveGroove] = useState<string | null>(null);
   const paintRef = useRef<PaintMode>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
 
@@ -170,18 +174,19 @@ export function DrumMachine() {
     };
   }, []);
 
-  // Dismiss fill / lane menus on outside click
+  // Dismiss fill / lane / groove menus on outside click
   useEffect(() => {
-    if (!fillOpen && !laneMenu) return;
+    if (!fillOpen && !laneMenu && !grooveOpen) return;
     const onDown = (e: PointerEvent) => {
       const t = e.target as HTMLElement;
       if (t.closest("[data-drum-popover]")) return;
       setFillOpen(false);
       setLaneMenu(null);
+      setGrooveOpen(false);
     };
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
-  }, [fillOpen, laneMenu]);
+  }, [fillOpen, laneMenu, grooveOpen]);
 
   const audition = (lane: DrumLane) => {
     const eng = getEngine();
@@ -200,7 +205,14 @@ export function DrumMachine() {
     cell: DrumStep,
     e: ReactPointerEvent,
   ) => {
-    if (e.button === 2) return;
+    // Piano-roll style: right-click (hold) erases across cells.
+    if (e.button === 2) {
+      e.preventDefault();
+      const blank = emptyStep();
+      if (isStepOn(cell)) setStep(lane, step, blank);
+      paintRef.current = { value: blank };
+      return;
+    }
     if (e.detail === 2) {
       setInspect({ kind: "drum", lane, step });
       return;
@@ -238,8 +250,8 @@ export function DrumMachine() {
   };
 
   const beatReadout = playStep < 0
-    ? "—"
-    : `Bar ${Math.floor(playStep / STEPS_PER_BAR) + 1} · Beat ${(Math.floor((playStep % STEPS_PER_BAR) / 4) + 1)} · Step ${(playStep % STEPS_PER_BAR) + 1}`;
+    ? "idle"
+    : `${Math.floor(playStep / STEPS_PER_BAR) + 1}.${Math.floor((playStep % STEPS_PER_BAR) / 4) + 1}.${(playStep % STEPS_PER_BAR) + 1}`;
 
   return (
     <div className="select-none w-full min-w-0 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-[#12151c] via-[#0c0e14] to-[#090b10] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
@@ -251,17 +263,17 @@ export function DrumMachine() {
             title="Play / pause this pattern only"
           />
           <PatternSelect accent="#fbbf24" />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-[11px] font-black uppercase tracking-[0.1em] text-amber-200/90">Drum Bay</div>
-            <div className="text-[10px] text-white/50 mt-0.5 font-mono truncate">
-              {bars} bar{bars === 1 ? "" : "s"} · {totalSteps} steps · {beatReadout}
+            <div className="text-[10px] text-white/50 mt-0.5 font-mono tabular-nums whitespace-nowrap">
+              {bars}×{STEPS_PER_BAR} · {totalSteps}st · {beatReadout}
             </div>
           </div>
         </EditorToolbarGroup>
         <EditorToolbarDivider />
-        <EditorToolbarGroup label="Length">
+        <EditorToolbarGroup label="Length" className="shrink-0">
           <PatternBarsControls accent="#fbbf24" />
-          <label className="flex items-center gap-1.5 text-[10px] text-white/60 cursor-pointer h-8 px-1.5 rounded-md hover:bg-white/[0.04]">
+          <label className="flex items-center gap-1.5 text-[10px] text-white/60 cursor-pointer h-8 px-1.5 rounded-md hover:bg-white/[0.04] shrink-0">
             <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} className="accent-amber-400" />
             Follow
           </label>
@@ -283,7 +295,7 @@ export function DrumMachine() {
             Fill last bar
           </button>
           {fillOpen && (
-            <div data-drum-popover="1" className="absolute right-0 top-full z-40 mt-1 w-56 rounded-xl border border-white/15 bg-[#0c0c12]/98 p-2 shadow-xl">
+            <div data-drum-popover="1" className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-white/18 bg-[#0c0c12] p-2 shadow-[0_12px_32px_rgba(0,0,0,0.85)]">
               <div className="text-[8px] font-black uppercase tracking-wider text-white/40 mb-1">Fill intensity</div>
               <input
                 type="range" min={0} max={1} step={0.01} value={fillIntensity}
@@ -328,49 +340,98 @@ export function DrumMachine() {
       {/* Pattern presets vs Kit */}
       <div className="mb-2.5 editor-toolbar">
         <EditorToolbarGroup label="Pattern presets">
-          {([
-            ["house", "House"],
-            ["trap", "Trap"],
-            ["break", "Break"],
-          ] as const).map(([id, label]) => (
+          <div className="relative">
             <button
-              key={id}
               type="button"
-              onClick={() => {
-                useFireSequencerStore.getState().applyDrumGroove(id);
-                toast(`${label} pattern generated (locked lanes kept)`);
-              }}
-              className="h-8 px-2.5 rounded-lg border border-white/12 bg-white/[0.04] text-[10px] font-bold uppercase tracking-[0.06em] text-white/70 hover:text-amber-200 hover:border-amber-400/40 transition"
-              title={`Generate a ${label} groove pattern — re-click for a related variant. Respects lane locks.`}
+              onClick={() => setGrooveOpen((v) => !v)}
+              className="h-8 px-2.5 rounded-lg border border-white/12 bg-white/[0.04] text-[10px] font-bold uppercase tracking-[0.06em] text-white/75 hover:text-amber-200 hover:border-amber-400/40 transition inline-flex items-center gap-1.5 max-w-[11rem]"
+              title="Load a drum groove preset — locked lanes are kept"
+              aria-haspopup="listbox"
+              aria-expanded={grooveOpen}
             >
-              {label}
+              <span className="truncate">
+                {activeGroove
+                  ? (DRUM_GROOVE_OPTIONS.find((o) => o.id === activeGroove)?.label ?? activeGroove)
+                  : "Grooves"}
+              </span>
+              <span aria-hidden className="text-white/40 shrink-0">▾</span>
             </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => {
-              useFireSequencerStore.getState().applyDrumGroove("clear");
-              toast("Cleared unlocked lanes (locks kept)");
-            }}
-            className={SEQ_PILL_DESTRUCTIVE}
-            title="Clear unlocked drum steps — locked lanes are kept"
-          >
-            Clear
-          </button>
+            {grooveOpen && (
+              <div
+                data-drum-popover="1"
+                role="listbox"
+                aria-label="Drum groove presets"
+                className="absolute left-0 top-full z-50 mt-1 w-44 rounded-lg border border-white/18 bg-[#0c0c12] py-1 shadow-xl"
+              >
+                {DRUM_GROOVE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="option"
+                    aria-selected={activeGroove === opt.id}
+                    className={`block w-full px-2.5 py-1.5 text-left text-[11px] font-semibold hover:bg-white/10 ${
+                      activeGroove === opt.id ? "text-amber-200 bg-amber-400/10" : "text-white/78"
+                    }`}
+                    onClick={() => {
+                      useFireSequencerStore.getState().applyDrumGroove(opt.id);
+                      setActiveGroove(opt.id);
+                      toast(`${opt.label} pattern loaded (locked lanes kept)`);
+                      setGrooveOpen(false);
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+                <div className="my-1 border-t border-white/10" />
+                <button
+                  type="button"
+                  className="block w-full px-2.5 py-1.5 text-left text-[11px] font-semibold text-rose-300/90 hover:bg-rose-500/15"
+                  onClick={() => {
+                    useFireSequencerStore.getState().applyDrumGroove("clear");
+                    setActiveGroove(null);
+                    toast("Cleared unlocked lanes (locks kept)");
+                    setGrooveOpen(false);
+                  }}
+                >
+                  Clear unlocked
+                </button>
+              </div>
+            )}
+          </div>
         </EditorToolbarGroup>
         <EditorToolbarDivider />
         <EditorToolbarGroup label="Kit">
-          <button
-            type="button"
-            onClick={() => {
-              useFireSequencerStore.getState().clearDrumKitSamples();
-              toast("Synth Kit — lane samples cleared");
-            }}
-            className="h-8 px-2.5 rounded-lg border border-amber-400/35 bg-amber-400/10 text-[10px] font-bold uppercase tracking-[0.06em] text-amber-200/90 hover:bg-amber-400/20 transition"
-            title="Clear drum-lane sample overrides — back to Synth Kit"
-          >
-            Synth Kit
-          </button>
+          {(() => {
+            const sampleCount = Object.keys(drumSamples ?? {}).length;
+            const usingSynth = sampleCount === 0;
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  useFireSequencerStore.getState().clearDrumKitSamples();
+                  audition("kick");
+                  toast(
+                    sampleCount > 0
+                      ? `Cleared ${sampleCount} lane sample${sampleCount === 1 ? "" : "s"} — using Synth Kit`
+                      : "Already on Synth Kit — synthesized drums (no samples)",
+                  );
+                }}
+                className={`h-8 px-2.5 rounded-lg text-[10px] font-bold uppercase tracking-[0.06em] transition border ${
+                  usingSynth
+                    ? "border-amber-400/55 bg-amber-400/18 text-amber-100"
+                    : "border-white/14 bg-white/[0.04] text-white/65 hover:border-amber-400/40 hover:text-amber-200"
+                }`}
+                title={
+                  usingSynth
+                    ? "Synth Kit active — built-in synthesized drums (no sample overrides)"
+                    : `Restore Synth Kit — clear ${sampleCount} loaded lane sample${sampleCount === 1 ? "" : "s"}`
+                }
+                aria-pressed={usingSynth}
+              >
+                Synth Kit{usingSynth ? "" : ` · ${sampleCount}`}
+              </button>
+            );
+          })()}
         </EditorToolbarGroup>
         <EditorToolbarDivider />
         <EditorToolbarGroup label="Transform">
@@ -766,7 +827,7 @@ const DrumRow = memo(function DrumRow({
                   onDown(laneId, s, cell, e);
                 }}
                 onPointerEnter={() => onEnter(laneId, s, cell)}
-                onContextMenu={(e) => { e.preventDefault(); onContextStep(s); }}
+                onContextMenu={(e) => { e.preventDefault(); }}
                 className="relative h-[26px] rounded-md border transition-colors min-w-0"
                 style={{
                   borderColor: current
@@ -789,6 +850,7 @@ const DrumRow = memo(function DrumRow({
                   opacity: on && (cell.prob ?? 1) < 0.85 ? 0.55 + (cell.prob ?? 1) * 0.45 : 1,
                 }}
                 aria-label={`${name} step ${s + 1}${on ? " (on)" : ""}`}
+                title="LMB paint · RMB hold erase · double-click inspect"
               >
                 {on && Math.abs(cell.micro ?? 0) > 0.05 && (
                   <span
@@ -841,7 +903,10 @@ const DrumRow = memo(function DrumRow({
             ⋯
           </button>
           {menuOpen && (
-            <div data-drum-popover="1" className="absolute right-0 top-full z-40 mt-1 w-36 rounded-lg border border-white/15 bg-[#0c0c12]/98 py-1 shadow-xl">
+            <div
+              data-drum-popover="1"
+              className="absolute right-full top-0 z-50 mr-1 w-40 rounded-lg border border-white/18 bg-[#0c0c12] py-1 shadow-[0_12px_32px_rgba(0,0,0,0.85)]"
+            >
               {[
                 { label: "Euclid", run: () => useFireSequencerStore.getState().euclidLane(laneId, 3) },
                 { label: "Random", run: () => useFireSequencerStore.getState().randomLane(laneId, 0.3) },
@@ -856,11 +921,12 @@ const DrumRow = memo(function DrumRow({
                 { label: locked ? "Unlock" : "Lock", run: () => toggleLock(laneId) },
                 { label: "Rotate", run: () => useFireSequencerStore.getState().transformDrumLane(laneId, "rotate") },
                 { label: "Reverse", run: () => useFireSequencerStore.getState().transformDrumLane(laneId, "reverse") },
+                { label: "Inspect step…", run: () => onContextStep(0) },
               ].map((it) => (
                 <button
                   key={it.label}
                   type="button"
-                  className="block w-full px-2.5 py-1.5 text-left text-[10px] text-white/70 hover:bg-white/10"
+                  className="block w-full px-2.5 py-1.5 text-left text-[11px] font-semibold text-white/78 hover:bg-white/10"
                   onClick={() => runLockedAware(it.label, it.run)}
                 >
                   {it.label}
@@ -891,6 +957,7 @@ function SampleDeck({
   const toast = useUIStore((s) => s.toast);
   const paintRef = useRef<PaintMode>(null);
   const dropRef = useRef<HTMLDivElement>(null);
+  const [deckCollapsed, toggleDeck] = useFireCollapsed("seq.sampleDeck", true);
 
   useEffect(() => {
     const up = () => { paintRef.current = null; };
@@ -927,24 +994,45 @@ function SampleDeck({
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
     >
-      <div className="flex items-center gap-2 mb-2.5">
-        <div>
+      <button
+        type="button"
+        onClick={toggleDeck}
+        className="flex w-full items-center gap-2 mb-0 text-left rounded-lg px-0.5 py-0.5 hover:bg-white/[0.03] transition"
+        aria-expanded={!deckCollapsed}
+      >
+        <CollapseToggle
+          collapsed={deckCollapsed}
+          color="#e879f9"
+          title={deckCollapsed ? "Expand Sample Deck" : "Collapse Sample Deck"}
+        />
+        <div className="min-w-0 flex-1">
           <div className="text-[11px] font-black uppercase tracking-[0.1em] text-fuchsia-300/90">Sample Deck</div>
-          <div className="text-[10px] text-white/48 mt-0.5">{samples.length}/{MAX_SAMPLE_LANES} racks · drag-drop or rack · same rich steps</div>
+          <div className="text-[10px] text-white/48 mt-0.5">
+            {samples.length}/{MAX_SAMPLE_LANES} racks
+            {deckCollapsed ? " · collapsed" : " · drag-drop or rack · same rich steps"}
+          </div>
         </div>
-        {samples.length > 0 && (
-          <button
-            type="button"
-            onClick={() => void addSample()}
-            disabled={samples.length >= MAX_SAMPLE_LANES}
-            className="ml-auto h-8 px-3 rounded-lg border border-fuchsia-400/45 bg-fuchsia-500/10 text-fuchsia-200 text-[10px] font-bold uppercase tracking-[0.08em] hover:bg-fuchsia-500/20 disabled:opacity-30 transition"
+        {!deckCollapsed && samples.length > 0 && (
+          <span
+            role="presentation"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="shrink-0"
           >
-            Rack a sample
-          </button>
+            <button
+              type="button"
+              onClick={() => void addSample()}
+              disabled={samples.length >= MAX_SAMPLE_LANES}
+              className="h-8 px-3 rounded-lg border border-fuchsia-400/45 bg-fuchsia-500/10 text-fuchsia-200 text-[10px] font-bold uppercase tracking-[0.08em] hover:bg-fuchsia-500/20 disabled:opacity-30 transition"
+            >
+              Rack a sample
+            </button>
+          </span>
         )}
-      </div>
-      {samples.length === 0 ? (
-        <div className="sample-deck-empty">
+      </button>
+
+      {!deckCollapsed && (samples.length === 0 ? (
+        <div className="sample-deck-empty mt-2.5">
           <div className="text-[11px] font-black uppercase tracking-[0.1em] text-fuchsia-200/90">Sample Deck</div>
           <div className="text-[10px] text-white/55">0/{MAX_SAMPLE_LANES} racks · empty</div>
           <p className="text-[10px] text-white/48 max-w-sm leading-relaxed">
@@ -961,7 +1049,7 @@ function SampleDeck({
           <div className="text-[10px] text-white/40">or drag audio here</div>
         </div>
       ) : (
-        <div className="space-y-1">
+        <div className="space-y-1 mt-2.5">
           {samples.map((sl) => (
             <div
               key={sl.id}
@@ -992,6 +1080,12 @@ function SampleDeck({
                       type="button"
                       onPointerDown={(e) => {
                         e.preventDefault();
+                        if (e.button === 2) {
+                          const blank = emptyStep();
+                          if (on) setSampleStep(sl.id, s, blank);
+                          paintRef.current = { value: blank };
+                          return;
+                        }
                         if (e.detail === 2) { onInspect(sl.id, s); return; }
                         if (e.shiftKey && on) {
                           const nextVel = cell.vel > 0.85 ? 0.7 : cell.vel > 0.55 ? 0.4 : 1;
@@ -1021,7 +1115,7 @@ function SampleDeck({
                         const paint = paintRef.current;
                         if (paint && isStepOn(paint.value) !== on) setSampleStep(sl.id, s, paint.value);
                       }}
-                      onContextMenu={(e) => { e.preventDefault(); onInspect(sl.id, s); }}
+                      onContextMenu={(e) => { e.preventDefault(); }}
                       className="relative h-[26px] rounded-md border transition-colors min-w-0"
                       style={{
                         borderColor: current ? "rgba(255,200,120,0.9)" : on ? "rgba(232,121,249,0.85)" : barStart ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)",
@@ -1061,7 +1155,7 @@ function SampleDeck({
             </div>
           ))}
         </div>
-      )}
+      ))}
     </div>
   );
 }

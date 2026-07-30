@@ -79,7 +79,6 @@ export function FireMasterMeter() {
         const gr = e.getFireLimiterReduction();
         const va = e.fireCommand.getActiveVoiceCount?.() ?? 0;
         const vb = e.peekFireCommandB()?.getActiveVoiceCount?.() ?? 0;
-        const voices = va + vb;
         const max = useFireCommandStore.getState().maxVoices;
 
         // Correlation stub: ChannelSplitter on fireTap when stereo available.
@@ -139,7 +138,11 @@ export function FireMasterMeter() {
           grRef.current.textContent = `LIM −${g}`;
           grRef.current.style.color = Number(g) > 0.2 ? "#ffb08a" : "rgba(255,255,255,0.4)";
         }
-        if (voicesRef.current) voicesRef.current.textContent = `Voices ${voices}/${max}`;
+        if (voicesRef.current) {
+          // Per-engine caps are identical; show A+B so dual-layer play reads honestly.
+          voicesRef.current.textContent = `Voices ${va}+${vb}/${max}`;
+          voicesRef.current.title = `Synth A ${va} · Synth B ${vb} · cap ${max} each`;
+        }
         if (corrRef.current) corrRef.current.textContent = `Corr ${corrTxt}`;
       } catch {
         /* engine not ready */

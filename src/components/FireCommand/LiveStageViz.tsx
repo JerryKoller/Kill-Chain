@@ -21,7 +21,7 @@ const C_POLY = bandShade(FC_BAND.mix, 0.62);
 const C_FX = bandShade(FC_BAND.mix, 0.82);
 const C_VOICE = bandShade(FC_BAND.mix, 0.48);
 
-const VOICE_CAPS = [6, 8, 12, 16, 24, 32] as const;
+const VOICE_CAPS = [6, 8, 12, 16, 24, 32, 48] as const;
 
 function hexAlpha(hex: string, a: number): string {
   const h = hex.replace("#", "");

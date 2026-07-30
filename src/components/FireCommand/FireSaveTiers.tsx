@@ -74,6 +74,21 @@ export function FireSaveTiers() {
       } else {
         const res = await openProject();
         if (!res.ok && res.error) toast(res.error);
+        else if (res.ok) {
+          const n = res.missingSamples?.length ?? 0;
+          if (n > 0) {
+            const names = (res.missingSamples ?? [])
+              .slice(0, 3)
+              .map((p) => p.split(/[\\/]/).pop() ?? p)
+              .join(", ");
+            toast(
+              `${n} sample${n === 1 ? "" : "s"} missing (${names}${n > 3 ? "…" : ""}) — re-link on this machine`,
+              "warn",
+            );
+          } else {
+            toast("Project opened", "success");
+          }
+        }
       }
     } catch (e) {
       toast(e instanceof Error ? e.message : "Project I/O failed");

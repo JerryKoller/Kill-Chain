@@ -19,8 +19,10 @@ import {
   exportStems,
   saveProject,
   openProject,
+  fireExportPreflight,
   type ExportFormat,
 } from "@/lib/fireStudio";
+import { FireExportToLibraryModal } from "./FireExportToLibraryModal";
 import { RollFitProvider } from "./useRollFit";
 import { PIANO_GUTTER } from "./PianoRoll";
 import { ArrangementPlaylist } from "./ArrangementPlaylist";
@@ -31,14 +33,11 @@ import { PatternSelect } from "./PatternSelect";
 import {
   SEQ,
   SEQ_CTRL,
-  SEQ_GROUP_LABEL,
-  SEQ_HINT,
   SEQ_META,
   SEQ_PILL,
   SEQ_PILL_DESTRUCTIVE,
   SEQ_PILL_DESTRUCTIVE_ARM,
   SEQ_TITLE,
-  SeqGroup,
   SeqSegment,
   SeqSegmented,
 } from "./seqChrome";
@@ -46,100 +45,8 @@ import { FullscreenEditorShell, EditorModeSwitch } from "./EditorShell";
 
 const FIRE = SEQ.fire;
 const ICE = SEQ.ice;
-const BRASS = SEQ.brass;
-const BRASS_SOFT = SEQ.brassSoft;
-const BRASS_GLOW = "rgba(232,184,109,0.35)";
 
 type Tab = "roll" | "drums";
-
-/**
- * Swing controls (v1.6): one knobs when linked; unlink to give drums and the
- * sample deck their own groove separate from the melody.
- */
-function SwingControls() {
-  const swing = useFireSequencerStore((s) => s.swing);
-  const swingDrums = useFireSequencerStore((s) => s.swingDrums);
-  const swingSamples = useFireSequencerStore((s) => s.swingSamples);
-  const swingLinked = useFireSequencerStore((s) => s.swingLinked);
-  const setSwing = useFireSequencerStore((s) => s.setSwing);
-  const setSwingDrums = useFireSequencerStore((s) => s.setSwingDrums);
-  const setSwingSamples = useFireSequencerStore((s) => s.setSwingSamples);
-  const setSwingLinked = useFireSequencerStore((s) => s.setSwingLinked);
-
-  const slider = (
-    label: string,
-    value: number,
-    onChange: (v: number) => void,
-    title: string,
-  ) => (
-    <div className="flex items-center gap-1.5" title={title}>
-      <span className="text-[10px] uppercase tracking-[0.08em] text-white/55 w-8 text-right">{label}</span>
-      <input
-        type="range"
-        min={0}
-        max={0.6}
-        step={0.02}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-[58px] accent-[#e8b86d]"
-        aria-label={`${label} swing ${Math.round(value * 100)} percent`}
-      />
-      <span className="text-[11px] font-mono tabular-nums text-[rgba(245,217,168,0.85)] w-8">
-        {Math.round(value * 100)}%
-      </span>
-    </div>
-  );
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className={SEQ_GROUP_LABEL} title="Delays every off-beat 16th for groove">
-        Swing
-      </span>
-      <button
-        type="button"
-        onClick={() => setSwingLinked(!swingLinked)}
-        className={`${SEQ_CTRL} !h-7 !px-2 text-[10px]`}
-        style={
-          swingLinked
-            ? { color: "rgba(255,255,255,0.65)", background: "rgba(255,255,255,0.06)" }
-            : { color: BRASS_SOFT, background: "rgba(232,184,109,0.16)", borderColor: "rgba(232,184,109,0.45)" }
-        }
-        title={
-          swingLinked
-            ? "Linked: one groove for everything. Click to give drums and samples their own swing."
-            : "Unlinked: melody, drums and samples each swing on their own. Click to re-link."
-        }
-        aria-pressed={!swingLinked}
-        aria-label={swingLinked ? "Unlink swing groups" : "Link swing groups"}
-      >
-        {swingLinked ? "🔗" : "⛓️‍💥"}
-      </button>
-      {swingLinked ? (
-        <div className="flex items-center gap-2" title="Delays every off-beat 16th for groove (all groups)">
-          <input
-            type="range"
-            min={0}
-            max={0.6}
-            step={0.02}
-            value={swing}
-            onChange={(e) => setSwing(Number(e.target.value))}
-            className="w-[88px] accent-[#e8b86d]"
-            aria-label={`Swing ${Math.round(swing * 100)} percent`}
-          />
-          <span className="text-[11px] font-mono tabular-nums text-[rgba(245,217,168,0.9)] min-w-[2.25rem]">
-            {Math.round(swing * 100)}%
-          </span>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {slider("Mel", swing, setSwing, "Swing on the piano-roll notes (Synth A + B)")}
-          {slider("Drm", swingDrums, setSwingDrums, "Swing on the drum kit lanes")}
-          {slider("Smp", swingSamples, setSwingSamples, "Swing on the sample deck lanes")}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export const SequencerPanel = memo(function SequencerPanel({
   asWorkspace = true,
@@ -158,23 +65,18 @@ export const SequencerPanel = memo(function SequencerPanel({
   const synthBEnabled = useFireSequencerStore((s) => s.synthBEnabled);
   const synthBPresetId = useFireSequencerStore((s) => s.synthBPresetId);
   const activeChannel = useFireSequencerStore((s) => s.activeChannel);
-  const drumLevel = useFireSequencerStore((s) => s.drumLevel);
   const noteCount = useFireSequencerStore((s) => s.notes.length);
   const togglePlay = useFireSequencerStore((s) => s.togglePlay);
-  const setBpm = useFireSequencerStore((s) => s.setBpm);
   const setSynthEnabled = useFireSequencerStore((s) => s.setSynthEnabled);
   const setDrumsEnabled = useFireSequencerStore((s) => s.setDrumsEnabled);
   const setSynthBEnabled = useFireSequencerStore((s) => s.setSynthBEnabled);
   const setSynthBPresetId = useFireSequencerStore((s) => s.setSynthBPresetId);
   const setActiveChannel = useFireSequencerStore((s) => s.setActiveChannel);
-  const setDrumLevel = useFireSequencerStore((s) => s.setDrumLevel);
   const clearNotes = useFireSequencerStore((s) => s.clearNotes);
   const clearDrums = useFireSequencerStore((s) => s.clearDrums);
   const collapsed = useFireSequencerStore((s) => s.collapsed);
   const setCollapsed = useFireSequencerStore((s) => s.setCollapsed);
   const playMode = useFireSequencerStore((s) => s.playMode);
-  const playScope = useFireSequencerStore((s) => s.playScope);
-  const setPlayScope = useFireSequencerStore((s) => s.setPlayScope);
   const recording = useFireSequencerStore((s) => s.recording);
   const recordQuantize = useFireSequencerStore((s) => s.recordQuantize);
   const recordMode = useFireSequencerStore((s) => s.recordMode);
@@ -190,9 +92,6 @@ export const SequencerPanel = memo(function SequencerPanel({
   const selectedClipId = useFireSequencerStore((s) => s.selectedClipId);
   const playlistTracks = useFireSequencerStore((s) => s.playlistTracks);
   const arrangement = useFireSequencerStore((s) => s.arrangement);
-  const notes = useFireSequencerStore((s) => s.notes);
-  const selectionStart = useFireSequencerStore((s) => s.selectionStart);
-  const selectionEnd = useFireSequencerStore((s) => s.selectionEnd);
   const linkedClipCount = useFireSequencerStore((s) => s.linkedClipCount);
   const varyPattern = useFireSequencerStore((s) => s.varyPattern);
   const humanizeNotes = useFireSequencerStore((s) => s.humanizeNotes);
@@ -202,6 +101,7 @@ export const SequencerPanel = memo(function SequencerPanel({
   const [exporting, setExporting] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("wav");
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [libraryExportOpen, setLibraryExportOpen] = useState(false);
   const [variationsOpen, setVariationsOpen] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const toast = useUIStore((s) => s.toast);
@@ -248,8 +148,9 @@ export const SequencerPanel = memo(function SequencerPanel({
       } else if ((e.key === "q" || e.key === "Q") && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         setRecordQuantize(!recordQuantize);
-      } else if ((e.key === "h" || e.key === "H") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      } else if ((e.key === "h" || e.key === "H") && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
+        e.stopPropagation();
         humanizeNotes();
         toast("Notes humanized");
       }
@@ -260,9 +161,16 @@ export const SequencerPanel = memo(function SequencerPanel({
 
   const doExportWav = async () => {
     if (exporting) return;
-    if (noteCount === 0 && !drumsEnabled) {
-      toast("Nothing to export — draw some notes or drums first");
+    const gate = await fireExportPreflight();
+    if (!gate.ok) {
+      toast(gate.reason ?? "Nothing to export");
       return;
+    }
+    if (gate.missingSamples.length > 0) {
+      toast(
+        `${gate.missingSamples.length} sample${gate.missingSamples.length === 1 ? "" : "s"} missing — export may be incomplete`,
+        "warn",
+      );
     }
     setExporting("arming…");
     try {
@@ -271,13 +179,13 @@ export const SequencerPanel = memo(function SequencerPanel({
         exportFormat,
       );
       if (!res?.path) {
-        toast(res ? "Export cancelled" : "Export unavailable");
+        toast(res ? "Export cancelled or silent" : "Export unavailable", "warn");
         return;
       }
       const how = res.method === "offline" ? "offline bounce" : "realtime capture";
-      toast(`Exported (${how}) → ${res.path.split(/[\\/]/).pop()}`);
+      toast(`Exported (${how}) → ${res.path.split(/[\\/]/).pop()}`, "success");
     } catch {
-      toast("Export failed");
+      toast("Export failed", "error");
     } finally {
       setExporting(null);
     }
@@ -285,9 +193,16 @@ export const SequencerPanel = memo(function SequencerPanel({
 
   const doExportStems = async () => {
     if (exporting) return;
-    if (noteCount === 0 && !drumsEnabled) {
-      toast("Nothing to export — draw some notes or drums first");
+    const gate = await fireExportPreflight();
+    if (!gate.ok) {
+      toast(gate.reason ?? "Nothing to export");
       return;
+    }
+    if (gate.missingSamples.length > 0) {
+      toast(
+        `${gate.missingSamples.length} sample${gate.missingSamples.length === 1 ? "" : "s"} missing — stems may be incomplete`,
+        "warn",
+      );
     }
     setExporting("arming…");
     try {
@@ -295,13 +210,15 @@ export const SequencerPanel = memo(function SequencerPanel({
         (p) => setExporting(`${p.stage} ${Math.round(p.fraction * 100)}%`),
         exportFormat,
       );
-      toast(
-        res
-          ? `${res.written.length} stems → ${res.dir.split(/[\\/]/).pop()}`
-          : "Stems export cancelled",
-      );
+      if (!res) {
+        toast("Stems export cancelled", "warn");
+        return;
+      }
+      const how = res.method === "offline" ? "offline" : "realtime";
+      const kcNote = res.method === "offline" ? " (dry; Kill-Chain master on realtime fallback)" : "";
+      toast(`${res.written.length} stems (${how})${kcNote} → ${res.dir.split(/[\\/]/).pop()}`, "success");
     } catch {
-      toast("Stems export failed");
+      toast("Stems export failed", "error");
     } finally {
       setExporting(null);
     }
@@ -314,8 +231,17 @@ export const SequencerPanel = memo(function SequencerPanel({
 
   const doOpenProject = async () => {
     const res = await openProject();
-    if (res.ok) toast("Project loaded — patch, pattern, samples");
-    else if (res.error) toast(res.error);
+    if (res.ok) {
+      const n = res.missingSamples?.length ?? 0;
+      if (n > 0) {
+        toast(
+          `Project loaded — ${n} sample${n === 1 ? "" : "s"} missing on this machine`,
+          "warn",
+        );
+      } else {
+        toast("Project loaded — patch, pattern, samples", "success");
+      }
+    } else if (res.error) toast(res.error, "error");
   };
 
   const presetId = useFireCommandStore((s) => s.presetId);
@@ -347,23 +273,10 @@ export const SequencerPanel = memo(function SequencerPanel({
     [instrumentOptions, synthBPresetId],
   );
 
-  const hasLoopSelection = useMemo(() => {
-    if (selectionEnd <= selectionStart) return false;
-    return notes.some((n) => n.step + n.len > selectionStart && n.step < selectionEnd);
-  }, [notes, selectionStart, selectionEnd]);
-
   const selectedClip = selectedClipId
     ? arrangement.find((c) => c.id === selectedClipId) ?? null
     : null;
   const linkedN = linkedClipCount(activeSectionId);
-
-  const toggleLoopScope = () => {
-    if (!hasLoopSelection) {
-      toast("Selection empty — select notes to loop a range");
-      return;
-    }
-    setPlayScope(playScope === "selection" ? "pattern" : "selection");
-  };
 
   const confirmClearTimeoutRef = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(confirmClearTimeoutRef.current), []);
@@ -432,289 +345,6 @@ export const SequencerPanel = memo(function SequencerPanel({
 
   const body = (
     <div ref={panelRef} tabIndex={-1} className="outline-none flex flex-col flex-1 min-h-0">
-      {/* Brass transport — matches Synth-side FireMiniTransport */}
-      <div
-        className={`relative overflow-hidden shrink-0 ${flush ? "" : "rounded-2xl mb-2.5"}`}
-        style={
-          flush
-            ? {
-                background: playing
-                  ? "linear-gradient(180deg, rgba(232,184,109,0.12) 0%, rgba(22,18,14,0.3) 50%, rgba(34,211,238,0.05) 100%)"
-                  : "linear-gradient(180deg, rgba(232,184,109,0.07) 0%, rgba(22,18,14,0.22) 55%, transparent 100%)",
-              }
-            : {
-                border: "1px solid rgba(232,184,109,0.22)",
-                background: "linear-gradient(180deg, #16120e 0%, #0e0c0a 100%)",
-                boxShadow: playing
-                  ? `0 0 0 1px rgba(0,0,0,0.35) inset, 0 8px 28px rgba(0,0,0,0.3), 0 0 40px ${BRASS_GLOW}`
-                  : "0 0 0 1px rgba(0,0,0,0.35) inset, 0 8px 28px rgba(0,0,0,0.28)",
-              }
-        }
-      >
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background: playing
-              ? "radial-gradient(ellipse 55% 140% at 10% 50%, rgba(232,184,109,0.2), transparent 55%), radial-gradient(ellipse 40% 100% at 90% 50%, rgba(232,184,109,0.08), transparent 50%)"
-              : "radial-gradient(ellipse 50% 120% at 50% 0%, rgba(232,184,109,0.1), transparent 55%)",
-          }}
-        />
-        <div
-          className="pointer-events-none absolute inset-x-0 top-0 h-px"
-          style={{ background: "linear-gradient(90deg, transparent, rgba(245,217,168,0.4), transparent)" }}
-        />
-        {!flush && (
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] opacity-40"
-          style={{
-            background: "linear-gradient(90deg, transparent, #e8b86d, transparent)",
-            maskImage: "repeating-linear-gradient(90deg, #000 0 8px, transparent 8px 14px)",
-            WebkitMaskImage: "repeating-linear-gradient(90deg, #000 0 8px, transparent 8px 14px)",
-          }}
-        />
-        )}
-
-        <div className="relative z-10 seq-header">
-          {/* A — Primary application header */}
-          <div className="seq-header__primary">
-            <div className="seq-header__transport">
-              <div className="seq-header__cluster">
-                <button
-                  onClick={togglePlay}
-                  className="relative h-9 px-4 rounded-lg font-black text-[12px] uppercase tracking-[0.1em] transition overflow-hidden shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] cursor-pointer"
-                  style={
-                    playing
-                      ? {
-                          color: "#1a1208",
-                          background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})`,
-                          boxShadow: `0 0 20px ${BRASS_GLOW}, inset 0 1px 0 rgba(255,255,255,0.35)`,
-                        }
-                      : {
-                          color: BRASS_SOFT,
-                          background: "rgba(232,184,109,0.12)",
-                          boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.45)",
-                        }
-                  }
-                  title={`Open Fire — play/stop ${playScope}`}
-                  aria-pressed={playing}
-                >
-                  {playing && (
-                    <span
-                      className="pointer-events-none absolute inset-0 opacity-60 animate-[evolve-breathe_1.8s_ease-in-out_infinite]"
-                      style={{ background: "radial-gradient(circle at 30% 40%, rgba(255,255,255,0.45), transparent 55%)" }}
-                    />
-                  )}
-                  <span className="relative inline-flex items-center gap-2">
-                    <span aria-hidden>{playing ? "■" : "▶"}</span>
-                    {playing ? "Hold Fire" : "Open Fire"}
-                  </span>
-                </button>
-              </div>
-
-              <SeqGroup label="Target">
-                <SeqSegmented aria-label="Play target">
-                  {([
-                    { id: "pattern" as const, label: "Pattern" },
-                    { id: "arrangement" as const, label: "Arrangement" },
-                    { id: "selection" as const, label: "Selection" },
-                  ]).map((opt) => (
-                    <SeqSegment
-                      key={opt.id}
-                      brass
-                      active={playScope === opt.id}
-                      onClick={() => setPlayScope(opt.id)}
-                      title={`Play target: ${opt.label}`}
-                    >
-                      {opt.label}
-                    </SeqSegment>
-                  ))}
-                </SeqSegmented>
-              </SeqGroup>
-
-              <div className="seq-header__cluster" role="group" aria-label="Transport">
-                <button
-                  type="button"
-                  onClick={toggleLoopScope}
-                  className={SEQ_CTRL}
-                  style={
-                    playScope === "selection"
-                      ? {
-                          color: "#1a1208",
-                          background: `linear-gradient(145deg, ${BRASS_SOFT}, ${BRASS})`,
-                          borderColor: "rgba(232,184,109,0.55)",
-                          fontWeight: 700,
-                        }
-                      : undefined
-                  }
-                  title={
-                    hasLoopSelection
-                      ? "Loop the selected note range (toggle selection scope)"
-                      : "Pattern / arrangement always loop — select notes to loop a range"
-                  }
-                  aria-pressed={playScope === "selection"}
-                >
-                  {playScope === "selection" ? "● Loop" : "Loop"}
-                </button>
-
-                <button
-                  onClick={() => setRecording(!recording)}
-                  className="h-8 px-3 rounded-lg font-bold text-[11px] uppercase tracking-[0.08em] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-rose-400/60 cursor-pointer inline-flex items-center gap-1.5"
-                  style={
-                    recording
-                      ? {
-                          color: "#fecdd3",
-                          background: "rgba(244,63,94,0.28)",
-                          boxShadow: "0 0 14px rgba(244,63,94,0.35), inset 0 0 0 1px rgba(244,63,94,0.75)",
-                          fontWeight: 800,
-                        }
-                      : {
-                          color: "rgba(255,255,255,0.55)",
-                          background: "rgba(0,0,0,0.28)",
-                          boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.12)",
-                        }
-                  }
-                  title="Arm record: while playing, everything you play lands in the piano roll"
-                  aria-pressed={recording}
-                  aria-label={recording ? "Disarm record" : "Arm record"}
-                >
-                  <span
-                    aria-hidden
-                    className="w-1.5 h-1.5 rounded-full"
-                    style={{
-                      background: recording ? "#fb7185" : "rgba(255,255,255,0.35)",
-                      boxShadow: recording ? "0 0 8px #fb7185" : undefined,
-                    }}
-                  />
-                  Rec
-                </button>
-
-                <div
-                  className="flex items-center gap-1.5 rounded-lg px-2.5 h-8"
-                  style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.2)" }}
-                >
-                  <span className={SEQ_GROUP_LABEL}>BPM</span>
-                  <input
-                    type="number"
-                    min={40}
-                    max={240}
-                    value={bpm}
-                    onChange={(e) => setBpm(Number(e.target.value) || 128)}
-                    className="w-[52px] h-6 rounded-md bg-black/40 px-1 text-[13px] font-mono text-center outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-[rgba(232,184,109,0.65)]"
-                    style={{ color: BRASS_SOFT, boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.22)" }}
-                    aria-label="Tempo BPM"
-                  />
-                </div>
-              </div>
-
-              {recording && (
-                <div className="seq-header__cluster">
-                  <button
-                    onClick={() => setRecordMode(recordMode === "overdub" ? "replace" : "overdub")}
-                    className={SEQ_CTRL}
-                    title="Toggle overdub vs replace"
-                  >
-                    {recordMode === "replace" ? "Replace" : "Overdub"}
-                  </button>
-                  <button
-                    onClick={() => setRecordCountIn((recordCountIn + 1) % 5)}
-                    className={SEQ_CTRL}
-                    title="Count-in bars"
-                  >
-                    {recordCountIn === 0 ? "No count-in" : `${recordCountIn} bar count-in`}
-                  </button>
-                  <button
-                    onClick={() => setMetronome(!metronome)}
-                    className={SEQ_CTRL}
-                    style={metronome ? { borderColor: "rgba(251,191,36,0.45)", color: "#fde68a" } : undefined}
-                    aria-pressed={metronome}
-                  >
-                    Metro
-                  </button>
-                  <button
-                    onClick={() => setRecordQuantize(!recordQuantize)}
-                    className={SEQ_CTRL}
-                    style={
-                      recordQuantize
-                        ? { color: BRASS_SOFT, background: "rgba(232,184,109,0.16)", borderColor: "rgba(232,184,109,0.45)" }
-                        : undefined
-                    }
-                    title="Quantize captured notes to the 1/16 grid"
-                    aria-pressed={recordQuantize}
-                  >
-                    ⧗ 1/16
-                  </button>
-                  <span className={`${SEQ_HINT} font-mono text-rose-200/80`}>
-                    REC · {recordMode.toUpperCase()}
-                    {recordCountIn > 0 ? ` · ${recordCountIn}b IN` : " · NO IN"}
-                    {" · "}
-                    {recordQuantize ? "1/16" : "FREE"}
-                  </span>
-                </div>
-              )}
-
-              <SwingControls />
-            </div>
-
-            <div className="seq-header__layers">
-              <SeqGroup label="Layers" hint="arm · mute">
-                <div
-                  className="inline-flex items-center gap-1 rounded-lg p-1"
-                  style={{ background: "rgba(0,0,0,0.35)", boxShadow: "inset 0 0 0 1px rgba(232,184,109,0.18)" }}
-                  role="group"
-                  aria-label="Layer arm / mute"
-                >
-                  {([
-                    { on: synthEnabled, toggle: () => setSynthEnabled(!synthEnabled), label: "A", accent: "#ff8f6b", soft: "#ffd0c0", title: "Synth A — click to arm or mute", name: "Synth A" },
-                    { on: synthBEnabled, toggle: () => setSynthBEnabled(!synthBEnabled), label: "B", accent: "#7dd3fc", soft: "#e0f2fe", title: "Synth B — click to arm or mute", name: "Synth B" },
-                    { on: drumsEnabled, toggle: () => setDrumsEnabled(!drumsEnabled), label: "DRM", accent: "#bef264", soft: "#ecfccb", title: "Drums — click to arm or mute", name: "Drums" },
-                  ] as const).map((ch) => (
-                    <button
-                      key={ch.label}
-                      onClick={ch.toggle}
-                      className="h-8 min-w-[2.75rem] px-2.5 rounded-md text-[11px] font-black tracking-wide transition inline-flex items-center justify-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] cursor-pointer"
-                      style={
-                        ch.on
-                          ? { color: ch.soft, background: `${ch.accent}22`, boxShadow: `inset 0 0 0 1px ${ch.accent}70, 0 0 10px ${ch.accent}28` }
-                          : { color: "rgba(255,255,255,0.38)", background: "transparent", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)" }
-                      }
-                      title={ch.title}
-                      aria-pressed={ch.on}
-                      aria-label={`${ch.name} ${ch.on ? "armed" : "muted"}`}
-                    >
-                      <span
-                        className="w-1.5 h-1.5 rounded-full shrink-0"
-                        style={{ background: ch.on ? ch.accent : "rgba(255,255,255,0.22)", boxShadow: ch.on ? `0 0 6px ${ch.accent}` : undefined }}
-                        aria-hidden
-                      />
-                      {ch.label}
-                    </button>
-                  ))}
-                </div>
-              </SeqGroup>
-              <input
-                type="range"
-                min={0}
-                max={1.2}
-                step={0.02}
-                value={drumLevel}
-                onChange={(e) => setDrumLevel(Number(e.target.value))}
-                className="w-[64px] accent-[#bef264]"
-                title="Drum layer level"
-                aria-label="Drum layer level"
-              />
-              {!asWorkspace && (
-                <button
-                  onClick={() => setCollapsed(true)}
-                  className={SEQ_CTRL}
-                  title="Collapse the sequencer to a compact transport strip"
-                  aria-label="Collapse sequencer"
-                >▲</button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
       <ArrangementPlaylist flush={flush} />
 
       {/* D — Editor toolbar */}
@@ -861,7 +491,6 @@ export const SequencerPanel = memo(function SequencerPanel({
                     accent={ch === 0 ? FIRE : ICE}
                     onClick={() => {
                       setActiveChannel(ch);
-                      setEditTarget(ch === 0 ? "a" : "b");
                     }}
                     title={
                       ch === 0
@@ -944,7 +573,7 @@ export const SequencerPanel = memo(function SequencerPanel({
                   aria-label="Close file menu"
                   onClick={() => setFileMenuOpen(false)}
                 />
-                <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl border border-white/12 bg-[#12151c] shadow-xl p-1 space-y-0.5">
+                <div className="absolute right-0 top-full z-30 mt-1 w-48 rounded-xl border border-white/12 bg-[#12151c] shadow-xl p-1 space-y-0.5">
                   <button
                     onClick={() => { setFileMenuOpen(false); void doOpenProject(); }}
                     className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-white/70 hover:bg-white/8 hover:text-white transition"
@@ -966,6 +595,11 @@ export const SequencerPanel = memo(function SequencerPanel({
                     disabled={!!exporting}
                     className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-violet-300/90 hover:bg-violet-500/10 transition disabled:opacity-40"
                   >Export stems…</button>
+                  <button
+                    onClick={() => { setFileMenuOpen(false); setLibraryExportOpen(true); }}
+                    disabled={!!exporting}
+                    className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-[#f5d9a8]/90 hover:bg-[rgba(232,184,109,0.1)] transition disabled:opacity-40"
+                  >Export to Library…</button>
                 </div>
               </>
             )}
@@ -989,26 +623,24 @@ export const SequencerPanel = memo(function SequencerPanel({
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 font-mono">
             <span><kbd className="text-white/90">Space</kbd> Play / stop (count-in if REC armed)</span>
             <span><kbd className="text-white/90">R</kbd> Arm / disarm record</span>
-            <span><kbd className="text-white/90">D</kbd> Draw tab (piano roll)</span>
             <span><kbd className="text-white/90">Q</kbd> Toggle 1/16 quantize</span>
-            <span><kbd className="text-white/90">H</kbd> Humanize notes</span>
-            <span><kbd className="text-white/90">M / S</kbd> Mute / solo tracks</span>
+            <span><kbd className="text-white/90">Shift+H</kbd> Humanize notes</span>
             <span><kbd className="text-white/90">Loop</kbd> Selection loop scope</span>
             <span><kbd className="text-white/90">?</kbd> This overlay</span>
           </div>
         </div>
       )}
 
-      {!editorCollapsed && (tab === "roll" ? (
+      {!editorCollapsed && !editorFullscreen && (tab === "roll" ? (
         <RollFitProvider totalSteps={bars * STEPS_PER_BAR} gutter={PIANO_GUTTER}>
           <PianoRoll />
           <AutomationLane />
         </RollFitProvider>
-      ) : (
+      ) : !editorCollapsed && !editorFullscreen ? (
         <div className="w-full min-w-0">
           <DrumMachine />
         </div>
-      ))}
+      ) : null)}
 
       {editorFullscreen && (
         <FullscreenEditorShell
@@ -1038,6 +670,10 @@ export const SequencerPanel = memo(function SequencerPanel({
           </div>
         </FullscreenEditorShell>
       )}
+      <FireExportToLibraryModal
+        open={libraryExportOpen}
+        onClose={() => setLibraryExportOpen(false)}
+      />
     </div>
   );
 

@@ -284,7 +284,6 @@ import { FireCommandDeck } from "./FireCommandDeck";
 import { ensureExpanded, foldStorageKey, scrollFireCommandTop, writeFold } from "./fireNavigate";
 import { useFireWorkspace, type FireWorkspace } from "./useFireWorkspace";
 import { FireWorkspaceTabs } from "./FireWorkspaceTabs";
-import { FireMiniTransport } from "./FireMiniTransport";
 import { FireCommandPalette } from "./FireCommandPalette";
 import { FireSaveTiers } from "./FireSaveTiers";
 import { useFireSynthBand, type FireSynthBand } from "./useFireSynthBand";
@@ -519,6 +518,10 @@ export function FireCommandView() {
     });
     return () => {
       setStageVizPressureSource(null);
+      try {
+        const seq = useFireSequencerStore.getState();
+        if (seq.playing) seq.stop();
+      } catch { /* ignore */ }
       useFireCommandStore.getState().panic();
     };
   }, []);
@@ -588,7 +591,13 @@ export function FireCommandView() {
       pressed.delete(k);
       useFireCommandStore.getState().noteOff(midi);
     };
-    const onBlur = () => { pressed.clear(); useFireCommandStore.getState().panic(); };
+    const onBlur = () => {
+      // Release held QWERTY keys only — full panic left transport "playing"
+      // with a silent playhead after Alt-Tab.
+      const store = useFireCommandStore.getState();
+      for (const midi of pressed.values()) store.noteOff(midi);
+      pressed.clear();
+    };
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
     window.addEventListener("blur", onBlur);
@@ -804,8 +813,7 @@ export function FireCommandView() {
         </div>
       ) : (
       <>
-      {/* Synth chrome — transport + band tabs flush into the console */}
-      <FireMiniTransport flush={flush} />
+      {/* Synth chrome — band tabs flush into the console (Open Fire lives in the app dock) */}
       <FireSynthBandTabs band={synthBand} onChange={setSynthBand} flush={flush} />
 
       {/* Home = Signal Path hub; band tabs mount only that category */}
@@ -5013,7 +5021,7 @@ function FiltCharacterStrip() {
   const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
   const cut = useFireCommandStore((s) => s.patch.filterCutoff) ?? 2600;
   const reso = useFireCommandStore((s) => s.patch.filterResonance) ?? 0.7;
-  const setParam = useFireCommandStore((s) => s.setParam);
+  const setParams = useFireCommandStore((s) => s.setParams);
   const c = FC.filter;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
@@ -5027,12 +5035,14 @@ function FiltCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => {
-              setParam("filterType", p.type);
-              setParam("filterCutoff", p.cut);
-              setParam("filterResonance", p.reso);
-              setParam("filterEnvAmount", p.env);
-              setParam("filterKeyTrack", p.key);
-              setParam("filterDrive", p.sat);
+              setParams({
+                filterType: p.type,
+                filterCutoff: p.cut,
+                filterResonance: p.reso,
+                filterEnvAmount: p.env,
+                filterKeyTrack: p.key,
+                filterDrive: p.sat,
+              });
             }}
             className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
             style={
@@ -8942,25 +8952,26 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         ))}
       </div>
 
-      <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5">
         <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>POLYPHONY</span>
-        {[6, 8, 12, 16, 24].map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => setMaxVoices(v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums"
-            style={
-              maxVoices === v
-                ? { borderColor: `${c}99`, background: `${c}33`, color: LIVE_C_GLOW }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }
-            }
-            title="Note polyphony (not Unison)"
-          >
-            {v}
-          </button>
-        ))}
-        <span className="ml-2 text-[8px] text-white/30">vs Unison · Voice Choir</span>
+        <select
+          value={maxVoices}
+          onChange={(e) => setMaxVoices(Number(e.target.value))}
+          className="h-7 min-w-[5rem] rounded-md border px-1.5 text-[10px] font-bold tabular-nums outline-none"
+          style={
+            maxVoices
+              ? { borderColor: `${c}99`, background: `${c}33`, color: LIVE_C_GLOW }
+              : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }
+          }
+          title="Note polyphony (not Unison) — raise for denser chords on stronger CPUs"
+        >
+          {[6, 8, 12, 16, 24, 32, 48].map((v) => (
+            <option key={v} value={v} style={{ background: "#0c0c12", color: "#fff" }}>
+              {v} voices
+            </option>
+          ))}
+        </select>
+        <span className="ml-1 text-[8px] text-white/30">vs Unison · Voice Choir</span>
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
@@ -9802,7 +9813,7 @@ function ReverbCharacterStrip() {
   const damp = useFireCommandStore((s) => s.patch.reverbDamp) ?? 0.45;
   const mix = useFireCommandStore((s) => s.patch.reverbMix) ?? 0;
   const diff = useFireCommandStore((s) => s.patch.reverbDiffusion) ?? 0.7;
-  const setParam = useFireCommandStore((s) => s.setParam);
+  const setParams = useFireCommandStore((s) => s.setParams);
   const c = FC.reverb;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
@@ -9822,11 +9833,13 @@ function ReverbCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => {
-              setParam("reverbSize", p.size);
-              setParam("reverbDamp", p.damp);
-              setParam("reverbPredelay", p.pre);
-              setParam("reverbDiffusion", p.diff);
-              setParam("reverbMix", p.mix);
+              setParams({
+                reverbSize: p.size,
+                reverbDamp: p.damp,
+                reverbPredelay: p.pre,
+                reverbDiffusion: p.diff,
+                reverbMix: p.mix,
+              });
             }}
             className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
             style={
@@ -10196,7 +10209,7 @@ function DelayCharacterStrip() {
   const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
   const fbk = useFireCommandStore((s) => s.patch.delayFeedback) ?? 0.3;
   const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
-  const setParam = useFireCommandStore((s) => s.setParam);
+  const setParams = useFireCommandStore((s) => s.setParams);
   const c = FC.delay;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
@@ -10212,9 +10225,11 @@ function DelayCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => {
-              setParam("delayTime", p.time);
-              setParam("delayFeedback", p.fbk);
-              setParam("delayMix", p.mix);
+              setParams({
+                delayTime: p.time,
+                delayFeedback: p.fbk,
+                delayMix: p.mix,
+              });
             }}
             className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
             style={
@@ -13246,6 +13261,8 @@ function ArpModMeter({
 function ArpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const arp = useFireCommandStore((s) => s.arp);
   const setArp = useFireCommandStore((s) => s.setArp);
+  const editTarget = useFireCommandStore((s) => s.editTarget);
+  const arpOnB = editTarget === "b";
   const modes: { id: ArpMode; label: string }[] = [
     { id: "up", label: "Up" }, { id: "down", label: "Dn" },
     { id: "updown", label: "Up/Dn" }, { id: "downup", label: "Dn/Up" },
@@ -13257,7 +13274,7 @@ function ArpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const cBpm = bandShade(FC.mod, 0.62);
   const cGate = bandShade(FC.mod, 0.8);
   const cSwing = bandShade(FC.mod, 0.88);
-  const live = arp.enabled;
+  const live = arp.enabled && !arpOnB;
   const bpmN = Math.log(Math.max(40, arp.bpm) / 40) / Math.log(300 / 40);
   const gateN = (arp.gate - 0.1) / 0.9;
   const swingN = (arp.swing ?? 0) / 0.33;
@@ -13296,14 +13313,16 @@ function ArpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       >
         <div className="min-w-0">
           <div className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
-            Signal Path · Mod
+            Signal Path · Mod{arpOnB ? " · Synth A only" : ""}
           </div>
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.mod, 0.96) }}>
             Cascade Orbit
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${arp.mode} · ${arp.bpm} · ${arp.division} · ${arp.octaves}º`
-                : `${arp.mode} · standby`}
+              {arpOnB
+                ? "inactive on B — switch to A to arm"
+                : live
+                  ? `${arp.mode} · ${arp.bpm} · ${arp.division} · ${arp.octaves}º`
+                  : `${arp.mode} · standby`}
             </span>
           </div>
         </div>
@@ -13334,18 +13353,15 @@ function ArpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           type="button"
           className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
           style={{ borderColor: `${c}55`, color: `${c}cc`, background: `${c}14` }}
-          title="Copy current arp contour into the Fire Sequencer pattern (stub writes held scale steps when possible)"
+          title="Paint held notes (or a C major stub) across the active Draw channel"
           onClick={() => {
             try {
-              const seq = useFireSequencerStore.getState();
               const held = useFireCommandStore.getState().heldNotes;
               const base = held.length ? held : [60, 64, 67, 72];
-              if (typeof (seq as unknown as { paintArpCapture?: (n: number[]) => void }).paintArpCapture === "function") {
-                (seq as unknown as { paintArpCapture: (n: number[]) => void }).paintArpCapture(base);
-              } else {
-                // Soft stub: stash on window for MIDI-drag helpers later.
-                (window as unknown as { __fireArpCapture?: number[] }).__fireArpCapture = base;
-              }
+              const n = useFireSequencerStore.getState().paintArpCapture(base);
+              useUIStore.getState().toast(
+                n > 0 ? `Painted ${n} arp notes → Draw ${useFireSequencerStore.getState().activeChannel === 1 ? "B" : "A"}` : "Nothing to paint",
+              );
             } catch { /* */ }
           }}
         >
@@ -14843,7 +14859,7 @@ function ScenesPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
                 ? "bypass"
-                : `${modeMeta.short} → ${targetTag} · ${occ}/${SCENE_SLOTS} saved · energy ${Math.round(energy * 100)}`}
+                : `${modeMeta.short} → Synth ${targetTag} only · shared bank · ${occ}/${SCENE_SLOTS} · energy ${Math.round(energy * 100)}`}
             </span>
           </div>
         </div>

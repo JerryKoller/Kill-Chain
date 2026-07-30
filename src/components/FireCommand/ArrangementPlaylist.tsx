@@ -20,10 +20,16 @@ import {
 import { useUIStore } from "@/state/uiStore";
 import { CollapseToggle } from "./CollapseToggle";
 import { useFireCollapsed } from "./useFireCollapsed";
-import { PatternBarsControls } from "./PatternBarsControls";
+import { ArrangementBarsControls } from "./ArrangementBarsControls";
 import { ScopedPlayButton } from "./ScopedPlayButton";
 import { SeqSectionRow, SEQ_PILL, SEQ } from "./seqChrome";
 import { ExitFullscreenButton } from "./EditorShell";
+import { writeFold } from "./fireNavigate";
+import {
+  PatternItem,
+  PatternsEmptyState,
+  PatternsStrip,
+} from "./PatternItem";
 
 const FIRE = SEQ.fire;
 
@@ -118,7 +124,6 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const duplicateClip = useFireSequencerStore((s) => s.duplicateClip);
   const nudgeClip = useFireSequencerStore((s) => s.nudgeClip);
   const trimClip = useFireSequencerStore((s) => s.trimClip);
-  const setClipColor = useFireSequencerStore((s) => s.setClipColor);
   const setPlaylistTrack = useFireSequencerStore((s) => s.setPlaylistTrack);
   const seekArrangement = useFireSequencerStore((s) => s.seekArrangement);
   const makeClipUnique = useFireSequencerStore((s) => s.makeClipUnique);
@@ -165,7 +170,39 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const [selectedClip, setSelectedClip] = useState<string | null>(null);
   const [clipMenu, setClipMenu] = useState<string | null>(null);
   const [appendOpen, setAppendOpen] = useState(false);
+
+  useEffect(() => {
+    if (!appendOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest("[data-fire-append-menu]")) {
+        setAppendOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setAppendOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [appendOpen]);
   const [dropHover, setDropHover] = useState<{ step: number; track: number; bars: number } | null>(null);
+  const [placeMode, setPlaceMode] = useState<{
+    patternId: string; bars: number; color: string; name: string;
+  } | null>(null);
+  const [selectedClips, setSelectedClips] = useState<Set<string>>(() => new Set());
+  const [marquee, setMarquee] = useState<{
+    x0: number; y0: number; x1: number; y1: number;
+  } | null>(null);
+  const marqueeRef = useRef<{
+    x0: number; y0: number; pointerId: number; moved: boolean;
+  } | null>(null);
   const [pxPerBar, setPxPerBar] = useState(PX_PER_BAR_DEFAULT);
   const [snapSteps, setSnapStepsState] = useState(readArrSnap);
   const [clipGhost, setClipGhost] = useState<{
@@ -284,6 +321,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     [sections],
   );
 
+  const arrangementBars = useFireSequencerStore((s) => s.arrangementBars);
+
   const arrangementEndStep = useMemo(
     () =>
       arrangement.reduce((m, c) => Math.max(m, c.startStep + clipLenSteps(c)), 0),
@@ -292,13 +331,13 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
 
   const totalSteps = useMemo(() => {
     const live = songTotalSteps(useFireSequencerStore.getState());
-    const minBars = 16;
-    const bars = Math.min(
-      MAX_ARRANGEMENT_BARS,
-      Math.max(minBars, Math.ceil(Math.max(live, arrangementEndStep) / STEPS_PER_BAR) + 4),
+    const needed = Math.max(
+      arrangementBars,
+      Math.ceil(Math.max(live, arrangementEndStep) / STEPS_PER_BAR),
     );
+    const bars = Math.min(MAX_ARRANGEMENT_BARS, Math.max(1, needed));
     return bars * STEPS_PER_BAR;
-  }, [arrangementEndStep, playing, playMode]);
+  }, [arrangementEndStep, arrangementBars, playing, playMode]);
 
   const totalBars = totalSteps / STEPS_PER_BAR;
   totalBarsRef.current = totalBars;
@@ -368,6 +407,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const placeAt = (step: number, track: number, force = false) => {
     if (!force && selectedClip) {
       setSelectedClip(null);
+      setSelectedClips(new Set());
       clearSelectedClip();
       return;
     }
@@ -379,11 +419,123 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     const id = placeClip(activeSectionId, snapped, track);
     if (id) {
       setSelectedClip(id);
+      setSelectedClips(new Set([id]));
       selectClipForEdit(id);
       toast(`Added “${activeName}” · T${track + 1} · bar ${Math.floor(snapped / STEPS_PER_BAR) + 1}`);
     } else {
       toast("That spot is occupied on this track — try another lane or Add to end");
     }
+  };
+
+  const finishPlaceMode = (step: number, track: number) => {
+    if (!placeMode) return;
+    if (arrangement.length >= MAX_CLIPS) {
+      toast(`Max ${MAX_CLIPS} clips`);
+      setPlaceMode(null);
+      setDropHover(null);
+      return;
+    }
+    const snapped = quantizeStep(step, effectiveSnapRef.current);
+    const id = placeClip(placeMode.patternId, snapped, track);
+    if (id) {
+      setSelectedClip(id);
+      setSelectedClips(new Set([id]));
+      selectClipForEdit(id);
+      toast(`Placed “${placeMode.name}” · T${track + 1}`);
+    } else {
+      toast("Can't place — track occupied");
+    }
+    setPlaceMode(null);
+    setDropHover(null);
+  };
+
+  const beginLaneMarquee = (e: React.PointerEvent, track: number) => {
+    if (e.button !== 0) return;
+
+    // Sticky place-mode: place even if the pointer is over an existing clip.
+    if (placeMode) {
+      e.preventDefault();
+      const { step } = posFromClient(e.clientX, e.clientY);
+      finishPlaceMode(step, track);
+      return;
+    }
+
+    if ((e.target as HTMLElement).closest("[data-clip]")) return;
+    e.preventDefault();
+
+    const el = scrollRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x0 = e.clientX - rect.left + el.scrollLeft;
+    const y0 = e.clientY - rect.top + el.scrollTop;
+    const pointerId = e.pointerId;
+    marqueeRef.current = { x0, y0, pointerId, moved: false };
+    setMarquee({ x0, y0, x1: x0, y1: y0 });
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId || !marqueeRef.current) return;
+      const sc = scrollRef.current;
+      if (!sc) return;
+      const r = sc.getBoundingClientRect();
+      const x1 = ev.clientX - r.left + sc.scrollLeft;
+      const y1 = ev.clientY - r.top + sc.scrollTop;
+      if (Math.hypot(x1 - marqueeRef.current.x0, y1 - marqueeRef.current.y0) > 5) {
+        marqueeRef.current.moved = true;
+      }
+      setMarquee({ x0: marqueeRef.current.x0, y0: marqueeRef.current.y0, x1, y1 });
+    };
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      const start = marqueeRef.current;
+      marqueeRef.current = null;
+      setMarquee(null);
+      if (!start) return;
+
+      const sc = scrollRef.current;
+      if (!sc) return;
+      const r = sc.getBoundingClientRect();
+      const x1 = ev.clientX - r.left + sc.scrollLeft;
+      const y1 = ev.clientY - r.top + sc.scrollTop;
+
+      if (!start.moved) {
+        const { step } = posFromClient(ev.clientX, ev.clientY);
+        placeAt(step, track, ev.shiftKey);
+        return;
+      }
+
+      const left = Math.min(start.x0, x1);
+      const right = Math.max(start.x0, x1);
+      const top = Math.min(start.y0, y1);
+      const bottom = Math.max(start.y0, y1);
+      const hit = new Set<string>();
+      const state = useFireSequencerStore.getState();
+      for (const clip of state.arrangement) {
+        const t = clampTrack(clip.track ?? 0);
+        const len = clipLenSteps(clip);
+        const clipLeft = (clip.startStep / STEPS_PER_BAR) * pxPerBar + 2;
+        const clipRight = clipLeft + Math.max(pxPerBar / 16, (len / STEPS_PER_BAR) * pxPerBar - 2);
+        const clipTop = RULER_H + t * laneH + 3;
+        const clipBottom = clipTop + laneH - 6;
+        if (clipRight >= left && clipLeft <= right && clipBottom >= top && clipTop <= bottom) {
+          hit.add(clip.id);
+        }
+      }
+      setSelectedClips(hit);
+      const first = hit.values().next().value as string | undefined;
+      if (first) {
+        setSelectedClip(first);
+        selectClipForEdit(first);
+      } else {
+        setSelectedClip(null);
+        clearSelectedClip();
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   const onTimelineDrop = (e: React.DragEvent) => {
@@ -468,54 +620,102 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     dragCleanupRef.current = detach;
   };
 
-  // Keyboard: Del / arrows nudge selected clip.
+  // Keyboard: Del / arrows nudge selected clip(s); Esc cancels place mode.
   useEffect(() => {
-    if (!selectedClip) return;
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return;
+      if (
+        target.tagName === "INPUT"
+        || target.tagName === "TEXTAREA"
+        || target.tagName === "SELECT"
+        || target.isContentEditable
+      ) return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (t?.closest("[data-fire-piano-roll]")) return;
+      const inArr = !!t?.closest("[data-fire-arrangement]");
+      const arrHovered = !!document.querySelector("[data-fire-arrangement]:hover");
+      if (!inArr && !arrHovered) return;
+
+      if (e.key === "Escape") {
+        if (placeMode) {
+          e.preventDefault();
+          setPlaceMode(null);
+          setDropHover(null);
+          return;
+        }
+        if (selectedClip || selectedClips.size > 0) {
+          setSelectedClip(null);
+          setSelectedClips(new Set());
+          clearSelectedClip();
+        }
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        const all = useFireSequencerStore.getState().arrangement;
+        const ids = new Set(all.map((c) => c.id));
+        setSelectedClips(ids);
+        const first = all[0]?.id ?? null;
+        setSelectedClip(first);
+        if (first) selectClipForEdit(first);
+        return;
+      }
+
+      const ids = selectedClips.size > 0
+        ? [...selectedClips]
+        : selectedClip
+          ? [selectedClip]
+          : [];
+      if (ids.length === 0) return;
+
       const grid = Math.max(0.25, effectiveSnapRef.current);
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        removeClip(selectedClip);
+        for (const id of ids) removeClip(id);
         setSelectedClip(null);
+        setSelectedClips(new Set());
+        clearSelectedClip();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        if (!nudgeClip(selectedClip, -(e.shiftKey ? grid * 4 : grid))) {
-          toast("Can't nudge — track occupied");
+        const delta = -(e.shiftKey ? grid * 4 : grid);
+        for (const id of ids) {
+          if (!nudgeClip(id, delta)) toast("Can't nudge — track occupied");
         }
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        if (!nudgeClip(selectedClip, e.shiftKey ? grid * 4 : grid)) {
-          toast("Can't nudge — track occupied");
+        const delta = e.shiftKey ? grid * 4 : grid;
+        for (const id of ids) {
+          if (!nudgeClip(id, delta)) toast("Can't nudge — track occupied");
         }
-      } else if (e.key === "ArrowUp") {
+      } else if (e.key === "ArrowUp" && ids.length === 1) {
         e.preventDefault();
-        const clip = useFireSequencerStore.getState().arrangement.find((c) => c.id === selectedClip);
+        const clip = useFireSequencerStore.getState().arrangement.find((c) => c.id === ids[0]);
         if (clip && !moveClip(clip.id, clip.startStep, Math.max(0, (clip.track ?? 0) - 1))) {
           toast("Can't move — track occupied");
         }
-      } else if (e.key === "ArrowDown") {
+      } else if (e.key === "ArrowDown" && ids.length === 1) {
         e.preventDefault();
-        const clip = useFireSequencerStore.getState().arrangement.find((c) => c.id === selectedClip);
+        const clip = useFireSequencerStore.getState().arrangement.find((c) => c.id === ids[0]);
         if (clip && !moveClip(clip.id, clip.startStep, Math.min(MAX_PLAYLIST_TRACKS - 1, (clip.track ?? 0) + 1))) {
           toast("Can't move — track occupied");
         }
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D") && ids.length === 1) {
         e.preventDefault();
-        const id = duplicateClip(selectedClip);
+        const id = duplicateClip(ids[0]!);
         if (id) {
           setSelectedClip(id);
+          setSelectedClips(new Set([id]));
           selectClipForEdit(id);
         } else toast(`Max ${MAX_CLIPS} clips or no free space`);
-      } else if (e.key === "Escape") {
-        setSelectedClip(null);
-        clearSelectedClip();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedClip, removeClip, nudgeClip, moveClip, duplicateClip, selectClipForEdit, clearSelectedClip, toast]);
+  }, [
+    selectedClip, selectedClips, placeMode, removeClip, nudgeClip, moveClip,
+    duplicateClip, selectClipForEdit, clearSelectedClip, toast,
+  ]);
 
   const seekFromRuler = (clientX: number, soft: boolean) => {
     const el = scrollRef.current;
@@ -574,6 +774,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
 
   return (
     <div
+      data-fire-arrangement
       className={
         arrFullscreen
           ? "fixed left-0 right-0 bottom-0 top-9 z-[90] flex flex-col bg-[#06070b] p-2.5 gap-2 overflow-hidden shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
@@ -602,7 +803,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-1.5 shrink-0 ml-auto">
-            <PatternBarsControls accent={FIRE} />
+            <ArrangementBarsControls accent={FIRE} />
           </div>
         </header>
       )}
@@ -620,7 +821,9 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
           meta={
             patternsDockCollapsed
               ? `${sections.length} pattern${sections.length === 1 ? "" : "s"} · ${sections.find((s) => s.id === activeSectionId)?.name ?? "—"}`
-              : "select to edit · drag onto timeline"
+              : sections.length === 0
+                ? "Create a pattern to begin sequencing"
+                : `${sections.length} pattern${sections.length === 1 ? "" : "s"} · select to edit · drag onto arrangement`
           }
           collapseControl={
             <CollapseToggle
@@ -632,119 +835,210 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
           play={
             <ScopedPlayButton
               scope="pattern"
-              title="Play / pause active pattern only"
+              title="Preview active pattern"
             />
           }
         />
         {!patternsDockCollapsed && (
-        <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
-          {sections.map((sec) => {
-            const active = sec.id === activeSectionId;
-            const sounding = playingPattern === sec.id;
-            if (renaming === sec.id) {
-              return (
-                <input
-                  key={sec.id}
-                  autoFocus
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onBlur={() => commitRename(sec.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename(sec.id);
-                    if (e.key === "Escape") setRenaming(null);
-                  }}
-                  className="w-24 h-8 rounded-lg border border-[#ff6a3d]/60 bg-black/40 px-2 text-xs text-white outline-none"
-                />
-              );
-            }
-            const color = colorOf(sec.id);
-            return (
-              <span key={sec.id} className="group inline-flex items-center h-8">
-                <button
-                  type="button"
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(PATTERN_DND, sec.id);
-                    e.dataTransfer.effectAllowed = "copy";
-                  }}
-                  onClick={() => setActiveSection(sec.id)}
-                  onDoubleClick={() => { setRenaming(sec.id); setRenameValue(sec.name); }}
-                  className={`h-8 px-2.5 rounded-l-lg text-[11px] font-bold border transition cursor-grab active:cursor-grabbing ${
-                    active ? "" : "border-white/10 bg-white/[0.03] text-white/55 hover:bg-white/[0.08]"
-                  }`}
-                  style={{
-                    ...(active
-                      ? { borderColor: `${color}b0`, background: `${color}22`, color }
-                      : undefined),
-                    ...(sounding ? { boxShadow: `0 0 12px ${color}80` } : undefined),
-                  }}
-                  title={`PATTERN ${sec.name} — edit below · drag onto arrangement · double-click to rename`}
-                >
-                  <span
-                    className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle"
-                    style={{ background: color, opacity: active ? 1 : 0.55 }}
+        <div className="patterns-panel-body">
+          <PatternsStrip aria-label="Pattern bank">
+            {sections.length === 0 ? (
+              <PatternsEmptyState
+                canCreate={sections.length < MAX_SECTIONS}
+                canPlace={sections.length < MAX_SECTIONS && arrangement.length < MAX_CLIPS}
+                onNew={() => {
+                  const id = addSection();
+                  if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
+                  else toast("Blank pattern ready — draw notes, then add it to the arrangement");
+                }}
+                onNewAndPlace={() => {
+                  const id = addSection();
+                  if (!id) {
+                    toast(`Max ${MAX_SECTIONS} patterns`);
+                    return;
+                  }
+                  const clipId = placeClip(id, arrangementEndStep, 0);
+                  if (clipId) setSelectedClip(clipId);
+                  toast(clipId
+                    ? "New pattern created and added to the arrangement"
+                    : "Blank pattern ready — timeline was full on Track 1");
+                }}
+              />
+            ) : (
+              sections.map((sec, index) => {
+                const active = sec.id === activeSectionId;
+                const sounding = playingPattern === sec.id;
+                const color = colorOf(sec.id);
+                const canDup = sections.length < MAX_SECTIONS;
+                const canPlace = arrangement.length < MAX_CLIPS;
+                return (
+                  <PatternItem
+                    key={sec.id}
+                    id={sec.id}
+                    name={sec.name}
+                    bars={sec.bars}
+                    color={color}
+                    selected={active}
+                    playing={sounding}
+                    renaming={renaming === sec.id}
+                    renameValue={renameValue}
+                    onRenameChange={setRenameValue}
+                    onRenameCommit={() => commitRename(sec.id)}
+                    onRenameCancel={() => setRenaming(null)}
+                    onSelect={() => setActiveSection(sec.id)}
+                    onDoubleClick={() => {
+                      // Duplicate then sticky-place — use store getState so activate+dup is atomic.
+                      const st = useFireSequencerStore.getState();
+                      if (sec.id !== st.activeSectionId) st.setActiveSection(sec.id);
+                      const id = useFireSequencerStore.getState().duplicateSection();
+                      if (!id) {
+                        toast(`Max ${MAX_SECTIONS} patterns`);
+                        return;
+                      }
+                      const dup = useFireSequencerStore.getState().sections.find((s) => s.id === id);
+                      const bars = dup?.bars ?? sec.bars;
+                      const color = PATTERN_COLORS[
+                        Math.max(0, useFireSequencerStore.getState().sections.findIndex((s) => s.id === id))
+                        % PATTERN_COLORS.length
+                      ];
+                      setPlaceMode({
+                        patternId: id,
+                        bars,
+                        color,
+                        name: dup?.name ?? `${sec.name} copy`,
+                      });
+                      // Ensure arrangement is visible for placement.
+                      writeFold("seq.arrangement", false);
+                      toast(`Duplicated “${sec.name}” — click arrangement to place (Esc cancels)`);
+                    }}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(PATTERN_DND, sec.id);
+                      e.dataTransfer.effectAllowed = "copy";
+                    }}
+                    tabIndex={active ? 0 : -1}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setActiveSection(sec.id);
+                        return;
+                      }
+                      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                        e.preventDefault();
+                        const dir = e.key === "ArrowRight" ? 1 : -1;
+                        const next = sections[(index + dir + sections.length) % sections.length];
+                        if (!next) return;
+                        setActiveSection(next.id);
+                        const el = e.currentTarget.parentElement?.querySelector(
+                          `[data-pattern-id="${next.id}"]`,
+                        ) as HTMLElement | null;
+                        el?.focus();
+                      }
+                    }}
+                    menuActions={[
+                      {
+                        id: "rename",
+                        label: "Rename",
+                        onClick: () => {
+                          setRenaming(sec.id);
+                          setRenameValue(sec.name);
+                        },
+                      },
+                      {
+                        id: "duplicate",
+                        label: "Duplicate",
+                        disabled: !canDup,
+                        onClick: () => {
+                          setActiveSection(sec.id);
+                          const id = duplicateSection();
+                          if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
+                        },
+                      },
+                      {
+                        id: "place",
+                        label: "Place on timeline",
+                        disabled: !canPlace,
+                        onClick: () => {
+                          const clipId = placeClip(sec.id, arrangementEndStep, 0);
+                          if (clipId) setSelectedClip(clipId);
+                          toast(clipId
+                            ? `Placed “${sec.name}” on the arrangement`
+                            : "Can't place — timeline was full on Track 1");
+                        },
+                      },
+                      ...(sections.length > 1
+                        ? [{
+                            id: "delete",
+                            label: "Delete",
+                            danger: true as const,
+                            onClick: () => removeSection(sec.id),
+                          }]
+                        : []),
+                    ]}
                   />
-                  {sec.name}
-                  <span className="ml-1.5 font-mono font-normal opacity-45 text-[10px]">{sec.bars}b</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setRenaming(sec.id); setRenameValue(sec.name); }}
-                  className="h-8 px-1.5 text-[10px] border border-l-0 text-white/25 hover:text-white/70 hover:bg-white/[0.06] transition"
-                  style={active ? { borderColor: `${color}b0` } : { borderColor: "rgba(255,255,255,0.1)" }}
-                  title={`Rename “${sec.name}”`}
-                >✎</button>
-                {sections.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeSection(sec.id)}
-                    className="h-8 px-1.5 rounded-r-lg text-[10px] border border-l-0 text-white/25 hover:text-rose-300 hover:bg-rose-500/10 transition"
-                    style={active ? { borderColor: `${color}b0` } : { borderColor: "rgba(255,255,255,0.1)" }}
-                    title={`Delete pattern “${sec.name}”`}
-                  >✕</button>
-                )}
-              </span>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => {
-              const id = addSection();
-              if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
-              else toast("Blank pattern ready — draw notes, then add it to the arrangement");
-            }}
-            disabled={sections.length >= MAX_SECTIONS}
-            className={`${SEQ_PILL} border-dashed disabled:opacity-30`}
-            title="Create a blank pattern (does not place it on the timeline)"
-          >＋ New</button>
-          <button
-            type="button"
-            onClick={() => {
-              const id = addSection();
-              if (!id) {
-                toast(`Max ${MAX_SECTIONS} patterns`);
-                return;
+                );
+              })
+            )}
+          </PatternsStrip>
+
+          {sections.length > 0 && !sections.some((s) => s.id === activeSectionId) ? (
+            <span className="hidden xl:inline text-[11px] text-white/48 shrink-0">
+              Select a pattern to edit
+            </span>
+          ) : null}
+
+          <div className="patterns-actions" role="group" aria-label="Pattern actions">
+            <button
+              type="button"
+              onClick={() => {
+                const id = addSection();
+                if (!id) {
+                  toast(`Max ${MAX_SECTIONS} patterns`);
+                  return;
+                }
+                const clipId = placeClip(id, arrangementEndStep, 0);
+                if (clipId) setSelectedClip(clipId);
+                toast(clipId
+                  ? "New pattern created and added to the arrangement"
+                  : "Blank pattern ready — timeline was full on Track 1");
+              }}
+              disabled={sections.length >= MAX_SECTIONS || arrangement.length >= MAX_CLIPS}
+              className="inline-flex h-8 items-center px-2.5 rounded-lg text-[11px] font-semibold border border-[#ff6a3d]/50 bg-[#ff6a3d]/16 text-[#ffbfa0] hover:bg-[#ff6a3d]/24 disabled:opacity-30 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
+              title="Create a blank pattern and place it at the end of the arrangement"
+            >
+              <span className="patterns-action-label-long">New + Place</span>
+              <span className="patterns-action-label-short">＋ Place</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const id = addSection();
+                if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
+                else toast("Blank pattern ready — draw notes, then add it to the arrangement");
+              }}
+              disabled={sections.length >= MAX_SECTIONS}
+              className={SEQ_PILL}
+              title="Create a new pattern"
+            >
+              New
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const id = duplicateSection();
+                if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
+              }}
+              disabled={
+                sections.length >= MAX_SECTIONS ||
+                sections.length === 0 ||
+                !sections.some((s) => s.id === activeSectionId)
               }
-              const clipId = placeClip(id, arrangementEndStep, 0);
-              if (clipId) setSelectedClip(clipId);
-              toast(clipId
-                ? "New pattern created and added to the arrangement"
-                : "Blank pattern ready — timeline was full on Track 1");
-            }}
-            disabled={sections.length >= MAX_SECTIONS || arrangement.length >= MAX_CLIPS}
-            className="inline-flex h-8 items-center px-2.5 rounded-lg text-[10px] font-semibold border border-[#ff6a3d]/40 bg-[#ff6a3d]/10 text-[#ffbfa0] hover:bg-[#ff6a3d]/18 disabled:opacity-30 transition"
-            title="Create a blank pattern and place it at the end of the arrangement"
-          >＋ New + place</button>
-          <button
-            type="button"
-            onClick={() => {
-              const id = duplicateSection();
-              if (!id) toast(`Max ${MAX_SECTIONS} patterns`);
-            }}
-            disabled={sections.length >= MAX_SECTIONS}
-            className={`${SEQ_PILL} disabled:opacity-30`}
-            title="Duplicate the pattern you're editing (bank only — not a timeline clip)"
-          >Duplicate</button>
+              className={SEQ_PILL}
+              title="Duplicate selected pattern"
+            >
+              Duplicate
+            </button>
+          </div>
         </div>
         )}
       </div>
@@ -786,7 +1080,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
             tools={
               !arrCollapsed ? (
               <>
-            {!arrFullscreen && <PatternBarsControls accent={FIRE} />}
+            {!arrFullscreen && <ArrangementBarsControls accent={FIRE} />}
             <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/25 p-0.5 h-8">
               <span className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-white/50">
                 Snap {ARR_SNAP_OPTIONS.find((o) => o.steps === snapSteps)?.label ?? "?"}
@@ -836,23 +1130,55 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
               <>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!nudgeClip(selected.id, -Math.max(0.25, effectiveSnap))) {
-                      toast("Can't nudge — track occupied");
-                    }
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.preventDefault();
+                    const delta = -Math.max(0.25, effectiveSnap);
+                    const tick = () => {
+                      if (!nudgeClip(selected.id, delta)) toast("Can't nudge — track occupied");
+                    };
+                    tick();
+                    let iv = 0;
+                    const delay = window.setTimeout(() => {
+                      iv = window.setInterval(tick, 55);
+                    }, 280);
+                    const stop = () => {
+                      window.clearTimeout(delay);
+                      if (iv) window.clearInterval(iv);
+                      window.removeEventListener("pointerup", stop);
+                      window.removeEventListener("pointercancel", stop);
+                    };
+                    window.addEventListener("pointerup", stop);
+                    window.addEventListener("pointercancel", stop);
                   }}
                   className={SEQ_PILL}
-                  title="Nudge left by arrange snap"
+                  title="Nudge left — hold to scrub"
                 >←</button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!nudgeClip(selected.id, Math.max(0.25, effectiveSnap))) {
-                      toast("Can't nudge — track occupied");
-                    }
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.preventDefault();
+                    const delta = Math.max(0.25, effectiveSnap);
+                    const tick = () => {
+                      if (!nudgeClip(selected.id, delta)) toast("Can't nudge — track occupied");
+                    };
+                    tick();
+                    let iv = 0;
+                    const delay = window.setTimeout(() => {
+                      iv = window.setInterval(tick, 55);
+                    }, 280);
+                    const stop = () => {
+                      window.clearTimeout(delay);
+                      if (iv) window.clearInterval(iv);
+                      window.removeEventListener("pointerup", stop);
+                      window.removeEventListener("pointercancel", stop);
+                    };
+                    window.addEventListener("pointerup", stop);
+                    window.addEventListener("pointercancel", stop);
                   }}
                   className={SEQ_PILL}
-                  title="Nudge right by arrange snap"
+                  title="Nudge right — hold to scrub"
                 >→</button>
                 <button
                   type="button"
@@ -866,31 +1192,9 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                   }}
                   className={SEQ_PILL}
                 >Dup</button>
-                <label className="h-8 inline-flex items-center gap-1 px-2 rounded-lg border border-white/12 text-[10px] text-white/50">
-                  Color
-                  <input
-                    type="color"
-                    value={selected.color
-                      ?? playlistTracks[selected.track ?? 0]?.color
-                      ?? colorOf(selected.patternId)}
-                    onChange={(e) => setClipColor(selected.id, e.target.value)}
-                    className="w-5 h-5 rounded border-0 bg-transparent cursor-pointer"
-                    title="Clip color"
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    removeClip(selected.id);
-                    setSelectedClip(null);
-                  }}
-                  className="inline-flex h-8 items-center justify-center gap-1.5 px-2.5 rounded-lg text-[10px] font-semibold border border-rose-400/30 text-rose-200/80 hover:bg-rose-500/15 transition shrink-0"
-                >
-                  Remove
-                </button>
               </>
             )}
-            <div className="relative">
+            <div className="relative" data-fire-append-menu>
               <button
                 type="button"
                 onClick={() => placeAtEnd(1)}
@@ -909,7 +1213,9 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 </span>
               </button>
               {appendOpen && (
-                <div className="absolute right-0 top-full z-40 mt-1 w-48 rounded-lg border border-white/15 bg-[#0c0c12]/98 py-1 shadow-xl">
+                <div
+                  className="absolute right-0 top-full z-40 mt-1 w-48 rounded-lg border border-white/18 bg-[#12121a] py-1 shadow-xl"
+                >
                   {[
                     { label: "Append once", run: () => placeAtEnd(1) },
                     { label: "Append ×4", run: () => placeAtEnd(4) },
@@ -964,9 +1270,12 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
               className="border-b border-white/[0.06] flex items-center px-2 text-[9px] font-black uppercase tracking-[0.14em] text-white/40 relative"
               style={{ height: RULER_H }}
             >
-              Tracks
+              <span className="flex-1">Tracks</span>
+              <span className="text-[8px] font-semibold normal-case tracking-normal text-white/35 mr-2.5">
+                drag edge
+              </span>
               <div
-                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/20"
+                className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize group/resize z-10"
                 onPointerDown={(e) => {
                   e.preventDefault();
                   const startX = e.clientX;
@@ -983,7 +1292,17 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                   window.addEventListener("pointerup", onUp);
                 }}
                 title="Drag to resize track headers"
-              />
+                aria-label="Resize track headers"
+              >
+                <span
+                  aria-hidden
+                  className="absolute inset-y-1 right-0.5 w-1 rounded-full bg-white/25 group-hover/resize:bg-[#ff6a3d]/70 group-active/resize:bg-[#ff6a3d] transition"
+                  style={{
+                    backgroundImage:
+                      "repeating-linear-gradient(180deg, rgba(255,255,255,0.55) 0 2px, transparent 2px 4px)",
+                  }}
+                />
+              </div>
             </div>
             {playlistTracks.map((tr, i) => {
               const trackAudible =
@@ -1205,16 +1524,23 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       top: track * laneH,
                       height: laneH,
                       background: track % 2 === 0 ? "rgba(255,255,255,0.018)" : "transparent",
+                      cursor: placeMode ? "copy" : undefined,
                     }}
-                    onClick={(e) => {
-                      if ((e.target as HTMLElement).closest("[data-clip]")) return;
+                    onPointerDown={(e) => beginLaneMarquee(e, track)}
+                    onPointerMove={(e) => {
+                      if (!placeMode) return;
                       const { step } = posFromClient(e.clientX, e.clientY);
-                      placeAt(step, track, e.shiftKey);
+                      setDropHover({ step, track, bars: placeMode.bars });
+                    }}
+                    onPointerLeave={() => {
+                      if (placeMode) setDropHover(null);
                     }}
                     title={
-                      selectedClip
-                        ? `Click to deselect (Shift+click places “${activeName}”)`
-                        : `Place “${activeName}” · T${track + 1}`
+                      placeMode
+                        ? `Click to place “${placeMode.name}” · T${track + 1}`
+                        : selectedClip
+                          ? `Drag to select · click to deselect (Shift+click places “${activeName}”)`
+                          : `Drag to multi-select · click places “${activeName}” · T${track + 1}`
                     }
                   />
                 ))}
@@ -1239,10 +1565,28 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       top: dropHover.track * laneH + 2,
                       width: Math.max(pxPerBar * dropHover.bars - 2, pxPerBar * 0.4),
                       height: laneH - 4,
-                      background: `${activeColor}33`,
-                      border: `1px dashed ${activeColor}`,
+                      background: `${placeMode?.color ?? activeColor}33`,
+                      border: `1px dashed ${placeMode?.color ?? activeColor}`,
                     }}
                   />
+                )}
+
+                {marquee && (
+                  <div
+                    className="absolute pointer-events-none z-40 border border-cyan-300/70 bg-cyan-400/15"
+                    style={{
+                      left: Math.min(marquee.x0, marquee.x1),
+                      top: Math.min(marquee.y0, marquee.y1) - RULER_H,
+                      width: Math.abs(marquee.x1 - marquee.x0),
+                      height: Math.abs(marquee.y1 - marquee.y0),
+                    }}
+                  />
+                )}
+
+                {placeMode && (
+                  <div className="absolute left-2 top-2 z-50 pointer-events-none rounded-md border border-white/20 bg-black/80 px-2 py-1 text-[10px] text-white/75">
+                    Placing <span style={{ color: placeMode.color }} className="font-bold">{placeMode.name}</span> — click to drop · Esc cancel
+                  </div>
                 )}
 
                 {clipGhost && (
@@ -1277,6 +1621,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       name={displayName}
                       sourceName={nameOf(clip.patternId)}
                       notePreview={clip.unique ? clip.local?.notes : sec?.notes}
+                      drumPreview={clip.unique ? clip.local?.drums : sec?.drums}
                       hasAutomation={!!(clip.unique ? clip.local?.automation : sec?.automation)
                         && Object.keys((clip.unique ? clip.local?.automation : sec?.automation) ?? {}).length > 0}
                       bars={bars}
@@ -1286,11 +1631,12 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       laneH={laneH}
                       snapSteps={effectiveSnap}
                       sounding={playingClips.has(clip.id)}
-                      selected={selectedClip === clip.id}
+                      selected={selectedClip === clip.id || selectedClips.has(clip.id)}
                       menuOpen={clipMenu === clip.id}
                       hidden={dragging || !!playlistTracks[track]?.collapsed}
                       onSelect={() => {
                         setSelectedClip(clip.id);
+                        setSelectedClips(new Set([clip.id]));
                         setClipMenu(null);
                         selectClipForEdit(clip.id);
                       }}
@@ -1316,6 +1662,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                         const id = duplicateClip(clip.id);
                         if (id) {
                           setSelectedClip(id);
+                          setSelectedClips(new Set([id]));
                           selectClipForEdit(id);
                           toast(clip.unique ? "Duplicated unique clip" : "Duplicated linked clip");
                         }
@@ -1324,6 +1671,11 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       onRemove={() => {
                         removeClip(clip.id);
                         if (selectedClip === clip.id) setSelectedClip(null);
+                        setSelectedClips((prev) => {
+                          const next = new Set(prev);
+                          next.delete(clip.id);
+                          return next;
+                        });
                         setClipMenu(null);
                         toast(`Removed clip “${displayName}”`);
                       }}
@@ -1366,6 +1718,7 @@ function TimelineClip({
   name,
   sourceName,
   notePreview,
+  drumPreview,
   hasAutomation,
   bars,
   fullBars,
@@ -1391,6 +1744,7 @@ function TimelineClip({
   name: string;
   sourceName: string;
   notePreview?: { step: number; midi: number; len: number; vel: number }[] | null;
+  drumPreview?: { steps: Record<string, { vel?: number }[]> } | null;
   hasAutomation?: boolean;
   bars: number;
   fullBars: number;
@@ -1430,30 +1784,63 @@ function TimelineClip({
   const audibleSteps = Math.max(1, bars * STEPS_PER_BAR);
   const spark = useMemo(() => {
     const notes = notePreview ?? [];
-    if (notes.length === 0) return null;
+    if (notes.length > 0) {
+      const h = Math.max(10, laneH - 22);
+      const visible = notes.filter((n) => n.step < audibleSteps).slice(0, 96);
+      if (visible.length === 0) return null;
+      const minMidi = Math.min(...visible.map((n) => n.midi));
+      const maxMidi = Math.max(...visible.map((n) => n.midi));
+      const span = Math.max(1, maxMidi - minMidi);
+      return visible.map((n, i) => {
+        const x = (n.step / audibleSteps) * 100;
+        const yw = ((n.midi - minMidi) / span) * (h - 2);
+        const ww = Math.max(0.8, (n.len / audibleSteps) * 100);
+        return (
+          <rect
+            key={`n${i}`}
+            x={`${x}%`}
+            y={h - 2 - yw}
+            width={`${ww}%`}
+            height={2.5}
+            fill="rgba(255,255,255,0.7)"
+            opacity={0.4 + n.vel * 0.55}
+          />
+        );
+      });
+    }
+
+    // Drum / sample step sparkline when there are no piano notes.
+    const steps = drumPreview?.steps;
+    if (!steps) return null;
+    const lanes = Object.keys(steps);
+    if (lanes.length === 0) return null;
     const h = Math.max(10, laneH - 22);
-    const visible = notes.filter((n) => n.step < audibleSteps).slice(0, 96);
-    if (visible.length === 0) return null;
-    const minMidi = Math.min(...visible.map((n) => n.midi));
-    const maxMidi = Math.max(...visible.map((n) => n.midi));
-    const span = Math.max(1, maxMidi - minMidi);
-    return visible.map((n, i) => {
-      const x = (n.step / audibleSteps) * 100;
-      const yw = ((n.midi - minMidi) / span) * (h - 2);
-      const ww = Math.max(0.8, (n.len / audibleSteps) * 100);
-      return (
-        <rect
-          key={i}
-          x={`${x}%`}
-          y={h - 2 - yw}
-          width={`${ww}%`}
-          height={2.5}
-          fill="rgba(255,255,255,0.7)"
-          opacity={0.4 + n.vel * 0.55}
-        />
-      );
+    const laneHPx = h / Math.max(1, lanes.length);
+    const rects: JSX.Element[] = [];
+    let ri = 0;
+    lanes.forEach((lane, li) => {
+      const row = steps[lane] ?? [];
+      for (let s = 0; s < Math.min(row.length, audibleSteps); s++) {
+        const vel = row[s]?.vel ?? 0;
+        if (vel <= 0) continue;
+        const x = (s / audibleSteps) * 100;
+        const ww = Math.max(0.9, (1 / audibleSteps) * 100);
+        rects.push(
+          <rect
+            key={`d${ri++}`}
+            x={`${x}%`}
+            y={li * laneHPx + 0.5}
+            width={`${ww}%`}
+            height={Math.max(1.5, laneHPx - 1)}
+            fill="rgba(255,255,255,0.75)"
+            opacity={0.35 + vel * 0.55}
+          />,
+        );
+        if (rects.length >= 160) return;
+      }
     });
-  }, [notePreview, audibleSteps, laneH]);
+    return rects.length > 0 ? rects : null;
+  }, [notePreview, drumPreview, audibleSteps, laneH]);
 
   return (
     <div
@@ -1541,7 +1928,7 @@ function TimelineClip({
       {menuOpen && (
         <div
           data-menu="1"
-          className="absolute left-0 top-full z-50 mt-0.5 w-44 rounded-lg border border-white/15 bg-[#0c0c12]/98 py-1 shadow-xl"
+          className="absolute left-0 top-full z-50 mt-0.5 w-44 rounded-lg border border-white/18 bg-[#12121a] py-1 shadow-xl"
           onClick={(e) => e.stopPropagation()}
         >
           {!unique && (

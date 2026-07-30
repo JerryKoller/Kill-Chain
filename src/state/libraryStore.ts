@@ -279,6 +279,18 @@ interface LibraryState {
   available: () => boolean;
   addFolders: () => Promise<void>;
   rescan: () => Promise<void>;
+  /**
+   * Register the managed Fire export folder (if needed) and upsert one track
+   * with known metadata — used after Fire Command → Library export.
+   */
+  ingestExportedTrack: (opts: {
+    path: string;
+    title: string;
+    artist: string;
+    album: string;
+    durationSec?: number | null;
+    genre?: string | null;
+  }) => Promise<LibraryTrack | null>;
   removeFolder: (folder: string) => void;
   clearAll: () => void;
   setSort: (key: LibrarySortKey) => void;
@@ -446,6 +458,49 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       set({ folders });
       schedulePersist();
       await get().rescan();
+    },
+
+    ingestExportedTrack: async (opts) => {
+      const api = window.playground?.library;
+      if (!api?.getExportDir || !api.statFile) return null;
+      const exportDir = await api.getExportDir();
+      if (!exportDir) return null;
+      // Keep the export folder registered so Library scans find future bounces.
+      if (!get().folders.some((f) => f.toLowerCase() === exportDir.toLowerCase())) {
+        set({ folders: [...get().folders, exportDir] });
+        schedulePersist();
+      }
+      const entry = await api.statFile(opts.path);
+      if (!entry) return null;
+      const existing = get().tracks.find((t) => t.path === entry.path);
+      const track: LibraryTrack = {
+        id: entry.path,
+        path: entry.path,
+        fileName: entry.name,
+        ext: entry.ext,
+        size: entry.size,
+        mtimeMs: entry.mtimeMs,
+        addedAt: existing?.addedAt ?? Date.now(),
+        title: opts.title.trim() || existing?.title || deriveFromPath(entry.path, entry.name).title,
+        artist: opts.artist.trim() || existing?.artist || "Kill-Chain",
+        album: opts.album.trim() || existing?.album || "Fire Command Exports",
+        trackNo: existing?.trackNo ?? null,
+        year: existing?.year ?? new Date().getFullYear(),
+        durationSec: opts.durationSec ?? existing?.durationSec ?? null,
+        bitrate: entry.ext === ".mp3" ? 320000 : existing?.bitrate ?? null,
+        sampleRate: existing?.sampleRate ?? null,
+        bitsPerSample: entry.ext === ".wav" ? 16 : existing?.bitsPerSample ?? null,
+        lossless: entry.ext === ".wav" ? true : entry.ext === ".mp3" ? false : existing?.lossless ?? null,
+        codec: entry.ext === ".mp3" ? "MPEG 1 Layer 3" : entry.ext === ".wav" ? "PCM" : existing?.codec ?? null,
+        genre: opts.genre ?? existing?.genre ?? "Electronic",
+        tagged: true,
+      };
+      const tracks = existing
+        ? get().tracks.map((t) => (t.path === track.path ? track : t))
+        : [track, ...get().tracks];
+      set({ tracks });
+      schedulePersist();
+      return track;
     },
 
     rescan: async () => {

@@ -35,7 +35,7 @@ export const SEQ_TITLE =
   "text-[11px] font-black uppercase tracking-[0.12em] text-white/78 leading-none";
 
 export const SEQ_META =
-  "text-[10px] text-white/52 leading-snug truncate";
+  "text-[11px] text-white/58 leading-snug truncate";
 
 export const SEQ_GROUP_LABEL =
   "text-[10px] font-bold uppercase tracking-[0.1em] text-[rgba(232,184,109,0.82)] leading-none";
@@ -179,19 +179,21 @@ export function SeqSectionRow({
 }) {
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 min-h-11 py-1.5 ${className}`}
+      className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 min-h-11 py-1.5 ${className}`}
     >
-      <button
-        type="button"
-        onClick={onToggle}
-        className="shrink-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] hover:brightness-110 transition"
-        aria-expanded={!collapsed}
-        title={collapsed ? `Expand ${title}` : `Collapse ${title}`}
-        aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
-      >
-        {collapseControl}
-      </button>
-      {play}
+      <div className="inline-flex items-center gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="shrink-0 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)] hover:brightness-110 transition"
+          aria-expanded={!collapsed}
+          title={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+          aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+        >
+          {collapseControl}
+        </button>
+        {play ? <div className="shrink-0 pl-0.5">{play}</div> : null}
+      </div>
       <button
         type="button"
         onClick={onToggle}

@@ -72,6 +72,11 @@ export class FireDrumKit {
   private readonly clip: WaveShaperNode;
   private readonly ctx: AudioContext;
   private noiseBuf: AudioBuffer | null = null;
+  /** Live one-shot sources — stopped on transport silence. */
+  private readonly liveSources = new Set<AudioScheduledSourceNode>();
+  private kitLevel = 0.9;
+  private sampleLevel = 0.9;
+  private silenced = false;
 
   constructor(ctx: BaseAudioContext, dest: AudioNode, sampleDest?: AudioNode) {
     this.ctx = ctx as AudioContext;
@@ -107,7 +112,52 @@ export class FireDrumKit {
   }
 
   setLevel(v: number): void {
-    this.output.gain.setTargetAtTime(clamp(v, 0, 1.2) * DRUM_TRIM, this.ctx.currentTime, 0.02);
+    this.kitLevel = clamp(v, 0, 1.2);
+    if (this.silenced) return;
+    this.output.gain.setTargetAtTime(this.kitLevel * DRUM_TRIM, this.ctx.currentTime, 0.02);
+  }
+
+  /**
+   * Transport stop: hard-stop live one-shots and mute buses so open hats /
+   * crash / samples don't ring after Stop.
+   */
+  silence(): void {
+    this.silenced = true;
+    const t = this.ctx.currentTime;
+    try {
+      for (const src of [...this.liveSources]) {
+        try { src.stop(t); } catch { /* already stopped */ }
+      }
+      this.liveSources.clear();
+      this.output.gain.cancelScheduledValues(t);
+      this.output.gain.setValueAtTime(0, t);
+      this.sampleOutput.gain.cancelScheduledValues(t);
+      this.sampleOutput.gain.setValueAtTime(0, t);
+      this.chokeOpenHat(t);
+      this.ohatGain = null;
+    } catch { /* ignore */ }
+  }
+
+  /** Re-open kit buses after a transport silence (next trigger / play). */
+  unsilence(): void {
+    if (!this.silenced) return;
+    this.silenced = false;
+    const t = this.ctx.currentTime;
+    try {
+      this.output.gain.cancelScheduledValues(t);
+      this.output.gain.setValueAtTime(this.kitLevel * DRUM_TRIM, t);
+      this.sampleOutput.gain.cancelScheduledValues(t);
+      this.sampleOutput.gain.setValueAtTime(this.sampleLevel * DRUM_TRIM, t);
+    } catch { /* ignore */ }
+  }
+
+  private trackSource(src: AudioScheduledSourceNode): void {
+    this.liveSources.add(src);
+    const prev = src.onended;
+    src.onended = (ev) => {
+      this.liveSources.delete(src);
+      if (typeof prev === "function") prev.call(src, ev);
+    };
   }
 
   // ── User samples ──────────────────────────────────────────────────────────
@@ -142,6 +192,7 @@ export class FireDrumKit {
     /** −1 inverts phase (kick polarity). */
     polarity = 1,
   ): void {
+    this.unsilence();
     const t = Math.max(this.ctx.currentTime, when);
     const v = clamp(Math.abs(velocity), 0.05, 1) * clamp(level, 0, 1.5) * (polarity < 0 ? -1 : 1);
     const src = this.ctx.createBufferSource();
@@ -160,6 +211,7 @@ export class FireDrumKit {
         try { n.disconnect(); } catch { /* ignore */ }
       }
     };
+    this.trackSource(src);
     src.start(t);
   }
 
@@ -204,6 +256,7 @@ export class FireDrumKit {
     polarity?: number;
     chokeOpenHat?: boolean;
   }): void {
+    this.unsilence();
     if (opts?.chokeOpenHat) this.chokeOpenHat(when);
     // A loaded user sample replaces the synthesized hit for this lane.
     const sample = this.samples.get(lane);
@@ -235,8 +288,14 @@ export class FireDrumKit {
 
   /** Disconnect synth-hit nodes after they finish to cut GC pressure. */
   private disposeOnEnd(last: AudioScheduledSourceNode, nodes: AudioNode[]): void {
+    for (const n of nodes) {
+      if ("stop" in n && typeof (n as AudioScheduledSourceNode).stop === "function") {
+        this.liveSources.add(n as AudioScheduledSourceNode);
+      }
+    }
     last.onended = () => {
       for (const n of nodes) {
+        if ("stop" in n) this.liveSources.delete(n as AudioScheduledSourceNode);
         try { n.disconnect(); } catch { /* ignore */ }
       }
     };

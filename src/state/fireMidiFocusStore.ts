@@ -229,7 +229,7 @@ export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => ({
     const mod = focusModuleAt(get().index);
     const pageKnobs = focusPageKnobs(mod, get().bankPage);
     const knob = pageKnobs[knobIdx];
-    if (!knob) return true;
+    if (!knob) return false;
     applyKnob(knob, raw);
     void value01;
     return true;

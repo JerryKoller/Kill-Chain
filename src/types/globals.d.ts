@@ -20,6 +20,7 @@ declare global {
           name: string,
           dataBase64: string,
         ) => Promise<string | null>;
+        openImage?: () => Promise<{ path: string; base64: string; mime: string } | null>;
       };
       /**
        * Open an http(s) / ms-settings:* / file:// URL via the OS default
@@ -52,6 +53,8 @@ declare global {
       library?: {
         pickFolders: () => Promise<string[]>;
         scan: (folders: string[]) => Promise<LibraryFileEntry[]>;
+        getExportDir?: () => Promise<string>;
+        statFile?: (filePath: string) => Promise<LibraryFileEntry | null>;
       };
       audioDevices?: {
         getDefaultOutputName: () => Promise<string | null>;

@@ -524,6 +524,67 @@ ipcMain.handle("library:scan", async (_e, folders: string[]): Promise<LibFileEnt
   return out;
 });
 
+/** Managed folder for Fire Command → Library exports. */
+ipcMain.handle("library:getExportDir", async (): Promise<string> => {
+  const dir = path.join(app.getPath("music"), "Kill-Chain", "Fire Exports");
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+});
+
+/** Stat one audio file for library ingest after export. */
+ipcMain.handle("library:statFile", async (_e, filePath: string): Promise<LibFileEntry | null> => {
+  try {
+    if (typeof filePath !== "string" || !filePath) return null;
+    const st = await fs.stat(filePath);
+    if (!st.isFile()) return null;
+    const ext = path.extname(filePath).toLowerCase();
+    if (!LIBRARY_EXTS.has(ext)) return null;
+    return {
+      path: filePath,
+      name: path.basename(filePath),
+      ext,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+    };
+  } catch {
+    return null;
+  }
+});
+
+/** Image picker for album artwork (Fire → Library export). */
+ipcMain.handle(
+  "dialog:openImage",
+  async (): Promise<{ path: string; base64: string; mime: string } | null> => {
+    if (!mainWindow) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Choose album artwork",
+      properties: ["openFile"],
+      filters: [
+        { name: "Images", extensions: ["jpg", "jpeg", "png", "webp"] },
+      ],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const filePath = result.filePaths[0];
+    try {
+      const buf = await fs.readFile(filePath);
+      // Soft cap ~8 MB — keeps ID3 APIC frames reasonable.
+      if (buf.byteLength > 8 * 1024 * 1024) {
+        console.warn("[dialog:openImage] image too large:", buf.byteLength);
+        return null;
+      }
+      const ext = path.extname(filePath).toLowerCase();
+      const mime =
+        ext === ".png" ? "image/png"
+        : ext === ".webp" ? "image/webp"
+        : "image/jpeg";
+      return { path: filePath, base64: buf.toString("base64"), mime };
+    } catch (err) {
+      console.error("[dialog:openImage] read failed:", err);
+      return null;
+    }
+  },
+);
+
 ipcMain.handle("shell:open", async (_e, url: string) => {
   if (!url) return;
   // Allow http(s) URLs and known Windows settings deep-links (ms-settings:*),

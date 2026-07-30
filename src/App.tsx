@@ -4,6 +4,7 @@ import { TitleBar } from "@/components/Layout/TitleBar";
 import { MissionHUD } from "@/components/Layout/MissionHUD";
 import { Sidebar } from "@/components/Layout/Sidebar";
 import { TransportBar } from "@/components/Layout/TransportBar";
+import { FireTransportDock } from "@/components/FireCommand/FireTransportDock";
 // The default view loads eagerly; every other tool is code-split so startup
 // only parses what's actually on screen (the synth alone is a big chunk).
 import { PlaygroundView } from "@/components/Playground/PlaygroundView";
@@ -258,7 +259,7 @@ export default function App() {
               </Suspense>
             )}
           </div>
-          <TransportBar />
+          {view === "fire" ? <FireTransportDock /> : <TransportBar />}
         </main>
       </div>
 

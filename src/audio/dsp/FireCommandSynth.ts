@@ -2290,7 +2290,10 @@ export class FireCommandSynth {
    * sources), so existing moderate patches behave exactly as before.
    */
   private effectiveMaxVoices(p: FirePatch): number {
-    const OSC_BUDGET = 96;
+    // Scale the oscillator budget with the user-chosen voice cap so raising
+    // polyphony actually unlocks more simultaneous notes on capable machines
+    // (default 12×8 = 96 matches the historical fixed budget).
+    const OSC_BUDGET = Math.max(96, this.maxVoices * 8);
     const byBudget = Math.floor(OSC_BUDGET / this.voiceSourceCost(p));
     const chipCap = Math.round(p.chipVoiceLimit ?? 0);
     const cap = chipCap > 0 ? Math.min(this.maxVoices, chipCap) : this.maxVoices;
@@ -2650,10 +2653,10 @@ export class FireCommandSynth {
       }
       if (gPan) this.autopan.pan.setTargetAtTime(clamp(accPan, -1, 1), now, 0.02);
       if (gVol) this.master.gain.setTargetAtTime(clamp(p.masterGain * (1 + accVol), 0, 1.4), now, 0.02);
-      if (gRev) this.reverbWet.gain.setTargetAtTime(clamp(p.reverbMix + accRev, 0, 1), now, 0.03);
-      if (gDly) this.delayWet.gain.setTargetAtTime(clamp(p.delayMix + accDly, 0, 1), now, 0.03);
-      if (gCh) this.chorusWet.gain.setTargetAtTime(clamp(p.chorusMix + accCh, 0, 1), now, 0.03);
-      if (gPh) this.phaserWet.gain.setTargetAtTime(clamp(p.phaserMix + accPh, 0, 1), now, 0.03);
+      if (gRev && !this.fxSilenced) this.reverbWet.gain.setTargetAtTime(clamp(p.reverbMix + accRev, 0, 1), now, 0.03);
+      if (gDly && !this.fxSilenced) this.delayWet.gain.setTargetAtTime(clamp(p.delayMix + accDly, 0, 1), now, 0.03);
+      if (gCh && !this.fxSilenced) this.chorusWet.gain.setTargetAtTime(clamp(p.chorusMix + accCh, 0, 1), now, 0.03);
+      if (gPh && !this.fxSilenced) this.phaserWet.gain.setTargetAtTime(clamp(p.phaserMix + accPh, 0, 1), now, 0.03);
       if (gDr) this.drivePre.gain.setTargetAtTime(clamp((p.driveInGain ?? 1) * (1 + (p.drive + accDr) * 1.2) / DRIVE_RANGE, 0.05, 2), now, 0.03);
       if (gSp && p.spectralMode !== "off") {
         /* spectral mix modulated in applySpectral on next set — store soft */
@@ -2663,8 +2666,8 @@ export class FireCommandSynth {
     // Restore the bus base value exactly once when a global route is removed.
     if (!gPan && this.gPanWas) this.autopan.pan.setTargetAtTime(0, now, 0.05);
     if (!gVol && this.gVolWas) this.master.gain.setTargetAtTime(clamp(p.masterGain, 0, 1.4), now, 0.05);
-    if (!gRev && this.gRevWas) this.reverbWet.gain.setTargetAtTime(clamp(p.reverbMix, 0, 1), now, 0.05);
-    if (!gDly && this.gDlyWas) this.delayWet.gain.setTargetAtTime(clamp(p.delayMix, 0, 1), now, 0.05);
+    if (!gRev && this.gRevWas && !this.fxSilenced) this.reverbWet.gain.setTargetAtTime(clamp(p.reverbMix, 0, 1), now, 0.05);
+    if (!gDly && this.gDlyWas && !this.fxSilenced) this.delayWet.gain.setTargetAtTime(clamp(p.delayMix, 0, 1), now, 0.05);
     this.gPanWas = gPan; this.gVolWas = gVol; this.gRevWas = gRev; this.gDlyWas = gDly;
 
     // ── trance gate ── (only touch the param when the target actually moves)
@@ -3040,6 +3043,7 @@ export class FireCommandSynth {
   /** `when` (ctx clock) enables sample-accurate sequencing; omit for live play.
    *  `liveAttackSec` tightens amp/filter attack for keyboard / MIDI only. */
   noteOn(midi: number, velocity = 0.9, when?: number, liveAttackSec?: number): void {
+    this.restoreFxIfSilenced();
     this.startModTimer();
     const p = this.patch;
     const t = Math.max(this.ctx.currentTime, when ?? this.ctx.currentTime);
@@ -3099,8 +3103,36 @@ export class FireCommandSynth {
    * same pitch from a piano roll can't cancel each other.
    */
   playNote(midi: number, velocity: number, when: number, duration: number): void {
+    this.restoreFxIfSilenced();
     this.startModTimer();
     const p = this.patch;
+    const t = Math.max(this.ctx.currentTime, when);
+    const releaseAt = when + Math.max(0.02, duration);
+    // Sequencer must honor mono the same way live noteOn does — otherwise
+    // piano-roll / arrangement stacks poly voices on acid/legato patches.
+    if (p.mono) {
+      const existing = this.monoVoice;
+      if (existing && !existing.releasing) {
+        const fromMidi = existing.midi;
+        existing.midi = midi;
+        existing.applyTuning(p, t, false, fromMidi);
+        existing.applyFm(p);
+        existing.triggerEnvelopes(p, velocity, t);
+        existing.noteOff(p, releaseAt);
+        return;
+      }
+      while (this.voices.size > 0) this.stealVoice();
+      const voice = new Voice(
+        this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
+        this.bankFor(p.oscATable), this.bankFor(p.oscBTable), this.bankFor(p.oscCTable),
+        p, midi, velocity, when,
+      );
+      this.voices.add(voice);
+      this.monoVoice = voice;
+      this.updatePolyGain();
+      voice.noteOff(p, releaseAt);
+      return;
+    }
     const cap = this.effectiveMaxVoices(p);
     while (this.voices.size >= cap) this.stealVoice();
     const voice = new Voice(
@@ -3110,7 +3142,7 @@ export class FireCommandSynth {
     );
     this.voices.add(voice);
     this.updatePolyGain();
-    voice.noteOff(p, when + Math.max(0.02, duration));
+    voice.noteOff(p, releaseAt);
   }
 
   allNotesOff(): void {
@@ -3122,6 +3154,51 @@ export class FireCommandSynth {
     // 6 ms fade with the actual stop deferred 40 ms, which is inaudible.
     for (const v of [...this.voices]) v.fastRelease();
   }
+
+  /** When true, FX wet/feedback stay hard-zeroed until the next note. */
+  private fxSilenced = false;
+
+  /** Re-open FX sends after a transport kill (called from noteOn / playNote). */
+  private restoreFxIfSilenced(): void {
+    if (!this.fxSilenced) return;
+    this.fxSilenced = false;
+    try {
+      this.applyBusParams(this.patch);
+    } catch { /* ignore */ }
+  }
+
+  /** Public: open FX wet again after stop/panic (e.g. start of a sequencer pass). */
+  unsilenceFx(): void {
+    this.restoreFxIfSilenced();
+  }
+
+  /**
+   * Panic / transport stop: kill delay feedback + wet sends so FX tails
+   * (hiss, infinite delay freeze, long reverb) don't keep ringing after notes
+   * are released. Wet stays zero until the next note (no timed restore —
+   * that was reopening delay/reverb mid-silence).
+   */
+  killFxTails(): void {
+    this.fxSilenced = true;
+    const t = this.ctx.currentTime;
+    try {
+      this.dFbLR.gain.cancelScheduledValues(t);
+      this.dFbRL.gain.cancelScheduledValues(t);
+      this.dFbLR.gain.setValueAtTime(0, t);
+      this.dFbRL.gain.setValueAtTime(0, t);
+      this.delayWet.gain.cancelScheduledValues(t);
+      this.delayWet.gain.setValueAtTime(0, t);
+      this.reverbWet.gain.cancelScheduledValues(t);
+      this.reverbWet.gain.setValueAtTime(0, t);
+      this.chorusWet.gain.cancelScheduledValues(t);
+      this.chorusWet.gain.setValueAtTime(0, t);
+      this.phaserWet.gain.cancelScheduledValues(t);
+      this.phaserWet.gain.setValueAtTime(0, t);
+      this.phaserFb.gain.cancelScheduledValues(t);
+      this.phaserFb.gain.setValueAtTime(0, t);
+    } catch { /* node may be mid-teardown */ }
+  }
+
 
   onVoiceEnded(v: Voice): void {
     this.voices.delete(v);
@@ -3538,8 +3615,16 @@ export class FireCommandSynth {
     const fbAmt = clamp(p.phaserFeedback ?? 0.35, 0, 0.9);
     const delta = !!(p.fxDeltaAudition);
     this.phaserDry.gain.setTargetAtTime(delta ? 0 : 1, t, 0.02);
-    this.phaserWet.gain.setTargetAtTime(phMix * (delta ? 1.4 : 1) * (stereo === "opposed" ? 1.1 : 1), t, 0.02);
-    this.phaserFb.gain.setTargetAtTime(phMix * fbAmt * (stereo === "quadrature" ? 0.75 : 1), t, 0.02);
+    this.phaserWet.gain.setTargetAtTime(
+      this.fxSilenced ? 0 : phMix * (delta ? 1.4 : 1) * (stereo === "opposed" ? 1.1 : 1),
+      t,
+      0.02,
+    );
+    this.phaserFb.gain.setTargetAtTime(
+      this.fxSilenced ? 0 : phMix * fbAmt * (stereo === "quadrature" ? 0.75 : 1),
+      t,
+      0.02,
+    );
 
     // Ring lives under FM · Ring module.
     const ringOn = on("fm");
@@ -3558,7 +3643,7 @@ export class FireCommandSynth {
     const chorusOn = pathFx && on("fx.chorus");
     const chMix = chorusOn ? clamp(p.chorusMix, 0, 1) : 0;
     this.chorusDry.gain.setTargetAtTime(delta ? 0 : (1 - chMix * 0.5), t, 0.02);
-    this.chorusWet.gain.setTargetAtTime(chMix * (delta ? 1.35 : 1), t, 0.02);
+    this.chorusWet.gain.setTargetAtTime(this.fxSilenced ? 0 : chMix * (delta ? 1.35 : 1), t, 0.02);
     const model = p.chorusModel ?? "dual";
     const voices = clamp(Math.round(p.chorusVoices ?? 2), 1, 4);
     const baseDelay = clamp(p.chorusDelay ?? 0.012, 0.004, 0.04);
@@ -3598,14 +3683,14 @@ export class FireCommandSynth {
     const fbDrive = clamp(p.delayFbDrive ?? 0, 0, 1);
     const fbFilt = clamp(p.delayFbFilter ?? 0.35, 0, 1);
     fb = clamp(fb * (1 - fbDrive * 0.08), 0, 0.97);
-    this.dFbLR.gain.setTargetAtTime(fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
-    this.dFbRL.gain.setTargetAtTime(fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
+    this.dFbLR.gain.setTargetAtTime(this.fxSilenced ? 0 : fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
+    this.dFbRL.gain.setTargetAtTime(this.fxSilenced ? 0 : fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
     const delayOn = pathFx && on("fx.delay");
     let dMix = delayOn ? clamp(p.delayMix, 0, 1) : 0;
     // Simple duck: reduce wet when voices loud (voice count proxy)
     const duck = clamp(p.delayDuck ?? 0, 0, 1);
     if (duck > 0.01 && this.voices.size > 0) dMix *= 1 - duck * Math.min(1, this.voices.size / 4) * 0.7;
-    this.delayWet.gain.setTargetAtTime(delta ? dMix * 1.3 : dMix, t, 0.02);
+    this.delayWet.gain.setTargetAtTime(this.fxSilenced ? 0 : (delta ? dMix * 1.3 : dMix), t, 0.02);
     this.delayDry.gain.setTargetAtTime(delta ? 0 : 1, t, 0.02);
     // Tone LPF: post-delay bus (or both if driveTonePos says both — pre handled as mild lowpass via protect)
     const tonePos = p.driveTonePos ?? "post";
@@ -3625,7 +3710,11 @@ export class FireCommandSynth {
     // Early vs tail: more early → higher dry remainder + shorter perceived wet
     this.reverbDry.gain.setTargetAtTime(delta ? 0 : ((1 - revMix * 0.4) * (0.7 + early * 0.3)), t, 0.04);
     if (p.reverbFreeze) revMix = Math.max(revMix, 0.85);
-    this.reverbWet.gain.setTargetAtTime(revMix * revOut * (delta ? 1.25 : 1) * (0.65 + (1 - early) * 0.45), t, 0.04);
+    this.reverbWet.gain.setTargetAtTime(
+      this.fxSilenced ? 0 : revMix * revOut * (delta ? 1.25 : 1) * (0.65 + (1 - early) * 0.45),
+      t,
+      0.04,
+    );
     const pre = clamp(p.reverbPredelay ?? 0, 0, 0.2);
     if (Math.abs(pre - this.lastPredelay) > 0.0005) {
       this.reverbPredelay.delayTime.setTargetAtTime(pre, t, 0.03);

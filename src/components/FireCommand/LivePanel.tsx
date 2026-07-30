@@ -115,33 +115,33 @@ export function LiveVoiceStrip() {
   const maxVoices = useFireCommandStore((s) => s.maxVoices);
   const setMaxVoices = useFireCommandStore((s) => s.setMaxVoices);
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5">
       <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${LIVE_C}66` }}>
         Voices
       </span>
-      {VOICE_CAPS.map((v) => {
-        const on = maxVoices === v;
-        return (
-          <button
-            key={v}
-            type="button"
-            onClick={() => setMaxVoices(v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${LIVE_C_HOT}99`,
-                    background: `${LIVE_C_HOT}28`,
-                    color: LIVE_C_GLOW,
-                    boxShadow: `0 0 8px ${LIVE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {v}
-          </button>
-        );
-      })}
+      <select
+        value={VOICE_CAPS.includes(maxVoices as (typeof VOICE_CAPS)[number]) ? maxVoices : maxVoices}
+        onChange={(e) => setMaxVoices(Number(e.target.value))}
+        className="h-7 min-w-[4.5rem] rounded-md border px-1.5 text-[10px] font-bold tabular-nums outline-none"
+        style={{
+          borderColor: `${LIVE_C_HOT}99`,
+          background: `${LIVE_C_HOT}28`,
+          color: LIVE_C_GLOW,
+          boxShadow: `0 0 8px ${LIVE_C}33`,
+        }}
+        title="Note polyphony cap — raise for denser chords on stronger machines"
+      >
+        {VOICE_CAPS.map((v) => (
+          <option key={v} value={v} style={{ background: "#0c0c12", color: "#fff" }}>
+            {v} voices
+          </option>
+        ))}
+        {!VOICE_CAPS.includes(maxVoices as (typeof VOICE_CAPS)[number]) && (
+          <option value={maxVoices} style={{ background: "#0c0c12", color: "#fff" }}>
+            {maxVoices} voices
+          </option>
+        )}
+      </select>
     </div>
   );
 }

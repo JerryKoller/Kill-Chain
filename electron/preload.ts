@@ -25,6 +25,9 @@ const bridge = {
     /** Dialog-free write into an already-picked folder. Returns full path. */
     writeIn: (dir: string, name: string, dataBase64: string): Promise<string | null> =>
       ipcRenderer.invoke("file:writeIn", { dir, name, dataBase64 }),
+    /** Pick an image and return its bytes (album artwork). */
+    openImage: (): Promise<{ path: string; base64: string; mime: string } | null> =>
+      ipcRenderer.invoke("dialog:openImage"),
   },
   shellOpen: (url: string): Promise<void> =>
     ipcRenderer.invoke("shell:open", url),
@@ -56,6 +59,13 @@ const bridge = {
     ): Promise<
       { path: string; name: string; ext: string; size: number; mtimeMs: number }[]
     > => ipcRenderer.invoke("library:scan", folders),
+    /** Ensure + return the managed Fire → Library export folder. */
+    getExportDir: (): Promise<string> => ipcRenderer.invoke("library:getExportDir"),
+    /** Stat a single audio file after writing an export. */
+    statFile: (
+      filePath: string,
+    ): Promise<{ path: string; name: string; ext: string; size: number; mtimeMs: number } | null> =>
+      ipcRenderer.invoke("library:statFile", filePath),
   },
 
   airspace: {
