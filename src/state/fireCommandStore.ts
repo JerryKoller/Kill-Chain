@@ -164,7 +164,7 @@ let sceneMorphActive = false;
 let padMorphActive = false;
 
 /** Abort in-flight scene morph / next-bar recalls (A↔B switch, preset load…). */
-function cancelSceneRecall(): void {
+export function cancelSceneRecall(): void {
   sceneMorphGen++;
   sceneMorphActive = false;
   if (sceneRecallTimer) {
@@ -870,6 +870,9 @@ const STORAGE_KEY = "killchain.firecommand.v5";
 // user presets survive the Pulse-Fire → Kill-Chain rename; the next persist
 // writes everything back under STORAGE_KEY.
 const LEGACY_STORAGE_KEY = "pulsefire.firecommand.v5";
+// Cap the user preset library — unbounded growth eventually trips the
+// localStorage quota, and a failed persist drops ALL Fire state at once.
+const MAX_USER_PRESETS = 128;
 
 export type EditTarget = "a" | "b";
 
@@ -891,6 +894,33 @@ function isFireLabelMode(v: unknown): v is FireLabelMode {
   return typeof v === "string" && (FIRE_LABEL_MODES as string[]).includes(v);
 }
 
+/**
+ * Scrub NaN/Infinity out of a merged patch in place. Corrupt persistence, a
+ * bad import or a runaway mutate can smuggle non-finite numbers into numeric
+ * params; one such value reaching an AudioParam write throws and wedges the
+ * graph. Scalars fall back to their DEFAULT_FIRE_PATCH value; nested numeric
+ * array fields fall back to inert values. gatePattern is already forced
+ * finite by cloneFirePatch, and modEnvPoints by normalizeModEnvPoints.
+ */
+function scrubNonFinitePatchNumbers(patch: FirePatch): void {
+  const p = patch as unknown as Record<string, unknown>;
+  for (const [key, def] of Object.entries(DEFAULT_FIRE_PATCH)) {
+    if (typeof def !== "number") continue;
+    const v = p[key];
+    if (typeof v !== "number" || !Number.isFinite(v)) p[key] = def;
+  }
+  for (const r of patch.modMatrix) {
+    if (!Number.isFinite(r.amount)) r.amount = 0;
+    if (typeof r.smooth === "number" && !Number.isFinite(r.smooth)) r.smooth = 0;
+  }
+  patch.chordIntervals = patch.chordIntervals.map((v) => (Number.isFinite(v) ? v : 0));
+  for (const c of patch.fmVectorCorners) {
+    c.levels = c.levels.map((v) => (Number.isFinite(v) ? v : 0)) as [number, number, number, number];
+    c.ratios = c.ratios.map((v) => (Number.isFinite(v) ? v : 1)) as [number, number, number];
+    if (!Number.isFinite(c.feedback)) c.feedback = 0;
+  }
+}
+
 function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
   // Deep-clone nested fields first — shallow `{...DEFAULT, ...raw}` used to
   // alias DEFAULT_FIRE_PATCH.fmVectorCorners / gatePattern / chordIntervals /
@@ -898,6 +928,9 @@ function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
   // Natural Selection then mutated shared nests; other presets stayed broken
   // until a full relaunch reloaded the module graph.
   const patch = cloneFirePatch(raw ?? {});
+  // Scrub before the migrations below so legacy fallbacks (e.g. the
+  // modAttack → MSEG conversion) only ever read finite values.
+  scrubNonFinitePatchNumbers(patch);
   // Migrate legacy ADSR-only patches into MSEG points.
   if (!Array.isArray(patch.modEnvPoints) || patch.modEnvPoints.length < 2) {
     patch.modEnvPoints = adsrToModEnvPoints(
@@ -1110,6 +1143,25 @@ function toastPerfGuard(): void {
   }
 }
 
+// One-shot per session — persist is debounced off every knob move, so an
+// unguarded warn/toast would fire several times a second once quota is hit.
+let storageQuotaWarned = false;
+function warnStorageQuota(): void {
+  if (storageQuotaWarned) return;
+  storageQuotaWarned = true;
+  console.warn(
+    "Kill-Chain: localStorage quota exceeded — Fire Command state is NOT being saved. Delete unused user presets (or clear site data) to restore saving.",
+  );
+  try {
+    useUIStore.getState().toast(
+      "Storage full — changes aren't being saved. Delete unused user presets to free space.",
+      "warn",
+    );
+  } catch {
+    /* store may not be ready during early hydrate */
+  }
+}
+
 function load(): PersistShape {
   if (typeof window === "undefined") return defaults();
   try {
@@ -1294,8 +1346,12 @@ function schedulePersist(getState: () => FireCommandState): void {
     };
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch {
-      /* ignore */
+    } catch (err) {
+      // Quota blown means every future save silently drops ALL Fire state —
+      // surface it. Anything else (private mode, storage disabled) stays quiet.
+      if (err instanceof DOMException && (err.name === "QuotaExceededError" || err.code === 22)) {
+        warnStorageQuota();
+      }
     }
   }, 350);
 }
@@ -1679,6 +1735,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     setParam: (key, value) => {
+      // Never let NaN/Infinity through — one non-finite AudioParam write
+      // throws and can wedge the graph (and would get persisted).
+      if (typeof value === "number" && !Number.isFinite(value)) return;
       // Knob moves mid-morph would otherwise commit the blend into patchA/B.
       if (sceneMorphActive || padMorphActive) discardMorphBlend(get, set);
       pushFireHistory(`param:${String(key)}`);
@@ -2207,9 +2266,20 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         arp: { ...s.arp },
         createdAt: Date.now(),
       };
+      // Quota safety: at the cap, the oldest saves make room for the new one.
+      const overflow = Math.max(0, s.userPresets.length + 1 - MAX_USER_PRESETS);
+      if (overflow > 0) {
+        console.warn(
+          `Kill-Chain: user preset cap (${MAX_USER_PRESETS}) reached — dropping the oldest save${overflow === 1 ? "" : "s"} to make room.`,
+        );
+      }
+      const droppedIds = new Set(s.userPresets.slice(0, overflow).map((p) => p.id));
       set({
-        userPresets: [...s.userPresets, preset],
-        ...(s.editTarget === "b" ? { presetIdB: id } : { presetId: id }),
+        userPresets: [...s.userPresets.slice(overflow), preset],
+        // A selection pointing at a dropped preset falls back to custom —
+        // same rule as deleteUserPreset.
+        presetId: s.editTarget === "b" ? (droppedIds.has(s.presetId) ? "custom" : s.presetId) : id,
+        presetIdB: s.editTarget === "b" ? id : (droppedIds.has(s.presetIdB) ? "custom" : s.presetIdB),
       });
       persist();
       return id;
@@ -2572,6 +2642,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       stampLivePatchesOntoActiveSection();
       if (s.editTarget === "a" && moduleId === "arp" && !on) {
         stopArpScheduler();
+        // stopArpScheduler cancels the pending note-off timers, so the
+        // sounding step would stick — silence like setArp({enabled:false}).
+        getEngine().fireCommand.allNotesOff();
         set({ arpCurrent: null, arpStepIndex: -1 });
       } else if (s.editTarget === "a" && moduleId === "arp" && on && get().arp.enabled && arpTimer === null) {
         startArpScheduler(get, set);

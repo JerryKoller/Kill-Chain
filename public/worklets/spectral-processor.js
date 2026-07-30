@@ -245,12 +245,19 @@ class SpectralProcessor extends AudioWorkletProcessor {
       }
       case "smear": {
         const c = 0.995 * Math.pow(a, 0.3);
+        // Quiet frame? Decay the held average toward 0 so a loud transient
+        // can't keep inflating silent tails.
+        let energy = 0;
+        for (let k = 0; k <= HALF; k++) energy += re[k] * re[k] + im[k] * im[k];
+        const hold = energy > 1e-6 ? 1 : 0.9;
         for (let k = 0; k <= HALF; k++) {
           if (!inBand(k)) continue;
           const mag = Math.hypot(re[k], im[k]);
-          const avg = st.avgMag[k] * c + mag * (1 - c);
+          const avg = (st.avgMag[k] * c + mag * (1 - c)) * hold;
           st.avgMag[k] = avg;
-          const scale = Math.min(avg / Math.max(mag, 1e-4), 1e4);
+          // Floor the denominator near the running average and cap the boost:
+          // quiet bins after a loud frame get at most ×6, never ×1e4.
+          const scale = Math.min(avg / Math.max(mag, avg * 0.05 + 1e-4), 6);
           re[k] *= scale;
           im[k] *= scale;
         }
@@ -297,7 +304,12 @@ class SpectralProcessor extends AudioWorkletProcessor {
     }
     fft(re, im, true);
 
-    for (let i = 0; i < FFT_SIZE; i++) st.accum[i] += re[i] * WINDOW[i] * OLA_NORM;
+    // Safety: hard-clamp each wet sample to ±1 before the OLA write so the
+    // accumulator (and the emitted wet signal) can never hold huge values.
+    for (let i = 0; i < FFT_SIZE; i++) {
+      const s = re[i] > 1 ? 1 : re[i] < -1 ? -1 : re[i];
+      st.accum[i] += s * WINDOW[i] * OLA_NORM;
+    }
     for (let i = 0; i < HOP; i++) st.outFifo[i] = st.accum[i];
     st.accum.copyWithin(0, HOP);
     st.accum.fill(0, FFT_SIZE - HOP);

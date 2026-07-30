@@ -669,7 +669,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
               const cableToMonitor = next?.monitor;
               return (
                 <div key={node.id} className="flex min-w-0 flex-1 items-center">
-                  <div className={`relative flex w-full min-w-0 flex-col items-center gap-0.5 ${on ? "" : "opacity-45"}`}>
+                  <div className={`relative flex w-full min-w-0 flex-col items-center gap-0.5 ${on ? "" : "fc-asleep"}`}>
                     <button
                       type="button"
                       onClick={(e) => onNodeClick(node, e)}
@@ -698,13 +698,12 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                             ? `0 0 ${8 + h * 18}px ${node.color}${Math.round(20 + h * 50).toString(16).padStart(2, "0")}`
                             : `inset 0 0 20px ${node.color}10`,
                         animation: modN > 0 ? "fire-mod-halo 2.8s ease-in-out infinite" : undefined,
-                        filter: on ? undefined : "grayscale(0.7)",
                         opacity: isMonitor ? 0.92 : 1,
                       }}
                     >
                       {node.badge && (
                         <span
-                          className="absolute -top-1.5 left-1/2 -translate-x-1/2 rounded border px-1 py-px text-[7px] font-black uppercase tracking-wider"
+                          className="fc-text-floor absolute -top-1.5 left-1/2 -translate-x-1/2 rounded border px-1 py-px font-black uppercase tracking-wider"
                           style={{
                             borderColor: `${node.color}55`,
                             background: "rgba(8,8,12,0.92)",
@@ -716,7 +715,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                       )}
                       {modN > 0 && (
                         <span
-                          className="absolute -top-1 -right-0.5 rounded-full border border-sky-400/50 bg-sky-500/25 px-1 text-[7px] font-bold text-sky-200"
+                          className="fc-text-floor absolute -top-1 -right-0.5 rounded-full border border-sky-400/50 bg-sky-500/25 px-1 font-bold text-sky-200"
                           title={`${modN} mod route${modN === 1 ? "" : "s"}`}
                         >
                           {modN}
@@ -728,7 +727,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                       >
                         {node.label}
                       </span>
-                      <span className="mt-0.5 max-w-full truncate px-0.5 font-mono text-[7px] leading-tight text-white/40">
+                      <span className="fc-text-floor mt-0.5 max-w-full truncate px-0.5 font-mono leading-tight text-white/40">
                         {status[node.id]}
                       </span>
                       <span className="mt-0.5 h-0.5 w-[min(2rem,40%)] overflow-hidden rounded-full bg-white/10">
@@ -888,7 +887,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                   return (
                     <div
                       key={fx.id}
-                      className={`rounded-md border px-1.5 py-1 ${enabled ? "" : "opacity-45 grayscale"}`}
+                      className={`rounded-md border px-1.5 py-1 ${enabled ? "" : "fc-asleep"}`}
                       style={{
                         borderColor: enabled ? `${FC_BAND.fx}33` : "rgba(255,255,255,0.12)",
                         background: enabled ? `${FC_BAND.fx}0c` : "rgba(0,0,0,0.35)",
@@ -902,13 +901,13 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                         title={enabled ? `Open ${fx.label}` : `${fx.label} — Asleep`}
                       >
                         {fx.label}
-                        {!enabled && <span className="ml-1 text-[7px] text-white/35">zzz</span>}
+                        {!enabled && <span className="fc-text-floor ml-1 text-white/35">zzz</span>}
                       </button>
                       <div className="mt-0.5 flex items-center justify-between gap-1">
                         <button
                           type="button"
                           onClick={() => setModuleEnable(fx.id, !enabled)}
-                          className={`rounded border px-1 text-[7px] font-bold ${
+                          className={`fc-text-floor rounded border px-1 font-bold ${
                             enabled
                               ? "border-emerald-400/40 text-emerald-200"
                               : "border-white/15 text-white/40"
@@ -1086,7 +1085,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                         return (
                           <div
                             key={mod.id}
-                            className={`relative flex items-center gap-0.5 min-w-0 ${enabled ? "" : "opacity-45"}`}
+                            className={`relative flex items-center gap-0.5 min-w-0 ${enabled ? "" : "fc-asleep"}`}
                           >
                             <button
                               type="button"
@@ -1115,7 +1114,6 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                                   : enabled
                                     ? "transparent"
                                     : "rgba(0,0,0,0.35)",
-                                filter: enabled ? undefined : "grayscale(0.75)",
                                 boxShadow: hot && enabled ? `0 0 8px ${mod.color}33` : undefined,
                               }}
                               title={`${mod.title}${mod.subtitle ? ` — ${mod.subtitle}` : ""}${!enabled ? " · ASLEEP" : ""}${routes ? ` · ${routes} routes` : ""}${locked ? " · LOCKED" : " · MUT eligible"}`}

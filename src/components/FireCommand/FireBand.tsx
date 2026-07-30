@@ -84,7 +84,7 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
             key={m.id}
             type="button"
             onClick={m.toggle}
-            className="relative flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            className={`relative flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${awake ? "" : "fc-asleep"}`}
             style={{
               borderColor: awake ? `${m.color}44` : "rgba(255,255,255,0.12)",
               background: awake
@@ -93,8 +93,6 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
               boxShadow: awake
                 ? `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 12px ${m.color}14`
                 : undefined,
-              opacity: awake ? 1 : 0.55,
-              filter: awake ? undefined : "grayscale(0.7)",
             }}
             title={awake ? `Expand ${m.title}` : `${m.title} — Asleep (Signal Path Off)`}
             aria-expanded={false}
@@ -107,7 +105,7 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
               {m.title}
             </span>
             {!awake && (
-              <span className="absolute right-1 top-1 rounded border border-white/15 bg-black/55 px-1 py-px text-[7px] font-black uppercase tracking-wider text-white/45">
+              <span className="fc-text-floor absolute right-1 top-1 rounded border border-white/15 bg-black/55 px-1 py-px font-black uppercase tracking-wider text-white/45">
                 Zzz
               </span>
             )}

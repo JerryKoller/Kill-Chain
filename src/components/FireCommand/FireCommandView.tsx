@@ -5,6 +5,7 @@ import { SequencerPanel } from "./SequencerPanel";
 import {
   useFireCommandStore,
   activeFireEngine,
+  cancelSceneRecall,
   FIRE_PRESETS,
   SCENE_SLOTS,
   type ArpMode,
@@ -529,6 +530,9 @@ export function FireCommandView() {
         if (seq.playing) seq.stop();
       } catch { /* ignore */ }
       useFireCommandStore.getState().panic();
+      // Abort pending scene morph / next-bar recalls — their timers must not
+      // mutate the store/engine after Fire unmounts.
+      cancelSceneRecall();
       try {
         useAudioStore.setState({ bypass: bypassBeforeFire });
         getEngine().setBypass(bypassBeforeFire);
@@ -3098,7 +3102,7 @@ function WarpModeStrip() {
             key={o.id}
             type="button"
             onClick={() => setParam("warpMode", o.id)}
-            className="min-w-[2.6rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+            className="fc-focus min-w-[2.6rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
             style={
               on
                 ? {
@@ -3130,11 +3134,12 @@ function WarpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
   const amount = useFireCommandStore((s) => s.patch.warpAmount) ?? 1;
   const warpMode = (useFireCommandStore((s) => s.patch.warpMode) ?? "classic") as WarpMode;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["fire.sec.warp"] !== false);
   const active = Math.abs(amount) > 0.01 && (
     warpMode !== "classic"
     || Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01
   );
-  const state = forgeState(active);
+  const state = forgeState(active, enabled);
 
   return (
     <Section
@@ -4918,13 +4923,15 @@ function FiltCarveChip({ mode }: { mode: "off" | "fundamental" | "odds" | "evens
         setParam("filterCarve", mode);
         if (mode !== "off") setParam("filterCarveAmount", Math.max(0.35, useFireCommandStore.getState().patch.filterCarveAmount ?? 0));
       }}
-      className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+      className="fc-focus rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
       style={{
         borderColor: on ? `${c}88` : "rgba(255,255,255,0.1)",
         color: on ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.4)",
         background: on ? `${c}30` : "rgba(0,0,0,0.3)",
+        boxShadow: on ? `0 0 12px ${c}44` : undefined,
       }}
       title={mode === "formant" ? "Movable F1/F2 formants — Cutoff slides vowels, Carve opens mouths" : `Harmonic carve: ${labels[mode]}`}
+      aria-pressed={on}
     >
       {labels[mode]}
     </button>
@@ -4952,7 +4959,7 @@ function FiltModelStrip() {
             key={o.id}
             type="button"
             onClick={() => setParam("filterModel", o.id)}
-            className="min-w-[2.4rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+            className="fc-focus min-w-[2.4rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
             style={
               on
                 ? {
@@ -8658,6 +8665,9 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const setParam = useFireCommandStore((s) => s.setParam);
   const setMaxVoices = useFireCommandStore((s) => s.setMaxVoices);
   const [voices, setVoices] = useState(0);
+  // "Cease total" restore timer — cleared on unmount so it can't re-open the
+  // master mix after leaving Fire.
+  const ceaseRestoreTimer = useRef<number | null>(null);
 
   useEffect(() => {
     let raf = 0;
@@ -8678,6 +8688,10 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  useEffect(() => () => {
+    if (ceaseRestoreTimer.current !== null) window.clearTimeout(ceaseRestoreTimer.current);
+  }, []);
+
   const ceaseFire = () => {
     useFireSequencerStore.getState().stop();
     const st = useFireCommandStore.getState();
@@ -8691,7 +8705,9 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
     if (ceaseMode === "total") {
       const eng = getEngine();
       eng.setFireMasterMix(0, true);
-      window.setTimeout(() => {
+      if (ceaseRestoreTimer.current !== null) window.clearTimeout(ceaseRestoreTimer.current);
+      ceaseRestoreTimer.current = window.setTimeout(() => {
+        ceaseRestoreTimer.current = null;
         const mix = useFireSequencerStore.getState().mixer.master;
         eng.setFireMasterMix(mix.level, mix.mute);
       }, 120);
@@ -15387,7 +15403,7 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
 
   return (
     <GlassPanel
-      className={`p-2.5 transition-[opacity,filter] ${!moduleAwake ? "opacity-[0.58] saturate-[0.35]" : ""} ${className ?? ""}`}
+      className={`p-2.5 transition-[opacity,filter] ${!moduleAwake ? "fc-asleep" : ""} ${className ?? ""}`}
       data-fire-module={collapseKey || undefined}
       data-fire-asleep={!moduleAwake ? "1" : undefined}
     >

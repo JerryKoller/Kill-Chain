@@ -771,6 +771,16 @@ const CLIP_RANGE = 3;
  */
 const DRIVE_RANGE = 2;
 
+/**
+ * Cap an FM / cross-mod frequency deviation (Hz) so the generated sidebands
+ * stay mostly under Nyquist. Deviation scales with the note's base frequency
+ * times large index multipliers, so high notes / high ratios could otherwise
+ * push deviation far past Nyquist and alias into broadband digital hash.
+ */
+function clampFmDev(hz: number, sampleRate: number): number {
+  return clamp(hz, 0, sampleRate * 0.33);
+}
+
 function makeDriveCurve(
   drive: number,
   mode: DriveMode = "soft",
@@ -1114,6 +1124,10 @@ class Voice {
     this.fdPad.gain.value = 1 / CLIP_RANGE;
     this.fdShaper = ctx.createWaveShaper();
     this.fdShaper.curve = synth.filterDriveCurve;
+    // Oversample the per-voice drive/carve saturation — its harmonics alias at
+    // 1× on resonant/bright material. (Identity curve at filterDrive 0, so this
+    // is free when unused.)
+    this.fdShaper.oversample = "2x";
     this.carveFilt = ctx.createBiquadFilter();
     this.carveFilt.type = "allpass";
     this.carveFilt.Q.value = 1;
@@ -1548,12 +1562,13 @@ class Voice {
         const parallel = [1.0, 1.15, 1.25, 1.35][alg - 4] ?? 1;
         modIdx = ((l2 * r2) + (l3 * r3) + (l4 * r4)) * parallel / 4.5;
       }
+      const sr = this.ctx.sampleRate;
       this.fmOsc.frequency.setValueAtTime(this.baseFreq * r2, t);
-      this.fmGain.gain.setValueAtTime((0.15 + l1 * 0.85) * modIdx * this.baseFreq * (4 + fb * 4), t);
+      this.fmGain.gain.setValueAtTime(clampFmDev((0.15 + l1 * 0.85) * modIdx * this.baseFreq * (4 + fb * 4), sr), t);
       const xm = (p.fmBtoA ?? 0.15 + fb * 0.5) * this.baseFreq * 4 / this.unisonCount;
-      this.xmodGain.gain.setTargetAtTime(xm, t, 0.02);
+      this.xmodGain.gain.setTargetAtTime(clampFmDev(xm, sr), t, 0.02);
       const abAmt = Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.45 : 0);
-      this.xmodGainAB.gain.setTargetAtTime(abAmt * this.baseFreq * 4 / this.unisonCount, t, 0.02);
+      this.xmodGainAB.gain.setTargetAtTime(clampFmDev(abAmt * this.baseFreq * 4 / this.unisonCount, sr), t, 0.02);
       return;
     }
     if (!fmOn) {
@@ -1563,23 +1578,24 @@ class Voice {
       const syncBoost = chipOn && p.hardSync && acidMix > 0.25
         ? Math.max(p.fmBtoA ?? 0, 0.55 + acidMix * 0.4)
         : 0;
-      this.xmodGain.gain.setTargetAtTime(syncBoost * this.baseFreq * 10 / this.unisonCount, t, 0.02);
+      this.xmodGain.gain.setTargetAtTime(clampFmDev(syncBoost * this.baseFreq * 10 / this.unisonCount, this.ctx.sampleRate), t, 0.02);
       const ab = (p.fmAtoB ?? 0) > 0.001 || p.oscBInherit === "fm" ? Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.55 : 0) : 0;
-      this.xmodGainAB.gain.setTargetAtTime(ab * this.baseFreq * 4 / this.unisonCount, t, 0.02);
+      this.xmodGainAB.gain.setTargetAtTime(clampFmDev(ab * this.baseFreq * 4 / this.unisonCount, this.ctx.sampleRate), t, 0.02);
       return;
     }
     const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
     const syncWanted = p.hardSync && (p.moduleEnable?.["chip"] === false ? true : acidMix > 0.2);
     const fmAmt = syncWanted ? Math.max(p.fmAmount, 0.22) : p.fmAmount;
     const fbClassic = clamp(p.fmFeedback ?? 0, 0, 0.85);
+    const sr = this.ctx.sampleRate;
     this.fmOsc.frequency.setValueAtTime(this.baseFreq * p.fmRatio, t);
-    this.fmGain.gain.setValueAtTime(fmAmt * this.baseFreq * ((syncWanted ? 9 : 6) + fbClassic * 5), t);
+    this.fmGain.gain.setValueAtTime(clampFmDev(fmAmt * this.baseFreq * ((syncWanted ? 9 : 6) + fbClassic * 5), sr), t);
     // Hard sync feel: strong B→A cross-mod (PeriodicWave can't hard-reset phase).
     const syncBoost = syncWanted ? Math.max(p.fmBtoA ?? 0, 0.88) : (p.fmBtoA ?? 0);
     const xm = syncBoost * this.baseFreq * (syncWanted ? 10 : 4) / this.unisonCount;
-    this.xmodGain.gain.setTargetAtTime(xm, t, 0.02);
+    this.xmodGain.gain.setTargetAtTime(clampFmDev(xm, sr), t, 0.02);
     const abAmt = Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.55 : 0);
-    this.xmodGainAB.gain.setTargetAtTime(abAmt * this.baseFreq * 4 / this.unisonCount, t, 0.02);
+    this.xmodGainAB.gain.setTargetAtTime(clampFmDev(abAmt * this.baseFreq * 4 / this.unisonCount, sr), t, 0.02);
   }
 
   private baseCutoff(p: FirePatch): number {
@@ -1742,6 +1758,26 @@ class Voice {
     }
   }
 
+  /**
+   * Schedule voice teardown `tailSec` from now. Live path uses a wall-clock
+   * timer; offline bounce has no wall clock, so it stops sources on the audio
+   * clock and cleans up in `onended` — otherwise offline voices never GC and a
+   * wall-clock steal could disconnect nodes mid-render.
+   */
+  private scheduleEnd(tailSec: number): void {
+    if (this.synth.offlineSafe) {
+      const at = this.ctx.currentTime + Math.max(0.01, tailSec);
+      const srcs: AudioScheduledSourceNode[] = [
+        ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise,
+        this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
+      ];
+      for (const n of srcs) { try { n.stop(at); } catch { /* already stopped */ } }
+      try { this.ampEnv.onended = () => this.forceStop(); } catch { /* ignore */ }
+    } else {
+      this.endTimer = setTimeout(() => this.forceStop(), tailSec * 1000);
+    }
+  }
+
   noteOff(p: FirePatch, when?: number): void {
     if (this.releasing || this.stopped) return;
     this.releasing = true;
@@ -1753,9 +1789,12 @@ class Voice {
       const model = lpgModelTimes(p.lpgModel ?? "classic", p.lpgDecay ?? 0.4, this.velocity);
       const decay = model.decay * (0.55 + clamp(p.lpgRing ?? 1, 0, 1) * 0.7);
       const tail = (t - now) + decay * 4 + 0.15;
-      if (!this.synth.offlineSafe) {
-        this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
-      }
+      // Declick: ease amp to 0 over the ring so LPG leakage doesn't hard-cut
+      // at the forced stop (previously it returned with amp untouched).
+      this.ampEnv.offset.cancelScheduledValues(t);
+      this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
+      this.ampEnv.offset.setTargetAtTime(0, t, Math.max(0.02, decay * 0.6));
+      this.scheduleEnd(tail);
       return;
     }
     const rel = Math.max(0.01, p.ampRelease);
@@ -1778,9 +1817,7 @@ class Voice {
     hold(this.filterEnv.offset);
     this.filterEnv.offset.setTargetAtTime(0, t, Math.max(0.01, p.filtRelease) / 4);
     const tail = (t - now) + rel * 4 + 0.15;
-    if (!this.synth.offlineSafe) {
-      this.endTimer = setTimeout(() => this.forceStop(), tail * 1000);
-    }
+    this.scheduleEnd(tail);
   }
 
   /** Quick click-free fade then stop — used when stealing a voice. */
@@ -1801,8 +1838,14 @@ class Voice {
     for (const n of srcs) {
       try { n.stop(hardAt); } catch { /* already stopped / not started */ }
     }
-    if (this.endTimer) clearTimeout(this.endTimer);
-    this.endTimer = setTimeout(() => this.forceStop(), 50);
+    if (this.synth.offlineSafe) {
+      // No wall clock offline — the audio-clock stop above ends ampEnv; clean
+      // up in onended so stolen voices still GC during render.
+      try { this.ampEnv.onended = () => this.forceStop(); } catch { /* ignore */ }
+    } else {
+      if (this.endTimer) clearTimeout(this.endTimer);
+      this.endTimer = setTimeout(() => this.forceStop(), 50);
+    }
   }
 
   forceStop(): void {
@@ -1827,6 +1870,7 @@ class Voice {
     }
     const others: AudioNode[] = [
       ...this.groupA.pans, ...this.groupB.pans,
+      ...this.groupA.gains, ...this.groupB.gains,
       ...this.groupA.morphLo, ...this.groupA.morphHi,
       ...this.groupB.morphLo, ...this.groupB.morphHi,
       this.groupA.level, this.groupB.level,
@@ -1836,7 +1880,7 @@ class Voice {
     if (this.filterWorklet) others.push(this.filterWorklet);
     if (this.groupC) {
       others.push(
-        ...this.groupC.pans, ...this.groupC.morphLo, ...this.groupC.morphHi, this.groupC.level,
+        ...this.groupC.pans, ...this.groupC.gains, ...this.groupC.morphLo, ...this.groupC.morphHi, this.groupC.level,
       );
     }
     for (const n of others) { try { n.disconnect(); } catch { /* ignore */ } }
@@ -2086,7 +2130,7 @@ class Voice {
         );
       }
     }
-    if (m.aFm) this.fmGain.gain.setTargetAtTime(Math.max(0, (p.fmAmount + m.fm) * this.baseFreq * 6), t, 0.02);
+    if (m.aFm) this.fmGain.gain.setTargetAtTime(clampFmDev(Math.max(0, (p.fmAmount + m.fm) * this.baseFreq * 6), this.ctx.sampleRate), t, 0.02);
     if (m.aLvl) {
       const oscAOn = p.moduleEnable?.["osc.a"] !== false;
       const oscBOn = p.moduleEnable?.["osc.b"] !== false;
@@ -2268,6 +2312,14 @@ export class FireCommandSynth {
   private lastCrushBits = -1;
   private lastSpectralMsg = "";
   private lastBusVoiceSyncKey = "";
+  /** Hysteretic CPU-eco flag — enter hot at 0.65, leave at 0.5. Prevents the
+   *  drive/soft-clip oversample from flapping (and rebuilding curves) when
+   *  voice count oscillates around a single threshold. */
+  private ecoHot = false;
+  /** Voices pulled from the active set but still fading out after a steal.
+   *  Tracked so setPatch hard-kills them too — otherwise a ~50 ms zombie can
+   *  keep its old filter/dual-morph topology and bleed into the next preset. */
+  private readonly dying = new Set<Voice>();
   private sh1Step = -1; private sh1Val = 0;
   private sh2Step = -1; private sh2Val = 0;
   private mtxRandStep = -1; private mtxRandVal = 0;
@@ -2314,7 +2366,15 @@ export class FireCommandSynth {
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
 
     // Preload filter bite worklet (non-blocking); voices fall back to biquad until ready.
-    void loadFilterModule(ctx).then((ok) => { this.filterWorkletReady = ok; });
+    void loadFilterModule(ctx).then((ok) => {
+      this.filterWorkletReady = ok;
+      // If a ladder/SVF patch loaded before the worklet was ready, live voices
+      // are stuck on biquad — rebuild once so the intended filter engages.
+      const m = this.patch.filterModel ?? "biquad";
+      if (ok && (m === "ladder" || m === "svf") && (this.patch.fxQuality ?? "live") !== "eco") {
+        this.setPatch(this.patch);
+      }
+    });
 
     // Pre-render every wavetable into pitch-mip × subframe PeriodicWave banks.
     // Constant-loudness gain is derived once per subframe from the full-res
@@ -2587,7 +2647,7 @@ export class FireCommandSynth {
     if (this.offlineSafe) return;
     if (this.modTimer) return;
     this.idleFrames = 0;
-    this.modTimer = setInterval(this.updateMod, 1000 / 120);
+    this.modTimer = setInterval(this.updateMod, 1000 / 60);
   }
 
   private stopModTimer(): void {
@@ -2607,8 +2667,12 @@ export class FireCommandSynth {
   private voiceSourceCost(p: FirePatch): number {
     const unison = Math.round(clamp(Math.min(p.unison, liveUnisonCap(p)), 1, MAX_UNISON));
     const groups = 2 + (p.oscCLevel > 0.0001 ? 1 : 0); // A and B always exist
+    // High Continuity runs a second (oscHi) oscillator per unison voice for the
+    // dual-frame morph crossfade, doubling the real oscillator count. The old
+    // budget ignored this and admitted ~2× too many voices on morphing patches.
+    const morphMul = (p.oscAContinuity ?? 0) >= 0.12 ? 2 : 1;
     const fm = (p.fmEngine ?? "classic") === "ops4" ? 4 : 1;
-    return unison * groups + 2 + fm; // + sub + noise + FM weight
+    return unison * groups * morphMul + 3 + fm; // + sub + subHarm + noise + FM weight
   }
 
   /**
@@ -2943,7 +3007,7 @@ export class FireCommandSynth {
     // Idle gate: sleep the 60 Hz timer after ~5 s with no voices (tails need
     // a few seconds). noteOn / playNote / setPatch restart it.
     if (this.voices.size === 0) {
-      if (++this.idleFrames > 600) {
+      if (++this.idleFrames > 300) {
         this.stopModTimer();
         return;
       }
@@ -3593,6 +3657,7 @@ export class FireCommandSynth {
 
   onVoiceEnded(v: Voice): void {
     this.voices.delete(v);
+    this.dying.delete(v);
     if (this.monoVoice === v) this.monoVoice = null;
     this.updatePolyGain();
   }
@@ -3650,6 +3715,7 @@ export class FireCommandSynth {
     if (!pick) return;
     for (const [k, vv] of this.held) if (vv === pick) this.held.delete(k);
     this.voices.delete(pick);
+    this.dying.add(pick);
     pick.fastRelease();
     this.updatePolyGain();
   }
@@ -3681,6 +3747,10 @@ export class FireCommandSynth {
     this.monoVoice = null;
     for (const v of [...this.voices]) v.forceStop();
     this.voices.clear();
+    // Stolen voices already removed from the active set are still fading out
+    // with their old topology — kill them too so nothing bleeds into the load.
+    for (const v of [...this.dying]) v.forceStop();
+    this.dying.clear();
     this.updatePolyGain();
     // Deep-clone nested fields so engine state never aliases store / factory
     // / user-preset objects (moduleEnable, modMatrix, fm corners, gate…).
@@ -3831,9 +3901,13 @@ export class FireCommandSynth {
         for (const v of this.voices) v.applyFm(p); break;
       case "filterType": case "filterCutoff": case "filterResonance":
       case "filterEnvAmount": case "filterEnvResoAmount": case "filterKeyTrack":
-      case "filterCarve": case "filterCarveAmount": case "filterSlope": case "filterDrivePos":
-      case "filterModel":
+      case "filterCarve": case "filterCarveAmount":
         for (const v of this.voices) v.setFilterLive(p); break;
+      case "filterSlope": case "filterDrivePos": case "filterModel":
+        // Filter topology (extra poles, pre/post drive routing, ladder/SVF
+        // worklet vs biquad) is baked per voice at construction — rebuild so
+        // the change is audible immediately, not only on the next note.
+        this.setPatch(p); break;
       case "filterDrive":
         this.filterDriveCurve = makeFilterDriveCurve(p.filterDrive);
         for (const v of this.voices) v.setFilterDriveCurve(this.filterDriveCurve);
@@ -3893,15 +3967,19 @@ export class FireCommandSynth {
     const bias = pathDrive ? (p.driveBias ?? 0) : 0;
     const sym = pathDrive ? (p.driveSymmetry ?? 0) : 0;
     // Under heavy patches, force eco oversampling even if the knob says Live/High.
-    const qEff = pressure > 0.6 ? "eco" : (p.fxQuality ?? "live");
-    const driveKey = `${p.driveMode}|${driveAmt.toFixed(3)}|${bias.toFixed(2)}|${sym.toFixed(2)}|${qEff}|p${pressure > 0.6 ? 1 : 0}`;
+    // Hysteresis (enter hot 0.65, leave 0.5) stops the oversample + drive-curve
+    // rebuild from flapping when voice count hovers around a single threshold.
+    this.ecoHot = pressure > (this.ecoHot ? 0.5 : 0.65);
+    const qEff = this.ecoHot ? "eco" : (p.fxQuality ?? "live");
+    const driveKey = `${p.driveMode}|${driveAmt.toFixed(3)}|${bias.toFixed(2)}|${sym.toFixed(2)}|${qEff}`;
     if (driveKey !== this.lastDriveKey) {
       this.driveShaper.curve = makeDriveCurve(driveAmt, p.driveMode, bias, sym);
-      this.driveShaper.oversample = qEff === "eco" ? "none" : qEff === "live" ? "2x" : "4x";
+      // Keep ≥2× on the wavefolder even in eco — its harmonics alias badly at 1×.
+      this.driveShaper.oversample = qEff === "eco" ? (p.driveMode === "fold" ? "2x" : "none") : qEff === "live" ? "2x" : "4x";
       this.lastDriveKey = driveKey;
     }
     // Soft-clip stage is always on the master bus — drop 2× OS when hot.
-    this.softClip.oversample = pressure > 0.5 ? "none" : "2x";
+    this.softClip.oversample = this.ecoHot ? "none" : "2x";
     const inG = pathDrive ? clamp(p.driveInGain ?? 1, 0, 2) : 1;
     const outG = pathDrive ? clamp(p.driveOutGain ?? 1, 0, 2) : 1;
     const auto = pathDrive && (p.driveAutoGain !== false);
@@ -3916,6 +3994,9 @@ export class FireCommandSynth {
       this.crushShaper.curve = makeCrushCurve(crushBits);
       this.lastCrushBits = crushBits;
     }
+    // The bit-crush staircase is a hard nonlinearity — oversample it so its
+    // images don't fold back as harsh alias tones (it ran at 1× before).
+    this.crushShaper.oversample = crushAmt > 0.02 ? "4x" : "none";
     this.crushDry.gain.setTargetAtTime(1 - crushAmt, t, 0.02);
     this.crushWet.gain.setTargetAtTime(crushAmt, t, 0.02);
 
@@ -4386,6 +4467,17 @@ export class FireCommandSynth {
 export function cloneFirePatch(raw: FirePatch | Partial<FirePatch>): FirePatch {
   const src = { ...DEFAULT_FIRE_PATCH, ...raw } as FirePatch;
   const patch: FirePatch = { ...src };
+  // Scrub non-finite scalars (corrupt persistence, a bad import, or a mutate
+  // that produced NaN/Infinity). A non-finite value written to an AudioParam
+  // throws and can wedge the graph into silence — fall back to the factory
+  // default for that key.
+  const def = DEFAULT_FIRE_PATCH as unknown as Record<string, unknown>;
+  const rec = patch as unknown as Record<string, unknown>;
+  for (const k in def) {
+    if (typeof def[k] === "number" && typeof rec[k] === "number" && !Number.isFinite(rec[k] as number)) {
+      rec[k] = def[k];
+    }
+  }
   patch.modMatrix = makeModMatrix(Array.isArray(src.modMatrix) ? src.modMatrix : []);
   patch.moduleEnable = { ...(src.moduleEnable ?? {}) };
   patch.modEnvPoints = Array.isArray(src.modEnvPoints)
@@ -4408,9 +4500,9 @@ export function cloneFirePatch(raw: FirePatch | Partial<FirePatch>): FirePatch {
     ? src.fmVectorCorners
     : DEFAULT_FIRE_PATCH.fmVectorCorners;
   patch.fmVectorCorners = corners.map((c) => ({
-    levels: [...c.levels] as [number, number, number, number],
-    ratios: [...c.ratios] as [number, number, number],
-    feedback: c.feedback,
+    levels: c.levels.map((v) => (Number.isFinite(v) ? v : 0)) as [number, number, number, number],
+    ratios: c.ratios.map((v) => (Number.isFinite(v) ? v : 1)) as [number, number, number],
+    feedback: Number.isFinite(c.feedback) ? c.feedback : 0,
   }));
   return patch;
 }

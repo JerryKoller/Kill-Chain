@@ -266,8 +266,8 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
           <div className="flex h-8 w-[5.25rem] shrink-0 items-center justify-center gap-1 rounded-md bg-black/25 ring-1 ring-emerald-400/20">
             <PressureKnob value={amount} onChange={(v) => act().setMutateAmount(v)} size={24} />
             <span className="flex flex-col items-start leading-none select-none" aria-hidden>
-              <span className="text-[7px] uppercase tracking-wider text-white/35">Mild</span>
-              <span className="mt-0.5 text-[7px] uppercase tracking-wider text-emerald-200/55">Wild</span>
+              <span className="fc-text-floor uppercase tracking-wider text-white/35">Mild</span>
+              <span className="fc-text-floor mt-0.5 uppercase tracking-wider text-emerald-200/55">Wild</span>
             </span>
           </div>
           {mutation && (
@@ -406,7 +406,7 @@ export function MutateCluster({ compact = false }: { compact?: boolean }) {
                       <span className="pointer-events-none absolute inset-0 animate-[evolve-breathe_2.2s_ease-in-out_infinite] bg-[radial-gradient(circle_at_50%_30%,rgba(236,253,245,0.35),transparent_65%)]" />
                     )}
                     <span className="relative block leading-none">{w.toUpperCase()}</span>
-                    <span className={`relative block text-[7px] uppercase tracking-wider mt-0.5 ${live ? "text-emerald-100/70" : "text-white/30"}`}>
+                    <span className={`fc-text-floor relative block uppercase tracking-wider mt-0.5 ${live ? "text-emerald-100/70" : "text-white/30"}`}>
                       {live ? "live" : "rival"}
                     </span>
                   </button>
