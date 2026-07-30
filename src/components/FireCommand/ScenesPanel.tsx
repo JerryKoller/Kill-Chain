@@ -217,14 +217,14 @@ export function ScenesQuickActions({
         }
         title={enabled ? "Bypass scenes module UI" : "Engage scenes"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );
 }
 
 export function sceneStageLabel(occ: number, mode: SceneMode, enabled: boolean): string {
-  if (!enabled) return "Bypass — module offline";
+  if (!enabled) return "Asleep — module offline";
   if (occ === 0) return "Empty — no saved scene";
   if (occ >= SCENE_SLOTS) return "Full — scene bank in motion";
   if (mode === "capture") return "Capture — waiting for notes";

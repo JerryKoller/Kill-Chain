@@ -543,7 +543,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
     return [
       { label: "Open", onClick: () => jump(modId) },
       {
-        label: enabled ? "Bypass module" : "Enable module",
+        label: enabled ? "Sleep module" : "Wake module",
         onClick: () => setModuleEnable(modId, !enabled),
       },
       {
@@ -888,17 +888,21 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                   return (
                     <div
                       key={fx.id}
-                      className={`rounded-md border px-1.5 py-1 ${enabled ? "" : "opacity-40"}`}
-                      style={{ borderColor: `${FC_BAND.fx}33`, background: `${FC_BAND.fx}0c` }}
+                      className={`rounded-md border px-1.5 py-1 ${enabled ? "" : "opacity-45 grayscale"}`}
+                      style={{
+                        borderColor: enabled ? `${FC_BAND.fx}33` : "rgba(255,255,255,0.12)",
+                        background: enabled ? `${FC_BAND.fx}0c` : "rgba(0,0,0,0.35)",
+                      }}
                     >
                       <button
                         type="button"
                         className="w-full truncate text-left text-[9px] font-semibold"
-                        style={{ color: FC_BAND.fx }}
+                        style={{ color: enabled ? FC_BAND.fx : "rgba(255,255,255,0.4)" }}
                         onClick={() => jump(fx.id)}
-                        title={`Open ${fx.label}`}
+                        title={enabled ? `Open ${fx.label}` : `${fx.label} — Asleep`}
                       >
                         {fx.label}
+                        {!enabled && <span className="ml-1 text-[7px] text-white/35">zzz</span>}
                       </button>
                       <div className="mt-0.5 flex items-center justify-between gap-1">
                         <button
@@ -907,10 +911,11 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                           className={`rounded border px-1 text-[7px] font-bold ${
                             enabled
                               ? "border-emerald-400/40 text-emerald-200"
-                              : "border-white/15 text-white/35"
+                              : "border-white/15 text-white/40"
                           }`}
+                          title={enabled ? `Sleep ${fx.label}` : `Wake ${fx.label}`}
                         >
-                          {enabled ? "On" : "Off"}
+                          {enabled ? "On" : "Zzz"}
                         </button>
                         <span className="font-mono text-[8px] text-white/45">{wetPct}%</span>
                       </div>
@@ -1081,7 +1086,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                         return (
                           <div
                             key={mod.id}
-                            className={`relative flex items-center gap-0.5 min-w-0 ${enabled ? "" : "opacity-40"}`}
+                            className={`relative flex items-center gap-0.5 min-w-0 ${enabled ? "" : "opacity-45"}`}
                           >
                             <button
                               type="button"
@@ -1099,15 +1104,28 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                               }}
                               className="min-w-0 flex-1 truncate rounded-md border px-1.5 py-1 text-left text-[9px] font-semibold uppercase tracking-wide transition hover:bg-white/[0.06]"
                               style={{
-                                color: mod.color,
-                                borderColor: focused ? `${mod.color}88` : `${mod.color}28`,
-                                background: focused ? `${mod.color}22` : "transparent",
-                                filter: enabled ? undefined : "grayscale(0.6)",
-                                boxShadow: hot ? `0 0 8px ${mod.color}33` : undefined,
+                                color: enabled ? mod.color : "rgba(255,255,255,0.4)",
+                                borderColor: focused
+                                  ? `${mod.color}88`
+                                  : enabled
+                                    ? `${mod.color}28`
+                                    : "rgba(255,255,255,0.12)",
+                                background: focused
+                                  ? `${mod.color}22`
+                                  : enabled
+                                    ? "transparent"
+                                    : "rgba(0,0,0,0.35)",
+                                filter: enabled ? undefined : "grayscale(0.75)",
+                                boxShadow: hot && enabled ? `0 0 8px ${mod.color}33` : undefined,
                               }}
-                              title={`${mod.title}${mod.subtitle ? ` — ${mod.subtitle}` : ""}${routes ? ` · ${routes} routes` : ""}${locked ? " · LOCKED" : " · MUT eligible"}`}
+                              title={`${mod.title}${mod.subtitle ? ` — ${mod.subtitle}` : ""}${!enabled ? " · ASLEEP" : ""}${routes ? ` · ${routes} routes` : ""}${locked ? " · LOCKED" : " · MUT eligible"}`}
                             >
                               {mod.short}
+                              {!enabled && (
+                                <span className="ml-1 font-mono text-[7px] text-white/35 normal-case tracking-normal">
+                                  zzz
+                                </span>
+                              )}
                               {sceneHint && (
                                 <span className="ml-1 font-mono text-[7px] text-white/40 normal-case tracking-normal">
                                   {sceneHint}
@@ -1141,14 +1159,14 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                                     ? hot
                                       ? "border-emerald-300/55 bg-emerald-400/25 text-emerald-100"
                                       : "border-emerald-400/40 bg-emerald-400/15 text-emerald-200"
-                                    : "border-white/12 bg-black/40 text-white/35 hover:text-white/60"
+                                    : "border-white/15 bg-black/55 text-white/40 hover:text-white/65"
                                 }`}
-                                title={enabled ? `Bypass ${mod.title}` : `Enable ${mod.title}`}
-                                aria-label={`${enabled ? "Disable" : "Enable"} ${mod.title}`}
+                                title={enabled ? `Sleep ${mod.title} (module offline)` : `Wake ${mod.title}`}
+                                aria-label={`${enabled ? "Sleep" : "Wake"} ${mod.title}`}
                                 aria-pressed={enabled}
                                 style={hot && enabled ? { animation: "fire-path-pulse 1.8s ease-in-out infinite" } : undefined}
                               >
-                                {enabled ? "On" : "Off"}
+                                {enabled ? "On" : "Zzz"}
                               </button>
                               <button
                                 type="button"

@@ -293,14 +293,14 @@ export function ChordQuickActions() {
         }
         title={enabled ? "Bypass chord module" : "Engage chord"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );
 }
 
 export function chordStageLabel(on: boolean, enabled: boolean, ivs: number[]): string {
-  if (!enabled) return "Bypass — module offline";
+  if (!enabled) return "Asleep — module offline";
   if (!on) return "Idle — enabled, no activity";
   const n = normalizeChordIvs(ivs).length;
   if (n <= 2) return "Power — active under play";

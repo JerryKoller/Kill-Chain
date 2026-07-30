@@ -249,7 +249,7 @@ export function GlueQuickActions() {
         }
         title={enabled ? "Bypass glue compressor" : "Engage glue"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );

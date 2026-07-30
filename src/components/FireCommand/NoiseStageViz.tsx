@@ -75,7 +75,9 @@ export function NoiseStageViz() {
   const stormMode = useFireCommandStore((s) => s.patch.noiseMode) ?? "bed";
   const density = useFireCommandStore((s) => s.patch.noiseDensity) ?? 0.45;
   const grain = useFireCommandStore((s) => s.patch.noiseGrain) ?? 0.35;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["noise"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
+  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -83,18 +85,18 @@ export function NoiseStageViz() {
   const flashRef = useRef(0);
   const dragRef = useRef<"xy" | "grain" | null>(null);
   const prevKey = useRef("");
-  const st = useRef({ level, color, mode, stormMode, density, grain });
-  st.current = { level, color, mode, stormMode, density, grain };
+  const st = useRef({ level, color, mode, stormMode, density, grain, enabled });
+  st.current = { level, color, mode, stormMode, density, grain, enabled };
 
-  const silent = level < 0.02;
+  const silent = !enabled || level < 0.02;
 
   useEffect(() => {
-    const key = `${level.toFixed(3)}|${color.toFixed(3)}|${mode}|${stormMode}|${density.toFixed(3)}|${grain.toFixed(3)}`;
+    const key = `${enabled ? 1 : 0}|${level.toFixed(3)}|${color.toFixed(3)}|${mode}|${stormMode}|${density.toFixed(3)}|${grain.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [level, color, mode, stormMode, density, grain]);
+  }, [enabled, level, color, mode, stormMode, density, grain]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -111,10 +113,11 @@ export function NoiseStageViz() {
         return;
       }
       // X → color (−1..1), Y → level (1 at top) — particle editor mapping
+      setModuleEnable("noise", true);
       setParam("noiseColor", Math.round((x * 2 - 1) * 1000) / 1000);
       setParam("noiseLevel", Math.round((1 - y) * 1000) / 1000);
     },
-    [setParam],
+    [setParam, setModuleEnable],
   );
 
   const onPointerDown = useCallback(
@@ -388,7 +391,7 @@ export function NoiseStageViz() {
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
         style={{ color: hexAlpha(C_HOT, 0.7) }}
       >
-        {silent ? "SILENT" : `${Math.round(level * 100)}%`}
+        {!enabled ? "ASLEEP" : silent ? "SILENT" : `${Math.round(level * 100)}%`}
       </div>
     </div>
   );

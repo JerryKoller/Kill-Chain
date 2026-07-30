@@ -63,6 +63,7 @@ import { PerfRelationshipStrip } from "./PerfRelationshipStrip";
 import { PerfScopeBadge } from "./PerfScopeBadge";
 import { PerfMidiLearnButton } from "./PerfMidiLearnButton";
 import { levelVoiceState, forgeState, modActivityCount } from "./sourceModuleState";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 import { UnisonStageViz } from "./UnisonStageViz";
 import { AnalogLifeStageViz } from "./AnalogLifeStageViz";
 import { FilterStageViz } from "./FilterStageViz";
@@ -1800,33 +1801,19 @@ function OscAFrameScrub() {
 }
 
 function OscAQuickActions() {
-  const level = useFireCommandStore((s) => s.patch.oscALevel);
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef(0.75);
   const c = FC.oscA;
-  const muted = level < 0.02;
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (muted) setParam("oscALevel", savedRef.current > 0.02 ? savedRef.current : 0.75);
-          else {
-            savedRef.current = level;
-            setParam("oscALevel", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: muted ? "rgba(255,255,255,0.2)" : `${c}66`,
-          color: muted ? "rgba(255,255,255,0.45)" : bandShade(FC.sources, 0.9),
-          background: muted ? "rgba(0,0,0,0.4)" : `${c}28`,
-          boxShadow: muted ? undefined : `0 0 10px ${c}33`,
-        }}
-        title={muted ? "Restore level" : "Mute OSC A"}
-      >
-        {muted ? "Muted" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="osc.a"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.sources, 0.9)}
+        titleOn="Sleep OSC A (same as Signal Path Off)"
+        titleOff="Wake OSC A (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -1860,7 +1847,8 @@ function OscAPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const detune = useFireCommandStore((s) => s.patch.oscADetune);
   const oct = useFireCommandStore((s) => s.patch.oscAOctave);
   const table = useFireCommandStore((s) => s.patch.oscATable);
-  const state = levelVoiceState(level, { role: "prime", wakeHint: "raise Level or unmute" });
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["osc.a"] !== false);
+  const state = levelVoiceState(level, { role: "prime", wakeHint: "wake module or raise Level", enabled });
   const mods = modActivityCount(env, lfo, detune);
 
   return (
@@ -1870,13 +1858,16 @@ function OscAPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="osc.a"
       chipHosted={chipHosted}
       right={<OscATableBrowser />}
+      statusLine={!enabled ? "Asleep" : state.tech === "muted" ? "Silent · level 0" : undefined}
     >
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
         style={{
-          borderColor: `${c}40`,
-          background: `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`,
-          boxShadow: `inset 0 1px 0 ${c}22`,
+          borderColor: enabled && state.tech === "active" ? `${c}40` : `${c}28`,
+          background: enabled && state.tech === "active"
+            ? `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.45), ${c}0c)`,
+          boxShadow: enabled && state.tech === "active" ? `inset 0 1px 0 ${c}22` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -1896,9 +1887,9 @@ function OscAPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div
             className="rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider"
             style={{
-              color: state.tech === "muted" ? "rgba(255,255,255,0.35)" : bandShade(FC.sources, 0.92),
-              background: state.tech === "muted" ? "rgba(0,0,0,0.45)" : `${c}36`,
-              border: `1px solid ${state.tech === "muted" ? "rgba(255,255,255,0.12)" : `${c}70`}`,
+              color: state.tech === "active" ? bandShade(FC.sources, 0.92) : "rgba(255,255,255,0.35)",
+              background: state.tech === "active" ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${state.tech === "active" ? `${c}70` : "rgba(255,255,255,0.12)"}`,
               boxShadow: state.tech === "active" ? `0 0 14px ${c}50` : undefined,
             }}
             title={state.detail}
@@ -2255,13 +2246,10 @@ function OscBDetunePresets() {
 }
 
 function OscBQuickActions() {
-  const level = useFireCommandStore((s) => s.patch.oscBLevel);
   const inherit = useFireCommandStore((s) => s.patch.oscBInherit) ?? "off";
   const phaseLock = useFireCommandStore((s) => s.patch.oscBPhaseLock) ?? false;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef(0.5);
   const c = FC.oscB;
-  const muted = level < 0.02;
   const stampInherit = (mode: OscBInheritMode) => {
     const patch = useFireCommandStore.getState().patch;
     setParam("oscBInherit", mode);
@@ -2377,26 +2365,15 @@ function OscBQuickActions() {
           );
         })}
       </div>
-      <button
-        type="button"
-        onClick={() => {
-          if (muted) setParam("oscBLevel", savedRef.current > 0.02 ? savedRef.current : 0.5);
-          else {
-            savedRef.current = level;
-            setParam("oscBLevel", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: muted ? "rgba(255,255,255,0.2)" : `${c}66`,
-          color: muted ? "rgba(255,255,255,0.45)" : bandShade(FC.sources, 0.88),
-          background: muted ? "rgba(0,0,0,0.4)" : `${c}28`,
-          boxShadow: muted ? undefined : `0 0 10px ${c}33`,
-        }}
-        title={muted ? "Restore level" : "Mute OSC B"}
-      >
-        {muted ? "Muted" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="osc.b"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.sources, 0.88)}
+        titleOn="Sleep OSC B (same as Signal Path Off)"
+        titleOff="Wake OSC B (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -2434,7 +2411,8 @@ function OscBPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const detune = useFireCommandStore((s) => s.patch.oscBDetune);
   const oct = useFireCommandStore((s) => s.patch.oscBOctave);
   const table = useFireCommandStore((s) => s.patch.oscBTable);
-  const state = levelVoiceState(level, { role: "twin", wakeHint: "raise Level or unmute" });
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["osc.b"] !== false);
+  const state = levelVoiceState(level, { role: "twin", wakeHint: "wake module or raise Level", enabled });
   const mods = modActivityCount(env, lfo, detune);
 
   return (
@@ -2444,13 +2422,16 @@ function OscBPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="osc.b"
       chipHosted={chipHosted}
       right={<OscBTableBrowser />}
+      statusLine={!enabled ? "Asleep" : state.tech === "muted" ? "Silent · level 0" : undefined}
     >
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
         style={{
-          borderColor: `${c}40`,
-          background: `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`,
-          boxShadow: `inset 0 1px 0 ${c}22`,
+          borderColor: enabled && state.tech === "active" ? `${c}40` : `${c}28`,
+          background: enabled && state.tech === "active"
+            ? `linear-gradient(105deg, ${c}22 0%, ${c}0a 42%, transparent 70%)`
+            : `linear-gradient(180deg, rgba(0,0,0,0.45), ${c}0c)`,
+          boxShadow: enabled && state.tech === "active" ? `inset 0 1px 0 ${c}22` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -2470,9 +2451,9 @@ function OscBPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div
             className="rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider"
             style={{
-              color: state.tech === "muted" ? "rgba(255,255,255,0.35)" : bandShade(FC.sources, 0.88),
-              background: state.tech === "muted" ? "rgba(0,0,0,0.45)" : `${c}36`,
-              border: `1px solid ${state.tech === "muted" ? "rgba(255,255,255,0.12)" : `${c}70`}`,
+              color: state.tech === "active" ? bandShade(FC.sources, 0.88) : "rgba(255,255,255,0.35)",
+              background: state.tech === "active" ? `${c}36` : "rgba(0,0,0,0.45)",
+              border: `1px solid ${state.tech === "active" ? `${c}70` : "rgba(255,255,255,0.12)"}`,
               boxShadow: state.tech === "active" ? `0 0 14px ${c}50` : undefined,
             }}
             title={state.detail}
@@ -2801,35 +2782,19 @@ function OscCDepthPresets() {
 }
 
 function OscCQuickActions() {
-  const level = useFireCommandStore((s) => s.patch.oscCLevel);
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef(0.4);
   const c = FC.oscC;
-  const dormant = level < 0.02;
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (dormant) {
-            setParam("oscCLevel", savedRef.current > 0.02 ? savedRef.current : 0.4);
-            setParam("oscCOctave", -1);
-          } else {
-            savedRef.current = level;
-            setParam("oscCLevel", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: dormant ? `${c}88` : `${c}66`,
-          color: dormant ? bandShade(FC.sources, 0.9) : bandShade(FC.sources, 0.75),
-          background: dormant ? `${c}40` : `${c}22`,
-          boxShadow: dormant ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={dormant ? "Wake Depth Voice (−1 oct @ 40%)" : "Sleep / mute OSC C"}
-      >
-        {dormant ? "Wake" : "Sleep"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="osc.c"
+        color={c}
+        onLabel="Sleep"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.sources, 0.75)}
+        titleOn="Sleep OSC C (same as Signal Path Off)"
+        titleOff="Wake OSC C (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -2894,8 +2859,9 @@ function OscCPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const detune = useFireCommandStore((s) => s.patch.oscCDetune);
   const oct = useFireCommandStore((s) => s.patch.oscCOctave);
   const table = useFireCommandStore((s) => s.patch.oscCTable);
-  const dormant = level < 0.02;
-  const state = levelVoiceState(level, { role: "depth", wakeHint: "press Wake or raise Level" });
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["osc.c"] !== false);
+  const dormant = !enabled || level < 0.02;
+  const state = levelVoiceState(level, { role: "depth", wakeHint: "press Wake or raise Level", enabled });
   const mods = modActivityCount(env, lfo, detune);
 
   return (
@@ -2905,6 +2871,7 @@ function OscCPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="osc.c"
       chipHosted={chipHosted}
       right={<OscCTableBrowser />}
+      statusLine={!enabled ? "Asleep" : level < 0.02 ? "Silent · level 0" : undefined}
     >
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
@@ -3058,38 +3025,19 @@ function WarpCharacterStrip() {
 function WarpQuickActions() {
   const stretch = useFireCommandStore((s) => s.patch.warpStretch) ?? 0;
   const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
-  const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ stretch: 0.35, tilt: -0.15, comb: 0.2 });
   const c = FC.warp;
-  const idle = Math.abs(stretch) < 0.01 && Math.abs(tilt) < 0.01 && comb < 0.01;
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("warpStretch", savedRef.current.stretch);
-            setParam("warpTilt", savedRef.current.tilt);
-            setParam("warpComb", savedRef.current.comb);
-          } else {
-            savedRef.current = { stretch, tilt, comb };
-            setParam("warpStretch", 0);
-            setParam("warpTilt", 0);
-            setParam("warpComb", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.sources, 0.9) : bandShade(FC.sources, 0.75),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore last forge" : "Bypass warp (neutral)"}
-      >
-        {idle ? "Forge" : "Bypass"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fire.sec.warp"
+        color={c}
+        onLabel="Bypass"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.sources, 0.75)}
+        titleOn="Sleep Warp (same as Signal Path Off)"
+        titleOff="Wake Warp (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -3551,7 +3499,9 @@ const NOISE_COLOR_PRESETS = [
 function NoiseCharacterStrip() {
   const level = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
   const color = useFireCommandStore((s) => s.patch.noiseColor) ?? 0;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["noise"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
+  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
   const c = FC.noise;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
@@ -3559,12 +3509,13 @@ function NoiseCharacterStrip() {
         Bed
       </span>
       {NOISE_COLOR_PRESETS.map((p) => {
-        const on = Math.abs(color - p.color) < 0.08 && level >= 0.02 && Math.abs(level - p.level) < 0.15;
+        const on = enabled && Math.abs(color - p.color) < 0.08 && level >= 0.02 && Math.abs(level - p.level) < 0.15;
         return (
           <button
             key={p.id}
             type="button"
             onClick={() => {
+              setModuleEnable("noise", true);
               setParam("noiseColor", p.color);
               if (level < 0.02) setParam("noiseLevel", p.level);
               else setParam("noiseLevel", Math.max(level, p.level * 0.6));
@@ -3635,39 +3586,22 @@ function NoiseGritModes() {
 }
 
 function NoiseQuickActions() {
-  const level = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
-  const color = useFireCommandStore((s) => s.patch.noiseColor) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ level: 0.28, color: 0 });
   const c = FC.noise;
-  const silent = level < 0.02;
   return (
     <div className="flex items-center gap-1">
+      <ModuleEnableToggle
+        moduleId="noise"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.sources, 0.78)}
+        titleOn="Sleep Noise (same as Signal Path Off)"
+        titleOff="Wake Noise (same as Signal Path On)"
+      />
       <button
         type="button"
-        onClick={() => {
-          if (silent) {
-            setParam("noiseLevel", savedRef.current.level > 0.02 ? savedRef.current.level : 0.28);
-            setParam("noiseColor", savedRef.current.color);
-          } else {
-            savedRef.current = { level, color };
-            setParam("noiseLevel", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: silent ? `${c}88` : `${c}66`,
-          color: silent ? bandShade(FC.sources, 0.92) : bandShade(FC.sources, 0.78),
-          background: silent ? `${c}40` : `${c}22`,
-          boxShadow: silent ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={silent ? "Raise noise bed" : "Silence noise bed"}
-      >
-        {silent ? "Storm" : "Mute"}
-      </button>
-      <button
-        type="button"
-        onClick={() => setParam("noiseColor", -color)}
+        onClick={() => setParam("noiseColor", -(useFireCommandStore.getState().patch.noiseColor ?? 0))}
         className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
         style={{ borderColor: `${c}44`, color: `${c}bb`, background: `${c}14` }}
         title="Flip color tilt (dark ↔ bright)"
@@ -3698,7 +3632,9 @@ function NoisePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const level = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
   const color = useFireCommandStore((s) => s.patch.noiseColor) ?? 0;
   const stormMode = useFireCommandStore((s) => s.patch.noiseMode) ?? "bed";
-  const silent = level < 0.02;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["noise"] !== false);
+  const silent = !enabled || level < 0.02;
+  const state = levelVoiceState(level, { role: "storm", wakeHint: "wake module or raise Level", enabled });
   const tiltLabel = color < -0.1 ? "Dark LP" : color > 0.1 ? "Bright HP" : "Flat";
   const setParam = useFireCommandStore((s) => s.setParam);
   const modes: { id: NoiseMode; label: string; title: string }[] = [
@@ -3714,6 +3650,7 @@ function NoisePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="noise"
       chipHosted={chipHosted}
       defaultCollapsed
+      statusLine={!enabled ? "Asleep" : level < 0.02 ? "Silent · level 0" : undefined}
     >
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
@@ -3732,7 +3669,7 @@ function NoisePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.sources, 0.88) }}>
             Grain Storm
             <span className="ml-2 font-mono text-[11px] font-normal text-white/45">
-              {silent ? "muted" : `${tiltLabel} · ${Math.round(level * 100)}%`}
+              {!enabled ? "asleep" : level < 0.02 ? "muted" : `${tiltLabel} · ${Math.round(level * 100)}%`}
             </span>
           </div>
         </div>
@@ -3746,9 +3683,9 @@ function NoisePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               border: `1px solid ${silent ? "rgba(255,255,255,0.12)" : `${c}70`}`,
               boxShadow: !silent ? `0 0 14px ${c}50` : undefined,
             }}
-            title={levelVoiceState(level, { role: "storm" }).detail}
+            title={state.detail}
           >
-            {silent ? "MUTED" : stormMode.toUpperCase()}
+            {!enabled ? "ASLEEP" : level < 0.02 ? "MUTED" : stormMode.toUpperCase()}
           </div>
         </div>
       </div>
@@ -3976,36 +3913,19 @@ function SubCharacterStrip() {
 }
 
 function SubQuickActions() {
-  const level = useFireCommandStore((s) => s.patch.subLevel) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef(0.4);
   const c = FC.sub;
-  const silent = level < 0.02;
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (silent) {
-            setParam("subLevel", savedRef.current > 0.02 ? savedRef.current : 0.4);
-            setParam("subOctave", -1);
-            setParam("subWave", "sine");
-          } else {
-            savedRef.current = level;
-            setParam("subLevel", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: silent ? `${c}88` : `${c}66`,
-          color: silent ? bandShade(FC.sources, 0.94) : bandShade(FC.sources, 0.8),
-          background: silent ? `${c}40` : `${c}22`,
-          boxShadow: silent ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={silent ? "Wake tectonic foundation (−1 sine)" : "Mute sub"}
-      >
-        {silent ? "Wake" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="sub"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.sources, 0.8)}
+        titleOn="Sleep Sub (same as Signal Path Off)"
+        titleOff="Wake Sub (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -4030,7 +3950,8 @@ function SubPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const level = useFireCommandStore((s) => s.patch.subLevel) ?? 0;
   const oct = useFireCommandStore((s) => s.patch.subOctave ?? -1);
   const wave = useFireCommandStore((s) => s.patch.subWave) ?? "sine";
-  const silent = level < 0.02;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["sub"] !== false);
+  const silent = !enabled || level < 0.02;
 
   return (
     <Section
@@ -4039,6 +3960,7 @@ function SubPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="sub"
       chipHosted={chipHosted}
       defaultCollapsed
+      statusLine={!enabled ? "Asleep" : level < 0.02 ? "Silent · level 0" : undefined}
       right={
         <FSeg<SubWave>
           paramKey="subWave"
@@ -4084,7 +4006,7 @@ function SubPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               boxShadow: !silent ? `0 0 14px ${c}50` : undefined,
             }}
           >
-            {silent ? "Off" : `${Math.round(level * 100)}%`}
+            { !enabled ? "ASLEEP" : level < 0.02 ? "Off" : `${Math.round(level * 100)}%`}
           </div>
         </div>
       </div>
@@ -5103,48 +5025,19 @@ function FiltCutoffStrip() {
 }
 
 function FiltQuickActions() {
-  const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
-  const cut = useFireCommandStore((s) => s.patch.filterCutoff) ?? 2600;
-  const reso = useFireCommandStore((s) => s.patch.filterResonance) ?? 0.7;
-  const env = useFireCommandStore((s) => s.patch.filterEnvAmount) ?? 0;
-  const key = useFireCommandStore((s) => s.patch.filterKeyTrack) ?? 0.3;
-  const sat = useFireCommandStore((s) => s.patch.filterDrive) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ type: "lowpass" as FireFilterType, cut: 1800, reso: 1.2, env: 0.35, key: 0.35, sat: 0.15 });
   const c = FC.filter;
-  const open = cut > 9000 && reso < 1.5 && Math.abs(env) < 0.05 && sat < 0.05;
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (open) {
-            setParam("filterType", savedRef.current.type);
-            setParam("filterCutoff", savedRef.current.cut);
-            setParam("filterResonance", savedRef.current.reso);
-            setParam("filterEnvAmount", savedRef.current.env);
-            setParam("filterKeyTrack", savedRef.current.key);
-            setParam("filterDrive", savedRef.current.sat);
-          } else {
-            savedRef.current = { type, cut, reso, env, key, sat };
-            setParam("filterType", "lowpass");
-            setParam("filterCutoff", 12000);
-            setParam("filterResonance", 0.5);
-            setParam("filterEnvAmount", 0);
-            setParam("filterDrive", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: open ? `${c}88` : `${c}66`,
-          color: open ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
-          background: open ? `${c}40` : `${c}22`,
-          boxShadow: open ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={open ? "Restore sculpted edge" : "Bypass to open LP"}
-      >
-        {open ? "Sculpt" : "Open"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="filter"
+        color={c}
+        onLabel="Sleep"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.tone, 0.75)}
+        titleOn="Sleep Filter (same as Signal Path Off)"
+        titleOff="Wake Filter (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -5739,40 +5632,18 @@ function ModQuickActions() {
   const envB = useFireCommandStore((s) => s.patch.oscBEnv) ?? 0;
   const envC = useFireCommandStore((s) => s.patch.oscCEnv) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ a: 0.02, d: 0.5, s: 0.3, r: 0.4, ea: 0.4, eb: 0.15, ec: 0 });
   const c = FC.envMod;
-  const idle = Math.abs(envA) < 0.02 && Math.abs(envB) < 0.02 && Math.abs(envC) < 0.02;
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("modAttack", savedRef.current.a);
-            setParam("modDecay", savedRef.current.d);
-            setParam("modSustain", savedRef.current.s);
-            setParam("modRelease", savedRef.current.r);
-            setParam("oscAEnv", savedRef.current.ea);
-            setParam("oscBEnv", savedRef.current.eb);
-            setParam("oscCEnv", savedRef.current.ec);
-          } else {
-            savedRef.current = { a, d, s: sus, r, ea: envA, eb: envB, ec: envC };
-            setParam("oscAEnv", 0);
-            setParam("oscBEnv", 0);
-            setParam("oscCEnv", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.tone, 0.9) : bandShade(FC.tone, 0.75),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore morph routing" : "Mute all Env→WT amounts"}
-      >
-        {idle ? "Weave" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="env.mod"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.tone, 0.75)}
+        titleOn="Sleep env.mod (same as Signal Path Off)"
+        titleOff="Wake env.mod (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -6708,42 +6579,18 @@ function Lfo1QuickActions() {
   const lfoB = useFireCommandStore((s) => s.patch.oscBLfo) ?? 0;
   const lfoC = useFireCommandStore((s) => s.patch.oscCLfo) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ wave: "sine" as LfoWave, rate: 5, depth: 0.35, dest: "volume" as LfoDest, a: 0, b: 0, c: 0 });
   const c = FC.lfo;
-  const idle = depth < 0.02 && dest === "off" && Math.abs(lfoA) < 0.02 && Math.abs(lfoB) < 0.02 && Math.abs(lfoC) < 0.02;
   return (
     <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("lfo1Wave", savedRef.current.wave);
-            setParam("lfo1Rate", savedRef.current.rate);
-            setParam("lfo1Depth", savedRef.current.depth);
-            setParam("lfo1Dest", savedRef.current.dest);
-            setParam("oscALfo", savedRef.current.a);
-            setParam("oscBLfo", savedRef.current.b);
-            setParam("oscCLfo", savedRef.current.c);
-          } else {
-            savedRef.current = { wave, rate, depth, dest, a: lfoA, b: lfoB, c: lfoC };
-            setParam("lfo1Depth", 0);
-            setParam("lfo1Dest", "off");
-            setParam("oscALfo", 0);
-            setParam("oscBLfo", 0);
-            setParam("oscCLfo", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.mod, 0.92) : bandShade(FC.mod, 0.75),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore aurora" : "Mute depth + dest + WT"}
-      >
-        {idle ? "Wake" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="lfo.1"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.mod, 0.78)}
+        titleOn="Sleep lfo.1 (same as Signal Path Off)"
+        titleOff="Wake lfo.1 (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -7304,36 +7151,18 @@ function Lfo2QuickActions() {
   const depth1 = useFireCommandStore((s) => s.patch.lfo1Depth) ?? 0;
   const dest1 = useFireCommandStore((s) => s.patch.lfo1Dest) ?? "off";
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ wave: "sine" as LfoWave, rate: 0.5, depth: 0.35, dest: "pan" as LfoDest });
   const c = FC.lfo2;
-  const idle = depth < 0.02 && dest === "off";
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("lfo2Wave", savedRef.current.wave);
-            setParam("lfo2Rate", savedRef.current.rate);
-            setParam("lfo2Depth", savedRef.current.depth);
-            setParam("lfo2Dest", savedRef.current.dest);
-          } else {
-            savedRef.current = { wave, rate, depth, dest };
-            setParam("lfo2Depth", 0);
-            setParam("lfo2Dest", "off");
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.mod, 0.94) : bandShade(FC.mod, 0.78),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore orbit" : "Mute depth + dest"}
-      >
-        {idle ? "Wake" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="lfo.2"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.mod, 0.78)}
+        titleOn="Sleep lfo.2 (same as Signal Path Off)"
+        titleOff="Wake lfo.2 (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -7693,38 +7522,18 @@ function FmQuickActions() {
   const ring = useFireCommandStore((s) => s.patch.ringAmount) ?? 0;
   const hz = useFireCommandStore((s) => s.patch.ringFreq) ?? 220;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ amt: 0.45, ratio: 3.5, ba: 0, ring: 0, hz: 220 });
   const c = FC.fm;
-  const idle = amt < 0.02 && ba < 0.02 && ring < 0.02;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("fmAmount", savedRef.current.amt);
-            setParam("fmRatio", savedRef.current.ratio);
-            setParam("fmBtoA", savedRef.current.ba);
-            setParam("ringAmount", savedRef.current.ring);
-            setParam("ringFreq", savedRef.current.hz);
-          } else {
-            savedRef.current = { amt, ratio, ba, ring, hz };
-            setParam("fmAmount", 0);
-            setParam("fmBtoA", 0);
-            setParam("ringAmount", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.mod, 0.94) : bandShade(FC.mod, 0.78),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore forge" : "Mute FM / B→A / Ring"}
-      >
-        {idle ? "Wake" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fm"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.mod, 0.78)}
+        titleOn="Sleep fm (same as Signal Path Off)"
+        titleOff="Wake fm (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -8112,63 +7921,18 @@ function FmRackQuickActions() {
   const vr = useFireCommandStore((s) => s.patch.vectorRate) ?? 0;
   const vd = useFireCommandStore((s) => s.patch.vectorDepth) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({
-    engine: "ops4" as FmEngineMode,
-    alg: 3,
-    fb: 0.2,
-    ops: [1, 0.8, 0.6, 0.4],
-    ratios: [1, 2, 3],
-    vr: 0.4,
-    vd: 0.5,
-  });
   const c = FC.fmRack;
-  const idle = engine === "classic" || (fb < 0.02 && vd < 0.02 && op2 < 0.05 && op3 < 0.05 && op4 < 0.05);
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            const s = savedRef.current;
-            setParam("fmEngine", s.engine);
-            setParam("fmAlg", s.alg);
-            setParam("fmFeedback", s.fb);
-            setParam("fmOp1Level", s.ops[0]!);
-            setParam("fmOp2Level", s.ops[1]!);
-            setParam("fmOp3Level", s.ops[2]!);
-            setParam("fmOp4Level", s.ops[3]!);
-            setParam("fmOp2Ratio", s.ratios[0]!);
-            setParam("fmOp3Ratio", s.ratios[1]!);
-            setParam("fmOp4Ratio", s.ratios[2]!);
-            setParam("vectorRate", s.vr);
-            setParam("vectorDepth", s.vd);
-          } else {
-            savedRef.current = {
-              engine: engine as FmEngineMode,
-              alg,
-              fb,
-              ops: [op1, op2, op3, op4],
-              ratios: [r2, r3, r4],
-              vr,
-              vd,
-            };
-            setParam("fmEngine", "classic");
-            setParam("fmFeedback", 0);
-            setParam("vectorDepth", 0);
-            setParam("vectorRate", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.mod, 0.96) : bandShade(FC.mod, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore lattice" : "Park rack (2-op)"}
-      >
-        {idle ? "Arm" : "Park"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fm.rack"
+        color={c}
+        onLabel="Park"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.mod, 0.8)}
+        titleOn="Sleep fm.rack (same as Signal Path Off)"
+        titleOff="Wake fm.rack (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -8541,36 +8305,18 @@ function PitchQuickActions() {
   const glide = useFireCommandStore((s) => s.patch.glide) ?? 0;
   const mono = useFireCommandStore((s) => s.patch.mono) ?? false;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ amt: 12, time: 0.12, glide: 0.4, mono: true });
   const c = FC.pitch;
-  const idle = Math.abs(amt) < 1 && glide < 0.02;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("pitchEnvAmount", savedRef.current.amt);
-            setParam("pitchEnvTime", savedRef.current.time);
-            setParam("glide", savedRef.current.glide);
-            setParam("mono", savedRef.current.mono);
-          } else {
-            savedRef.current = { amt, time, glide, mono };
-            setParam("pitchEnvAmount", 0);
-            setParam("glide", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.mod, 0.96) : bandShade(FC.mod, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore horizon" : "Mute env + glide"}
-      >
-        {idle ? "Wake" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="pitch"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.mod, 0.8)}
+        titleOn="Sleep pitch (same as Signal Path Off)"
+        titleOff="Wake pitch (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => setParam("mono", !mono)}
@@ -9943,36 +9689,18 @@ function ReverbQuickActions() {
   const diff = useFireCommandStore((s) => s.patch.reverbDiffusion) ?? 0.7;
   const mix = useFireCommandStore((s) => s.patch.reverbMix) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ size: 2.2, damp: 0.4, pre: 0.04, diff: 0.75, mix: 0.45 });
   const c = FC.reverb;
-  const idle = mix < 0.03;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("reverbSize", savedRef.current.size);
-            setParam("reverbDamp", savedRef.current.damp);
-            setParam("reverbPredelay", savedRef.current.pre);
-            setParam("reverbDiffusion", savedRef.current.diff);
-            setParam("reverbMix", savedRef.current.mix);
-          } else {
-            savedRef.current = { size, damp, pre, diff, mix };
-            setParam("reverbMix", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore vault" : "Bypass mix"}
-      >
-        {idle ? "Bloom" : "Dry"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fx.reverb"
+        color={c}
+        onLabel="Dry"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.fx, 0.8)}
+        titleOn="Sleep fx.reverb (same as Signal Path Off)"
+        titleOff="Wake fx.reverb (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -10331,34 +10059,18 @@ function DelayQuickActions() {
   const fbk = useFireCommandStore((s) => s.patch.delayFeedback) ?? 0.3;
   const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ time: 0.28, fbk: 0.4, mix: 0.45 });
   const c = FC.delay;
-  const idle = mix < 0.03;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("delayTime", savedRef.current.time);
-            setParam("delayFeedback", savedRef.current.fbk);
-            setParam("delayMix", savedRef.current.mix);
-          } else {
-            savedRef.current = { time, fbk, mix };
-            setParam("delayMix", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore cascade" : "Bypass mix"}
-      >
-        {idle ? "Bounce" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fx.delay"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.fx, 0.8)}
+        titleOn="Sleep fx.delay (same as Signal Path Off)"
+        titleOff="Wake fx.delay (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -10735,34 +10447,18 @@ function ChorusQuickActions() {
   const depth = useFireCommandStore((s) => s.patch.chorusDepth) ?? 0.4;
   const mix = useFireCommandStore((s) => s.patch.chorusMix) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ rate: 0.6, depth: 0.45, mix: 0.5 });
   const c = FC.chorus;
-  const idle = mix < 0.03;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("chorusRate", savedRef.current.rate);
-            setParam("chorusDepth", savedRef.current.depth);
-            setParam("chorusMix", savedRef.current.mix);
-          } else {
-            savedRef.current = { rate, depth, mix };
-            setParam("chorusMix", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore ensemble" : "Bypass mix"}
-      >
-        {idle ? "Bloom" : "Mute"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fx.chorus"
+        color={c}
+        onLabel="Mute"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.fx, 0.8)}
+        titleOn="Sleep fx.chorus (same as Signal Path Off)"
+        titleOff="Wake fx.chorus (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -11116,34 +10812,18 @@ function PhaserQuickActions() {
   const depth = useFireCommandStore((s) => s.patch.phaserDepth) ?? 0.6;
   const mix = useFireCommandStore((s) => s.patch.phaserMix) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ rate: 0.4, depth: 0.65, mix: 0.55 });
   const c = FC.phaser;
-  const idle = mix < 0.03;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("phaserRate", savedRef.current.rate);
-            setParam("phaserDepth", savedRef.current.depth);
-            setParam("phaserMix", savedRef.current.mix);
-          } else {
-            savedRef.current = { rate, depth, mix };
-            setParam("phaserMix", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore veil" : "Bypass mix"}
-      >
-        {idle ? "Unveil" : "Veil"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fx.phaser"
+        color={c}
+        onLabel="Veil"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.fx, 0.8)}
+        titleOn="Sleep fx.phaser (same as Signal Path Off)"
+        titleOff="Wake fx.phaser (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -11575,33 +11255,17 @@ function AgeQuickActions() {
     dust: 0.25, hiss: 0.2, hum: 0.15, print: 0.1,
   });
   const c = FC.vintage;
-  const idle = Math.max(cass, wow, vhs, bbd, dust, hiss, hum, print, srr, comp, Math.abs(speed), bit !== "off" ? 0.3 : 0) < 0.04;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, savedRef.current);
-          } else {
-            savedRef.current = {
-              id: "saved", label: "Saved",
-              cass, speed, wow, vhs, bit, srr, bbd, comp, dust, hiss, hum, print,
-            };
-            ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, AGE_CHARS[0]!);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore archive" : "Clear aging"}
-      >
-        {idle ? "Awaken" : "Sleep"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fx.vintage"
+        color={c}
+        onLabel="Sleep"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.fx, 0.8)}
+        titleOn="Sleep fx.vintage (same as Signal Path Off)"
+        titleOff="Wake fx.vintage (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -12048,36 +11712,18 @@ function DriveQuickActions() {
   const crush = useFireCommandStore((s) => s.patch.crush) ?? 0;
   const tone = useFireCommandStore((s) => s.patch.tone) ?? 15000;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ drive: 0.45, mode: "tube" as DriveMode, crush: 0.1, tone: 9000 });
   const c = FC.drive;
-  const idle = drive < 0.03 && crush < 0.03;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("drive", savedRef.current.drive);
-            setParam("driveMode", savedRef.current.mode);
-            setParam("crush", savedRef.current.crush);
-            setParam("tone", savedRef.current.tone);
-          } else {
-            savedRef.current = { drive, mode, crush, tone };
-            setParam("drive", 0);
-            setParam("crush", 0);
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Restore last forge" : "Bypass drive + crush"}
-      >
-        {idle ? "Ignite" : "Cool"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fx.drive"
+        color={c}
+        onLabel="Cool"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.fx, 0.8)}
+        titleOn="Sleep fx.drive (same as Signal Path Off)"
+        titleOff="Wake fx.drive (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -12372,7 +12018,7 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               boxShadow: live ? `0 0 14px ${c}50` : undefined,
             }}
           >
-            {!enabled ? "Bypass — module offline" : macroStageLabel(vals)}
+            {!enabled ? "Asleep — module offline" : macroStageLabel(vals)}
           </div>
         </div>
       </div>
@@ -15185,34 +14831,18 @@ function SpectralQuickActions() {
   const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
   const mix = useFireCommandStore((s) => s.patch.spectralMix) ?? 0.5;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const savedRef = useRef({ mode: "freeze" as SpectralMode, amount: 0.8, mix: 0.65 });
   const c = FC.spectral;
-  const idle = mode === "off";
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
-      <button
-        type="button"
-        onClick={() => {
-          if (idle) {
-            setParam("spectralMode", savedRef.current.mode === "off" ? "freeze" : savedRef.current.mode);
-            setParam("spectralAmount", savedRef.current.amount);
-            setParam("spectralMix", savedRef.current.mix);
-          } else {
-            savedRef.current = { mode, amount, mix };
-            setParam("spectralMode", "off");
-          }
-        }}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={{
-          borderColor: idle ? `${c}88` : `${c}66`,
-          color: idle ? bandShade(FC.fx, 0.96) : bandShade(FC.fx, 0.8),
-          background: idle ? `${c}40` : `${c}22`,
-          boxShadow: idle ? `0 0 14px ${c}55` : `0 0 8px ${c}28`,
-        }}
-        title={idle ? "Arm lattice" : "Bypass spectral"}
-      >
-        {idle ? "Arm" : "Park"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="fx.spectral"
+        color={c}
+        onLabel="Sleep"
+        offLabel="Wake"
+        onTextColor={bandShade(FC.fx, 0.8)}
+        titleOn="Sleep fx.spectral (same as Signal Path Off)"
+        titleOff="Wake fx.spectral (same as Signal Path On)"
+      />
       <button
         type="button"
         onClick={() => {
@@ -15597,6 +15227,9 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
   const toggleModulePin = useFireCommandStore((s) => s.toggleModulePin);
   const toggleModuleLock = useFireCommandStore((s) => s.toggleModuleLock);
   const locked = useFireCommandStore((s) => !!(collapseKey && s.moduleLocks[collapseKey]));
+  const moduleAwake = useFireCommandStore((s) =>
+    !collapseKey ? true : s.patch.moduleEnable?.[collapseKey] !== false,
+  );
   const atlas = collapseKey ? FIRE_MODULE_BY_ID.get(collapseKey) : undefined;
   const labelMode = useFireCommandStore((s) => s.labelMode);
   useFireBandRegister(collapseKey, title, color, collapsed, toggle, !!chipHosted && !!collapseKey);
@@ -15649,11 +15282,13 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
     atlas?.subtitle && atlas.subtitle !== atlas.short && atlas.subtitle !== atlas.title
       ? atlas.subtitle
       : null;
+  const asleepStatus = !moduleAwake ? "Asleep — wake on Signal Path or Sleep/Mute" : null;
 
   return (
     <GlassPanel
-      className={`p-2.5 ${className ?? ""}`}
+      className={`p-2.5 transition-[opacity,filter] ${!moduleAwake ? "opacity-[0.58] saturate-[0.35]" : ""} ${className ?? ""}`}
       data-fire-module={collapseKey || undefined}
+      data-fire-asleep={!moduleAwake ? "1" : undefined}
     >
       <div className={`flex items-center justify-between gap-2 min-w-0 ${open ? "mb-2" : ""}`}>
         {collapseKey ? (
@@ -15663,8 +15298,21 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
             className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 min-w-0"
             title={collapsed ? "Expand section" : "Collapse section"}
           >
-            <CollapseToggle collapsed={!open} color={color} />
-            <span className="fc-text-primary font-semibold uppercase tracking-[0.18em] truncate" style={{ color }}>{displayTitle}</span>
+            <CollapseToggle collapsed={!open} color={moduleAwake ? color : "rgba(255,255,255,0.35)"} />
+            <span
+              className="fc-text-primary font-semibold uppercase tracking-[0.18em] truncate"
+              style={{ color: moduleAwake ? color : "rgba(255,255,255,0.42)" }}
+            >
+              {displayTitle}
+            </span>
+            {!moduleAwake && (
+              <span
+                className="shrink-0 rounded border border-white/15 bg-black/55 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-white/45"
+                title="Module offline — same as Signal Path Off"
+              >
+                Asleep
+              </span>
+            )}
             {locked && <span className="fc-lock-badge" title="Protected from Random Armory / mutation">LOCK</span>}
           </button>
         ) : (
@@ -15706,9 +15354,9 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
           {open && right ? <div className="max-w-[55%] overflow-x-auto">{right}</div> : null}
         </div>
       </div>
-      {!open && (statusLine || subtitle) && (
+      {!open && (asleepStatus || statusLine || subtitle) && (
         <div className="fc-text-secondary mt-1 truncate opacity-80">
-          {statusLine ?? subtitle}
+          {asleepStatus ?? statusLine ?? subtitle}
         </div>
       )}
       {open && children}

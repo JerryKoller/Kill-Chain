@@ -233,7 +233,7 @@ export function AirQuickActions() {
         }
         title={enabled ? "Bypass air shelves" : "Engage air"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );

@@ -61,6 +61,7 @@ export function useFireBandRegister(
 }
 
 function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
+  const moduleEnable = useFireCommandStore((s) => s.patch.moduleEnable);
   if (modules.length === 0) return null;
   // Prefer even atlas-width grids (7 modules → 7 equal chips) so every band
   // reads as a symmetric row rather than a ragged 3× wrap.
@@ -76,29 +77,43 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
       className="mb-2 grid gap-1.5"
       style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
     >
-      {modules.map((m) => (
-        <button
-          key={m.id}
-          type="button"
-          onClick={m.toggle}
-          className="flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-          style={{
-            borderColor: `${m.color}44`,
-            background: `linear-gradient(160deg, ${m.color}18, transparent)`,
-            boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 12px ${m.color}14`,
-          }}
-          title={`Expand ${m.title}`}
-          aria-expanded={false}
-        >
-          <CollapseToggle collapsed color={m.color} />
-          <span
-            className="text-[10px] font-semibold uppercase tracking-[0.16em] truncate"
-            style={{ color: m.color }}
+      {modules.map((m) => {
+        const awake = moduleEnable?.[m.id] !== false;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={m.toggle}
+            className="relative flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            style={{
+              borderColor: awake ? `${m.color}44` : "rgba(255,255,255,0.12)",
+              background: awake
+                ? `linear-gradient(160deg, ${m.color}18, transparent)`
+                : "linear-gradient(160deg, rgba(0,0,0,0.45), transparent)",
+              boxShadow: awake
+                ? `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 12px ${m.color}14`
+                : undefined,
+              opacity: awake ? 1 : 0.55,
+              filter: awake ? undefined : "grayscale(0.7)",
+            }}
+            title={awake ? `Expand ${m.title}` : `${m.title} — Asleep (Signal Path Off)`}
+            aria-expanded={false}
           >
-            {m.title}
-          </span>
-        </button>
-      ))}
+            <CollapseToggle collapsed color={awake ? m.color : "rgba(255,255,255,0.35)"} />
+            <span
+              className="text-[10px] font-semibold uppercase tracking-[0.16em] truncate"
+              style={{ color: awake ? m.color : "rgba(255,255,255,0.4)" }}
+            >
+              {m.title}
+            </span>
+            {!awake && (
+              <span className="absolute right-1 top-1 rounded border border-white/15 bg-black/55 px-1 py-px text-[7px] font-black uppercase tracking-wider text-white/45">
+                Zzz
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

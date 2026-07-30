@@ -260,7 +260,7 @@ export function MacroQuickActions() {
         }
         title={enabled ? "Bypass macros (matrix reads 0)" : "Engage macros"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );

@@ -269,7 +269,7 @@ export function HarmQuickActions() {
         }
         title={enabled ? "Bypass harmony" : "Engage harmony"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );
@@ -300,7 +300,7 @@ export function HarmScaleBadge() {
 }
 
 export function harmStageLabel(mode: HarmonyMode, enabled: boolean, level: number): string {
-  if (!enabled) return "Bypass — module offline";
+  if (!enabled) return "Asleep — module offline";
   if (mode === "off") return "Silent — wet level at zero";
   if (level < 0.08) return "Whisper — wet level at zero";
   if (mode === "triad" && level > 0.7) return "Choir — active under play";

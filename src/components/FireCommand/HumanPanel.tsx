@@ -300,14 +300,14 @@ export function HumanQuickActions() {
         }
         title={enabled ? "Bypass humanize" : "Engage humanize"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );
 }
 
 export function humanStageLabel(on: boolean, enabled: boolean, timing: number, vel: number): string {
-  if (!enabled) return "Bypass — module offline";
+  if (!enabled) return "Asleep — module offline";
   if (!on || (timing < 0.03 && vel < 0.03)) return "Grid — humanize bypassed";
   const hit = humanCharMatch(timing, vel, on);
   if (hit) return `${hit.label} — active under play`;

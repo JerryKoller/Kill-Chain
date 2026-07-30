@@ -339,14 +339,14 @@ export function GateQuickActions() {
         }
         title={enabled ? "Bypass gate module" : "Engage gate"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );
 }
 
 export function gateStageLabel(on: boolean, enabled: boolean, depth: number, rate: number): string {
-  if (!enabled) return "Bypass — module offline";
+  if (!enabled) return "Asleep — module offline";
   if (!on) return "Armed — waiting for notes";
   if (depth < 0.15) return "Whisper — wet level at zero";
   if (rate >= 12) return "Strobe — active under play";

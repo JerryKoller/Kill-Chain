@@ -1,6 +1,9 @@
 /**
  * Standardized Source-module DSP states + thematic display labels.
  * Technical state is authoritative; flavor is optional personality.
+ *
+ * Module on/off is always `moduleEnable` (Signal Path ↔ panel Mute/Sleep).
+ * Level-gated silence is a separate "muted" cue when the module is still awake.
  */
 
 export type SourceTechState = "active" | "bypassed" | "muted" | "disabled" | "armed";
@@ -9,7 +12,7 @@ export const SOURCE_STATE_FLAVOR: Record<SourceTechState, string> = {
   active: "Awake",
   bypassed: "Passing through",
   muted: "Silent",
-  disabled: "Dormant",
+  disabled: "Asleep",
   armed: "Ready",
 };
 
@@ -21,11 +24,23 @@ export type SourceStateInfo = {
   detail: string;
 };
 
-/** Level-gated voice (Osc A/B/C, Noise, Sub). */
+/** Level-gated voice (Osc A/B/C, Noise, Sub), gated by moduleEnable first. */
 export function levelVoiceState(
   level: number,
-  opts?: { wakeHint?: string; role?: "prime" | "twin" | "depth" | "storm" | "tectonic" },
+  opts?: {
+    wakeHint?: string;
+    role?: "prime" | "twin" | "depth" | "storm" | "tectonic";
+    /** When false, module is offline via moduleEnable (Signal Path / Sleep). */
+    enabled?: boolean;
+  },
 ): SourceStateInfo {
+  if (opts?.enabled === false) {
+    return {
+      tech: "disabled",
+      pill: "ASLEEP",
+      detail: "Asleep — offline on Signal Path; wake here or on the Command Map",
+    };
+  }
   const silent = level < 0.02;
   if (silent) {
     const tech: SourceTechState = opts?.role === "depth" || opts?.role === "tectonic" ? "disabled" : "muted";
@@ -44,7 +59,14 @@ export function levelVoiceState(
 }
 
 /** Warp forge: processing vs neutral pass-through. */
-export function forgeState(forging: boolean): SourceStateInfo {
+export function forgeState(forging: boolean, enabled = true): SourceStateInfo {
+  if (!enabled) {
+    return {
+      tech: "disabled",
+      pill: "ASLEEP",
+      detail: "Asleep — Harmonic Forge offline on Signal Path",
+    };
+  }
   if (forging) {
     return {
       tech: "active",
@@ -60,7 +82,14 @@ export function forgeState(forging: boolean): SourceStateInfo {
 }
 
 /** Chip / Acid circuit engagement. */
-export function circuitState(live: boolean): SourceStateInfo {
+export function circuitState(live: boolean, enabled = true): SourceStateInfo {
+  if (!enabled) {
+    return {
+      tech: "disabled",
+      pill: "ASLEEP",
+      detail: "Asleep — Acid Circuit offline on Signal Path",
+    };
+  }
   if (live) {
     return {
       tech: "active",

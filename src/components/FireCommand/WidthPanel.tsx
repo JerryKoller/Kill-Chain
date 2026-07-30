@@ -201,7 +201,7 @@ export function WidthQuickActions() {
         }
         title={enabled ? "Bypass width (force unity)" : "Engage width"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );

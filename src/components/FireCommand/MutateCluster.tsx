@@ -173,7 +173,8 @@ function pressureLabel(amount: number): string {
   if (amount < 0.25) return "Subtle drift";
   if (amount < 0.5) return "Adaptation";
   if (amount < 0.75) return "Speciation";
-  return "Cambrian burst";
+  if (amount < 0.9) return "Cambrian burst";
+  return "Natural selection";
 }
 
 export function MutateCluster({ compact = false }: { compact?: boolean }) {

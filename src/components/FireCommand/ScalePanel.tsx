@@ -286,7 +286,7 @@ export function ScaleQuickActions() {
         }
         title={enabled ? "Bypass scale module" : "Engage scale"}
       >
-        {enabled ? "On" : "Bypass"}
+        {enabled ? "On" : "Asleep"}
       </button>
     </div>
   );
@@ -369,7 +369,7 @@ export function ScaleCorrectStrip() {
 }
 
 export function scaleStageLabel(lock: boolean, enabled: boolean, scaleId: ScaleId): string {
-  if (!enabled) return "Bypass — module offline";
+  if (!enabled) return "Asleep — module offline";
   if (!lock) return "Open — scale correction disabled";
   if (scaleId === "off") return "Chromatic — scale correction disabled";
   if (scaleId === "pentMinor" || scaleId === "blues") return "Tight — correction engaged";
