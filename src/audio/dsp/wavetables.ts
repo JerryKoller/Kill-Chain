@@ -61,8 +61,12 @@ export const WT_BANDLIMIT_FRAC = 0.45;
 /** Target ∑ aₙ² after RMS normalize (sine fundamental → a₁ = 1). */
 export const WT_TARGET_ENERGY = 1;
 
-/** Soft cap on ∑|aₙ| so pathological bright frames don't clip pre-filter. */
-const WT_PEAK_BOUND = 1.75;
+/**
+ * Soft cap on ∑|aₙ| (worst-case coherent peak for a sine series).
+ * 1.75 let bright frames clip the voice bus after disableNormalization;
+ * ~1.15 keeps RMS character vs dull frames without hot peaks.
+ */
+const WT_PEAK_BOUND = 1.15;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));

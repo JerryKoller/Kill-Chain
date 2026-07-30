@@ -150,12 +150,12 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
   });
   // Soften only runaway scream Q — Studio/Fire power users may sit above 2.2.
   const pressureEarly = patchCpuPressure(patch, patch.mono ? 1 : 4);
-  const resoCeil = pressureEarly > 0.7 ? 8 : 18;
+  const resoCeil = pressureEarly > 0.7 ? 8 : 12;
   cap((patch.filterResonance ?? 0) > resoCeil, () => {
     patch.filterResonance = resoCeil;
   });
-  cap((patch.filterDrive ?? 0) > 0.85, () => {
-    patch.filterDrive = 0.85;
+  cap((patch.filterDrive ?? 0) > 0.75, () => {
+    patch.filterDrive = 0.75;
   });
   cap((patch.drive ?? 0) > 0.7, () => {
     patch.drive = 0.7;
@@ -226,16 +226,18 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
  */
 export function applyLoudnessSafety(patch: FirePatch): FirePatch {
   patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.78);
-  // Power-user bite path: allow high Q; performance safety softens under CPU load.
-  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 16);
-  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.85);
-  patch.drive = Math.min(patch.drive ?? 0, 0.7);
+  // Mutate/randomize: keep bite (was hard-capped at 2.2) but not scream-clip Q.
+  // Manual Studio knobs may still sit higher; liveFilterQ + reso compensation handle that.
+  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 10);
+  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.7);
+  patch.drive = Math.min(patch.drive ?? 0, 0.65);
   patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.62);
   patch.delayMix = Math.min(patch.delayMix ?? 0, 0.42);
   patch.reverbMix = Math.min(patch.reverbMix ?? 0, 0.5);
   patch.fmAmount = Math.min(patch.fmAmount ?? 0, 0.65);
   patch.fmFeedback = Math.min(patch.fmFeedback ?? 0, 0.55);
   patch.crush = Math.min(patch.crush ?? 0, 0.45);
+  patch.noiseLevel = Math.min(patch.noiseLevel ?? 0, 0.45);
   patch.unison = Math.min(patch.unison ?? 1, 7) as FirePatch["unison"];
   if ((patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0) > 2.1) {
     const s = 2.0 / ((patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0));

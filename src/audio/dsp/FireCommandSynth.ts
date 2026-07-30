@@ -9,7 +9,8 @@
  *
  * Wavetable playback keeps CPU in check via pitch-mip × subframe `PeriodicWave`
  * banks. At high Continuity, each unison slot dual-crossfades adjacent frames
- * (equal-power); Continuity → 0 keeps the coarse snap character.
+ * (linear / amplitude-preserving — frames are correlated); Continuity → 0 keeps
+ * the coarse snap character.
  */
 
 import {
@@ -675,6 +676,32 @@ function liveFilterQ(base: number, extra = 0): number {
 }
 
 /**
+ * Unison level trim. Random/even/alternating voices are mostly incoherent
+ * (1/√N). True `locked` phase is coherent — peaks scale ~N, so 1/√N left
+ * locked stacks ~√N too hot after the real-phase fix landed.
+ */
+export function unisonLevelNorm(count: number, phase: UnisonPhaseMode): number {
+  const n = Math.max(1, count | 0);
+  if (phase === "locked") return 1 / n;
+  return 1 / Math.sqrt(n);
+}
+
+/**
+ * Dual-frame morph gains. Adjacent frames are correlated — linear keeps
+ * peak ≤ 1 when frames match (equal-power would boost mid-crossfade by √2).
+ */
+export function morphFrameGains(frac: number): { g0: number; g1: number } {
+  const f = Math.max(0, Math.min(1, frac));
+  return { g0: 1 - f, g1: f };
+}
+
+/** Pre-filter trim as Q rises so bite stays audible without resonant blowups. */
+export function filterResoCompGain(q: number): number {
+  const excess = Math.max(0, q - 0.707);
+  return 1 / (1 + excess * 0.1);
+}
+
+/**
  * Fixed headroom trim on the voice-summing bus.
  *
  * ROOT CAUSE (clipping, part 1): a single default-patch voice already peaks
@@ -953,10 +980,8 @@ class Voice {
   private instabilityCur = 0;
   private instabilityTarget = 0;
   private readonly unisonCount: number;
-  /** Equal-power unison normalization: keeps a group's loudness constant as the
-   *  unison voice count rises (wider, not louder) so stacked unison can't blow
-   *  past the soft-clip on its own. */
-  private readonly uNorm: number;
+  /** Equal-power/coherent unison normalization — see unisonLevelNorm. */
+  private uNorm: number;
   /** Extra cascaded biquads for slope > 12 dB/oct. */
   private readonly filterExtra: BiquadFilterNode[] = [];
   /** Harmonic carve notch / peaking stage (F1 / primary). */
@@ -1007,7 +1032,7 @@ class Voice {
       : null;
     this.baseFreq = midiToFreq(midi);
     this.unisonCount = Math.round(clamp(Math.min(p.unison, liveUnisonCap(p)), 1, MAX_UNISON));
-    this.uNorm = 1 / Math.sqrt(this.unisonCount);
+    this.uNorm = unisonLevelNorm(this.unisonCount, p.unisonPhase ?? "locked");
     // Analog Life: persistent DNA personality + note variance.
     const seed = (p.analogDnaSeed ?? 0x73a9c412) >>> 0;
     this.voiceSlot = Math.abs(midi + Math.round(velocity * 17)) % 48;
@@ -1169,8 +1194,8 @@ class Voice {
     this.applyFm(p);
     this.applyUnisonSpread(p);
     this.setWtA(clamp(p.oscAPos, 0, 1), p.oscAContinuity ?? 0.72);
-    this.setWtB(clamp(p.oscBPos, 0, 1));
-    this.setWtC(clamp(p.oscCPos, 0, 1));
+    this.setWtB(clamp(p.oscBPos, 0, 1), p.oscAContinuity ?? 0.72);
+    this.setWtC(clamp(p.oscCPos, 0, 1), p.oscAContinuity ?? 0.72);
 
     const dnaSeed = (p.analogDnaSeed ?? 1) >>> 0;
     const spreadSec = p.moduleEnable?.["mixer.unison"] === false ? 0 : (p.unisonTemporalSpread ?? 0);
@@ -1294,9 +1319,9 @@ class Voice {
       group.lastK1 = k1;
     }
     group.lastFrac = frac;
-    // Equal-power crossfade between adjacent bank frames.
-    const g0 = Math.cos(frac * Math.PI * 0.5);
-    const g1 = Math.sin(frac * Math.PI * 0.5);
+    // Adjacent wavetable frames are highly correlated. Equal-power (√) boosts
+    // mid-crossfades by up to √2 when frames match; linear keeps peak ≤ 1.
+    const { g0, g1 } = morphFrameGains(frac);
     for (let i = 0; i < group.osc.length; i++) {
       group.morphLo[i]!.gain.setTargetAtTime(g0, t, 0.006);
       group.morphHi[i]!.gain.setTargetAtTime(g1, t, 0.006);
@@ -1340,6 +1365,7 @@ class Voice {
     const anchor = p.unisonAnchor !== false;
     const mid = (this.unisonCount - 1) / 2;
     const phaseMode = p.unisonPhase ?? "locked";
+    this.uNorm = unisonLevelNorm(unisonOn ? this.unisonCount : 1, phaseMode);
     for (let i = 0; i < this.unisonCount; i++) {
       const isAnchor = anchor && this.unisonCount > 1 && Math.abs(i - mid) < 0.51;
       const choirScale = isAnchor ? 0 : mix;
@@ -1890,6 +1916,7 @@ class Voice {
         this.filterWorklet.parameters.get("cutoff")?.setTargetAtTime(20000, t, 0.03);
         this.filterWorklet.parameters.get("resonance")?.setTargetAtTime(0, t, 0.03);
       }
+      this.mix.gain.setTargetAtTime(1, t, 0.03);
       return;
     }
     const base = this.baseCutoff(p);
@@ -1899,14 +1926,17 @@ class Voice {
         ? 1 + voiceIdentityUnit(p.analogDnaSeed ?? 1, this.voiceSlot, 5) * clamp(p.drift ?? 0, 0, 1) * 0.08
         : 1;
     const cut = clamp(base * cal, 20, 20000);
+    const qLive = liveFilterQ(p.filterResonance);
     this.filter.type = p.filterType;
-    this.filter.Q.setTargetAtTime(liveFilterQ(p.filterResonance), t, 0.02);
+    this.filter.Q.setTargetAtTime(qLive, t, 0.02);
     this.filter.frequency.setTargetAtTime(cut, t, 0.03);
     for (const extra of this.filterExtra) {
       extra.type = p.filterType;
-      extra.Q.setTargetAtTime(liveFilterQ(p.filterResonance) * 0.55, t, 0.02);
+      extra.Q.setTargetAtTime(qLive * 0.55, t, 0.02);
       extra.frequency.setTargetAtTime(cut, t, 0.03);
     }
+    // High Q still bites; compensate the input so resonant peaks don't clip.
+    this.mix.gain.setTargetAtTime(filterResoCompGain(qLive), t, 0.03);
     if (this.filterWorklet) {
       const model = p.filterModel ?? "biquad";
       const typeHint =
@@ -1915,7 +1945,7 @@ class Voice {
             : p.filterType === "notch" ? 3
               : 0;
       const mode = model === "svf" ? 1 : 0;
-      const q01 = clamp(liveFilterQ(p.filterResonance) / FILTER_Q_CEIL, 0, 1);
+      const q01 = clamp(qLive / FILTER_Q_CEIL, 0, 1);
       const cutP = this.filterWorklet.parameters.get("cutoff");
       const resP = this.filterWorklet.parameters.get("resonance");
       const drvP = this.filterWorklet.parameters.get("drive");
@@ -1923,7 +1953,7 @@ class Voice {
       const typeP = this.filterWorklet.parameters.get("typeHint");
       cutP?.setTargetAtTime(cut, t, 0.03);
       resP?.setTargetAtTime(q01, t, 0.03);
-      drvP?.setTargetAtTime(clamp(p.filterDrive ?? 0, 0, 1) * 0.65, t, 0.04);
+      drvP?.setTargetAtTime(clamp(p.filterDrive ?? 0, 0, 1) * 0.55, t, 0.04);
       modeP?.setValueAtTime(mode, t);
       typeP?.setValueAtTime(typeHint, t);
     }
@@ -1941,16 +1971,17 @@ class Voice {
       this.carveFilt2.gain.setTargetAtTime(0, t, 0.03);
     } else if (carve === "formant") {
       // Movable F1/F2 pair — cutoff slides the vowel, carve amount opens the mouths.
+      // Gains kept studio-safe (was up to +16/+13 dB — guaranteed pre-drive clips).
       const f1 = clamp(cut * (0.35 + amt * 0.2), 220, 1000);
       const f2 = clamp(cut * (0.95 + amt * 1.1), 650, 3800);
       this.carveFilt.type = "peaking";
       this.carveFilt.frequency.setTargetAtTime(f1, t, 0.03);
-      this.carveFilt.Q.setTargetAtTime(3.5 + amt * 9, t, 0.03);
-      this.carveFilt.gain.setTargetAtTime(4 + amt * 12, t, 0.03);
+      this.carveFilt.Q.setTargetAtTime(2.2 + amt * 4.5, t, 0.03);
+      this.carveFilt.gain.setTargetAtTime(1.5 + amt * 5, t, 0.03);
       this.carveFilt2.type = "peaking";
       this.carveFilt2.frequency.setTargetAtTime(f2, t, 0.03);
-      this.carveFilt2.Q.setTargetAtTime(2.5 + amt * 7, t, 0.03);
-      this.carveFilt2.gain.setTargetAtTime(3 + amt * 10, t, 0.03);
+      this.carveFilt2.Q.setTargetAtTime(1.8 + amt * 3.5, t, 0.03);
+      this.carveFilt2.gain.setTargetAtTime(1.2 + amt * 4, t, 0.03);
     } else {
       this.carveFilt2.type = "allpass";
       this.carveFilt2.gain.setTargetAtTime(0, t, 0.03);
@@ -3603,10 +3634,26 @@ export class FireCommandSynth {
   // ── patch ──
   setPatch(p: FirePatch): void {
     this.startModTimer();
-    // Merge over the defaults so patches persisted before newer fields were
-    // added (fmBtoA, noiseColor, filterDrive, stereoWidth, velAmount…) load
-    // with legacy-exact behavior instead of undefined params.
-    this.patch = { ...DEFAULT_FIRE_PATCH, ...p };
+    // Drop any pending warp rebuild from a prior knob scrub — otherwise an
+    // 80 ms timer can rebind voices after a preset load with stale intent.
+    if (this.warpTimer) {
+      clearTimeout(this.warpTimer);
+      this.warpTimer = null;
+    }
+    this.warpedBanks.clear();
+    this.warpedSig = "";
+    // Hard-kill live voices. fastRelease left ~50 ms zombies whose filter
+    // topology (ladder/SVF worklet vs biquad) and dual-morph graph cannot be
+    // retopologized by setFilterLive — Natural Selection → loadPreset then
+    // bled NS DNA into the next preset until relaunch rebuilt the synth.
+    this.held.clear();
+    this.monoVoice = null;
+    for (const v of [...this.voices]) v.forceStop();
+    this.voices.clear();
+    this.updatePolyGain();
+    // Deep-clone nested fields so engine state never aliases store / factory
+    // / user-preset objects (moduleEnable, modMatrix, fm corners, gate…).
+    this.patch = cloneFirePatch({ ...DEFAULT_FIRE_PATCH, ...p });
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
     this.lastDriveKey = "";
     this.lastCrushBits = -1;
@@ -3622,16 +3669,6 @@ export class FireCommandSynth {
     this.applyBusParams(this.patch);
     this.applyLfoParams(this.patch);
     this.applySpectral(this.patch);
-    for (const v of this.voices) {
-      this.rebindVoiceBanks(v, this.patch);
-      v.setSubWave(this.patch.subWave);
-      v.setOscLevels(this.patch);
-      v.setFilterLive(this.patch);
-      v.setFilterDriveCurve(this.filterDriveCurve);
-      v.applyFm(this.patch);
-      v.applyUnisonSpread(this.patch);
-      v.clearMod();
-    }
   }
 
   /**
@@ -3749,7 +3786,11 @@ export class FireCommandSynth {
       case "oscADetune": case "oscBDetune": case "oscCDetune": case "unisonDetune": case "unisonWidth":
       case "unisonMix": case "unisonAnchor": case "unisonDistribution": case "unisonPhase":
       case "unisonTemporalSpread": case "unisonTemporalMode":
-        for (const v of this.voices) v.applyUnisonSpread(p); break;
+        for (const v of this.voices) {
+          v.applyUnisonSpread(p);
+          v.setOscLevels(p);
+        }
+        break;
       case "fmAmount": case "fmRatio": case "fmBtoA": case "fmAtoB":
       case "fmEngine": case "fmAlg": case "fmFeedback":
       case "fmOp1Level": case "fmOp2Level": case "fmOp3Level": case "fmOp4Level":
@@ -4305,6 +4346,42 @@ export class FireCommandSynth {
       this.airOut.connect(this.reverbIn);
     }
   }
+}
+
+/**
+ * Deep-clone a Fire patch so nested arrays/objects never alias factory defaults,
+ * user presets, or the live store (the NS→loadPreset contamination class).
+ */
+export function cloneFirePatch(raw: FirePatch | Partial<FirePatch>): FirePatch {
+  const src = { ...DEFAULT_FIRE_PATCH, ...raw } as FirePatch;
+  const patch: FirePatch = { ...src };
+  patch.modMatrix = makeModMatrix(Array.isArray(src.modMatrix) ? src.modMatrix : []);
+  patch.moduleEnable = { ...(src.moduleEnable ?? {}) };
+  patch.modEnvPoints = Array.isArray(src.modEnvPoints)
+    ? src.modEnvPoints.map((pt) => ({ ...pt }))
+    : DEFAULT_FIRE_PATCH.modEnvPoints.map((pt) => ({ ...pt }));
+  patch.gatePattern = Array.isArray(src.gatePattern)
+    ? src.gatePattern.map((v) => clamp(Number(v) || 0, 0, 1)).slice(0, 16)
+    : [...DEFAULT_FIRE_PATCH.gatePattern];
+  while (patch.gatePattern.length < 16) patch.gatePattern.push(0);
+  patch.chordIntervals = Array.isArray(src.chordIntervals)
+    ? [...src.chordIntervals]
+    : [...DEFAULT_FIRE_PATCH.chordIntervals];
+  patch.scaleFollowers = {
+    harmony: src.scaleFollowers?.harmony !== false,
+    chord: src.scaleFollowers?.chord !== false,
+    arp: src.scaleFollowers?.arp !== false,
+    pianoRoll: !!src.scaleFollowers?.pianoRoll,
+  };
+  const corners = Array.isArray(src.fmVectorCorners) && src.fmVectorCorners.length >= 4
+    ? src.fmVectorCorners
+    : DEFAULT_FIRE_PATCH.fmVectorCorners;
+  patch.fmVectorCorners = corners.map((c) => ({
+    levels: [...c.levels] as [number, number, number, number],
+    ratios: [...c.ratios] as [number, number, number],
+    feedback: c.feedback,
+  }));
+  return patch;
 }
 
 export const DEFAULT_FIRE_PATCH: FirePatch = {

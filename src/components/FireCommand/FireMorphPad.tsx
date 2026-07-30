@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useFireCommandStore, FIRE_PRESETS, type SavedPreset } from "@/state/fireCommandStore";
-import { DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
+import { cloneFirePatch, DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { pushFireHistory } from "@/lib/fireHistory";
 import { CollapseToggle } from "./CollapseToggle";
 import { useFireCollapsed } from "./useFireCollapsed";
@@ -404,7 +404,8 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
     const patchFor = (id: string): FirePatch => {
       const factory = FIRE_PRESETS.find((p) => p.id === id);
       const user = factory ? null : userPresets.find((p) => p.id === id);
-      return { ...DEFAULT_FIRE_PATCH, ...(factory?.patch ?? user?.patch ?? {}) };
+      // Deep clone so morph scrub never aliases factory / user nested fields.
+      return cloneFirePatch(factory?.patch ?? user?.patch ?? {});
     };
     return {
       a: patchFor(cornerIds.a),

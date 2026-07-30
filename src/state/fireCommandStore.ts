@@ -12,6 +12,7 @@ import type { ScaleId } from "@/state/fireSequencerStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
 import {
   DEFAULT_FIRE_PATCH,
+  cloneFirePatch,
   makeModMatrix,
   type FirePatch,
   type LfoWave,
@@ -891,9 +892,12 @@ function isFireLabelMode(v: unknown): v is FireLabelMode {
 }
 
 function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
-  const patch = { ...DEFAULT_FIRE_PATCH, ...(raw ?? {}) };
-  patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-  if (raw && raw.moduleEnable) patch.moduleEnable = { ...raw.moduleEnable };
+  // Deep-clone nested fields first — shallow `{...DEFAULT, ...raw}` used to
+  // alias DEFAULT_FIRE_PATCH.fmVectorCorners / gatePattern / chordIntervals /
+  // moduleEnable across factory presets, user saves, and the live edit buffer.
+  // Natural Selection then mutated shared nests; other presets stayed broken
+  // until a full relaunch reloaded the module graph.
+  const patch = cloneFirePatch(raw ?? {});
   // Migrate legacy ADSR-only patches into MSEG points.
   if (!Array.isArray(patch.modEnvPoints) || patch.modEnvPoints.length < 2) {
     patch.modEnvPoints = adsrToModEnvPoints(
@@ -920,13 +924,6 @@ function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
   if (!patch.ringMode) patch.ringMode = "ratio";
   if (!patch.lfo1RateDisplay) patch.lfo1RateDisplay = "hz";
   if (!patch.lfo2RateDisplay) patch.lfo2RateDisplay = "hz";
-  if (!Array.isArray(patch.fmVectorCorners) || patch.fmVectorCorners.length < 4) {
-    patch.fmVectorCorners = DEFAULT_FIRE_PATCH.fmVectorCorners.map((c) => ({
-      levels: [...c.levels] as [number, number, number, number],
-      ratios: [...c.ratios] as [number, number, number],
-      feedback: c.feedback,
-    }));
-  }
   if (typeof patch.fmVectorX !== "number") patch.fmVectorX = 0.5;
   if (typeof patch.fmVectorY !== "number") patch.fmVectorY = 0.5;
   // FX Clarity migrations
@@ -973,16 +970,6 @@ function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
   else if (patch.scaleMode === "soft" || patch.scaleMode === "strict" || patch.scaleMode === "fold") {
     patch.scaleLock = true;
   }
-  if (!patch.scaleFollowers || typeof patch.scaleFollowers !== "object") {
-    patch.scaleFollowers = { harmony: true, chord: true, arp: true, pianoRoll: false };
-  } else {
-    patch.scaleFollowers = {
-      harmony: patch.scaleFollowers.harmony !== false,
-      chord: patch.scaleFollowers.chord !== false,
-      arp: patch.scaleFollowers.arp !== false,
-      pianoRoll: !!patch.scaleFollowers.pianoRoll,
-    };
-  }
   if (patch.chordMode !== "builder" && patch.chordMode !== "memory") patch.chordMode = "memory";
   if (!patch.macroResponse || !["absolute", "relative", "bipolar", "smoothed"].includes(patch.macroResponse)) {
     patch.macroResponse = "absolute";
@@ -997,10 +984,11 @@ function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
     patch.humanizeSeedMode = "fixed";
   }
   if (typeof patch.humanizeProtectDownbeats !== "boolean") patch.humanizeProtectDownbeats = true;
-  if (Array.isArray(patch.gatePattern)) {
-    patch.gatePattern = patch.gatePattern.map((v) => clamp(Number(v) || 0, 0, 1));
-    while (patch.gatePattern.length < 16) patch.gatePattern.push(0);
-    patch.gatePattern = patch.gatePattern.slice(0, 16);
+  if (!patch.filterModel || !["biquad", "ladder", "svf"].includes(patch.filterModel)) {
+    patch.filterModel = "biquad";
+  }
+  if (!patch.warpMode || !["classic", "scramble", "subharmonic", "brickwall"].includes(patch.warpMode)) {
+    patch.warpMode = "classic";
   }
   return patch;
 }
@@ -1181,7 +1169,15 @@ function load(): PersistShape {
       kbdVelCurve: typeof parsed.kbdVelCurve === "number" ? clamp(parsed.kbdVelCurve, 0.35, 1.8) : d.kbdVelCurve,
       kbdDelayMs: typeof parsed.kbdDelayMs === "number" ? clamp(parsed.kbdDelayMs, 0, 50) : d.kbdDelayMs,
       kbdAttackMs: typeof parsed.kbdAttackMs === "number" ? clamp(parsed.kbdAttackMs, 1, 80) : d.kbdAttackMs,
-      userPresets: Array.isArray(parsed.userPresets) ? parsed.userPresets : d.userPresets,
+      userPresets: Array.isArray(parsed.userPresets)
+        ? parsed.userPresets
+            .filter((p): p is SavedPreset => !!p && typeof p === "object" && typeof (p as SavedPreset).id === "string")
+            .map((p) => ({
+              ...p,
+              patch: normalizePatch((p as SavedPreset).patch),
+              arp: { ...DEFAULT_ARP, ...((p as SavedPreset).arp ?? {}) },
+            }))
+        : d.userPresets,
       maxVoices: typeof parsed.maxVoices === "number" ? parsed.maxVoices : d.maxVoices,
       mutateAmount: typeof parsed.mutateAmount === "number" ? clamp(parsed.mutateAmount, 0, 1) : d.mutateAmount,
       mutateLineage: typeof parsed.mutateLineage === "number" ? Math.max(0, Math.floor(parsed.mutateLineage)) : d.mutateLineage,
@@ -2046,11 +2042,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       pushFireHistory();
       cancelSceneRecall();
       padMorphActive = false;
-      const patch = { ...DEFAULT_FIRE_PATCH, ...(rawPatch as Partial<FirePatch>) };
-      patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-      patch.moduleEnable = (rawPatch as Partial<FirePatch>)?.moduleEnable
-        ? { ...((rawPatch as Partial<FirePatch>).moduleEnable as Record<string, boolean>) }
-        : {};
+      const patch = normalizePatch(rawPatch as Partial<FirePatch>);
       const softened = applyPerformanceSafety(patch);
       const arp: ArpSettings = rawArp && typeof rawArp === "object"
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
@@ -2158,8 +2150,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
     applyCharacterPatch: (rawPatch, rawArp) => {
       pushFireHistory();
-      const patch = { ...DEFAULT_FIRE_PATCH, ...rawPatch };
-      patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
+      const patch = normalizePatch(rawPatch as Partial<FirePatch>);
       const softened = applyPerformanceSafety(patch);
       const s = get();
       if (s.editTarget === "b") {
@@ -2210,7 +2201,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const preset: SavedPreset = {
         id,
         name: name.trim() || `Patch ${s.userPresets.length + 1}`,
-        patch: { ...s.patch },
+        // Deep clone — shallow `{...s.patch}` shared nested refs with the live
+        // buffer, so later NS / knob edits corrupted every saved preset.
+        patch: cloneFirePatch(s.patch),
         arp: { ...s.arp },
         createdAt: Date.now(),
       };

@@ -51,8 +51,11 @@ class KcFilterProcessor extends AudioWorkletProcessor {
     const sr = sampleRate;
     const fc = Math.max(20, Math.min(sr * 0.45, cut0 || 1000));
     const g = Math.tan(Math.PI * fc / sr);
-    const k = Math.max(0, Math.min(0.98, (res0 || 0) * 0.98));
+    // Softer reso map — host Q/14 already; keep k well below self-osc blowup.
+    const k = Math.max(0, Math.min(0.92, (res0 || 0) * 0.9));
     const drv = Math.max(0, Math.min(1, drv0 || 0));
+    // Pre-filter trim rises with resonance so bite ≠ clip.
+    const inComp = 1 / (1 + k * 1.35);
 
     for (let ch = 0; ch < chCount; ch++) {
       const inp = input[ch];
@@ -64,12 +67,13 @@ class KcFilterProcessor extends AudioWorkletProcessor {
       let ic1 = this.ic1, ic2 = this.ic2;
 
       for (let i = 0; i < out.length; i++) {
-        let x = inp[i];
+        let x = inp[i] * inComp;
         if (drv > 0.001) {
-          const hot = x * (1 + drv * 2.5);
+          const hot = x * (1 + drv * 1.8);
           x = Math.tanh(hot);
         }
 
+        let y;
         if (mode0 === 0) {
           // 4-pole Moog-ish ladder (Huovilainen-lite)
           const f = g / (1 + g);
@@ -79,25 +83,28 @@ class KcFilterProcessor extends AudioWorkletProcessor {
           z3 += 2 * f * (Math.tanh(z2) - Math.tanh(z3));
           z4 += 2 * f * (Math.tanh(z3) - Math.tanh(z4));
           // Mild LP2/LP4 blend by type
-          out[i] = type0 === 1 ? (z2 - z4) : type0 === 2 ? (x - z4) : z4;
+          y = type0 === 1 ? (z2 - z4) : type0 === 2 ? (x - z4) : z4;
         } else {
           // Chamberlin / trapezoidal SVF
-          const q = 1 - k * 0.95;
+          const q = 1 - k * 0.9;
           const hp = (x - ic2) * (1 / (1 + g * (g + q))) - ic1 * (g / (1 + g * (g + q)));
           const bp = hp * g + ic1;
           const lp = bp * g + ic2;
           ic1 = bp + hp * g;
           ic2 = lp + bp * g;
-          if (type0 === 1 || mode0 === 2) out[i] = bp;
-          else if (type0 === 2 || mode0 === 3) out[i] = hp;
-          else if (type0 === 3) out[i] = x - 2 * bp; // notch-ish
-          else out[i] = lp;
+          if (type0 === 1 || mode0 === 2) y = bp;
+          else if (type0 === 2 || mode0 === 3) y = hp;
+          else if (type0 === 3) y = x - 2 * bp; // notch-ish
+          else y = lp;
         }
+        // Soft-limit output + keep internal state finite.
+        out[i] = Math.tanh(y);
       }
 
       if (ch === 0) {
-        this.z1 = z1; this.z2 = z2; this.z3 = z3; this.z4 = z4;
-        this.ic1 = ic1; this.ic2 = ic2;
+        const lim = (v) => (Number.isFinite(v) ? Math.max(-4, Math.min(4, v)) : 0);
+        this.z1 = lim(z1); this.z2 = lim(z2); this.z3 = lim(z3); this.z4 = lim(z4);
+        this.ic1 = lim(ic1); this.ic2 = lim(ic2);
       }
     }
     return true;

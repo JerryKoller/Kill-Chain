@@ -26,7 +26,7 @@
 import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
 import { DRUM_LANES, type DrumLane } from "@/audio/dsp/FireDrumKit";
-import { DEFAULT_FIRE_PATCH, makeModMatrix, type FirePatch } from "@/audio/dsp/FireCommandSynth";
+import { DEFAULT_FIRE_PATCH, cloneFirePatch, makeModMatrix, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { audioUrlForPath } from "@/state/libraryStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
 import { useFireCommandStore, slotsFromState, scheduleSequencerSynthNote, expandSequencerSynthVoices, silenceTransportAudio } from "@/state/fireCommandStore";
@@ -1205,12 +1205,7 @@ function sanitizeDrumSamples(
 
 function clonePatchSnap(raw: unknown): FirePatch | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const patch = { ...DEFAULT_FIRE_PATCH, ...(raw as Partial<FirePatch>) };
-  patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-  if ((raw as Partial<FirePatch>).moduleEnable) {
-    patch.moduleEnable = { ...((raw as Partial<FirePatch>).moduleEnable as Record<string, boolean>) };
-  }
-  return patch;
+  return cloneFirePatch(raw as Partial<FirePatch>);
 }
 
 /** Read live A/B patches from the synth store. */
