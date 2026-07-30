@@ -363,10 +363,14 @@ const DRIVE_MODES: DriveMode[] = ["soft", "soft", "tube", "fold", "hard", "fuzz"
 /** Generate a fresh, musical (non-screeching) random wavetable patch. */
 function randomPatch(): FirePatch {
   const mono = chance(0.5);
-  const filterType: FireFilterType = chance(0.8) ? "lowpass" : chance(0.5) ? "bandpass" : chance(0.5) ? "notch" : "highpass";
+  // Broader Armory priors — less 80% LP bias; occasional ops4 / hard sync / extreme warp.
+  const filterType: FireFilterType = chance(0.52)
+    ? "lowpass"
+    : chance(0.4) ? "bandpass" : chance(0.5) ? "highpass" : "notch";
   const morphMod = chance(0.6);
   const lush = chance(0.45);
   const useC = chance(0.3);
+  const wildArmory = chance(0.22);
   // A couple of musical matrix routes for instant movement.
   const routes: ModRoute[] = [];
   if (chance(0.5)) routes.push(MR("macro1", "cutoff", rand(0.3, 0.8)));
@@ -409,9 +413,12 @@ function randomPatch(): FirePatch {
     unisonTemporalSpread: chance(0.22) ? rand(0.003, 0.02) : (chance(0.35) ? rand(0.001, 0.008) : 0),
     unisonTemporalMode: pick(["ltr", "ltr", "center", "random"] as const),
     unisonEnvSpread: chance(0.2) ? rand(0.1, 0.55) : 0,
-    warpStretch: chance(0.18) ? rand(-0.5, 0.6) : 0,
-    warpTilt: chance(0.18) ? rand(-0.6, 0.6) : 0,
-    warpComb: chance(0.12) ? rand(0.15, 0.6) : 0,
+    warpMode: wildArmory
+      ? pick(["classic", "scramble", "subharmonic", "brickwall"] as const)
+      : (chance(0.2) ? pick(["scramble", "subharmonic", "brickwall"] as const) : "classic"),
+    warpStretch: wildArmory ? rand(-0.85, 0.9) : (chance(0.18) ? rand(-0.5, 0.6) : 0),
+    warpTilt: wildArmory ? rand(-0.85, 0.85) : (chance(0.18) ? rand(-0.6, 0.6) : 0),
+    warpComb: wildArmory ? rand(0.2, 0.85) : (chance(0.12) ? rand(0.15, 0.6) : 0),
     warpAmount: chance(0.7) ? 1 : rand(0.4, 1),
     subWave: pick(SUB_WAVES),
     subLevel: chance(0.6) ? rand(0.2, 0.7) : 0,
@@ -428,6 +435,9 @@ function randomPatch(): FirePatch {
     ringAmount: chance(0.2) ? rand(0.1, 0.4) : 0,
     ringFreq: rand(40, 600),
     filterType,
+    filterModel: wildArmory && chance(0.45)
+      ? pick(["ladder", "svf"] as const)
+      : (chance(0.18) ? pick(["ladder", "svf"] as const) : "biquad"),
     filterCutoff: Math.round(rand(400, 6500)),
     filterResonance: rand(1, 8),
     filterEnvAmount: rand(-0.3, 0.7),
@@ -436,8 +446,10 @@ function randomPatch(): FirePatch {
     filterDrive: chance(0.35) ? rand(0.1, 0.5) : 0,
     filterDrivePos: chance(0.25) ? "pre" : "post",
     filterSlope: pick([1, 1, 2, 3] as const),
-    filterCarve: chance(0.2) ? pick(["fundamental", "odds", "evens", "noise"] as const) : "off",
-    filterCarveAmount: chance(0.2) ? rand(0.2, 0.7) : 0,
+    filterCarve: chance(0.28)
+      ? pick(["fundamental", "odds", "evens", "noise", "formant", "formant"] as const)
+      : "off",
+    filterCarveAmount: chance(0.28) ? rand(0.2, 0.7) : 0,
     ampAttack: chance(0.3) ? rand(0.2, 1.2) : rand(0.002, 0.05),
     ampDecay: rand(0.1, 0.6),
     ampSustain: rand(0.3, 0.95),
@@ -564,23 +576,23 @@ function randomPatch(): FirePatch {
     hiss: chance(0.1) ? rand(0.02, 0.1) : 0,
     hum: chance(0.08) ? rand(0.02, 0.08) : 0,
     printThrough: chance(0.08) ? rand(0.02, 0.12) : 0,
-    pulseDuty: 0.5,
-    hardSync: false,
+    pulseDuty: wildArmory ? rand(0.08, 0.92) : 0.5,
+    hardSync: wildArmory && chance(0.55),
     chipNoise: "white",
     chipVoiceLimit: 0,
     accentAmount: 0,
     slideOn: false,
     chipAcidMix: rand(0.15, 0.85),
-    fmEngine: "classic",
-    fmAlg: 0,
+    fmEngine: wildArmory && chance(0.5) ? "ops4" : "classic",
+    fmAlg: wildArmory ? Math.floor(rand(0, 8)) : 0,
     fmOp1Level: 1,
-    fmOp2Level: 0.7,
-    fmOp3Level: 0.5,
-    fmOp4Level: 0.35,
-    fmOp2Ratio: 1,
-    fmOp3Ratio: 2,
-    fmOp4Ratio: 3,
-    fmFeedback: 0,
+    fmOp2Level: wildArmory ? rand(0.35, 1) : 0.7,
+    fmOp3Level: wildArmory ? rand(0.2, 0.9) : 0.5,
+    fmOp4Level: wildArmory ? rand(0.1, 0.7) : 0.35,
+    fmOp2Ratio: wildArmory ? pick([0.5, 1, 1.5, 2, 3, 5, 7]) : 1,
+    fmOp3Ratio: wildArmory ? pick([0.5, 1, 2, 3, 4, 6]) : 2,
+    fmOp4Ratio: wildArmory ? pick([1, 2, 3, 5, 7, 11]) : 3,
+    fmFeedback: wildArmory ? rand(0, 0.55) : 0,
     vectorRate: chance(0.12) ? rand(0.05, 0.3) : 0,
     vectorDepth: chance(0.12) ? rand(0.15, 0.55) : 0,
     pathOsc: true,
@@ -727,14 +739,19 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
   if (a > 0.55) {
     if (pWild(0.35)) p.oscATable = pick(WAVETABLE_IDS);
     if (pWild(0.4)) {
-      p.filterType = pick<FireFilterType>(["lowpass", "lowpass", "bandpass", "highpass", "notch"]);
+      // Less LP bias than Armory-classic — wild species prefer BP/HP/notch.
+      p.filterType = pick<FireFilterType>(["lowpass", "bandpass", "bandpass", "highpass", "notch"]);
     }
+    if (pWild(0.28)) p.filterModel = pick(["biquad", "ladder", "svf", "ladder"] as const);
     if (pWild(0.3)) p.driveMode = pick(DRIVE_MODES);
     if (pWild(0.28)) p.noiseMode = pick(["bed", "burst", "storm"] as const);
     if (pWild(0.25)) p.lfo1Dest = pick(LFO_DESTS);
     if (pWild(0.25)) p.lfo2Dest = pick(LFO_DESTS);
     if (pWild(0.22)) p.filterSlope = pick([1, 1, 2, 3] as const);
-    if (pWild(0.2)) p.filterCarve = pick(["off", "fundamental", "odds", "evens", "noise"] as const);
+    if (pWild(0.28)) {
+      p.filterCarve = pick(["off", "fundamental", "odds", "evens", "noise", "formant", "formant"] as const);
+    }
+    if (pWild(0.22)) p.warpMode = pick(["classic", "scramble", "subharmonic", "brickwall"] as const);
     if (pWild(0.18)) p.chorusModel = pick(["single", "dual", "triple", "ensemble", "dimension", "tape"] as const);
     if (pWild(0.18)) p.delayCascadeMode = pick(["slap", "echo", "dub", "bounce", "long"] as const);
   }
@@ -746,12 +763,62 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
     if (pWild(0.4)) p.unison = pick([1, 1, 3, 3, 5, 7]);
     if (pWild(0.3)) p.unisonDistribution = pick(["linear", "gaussian", "center", "edge", "alternating"] as const);
     if (pWild(0.28)) p.unisonPhase = pick(["even", "random", "alternating", "locked"] as const);
-    if (pWild(0.25)) p.oscBInherit = pick(["off", "morph", "mirror", "offset", "fm"] as const);
+    if (pWild(0.3)) p.unisonTemporalSpread = rand(0, 0.028);
+    if (pWild(0.25)) p.oscBInherit = pick(["off", "morph", "mirror", "offset", "fm", "family", "lock"] as const);
     if (pWild(0.22)) p.spectralMode = pick(["off", "freeze", "smear", "gate", "shift"] as const);
     if (pWild(0.2)) p.fxRoutingScene = pick(["serial", "driveAgePrint", "spaceCascade", "spectralTail"] as const);
     if (pWild(0.2)) p.ampModel = pick(["vca", "gate"] as const);
     if (pWild(0.18)) p.lpgOn = !p.lpgOn;
+    if (pWild(0.22)) p.lpgModel = pick(["classic", "fast", "slow", "aged", "sticky", "bright"] as const);
     if (pWild(0.15)) p.mono = !p.mono;
+    // Creative engines unused by mild nudges — flip species DNA hard.
+    if (pWild(0.4)) p.fmEngine = p.fmEngine === "ops4" ? "classic" : "ops4";
+    if (pWild(0.35)) p.fmAlg = Math.floor(rand(0, 8));
+    if (pWild(0.3)) {
+      p.fmOp2Ratio = pick([0.5, 1, 1.5, 2, 3, 5, 7]);
+      p.fmOp3Ratio = pick([0.5, 1, 2, 3, 4, 6]);
+      p.fmOp4Ratio = pick([1, 2, 3, 5, 7, 11]);
+      p.fmFeedback = rand(0, 0.65);
+      p.fmOp2Level = rand(0.2, 1);
+      p.fmOp3Level = rand(0.15, 0.9);
+      p.fmOp4Level = rand(0.1, 0.75);
+    }
+    if (pWild(0.35)) p.hardSync = !p.hardSync;
+    if (pWild(0.3)) p.pulseDuty = rand(0.05, 0.95);
+    if (pWild(0.28)) p.chipAcidMix = rand(0.15, 0.95);
+    if (pWild(0.3)) p.filterDrivePos = p.filterDrivePos === "pre" ? "post" : "pre";
+    if (pWild(0.32)) {
+      // Rewrite mod-env contour shape (species gesture).
+      p.modEnvPoints = adsrToModEnvPoints(
+        rand(0.001, 0.8),
+        rand(0.05, 1.4),
+        rand(0, 0.85),
+        rand(0.05, 1.6),
+      );
+      p.modEnvSustainIndex = Math.max(1, (p.modEnvPoints.length || 2) - 1);
+      p.modEnvLoop = chance(0.25);
+    }
+    if (pWild(0.3)) {
+      p.airAmount = rand(0.15, 0.85);
+      p.airHigh = rand(-0.8, 0.9);
+      p.airLow = rand(-0.5, 0.6);
+    }
+    if (pWild(0.35)) {
+      // Age individuals — cassette / tape / wow without wet hall.
+      p.cassetteGen = rand(0.1, 0.7);
+      p.tapeSpeed = rand(-0.45, 0.45);
+      p.wowFlutter = rand(0.05, 0.55);
+      p.vhsColor = rand(0.05, 0.5);
+      p.ageMacro = Math.max(p.ageMacro ?? 0, rand(0.15, 0.65));
+      p.ageEvolve = rand(0.05, 0.45);
+    }
+    if (pWild(0.28)) {
+      p.warpStretch = rand(-0.95, 0.95);
+      p.warpTilt = rand(-0.9, 0.9);
+      p.warpComb = rand(0.1, 0.9);
+      p.warpAmount = chance(0.7) ? 1 : rand(0.45, 1);
+      p.warpMode = pick(["classic", "scramble", "subharmonic", "brickwall"] as const);
+    }
     // Inject a fresh matrix route so offspring actually move differently.
     if (pWild(0.35) && Array.isArray(p.modMatrix)) {
       const slot = p.modMatrix.findIndex((r) => !r || r.source === "none" || r.dest === "none");
@@ -765,16 +832,20 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
     }
   }
   if (a > 0.85) {
-    // Full Cambrian — occasionally flip wet FX engines on hard.
-    if (pWild(0.5)) p.reverbMix = Math.max(p.reverbMix, rand(0.25, 0.75));
-    if (pWild(0.45)) p.delayMix = Math.max(p.delayMix, rand(0.2, 0.65));
-    if (pWild(0.4)) p.chorusMix = Math.max(p.chorusMix, rand(0.2, 0.7));
-    if (pWild(0.35)) p.phaserMix = Math.max(p.phaserMix, rand(0.15, 0.6));
+    // Full Cambrian — dry-wild by default: timbre/species, not hall floors.
+    // (Wet mixes still jitter via uni01; we do NOT auto-raise reverb/delay/chorus/phaser.)
     if (pWild(0.4)) p.drive = Math.max(p.drive, rand(0.2, 0.7));
     if (pWild(0.3)) p.noiseLevel = Math.max(p.noiseLevel, rand(0.08, 0.35));
     if (pWild(0.35)) p.fmAmount = Math.max(p.fmAmount, rand(0.15, 0.65));
     if (pWild(0.25)) p.filterCutoff = rand(120, 9000);
-    if (pWild(0.25)) p.filterResonance = rand(2, 16);
+    if (pWild(0.3)) p.filterResonance = rand(2, 16);
+    if (pWild(0.25)) p.filterModel = pick(["ladder", "svf", "ladder"] as const);
+    if (pWild(0.3)) p.hardSync = true;
+    if (pWild(0.28)) p.fmEngine = "ops4";
+    if (pWild(0.25)) {
+      p.warpMode = pick(["scramble", "subharmonic", "brickwall"] as const);
+      p.warpAmount = 1;
+    }
   }
 
   return p;

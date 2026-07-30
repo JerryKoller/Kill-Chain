@@ -294,6 +294,8 @@ export function wavetableName(id: string): string {
 // harmonic series, which reads to the ear as stretch/tilt/comb while staying
 // perfectly band-limited and CPU-free at play time.
 
+export type WarpMode = "classic" | "scramble" | "subharmonic" | "brickwall";
+
 /**
  * Warp a sine-series amplitude array (index 0 unused, 1..N = harmonics).
  *
@@ -305,19 +307,23 @@ export function wavetableName(id: string): string {
  *   for a reedy, octave-doubled character.
  * - `comb` (0..1): periodic notches carved across the series — metallic,
  *   flanged spectra at full depth.
+ * - `mode`: classic (stretch/tilt/comb), scramble (partial permute),
+ *   subharmonic (fold energy into n/2·n/3), brickwall (hard harmonic gate).
  *
- * All zeros returns the input untouched (bit-identical fast path).
+ * All zeros + classic returns the input untouched (bit-identical fast path).
  */
 export function applyWarp(
   imag: Float32Array,
   stretch: number,
   tilt: number,
   comb: number,
+  mode: WarpMode = "classic",
 ): Float32Array {
   stretch = clamp(stretch, -1, 1);
   tilt = clamp(tilt, -1, 1);
   comb = clamp(comb, 0, 1);
-  if (stretch === 0 && tilt === 0 && comb === 0) return imag;
+  const m = mode ?? "classic";
+  if (m === "classic" && stretch === 0 && tilt === 0 && comb === 0) return imag;
 
   const N = imag.length - 1; // harmonics 1..N
   const out = new Float32Array(imag.length);
@@ -325,15 +331,15 @@ export function applyWarp(
   // 1) Stretch: resample the series along n' = n · (1 + B·n) — the classic
   //    stiff-string partial law, applied to amplitudes via inverse mapping.
   const B = stretch * 0.05;
-  for (let m = 1; m <= N; m++) {
-    const denom = Math.max(0.3, 1 + B * m);
-    const src = m / denom; // fractional source harmonic
+  for (let mH = 1; mH <= N; mH++) {
+    const denom = Math.max(0.3, 1 + B * mH);
+    const src = mH / denom; // fractional source harmonic
     const lo = Math.floor(src);
     const hi = lo + 1;
     const t = src - lo;
     const aLo = lo >= 1 && lo <= N ? imag[lo]! : 0;
     const aHi = hi >= 1 && hi <= N ? imag[hi]! : 0;
-    out[m] = aLo * (1 - t) + aHi * t;
+    out[mH] = aLo * (1 - t) + aHi * t;
   }
 
   // 2) Tilt: even/odd emphasis (fundamental always survives).
@@ -350,6 +356,56 @@ export function applyWarp(
     for (let n = 2; n <= N; n++) {
       const notch = 0.5 + 0.5 * Math.cos((2 * Math.PI * n) / 4.3);
       out[n]! *= 1 - comb * notch;
+    }
+  }
+
+  // 4) Mode species — still integer-harmonic / PeriodicWave-legal.
+  if (m === "scramble") {
+    // Deterministic partial permute seeded by stretch/tilt/comb — alien but stable.
+    const seed = Math.floor(
+      (Math.abs(stretch) * 997 + Math.abs(tilt) * 7919 + comb * 104729) * 1e6,
+    ) >>> 0;
+    let s = seed || 1;
+    const rnd = () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 0x100000000;
+    };
+    const depth = 0.35 + Math.max(Math.abs(stretch), Math.abs(tilt), comb) * 0.65;
+    const idxs = Array.from({ length: N }, (_, i) => i + 1);
+    for (let i = N - 1; i > 1; i--) {
+      if (rnd() > depth) continue;
+      const j = 1 + Math.floor(rnd() * i);
+      const tmp = idxs[i]!;
+      idxs[i] = idxs[j]!;
+      idxs[j] = tmp;
+    }
+    const scrambled = new Float32Array(out.length);
+    scrambled[1] = out[1]!;
+    for (let n = 2; n <= N; n++) scrambled[n] = out[idxs[n - 1]!]!;
+    for (let n = 1; n <= N; n++) out[n] = scrambled[n]!;
+  } else if (m === "subharmonic") {
+    // Fold upper partial energy into n/2 and n/3 (subharmonic inject).
+    const depth = 0.25 + Math.max(Math.abs(stretch), comb) * 0.7;
+    const inj = new Float32Array(out.length);
+    for (let n = 2; n <= N; n++) {
+      const a = out[n]!;
+      const h2 = Math.floor(n / 2);
+      const h3 = Math.floor(n / 3);
+      if (h2 >= 1) inj[h2]! += a * depth * 0.55;
+      if (h3 >= 1) inj[h3]! += a * depth * 0.35;
+    }
+    for (let n = 1; n <= N; n++) out[n]! = out[n]! * (1 - depth * 0.35) + inj[n]!;
+  } else if (m === "brickwall") {
+    // Hard harmonic gate: stretch sets the cutoff harmonic, comb softens the edge.
+    const cutN = clamp(
+      Math.round(4 + (0.5 + stretch * 0.5) * (N - 4) * (1 - comb * 0.45)),
+      2,
+      N,
+    );
+    const soft = 1 + Math.round(comb * 6);
+    for (let n = 2; n <= N; n++) {
+      if (n > cutN + soft) out[n] = 0;
+      else if (n > cutN) out[n]! *= 1 - (n - cutN) / (soft + 0.001);
     }
   }
 

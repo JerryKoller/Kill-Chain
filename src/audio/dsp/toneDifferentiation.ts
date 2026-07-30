@@ -21,7 +21,8 @@ export type UnisonTemporalMode = "ltr" | "center" | "random";
 export type AmpModel = "vca" | "gate";
 export type AmpRetrigger = "zero" | "current" | "legato";
 export type FilterDrivePos = "pre" | "post";
-export type FilterCarveMode = "off" | "fundamental" | "odds" | "evens" | "noise";
+export type FilterCarveMode = "off" | "fundamental" | "odds" | "evens" | "noise" | "formant";
+export type FilterModel = "biquad" | "ladder" | "svf";
 export type LpgModel = "fast" | "classic" | "slow" | "aged" | "sticky" | "bright";
 export type FilterSlope = 1 | 2 | 3;
 

@@ -11,13 +11,13 @@ const MODULE_KEYS: Record<string, readonly PatchKey[]> = {
   "osc.a": ["oscATable", "oscAPos", "oscAEnv", "oscALfo", "oscAOctave", "oscADetune", "oscALevel", "oscAContinuity"],
   "osc.b": ["oscBTable", "oscBPos", "oscBEnv", "oscBLfo", "oscBOctave", "oscBDetune", "oscBLevel", "oscBInherit", "oscBPhaseLock", "fmAtoB"],
   "osc.c": ["oscCTable", "oscCPos", "oscCEnv", "oscCLfo", "oscCOctave", "oscCDetune", "oscCLevel"],
-  "fire.sec.warp": ["warpStretch", "warpTilt", "warpComb", "warpAmount"],
+  "fire.sec.warp": ["warpStretch", "warpTilt", "warpComb", "warpAmount", "warpMode"],
   chip: ["pulseDuty", "hardSync", "chipNoise", "chipVoiceLimit", "accentAmount", "slideOn", "chipAcidMix"],
   noise: ["noiseLevel", "noiseColor", "noiseMode", "noiseDensity", "noiseGrain"],
   sub: ["subWave", "subLevel", "subOctave", "subPhaseAlign", "subTranslate"],
   "mixer.unison": ["unison", "unisonDetune", "unisonWidth"],
   "analog.life": ["drift", "driftRate", "voiceInstability", "tuneVariance", "envVariance"],
-  filter: ["filterType", "filterCutoff", "filterResonance", "filterEnvAmount", "filterKeyTrack", "filterDrive"],
+  filter: ["filterType", "filterModel", "filterCutoff", "filterResonance", "filterEnvAmount", "filterKeyTrack", "filterDrive", "filterCarve", "filterCarveAmount"],
   "env.amp": ["ampAttack", "ampDecay", "ampSustain", "ampRelease", "velAmount"],
   "env.mod": ["modAttack", "modDecay", "modSustain", "modRelease"],
   "env.filt": ["filtAttack", "filtDecay", "filtSustain", "filtRelease"],
@@ -94,6 +94,8 @@ export function liveUnisonCap(patch: FirePatch): number {
   const spectralOn = spectralActive(patch);
   const ops4 = (patch.fmEngine ?? "classic") === "ops4";
   const groups = 2 + ((patch.oscCLevel ?? 0) > 0.0001 ? 1 : 0);
+  const dualMorph = (patch.oscAContinuity ?? 0) > 0.45;
+  const workletFilt = (patch.filterModel ?? "biquad") !== "biquad" && (patch.fxQuality ?? "live") !== "eco";
   const heavyFx =
     (patch.crush ?? 0) > 0.45
     || (patch.chorusModel === "triple" || patch.chorusModel === "ensemble")
@@ -105,6 +107,8 @@ export function liveUnisonCap(patch: FirePatch): number {
   if (spectralOn && ops4) cap = 4;
   if (spectralOn && groups >= 3) cap = Math.min(cap, 4);
   if (!spectralOn && !ops4 && heavyFx) cap = Math.min(cap, 8);
+  if (dualMorph) cap = Math.min(cap, 8);
+  if (workletFilt) cap = Math.min(cap, dualMorph ? 6 : 8);
   return cap;
 }
 
@@ -144,14 +148,17 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
   cap((patch.unison ?? 1) > uniCap, () => {
     patch.unison = uniCap as FirePatch["unison"];
   });
-  cap((patch.filterResonance ?? 0) > 2.2, () => {
-    patch.filterResonance = 2.2;
+  // Soften only runaway scream Q — Studio/Fire power users may sit above 2.2.
+  const pressureEarly = patchCpuPressure(patch, patch.mono ? 1 : 4);
+  const resoCeil = pressureEarly > 0.7 ? 8 : 18;
+  cap((patch.filterResonance ?? 0) > resoCeil, () => {
+    patch.filterResonance = resoCeil;
   });
-  cap((patch.filterDrive ?? 0) > 0.65, () => {
-    patch.filterDrive = 0.65;
+  cap((patch.filterDrive ?? 0) > 0.85, () => {
+    patch.filterDrive = 0.85;
   });
-  cap((patch.drive ?? 0) > 0.55, () => {
-    patch.drive = 0.55;
+  cap((patch.drive ?? 0) > 0.7, () => {
+    patch.drive = 0.7;
   });
   cap((patch.crush ?? 0) > 0.5, () => {
     patch.crush = 0.5;
@@ -212,12 +219,17 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
   return softened;
 }
 
-/** Loudness / feedback safety ceiling after randomize or mutate. */
+/**
+ * Loudness / feedback safety after randomize or mutate.
+ * Split from the old hard Q≤2.2 ceiling so Natural Selection / Studio can
+ * keep filter bite — only runaway feedback/wet mixes stay tightly capped.
+ */
 export function applyLoudnessSafety(patch: FirePatch): FirePatch {
   patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.78);
-  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 2.2);
-  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.65);
-  patch.drive = Math.min(patch.drive ?? 0, 0.55);
+  // Power-user bite path: allow high Q; performance safety softens under CPU load.
+  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 16);
+  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.85);
+  patch.drive = Math.min(patch.drive ?? 0, 0.7);
   patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.62);
   patch.delayMix = Math.min(patch.delayMix ?? 0, 0.42);
   patch.reverbMix = Math.min(patch.reverbMix ?? 0, 0.5);

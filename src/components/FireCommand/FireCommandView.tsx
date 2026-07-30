@@ -25,7 +25,7 @@ import { useFireMidiFocusStore, bootFireMidiFocus } from "@/state/fireMidiFocusS
 import { focusPageKnobs, focusModuleAt, focusPageCount, FIRE_FOCUS_COUNT } from "./fireKnobFocus";
 import { setStageVizPressureSource } from "./stageVizRaf";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
-import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode } from "@/audio/dsp/FireCommandSynth";
+import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode, type FilterModel, type WarpMode } from "@/audio/dsp/FireCommandSynth";
 import { matrixArcsForParam, countRoutesFrom, MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
 import { fxTechState, fxTechBadge, FX_QUALITY_LABELS, type FxQuality, type LowProtect } from "@/audio/dsp/fxClarity";
 import {
@@ -3067,6 +3067,50 @@ function WarpQuickActions() {
   );
 }
 
+function WarpModeStrip() {
+  const mode = (useFireCommandStore((s) => s.patch.warpMode) ?? "classic") as WarpMode;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.warp;
+  const opts: { id: WarpMode; label: string; tip: string }[] = [
+    { id: "classic", label: "Classic", tip: "Stretch / tilt / comb harmonic remap" },
+    { id: "scramble", label: "Scramble", tip: "Deterministic partial permute — alien spectra" },
+    { id: "subharmonic", label: "Subharm", tip: "Fold energy into n/2 · n/3 subharmonics" },
+    { id: "brickwall", label: "Brick", tip: "Hard harmonic gate — stretch sets the wall" },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Mode
+      </span>
+      {opts.map((o) => {
+        const on = mode === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setParam("warpMode", o.id)}
+            className="min-w-[2.6rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.sources, 0.92),
+                    boxShadow: `0 0 12px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={o.tip}
+            aria-pressed={on}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function WarpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const c = FC.warp;
   const cSt = bandShade(FC.sources, 0.55);
@@ -3076,8 +3120,10 @@ function WarpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
   const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
   const amount = useFireCommandStore((s) => s.patch.warpAmount) ?? 1;
+  const warpMode = (useFireCommandStore((s) => s.patch.warpMode) ?? "classic") as WarpMode;
   const active = Math.abs(amount) > 0.01 && (
-    Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01
+    warpMode !== "classic"
+    || Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01
   );
   const state = forgeState(active);
 
@@ -3111,7 +3157,7 @@ function WarpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Harmonic Forge
             <span className="ml-2 font-mono text-[11px] font-normal text-white/45">
               {active
-                ? `ST ${stretch > 0 ? "+" : ""}${Math.round(stretch * 100)} · TL ${tilt > 0 ? "+" : ""}${Math.round(tilt * 100)} · CB ${Math.round(comb * 100)}`
+                ? `${warpMode.slice(0, 3).toUpperCase()} · ST ${stretch > 0 ? "+" : ""}${Math.round(stretch * 100)} · TL ${tilt > 0 ? "+" : ""}${Math.round(tilt * 100)} · CB ${Math.round(comb * 100)}`
                 : "neutral · pass-through"}
             </span>
           </div>
@@ -3134,6 +3180,7 @@ function WarpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
 
       <WarpStageViz />
+      <WarpModeStrip />
       <WarpCharacterStrip />
 
       <div className="mb-2 flex items-center justify-center gap-5">
@@ -3149,7 +3196,7 @@ function WarpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <FParamKnob paramKey="warpComb" label="Comb" min={0} max={1} format={fmtPct} def={0} size={48} color={cCb} />
       </div>
       <div className="mt-1.5 text-center text-[12px] leading-snug" style={{ color: `${c}aa` }}>
-        Forge amount scales Stretch/Tilt/Comb (− = inverse). Dim IN · bright OUT.
+        Forge scales Stretch/Tilt/Comb (− = inverse). Modes stay PeriodicWave-legal.
       </div>
     </Section>
   );
@@ -4842,7 +4889,7 @@ function filtNearHz(a: number, b: number) {
   return Math.abs(Math.log2(Math.max(30, a) / Math.max(30, b))) < 0.18;
 }
 
-function FiltCarveChip({ mode }: { mode: "off" | "fundamental" | "odds" | "evens" | "noise" }) {
+function FiltCarveChip({ mode }: { mode: "off" | "fundamental" | "odds" | "evens" | "noise" | "formant" }) {
   const carve = useFireCommandStore((s) => s.patch.filterCarve) ?? "off";
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = FC.filter;
@@ -4853,6 +4900,7 @@ function FiltCarveChip({ mode }: { mode: "off" | "fundamental" | "odds" | "evens
     odds: "Odds",
     evens: "Evens",
     noise: "Noise",
+    formant: "Formant",
   };
   return (
     <button
@@ -4867,10 +4915,53 @@ function FiltCarveChip({ mode }: { mode: "off" | "fundamental" | "odds" | "evens
         color: on ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.4)",
         background: on ? `${c}30` : "rgba(0,0,0,0.3)",
       }}
-      title={`Harmonic carve: ${labels[mode]}`}
+      title={mode === "formant" ? "Movable F1/F2 formants — Cutoff slides vowels, Carve opens mouths" : `Harmonic carve: ${labels[mode]}`}
     >
       {labels[mode]}
     </button>
+  );
+}
+
+function FiltModelStrip() {
+  const model = (useFireCommandStore((s) => s.patch.filterModel) ?? "biquad") as FilterModel;
+  const setParam = useFireCommandStore((s) => s.setParam);
+  const c = FC.filter;
+  const opts: { id: FilterModel; label: string; tip: string }[] = [
+    { id: "biquad", label: "Eco", tip: "Classic biquad cascade (default / eco)" },
+    { id: "ladder", label: "Ladder", tip: "Moog-ish 4-pole ladder worklet — real bite" },
+    { id: "svf", label: "SVF", tip: "State-variable filter worklet — sharp character" },
+  ];
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
+      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        Model
+      </span>
+      {opts.map((o) => {
+        const on = model === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => setParam("filterModel", o.id)}
+            className="min-w-[2.4rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+            style={
+              on
+                ? {
+                    borderColor: `${c}99`,
+                    background: `${c}33`,
+                    color: bandShade(FC.tone, 0.92),
+                    boxShadow: `0 0 12px ${c}44`,
+                  }
+                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
+            }
+            title={o.tip}
+            aria-pressed={on}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -5202,6 +5293,7 @@ function FilterPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
 
       <FilterStageViz />
       <FiltTypeStrip />
+      <FiltModelStrip />
       <FiltCharacterStrip />
       <FiltCutoffStrip />
 
@@ -5224,13 +5316,13 @@ function FilterPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <FParamKnob paramKey="filterCarveAmount" label="Carve" min={0} max={1} format={fmtPct} def={0} size={40} color={bandShade(FC.tone, 0.8)} />
       </div>
       <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
-        {(["off", "fundamental", "odds", "evens", "noise"] as const).map((m) => (
+        {(["off", "fundamental", "odds", "evens", "noise", "formant"] as const).map((m) => (
           <FiltCarveChip key={m} mode={m} />
         ))}
         <FiltDrivePosChip />
       </div>
       <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
-        Spectral blade — slope cascades, carve targets partials, Env→Reso for dual sweep.
+        Spectral blade — Ladder/SVF for bite · Formant carve moves F1/F2 with Cutoff · Env→Reso dual sweep.
       </div>
     </Section>
   );

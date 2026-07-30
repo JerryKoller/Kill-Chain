@@ -7,13 +7,9 @@
  * the same downstream chain as music (EQ, FX, spatializer, limiter) unless the
  * global bypass ("FX: OFF") is engaged.
  *
- * Wavetable playback is intentionally light on CPU: each table is pre-rendered
- * into a dense bank of `SUBFRAMES` band-limited `PeriodicWave`s (the morph is
- * interpolated in harmonic space at build time). A voice therefore needs only
- * ONE oscillator per unison voice; morphing just swaps which bank entry it
- * plays, at control-rate, and only when the entry actually changes. This keeps
- * polyphony affordable and avoids the audio dropouts that a 2-oscillator
- * crossfade design caused under chords.
+ * Wavetable playback keeps CPU in check via pitch-mip × subframe `PeriodicWave`
+ * banks. At high Continuity, each unison slot dual-crossfades adjacent frames
+ * (equal-power); Continuity → 0 keeps the coarse snap character.
  */
 
 import {
@@ -25,6 +21,7 @@ import {
   normalizeSpectrum,
   mipLevelForFreq,
   applyWarp,
+  type WarpMode,
 } from "./wavetables";
 import { FireVintageAge } from "./FireVintageAge";
 import { punchMacroToGlue, type GlueMode, type MasterChainScene } from "./mixClarity";
@@ -34,6 +31,7 @@ import {
   type EnvCurve,
   type FilterCarveMode,
   type FilterDrivePos,
+  type FilterModel,
   type FilterSlope,
   type LpgModel,
   type ModEnvPoint,
@@ -59,6 +57,7 @@ export type {
   EnvCurve,
   FilterCarveMode,
   FilterDrivePos,
+  FilterModel,
   FilterSlope,
   LpgModel,
   ModEnvPoint,
@@ -68,6 +67,7 @@ export type {
   UnisonPhaseMode,
   UnisonTemporalMode,
 } from "./toneDifferentiation";
+export type { WarpMode } from "./wavetables";
 
 export type FireFilterType = "lowpass" | "bandpass" | "highpass" | "notch";
 export type SubWave = "sine" | "triangle" | "square" | "sawtooth";
@@ -221,6 +221,8 @@ export interface FirePatch {
    * Scales Stretch/Tilt/Comb (negative = inverse transform). 0 = bypass.
    */
   warpAmount: number;
+  /** PeriodicWave-legal warp species (classic / scramble / subharmonic / brickwall). */
+  warpMode: WarpMode;
   // ── Unison ──
   unison: number;
   unisonDetune: number;
@@ -261,6 +263,8 @@ export interface FirePatch {
   ringFreq: number;
   // ── Filter ──
   filterType: FireFilterType;
+  /** Eco/default = biquad cascade; ladder/svf = bite worklet when loaded. */
+  filterModel: FilterModel;
   filterCutoff: number;
   filterResonance: number;
   filterEnvAmount: number;
@@ -636,8 +640,8 @@ export interface FirePatch {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const midiToFreq = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 const MAX_UNISON = 16;
-/** Hard ceiling on Biquad Q — values near 30 scream and hard-clip the filter. */
-const FILTER_Q_CEIL = 3.5;
+/** Hard ceiling on live filter Q — power-user bite path (was 3.5). */
+const FILTER_Q_CEIL = 14;
 
 /**
  * Soft unison ceiling for live voices. Extreme user presets (unison 16 +
@@ -647,6 +651,8 @@ function liveUnisonCap(p: FirePatch): number {
   const spectralOn = (p.spectralMode ?? "off") !== "off" && (p.spectralMix ?? 0) > 0.05;
   const ops4 = (p.fmEngine ?? "classic") === "ops4";
   const groups = 2 + ((p.oscCLevel ?? 0) > 0.0001 ? 1 : 0);
+  const dualMorph = (p.oscAContinuity ?? 0) > 0.45;
+  const workletFilt = (p.filterModel ?? "biquad") !== "biquad" && (p.fxQuality ?? "live") !== "eco";
   const heavyFx =
     (p.crush ?? 0) > 0.45
     || p.chorusModel === "triple"
@@ -659,6 +665,8 @@ function liveUnisonCap(p: FirePatch): number {
   if (spectralOn && ops4) cap = 4;
   if (spectralOn && groups >= 3) cap = Math.min(cap, 4);
   if (!spectralOn && !ops4 && heavyFx) cap = Math.min(cap, 8);
+  if (dualMorph) cap = Math.min(cap, 8);
+  if (workletFilt) cap = Math.min(cap, dualMorph ? 6 : 8);
   return cap;
 }
 
@@ -884,13 +892,20 @@ interface LfoBank {
 }
 
 interface Group {
+  /** Low / primary frame oscillators. */
   osc: OscillatorNode[];
+  /** Adjacent-frame oscillators for equal-power morph crossfade. */
+  oscHi: OscillatorNode[];
+  morphLo: GainNode[];
+  morphHi: GainNode[];
   /** Per-unison polarity / level (alternating phase uses gain = -1). */
   gains: GainNode[];
   pans: StereoPannerNode[];
   level: GainNode;
   bank: PeriodicWave[];
   lastK: number;
+  lastK1: number;
+  lastFrac: number;
 }
 
 /** One polyphonic, stereo wavetable voice. */
@@ -944,8 +959,12 @@ class Voice {
   private readonly uNorm: number;
   /** Extra cascaded biquads for slope > 12 dB/oct. */
   private readonly filterExtra: BiquadFilterNode[] = [];
-  /** Harmonic carve notch / peaking stage. */
+  /** Harmonic carve notch / peaking stage (F1 / primary). */
   private readonly carveFilt: BiquadFilterNode;
+  /** Second carve stage for formant F2 pairs. */
+  private readonly carveFilt2: BiquadFilterNode;
+  /** Optional ladder/SVF worklet (null = biquad eco path). */
+  private readonly filterWorklet: AudioWorkletNode | null;
   /** Persistent Analog Life personality slot (0..47). */
   voiceSlot = 0;
 
@@ -1025,9 +1044,11 @@ class Voice {
     // as a pure (silent) modulator, Serum-style.
     for (const pan of this.groupB.pans) pan.connect(this.xmodGain);
     for (const o of this.groupA.osc) this.xmodGain.connect(o.frequency);
+    for (const o of this.groupA.oscHi) this.xmodGain.connect(o.frequency);
     // Twin FM: A → B
     for (const pan of this.groupA.pans) pan.connect(this.xmodGainAB);
     for (const o of this.groupB.osc) this.xmodGainAB.connect(o.frequency);
+    for (const o of this.groupB.oscHi) this.xmodGainAB.connect(o.frequency);
 
     this.sub = ctx.createOscillator();
     this.sub.type = p.subWave;
@@ -1058,6 +1079,10 @@ class Voice {
     this.carveFilt.type = "allpass";
     this.carveFilt.Q.value = 1;
     this.carveFilt.frequency.value = 1000;
+    this.carveFilt2 = ctx.createBiquadFilter();
+    this.carveFilt2.type = "allpass";
+    this.carveFilt2.Q.value = 1;
+    this.carveFilt2.frequency.value = 2000;
 
     const slope = Math.round(clamp(p.filterSlope ?? 1, 1, 3)) as FilterSlope;
     for (let i = 1; i < slope; i++) {
@@ -1067,14 +1092,33 @@ class Voice {
       this.filterExtra.push(extra);
     }
 
+    const model = p.filterModel ?? "biquad";
+    const wantWorklet =
+      (model === "ladder" || model === "svf")
+      && synth.filterWorkletReady
+      && (p.fxQuality ?? "live") !== "eco";
+    this.filterWorklet = wantWorklet
+      ? new AudioWorkletNode(ctx, "kc-filter", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
+        })
+      : null;
+
     const drivePre = (p.filterDrivePos ?? "post") === "pre";
     let node: AudioNode = this.mix;
     if (drivePre) {
       node = node.connect(this.fdPad).connect(this.fdShaper);
     }
-    node = node.connect(this.filter);
-    for (const extra of this.filterExtra) node = node.connect(extra);
-    node = node.connect(this.carveFilt);
+    if (this.filterWorklet) {
+      // Worklet is the audible filter; keep biquad out of the audio path
+      // but still drive its params so env/mod math stays shared.
+      node = node.connect(this.filterWorklet);
+    } else {
+      node = node.connect(this.filter);
+      for (const extra of this.filterExtra) node = node.connect(extra);
+    }
+    node = node.connect(this.carveFilt).connect(this.carveFilt2);
     if (!drivePre) {
       node = node.connect(this.fdPad).connect(this.fdShaper);
     }
@@ -1096,6 +1140,14 @@ class Voice {
     this.modCutoff = ctx.createConstantSource();
     this.modCutoff.offset.value = 0;
     this.modCutoff.connect(this.filter.frequency);
+    if (this.filterWorklet) {
+      const cutP = this.filterWorklet.parameters.get("cutoff");
+      if (cutP) {
+        // Base cutoff written in setFilterLive; env/mod sum onto the worklet too.
+        this.filterEnv.connect(cutP);
+        this.modCutoff.connect(cutP);
+      }
+    }
 
     // FM + LFO + pitch-env taps into every oscillator.
     for (const o of this.allOscs()) this.fmGain.connect(o.frequency);
@@ -1141,8 +1193,13 @@ class Voice {
       const usePhase = !isAnchor && phaseMode !== "locked" && phaseMode !== "alternating";
       const phi = usePhase ? phases[i]! : 0;
       this.groupA.osc[i].start(st + phi / (2 * Math.PI * fA0));
+      this.groupA.oscHi[i].start(st + phi / (2 * Math.PI * fA0));
       this.groupB.osc[i].start(st + phi / (2 * Math.PI * fB0));
-      if (this.groupC) this.groupC.osc[i].start(st + phi / (2 * Math.PI * fC0));
+      this.groupB.oscHi[i].start(st + phi / (2 * Math.PI * fB0));
+      if (this.groupC) {
+        this.groupC.osc[i].start(st + phi / (2 * Math.PI * fC0));
+        this.groupC.oscHi[i].start(st + phi / (2 * Math.PI * fC0));
+      }
     }
     this.sub.start(t);
     this.subHarm.start(t);
@@ -1159,48 +1216,108 @@ class Voice {
 
   private makeGroup(ctx: AudioContext, count: number, bank: PeriodicWave[]): Group {
     const osc: OscillatorNode[] = [];
+    const oscHi: OscillatorNode[] = [];
+    const morphLo: GainNode[] = [];
+    const morphHi: GainNode[] = [];
     const gains: GainNode[] = [];
     const pans: StereoPannerNode[] = [];
     const level = ctx.createGain();
     for (let i = 0; i < count; i++) {
       const o = ctx.createOscillator();
+      const oHi = ctx.createOscillator();
+      const mLo = ctx.createGain();
+      const mHi = ctx.createGain();
+      mLo.gain.value = 1;
+      mHi.gain.value = 0;
       const g = ctx.createGain();
       g.gain.value = 1;
       const pan = ctx.createStereoPanner();
       o.setPeriodicWave(bank[0]);
-      o.connect(g).connect(pan).connect(level);
+      oHi.setPeriodicWave(bank[0]);
+      // Dual-frame equal-power morph: lo/hi → polarity → pan → group level.
+      o.connect(mLo).connect(g);
+      oHi.connect(mHi).connect(g);
+      g.connect(pan).connect(level);
       osc.push(o);
+      oscHi.push(oHi);
+      morphLo.push(mLo);
+      morphHi.push(mHi);
       gains.push(g);
       pans.push(pan);
     }
-    return { osc, gains, pans, level, bank, lastK: -1 };
+    return { osc, oscHi, morphLo, morphHi, gains, pans, level, bank, lastK: -1, lastK1: -1, lastFrac: -1 };
   }
 
   private allOscs(): OscillatorNode[] {
-    return this.groupC
-      ? [...this.groupA.osc, ...this.groupB.osc, ...this.groupC.osc]
-      : [...this.groupA.osc, ...this.groupB.osc];
+    const a = [...this.groupA.osc, ...this.groupA.oscHi, ...this.groupB.osc, ...this.groupB.oscHi];
+    if (this.groupC) a.push(...this.groupC.osc, ...this.groupC.oscHi);
+    return a;
   }
 
   private setWt(group: Group, pos: number, continuity = 1): void {
     const cont = clamp(continuity, 0, 1);
-    // Continuity low → coarse frame grid (discrete snaps); high → full subframe resolution.
-    const steps = Math.max(2, Math.round(4 + cont * (SUBFRAMES - 4)));
-    const snapped = Math.round(clamp(pos, 0, 1) * (steps - 1)) / (steps - 1);
-    const k = Math.round(snapped * (SUBFRAMES - 1));
-    if (k === group.lastK) return;
-    group.lastK = k;
-    const wave = group.bank[k];
-    for (const o of group.osc) o.setPeriodicWave(wave);
+    const N = Math.max(2, group.bank.length);
+    const t = this.ctx.currentTime;
+    // Continuity low → coarse snapped single frame; high → dual-osc crossfade.
+    if (cont < 0.12) {
+      const steps = Math.max(2, Math.round(4 + cont * (N - 4)));
+      const snapped = Math.round(clamp(pos, 0, 1) * (steps - 1)) / (steps - 1);
+      const k = Math.round(snapped * (N - 1));
+      if (k === group.lastK && group.lastFrac === 0) return;
+      group.lastK = k;
+      group.lastK1 = k;
+      group.lastFrac = 0;
+      const wave = group.bank[k] ?? group.bank[0]!;
+      for (let i = 0; i < group.osc.length; i++) {
+        group.osc[i]!.setPeriodicWave(wave);
+        group.morphLo[i]!.gain.setTargetAtTime(1, t, 0.01);
+        group.morphHi[i]!.gain.setTargetAtTime(0, t, 0.01);
+      }
+      return;
+    }
+    const steps = Math.max(2, Math.round(4 + cont * (N - 4)));
+    const continuous = clamp(pos, 0, 1) * (N - 1);
+    const snapped = (Math.round(clamp(pos, 0, 1) * (steps - 1)) / (steps - 1)) * (N - 1);
+    const idx = continuous * cont + snapped * (1 - cont);
+    const k0 = Math.max(0, Math.min(N - 1, Math.floor(idx)));
+    const k1 = Math.min(N - 1, k0 + 1);
+    const frac = clamp(idx - k0, 0, 1);
+    if (k0 === group.lastK && k1 === group.lastK1 && Math.abs(frac - group.lastFrac) < 0.0015) return;
+    if (k0 !== group.lastK || k1 !== group.lastK1) {
+      const w0 = group.bank[k0] ?? group.bank[0]!;
+      const w1 = group.bank[k1] ?? w0;
+      for (let i = 0; i < group.osc.length; i++) {
+        group.osc[i]!.setPeriodicWave(w0);
+        group.oscHi[i]!.setPeriodicWave(w1);
+      }
+      group.lastK = k0;
+      group.lastK1 = k1;
+    }
+    group.lastFrac = frac;
+    // Equal-power crossfade between adjacent bank frames.
+    const g0 = Math.cos(frac * Math.PI * 0.5);
+    const g1 = Math.sin(frac * Math.PI * 0.5);
+    for (let i = 0; i < group.osc.length; i++) {
+      group.morphLo[i]!.gain.setTargetAtTime(g0, t, 0.006);
+      group.morphHi[i]!.gain.setTargetAtTime(g1, t, 0.006);
+    }
   }
 
   setWtA(pos: number, continuity = 1): void { this.setWt(this.groupA, pos, continuity); }
-  setWtB(pos: number): void { this.setWt(this.groupB, pos, 1); }
-  setWtC(pos: number): void { if (this.groupC) this.setWt(this.groupC, pos, 1); }
+  setWtB(pos: number, continuity = 1): void { this.setWt(this.groupB, pos, continuity); }
+  setWtC(pos: number, continuity = 1): void { if (this.groupC) this.setWt(this.groupC, pos, continuity); }
 
-  setBankA(bank: PeriodicWave[]): void { this.groupA.bank = bank; this.groupA.lastK = -1; }
-  setBankB(bank: PeriodicWave[]): void { this.groupB.bank = bank; this.groupB.lastK = -1; }
-  setBankC(bank: PeriodicWave[]): void { if (this.groupC) { this.groupC.bank = bank; this.groupC.lastK = -1; } }
+  setBankA(bank: PeriodicWave[]): void {
+    this.groupA.bank = bank; this.groupA.lastK = -1; this.groupA.lastK1 = -1; this.groupA.lastFrac = -1;
+  }
+  setBankB(bank: PeriodicWave[]): void {
+    this.groupB.bank = bank; this.groupB.lastK = -1; this.groupB.lastK1 = -1; this.groupB.lastFrac = -1;
+  }
+  setBankC(bank: PeriodicWave[]): void {
+    if (this.groupC) {
+      this.groupC.bank = bank; this.groupC.lastK = -1; this.groupC.lastK1 = -1; this.groupC.lastFrac = -1;
+    }
+  }
   hasGroupC(): boolean { return this.groupC !== null; }
 
   setSubWave(w: SubWave): void { this.sub.type = w; }
@@ -1299,8 +1416,13 @@ class Voice {
       }
     };
     for (const o of this.groupA.osc) setFreq(o, fA);
+    for (const o of this.groupA.oscHi) setFreq(o, fA);
     for (const o of this.groupB.osc) setFreq(o, fB);
-    if (this.groupC) for (const o of this.groupC.osc) setFreq(o, fC);
+    for (const o of this.groupB.oscHi) setFreq(o, fB);
+    if (this.groupC) {
+      for (const o of this.groupC.osc) setFreq(o, fC);
+      for (const o of this.groupC.oscHi) setFreq(o, fC);
+    }
     const fSub = this.baseFreq * Math.pow(2, p.subOctave ?? -1);
     setFreq(this.sub, fSub);
     setFreq(this.subHarm, fSub * 2);
@@ -1547,6 +1669,19 @@ class Voice {
           t + filtAtk,
           Math.max(0.005, filtDec / 3),
         );
+        if (this.filterWorklet) {
+          const resP = this.filterWorklet.parameters.get("resonance");
+          if (resP) {
+            resP.cancelScheduledValues(t);
+            resP.setValueAtTime(clamp(liveFilterQ(p.filterResonance) / FILTER_Q_CEIL, 0, 1), t);
+            resP.linearRampToValueAtTime(clamp(qPeak / FILTER_Q_CEIL, 0, 1), t + filtAtk);
+            resP.setTargetAtTime(
+              clamp(liveFilterQ(p.filterResonance, resoAmt * 14 * p.filtSustain) / FILTER_Q_CEIL, 0, 1),
+              t + filtAtk,
+              Math.max(0.005, filtDec / 3),
+            );
+          }
+        }
       }
       if (accent > 0.04) {
         const boosted = clamp(peak * (1 + accent * 0.4), 0, 1.25);
@@ -1651,11 +1786,19 @@ class Voice {
       try { bank.pitchDepth.disconnect(this.sub.detune); } catch { /* ignore */ }
     }
     const others: AudioNode[] = [
-      ...this.groupA.pans, ...this.groupB.pans, this.groupA.level, this.groupB.level,
+      ...this.groupA.pans, ...this.groupB.pans,
+      ...this.groupA.morphLo, ...this.groupA.morphHi,
+      ...this.groupB.morphLo, ...this.groupB.morphHi,
+      this.groupA.level, this.groupB.level,
       this.gSub, this.gSubHarm, this.gNoise, this.noiseBurst, this.noiseFilt, this.fmGain, this.xmodGain, this.xmodGainAB,
-      this.mix, this.filter, ...this.filterExtra, this.carveFilt, this.fdPad, this.fdShaper, this.vca,
+      this.mix, this.filter, ...this.filterExtra, this.carveFilt, this.carveFilt2, this.fdPad, this.fdShaper, this.vca,
     ];
-    if (this.groupC) others.push(...this.groupC.pans, this.groupC.level);
+    if (this.filterWorklet) others.push(this.filterWorklet);
+    if (this.groupC) {
+      others.push(
+        ...this.groupC.pans, ...this.groupC.morphLo, ...this.groupC.morphHi, this.groupC.level,
+      );
+    }
     for (const n of others) { try { n.disconnect(); } catch { /* ignore */ } }
     this.synth.onVoiceEnded(this);
   }
@@ -1742,6 +1885,11 @@ class Voice {
         extra.frequency.setTargetAtTime(20000, t, 0.03);
       }
       this.carveFilt.type = "allpass";
+      this.carveFilt2.type = "allpass";
+      if (this.filterWorklet) {
+        this.filterWorklet.parameters.get("cutoff")?.setTargetAtTime(20000, t, 0.03);
+        this.filterWorklet.parameters.get("resonance")?.setTargetAtTime(0, t, 0.03);
+      }
       return;
     }
     const base = this.baseCutoff(p);
@@ -1759,19 +1907,59 @@ class Voice {
       extra.Q.setTargetAtTime(liveFilterQ(p.filterResonance) * 0.55, t, 0.02);
       extra.frequency.setTargetAtTime(cut, t, 0.03);
     }
-    // Harmonic carve via notch / peaking near fundamental or partials.
+    if (this.filterWorklet) {
+      const model = p.filterModel ?? "biquad";
+      const typeHint =
+        p.filterType === "bandpass" ? 1
+          : p.filterType === "highpass" ? 2
+            : p.filterType === "notch" ? 3
+              : 0;
+      const mode = model === "svf" ? 1 : 0;
+      const q01 = clamp(liveFilterQ(p.filterResonance) / FILTER_Q_CEIL, 0, 1);
+      const cutP = this.filterWorklet.parameters.get("cutoff");
+      const resP = this.filterWorklet.parameters.get("resonance");
+      const drvP = this.filterWorklet.parameters.get("drive");
+      const modeP = this.filterWorklet.parameters.get("mode");
+      const typeP = this.filterWorklet.parameters.get("typeHint");
+      cutP?.setTargetAtTime(cut, t, 0.03);
+      resP?.setTargetAtTime(q01, t, 0.03);
+      drvP?.setTargetAtTime(clamp(p.filterDrive ?? 0, 0, 1) * 0.65, t, 0.04);
+      modeP?.setValueAtTime(mode, t);
+      typeP?.setValueAtTime(typeHint, t);
+    }
+    // Harmonic carve via notch / peaking near fundamental or partials / formants.
     const carve = p.filterCarve ?? "off";
     const amt = clamp(p.filterCarveAmount ?? 0, 0, 1);
     if (carve === "off" || amt < 0.02) {
       this.carveFilt.type = "allpass";
       this.carveFilt.Q.setTargetAtTime(0.7, t, 0.03);
       this.carveFilt.frequency.setTargetAtTime(1000, t, 0.03);
+      this.carveFilt.gain.setTargetAtTime(0, t, 0.03);
+      this.carveFilt2.type = "allpass";
+      this.carveFilt2.Q.setTargetAtTime(0.7, t, 0.03);
+      this.carveFilt2.frequency.setTargetAtTime(2000, t, 0.03);
+      this.carveFilt2.gain.setTargetAtTime(0, t, 0.03);
+    } else if (carve === "formant") {
+      // Movable F1/F2 pair — cutoff slides the vowel, carve amount opens the mouths.
+      const f1 = clamp(cut * (0.35 + amt * 0.2), 220, 1000);
+      const f2 = clamp(cut * (0.95 + amt * 1.1), 650, 3800);
+      this.carveFilt.type = "peaking";
+      this.carveFilt.frequency.setTargetAtTime(f1, t, 0.03);
+      this.carveFilt.Q.setTargetAtTime(3.5 + amt * 9, t, 0.03);
+      this.carveFilt.gain.setTargetAtTime(4 + amt * 12, t, 0.03);
+      this.carveFilt2.type = "peaking";
+      this.carveFilt2.frequency.setTargetAtTime(f2, t, 0.03);
+      this.carveFilt2.Q.setTargetAtTime(2.5 + amt * 7, t, 0.03);
+      this.carveFilt2.gain.setTargetAtTime(3 + amt * 10, t, 0.03);
     } else {
+      this.carveFilt2.type = "allpass";
+      this.carveFilt2.gain.setTargetAtTime(0, t, 0.03);
       const f0 = clamp(this.baseFreq, 40, 4000);
       if (carve === "fundamental") {
         this.carveFilt.type = "notch";
         this.carveFilt.frequency.setTargetAtTime(f0, t, 0.03);
         this.carveFilt.Q.setTargetAtTime(0.7 + amt * 8, t, 0.03);
+        this.carveFilt.gain.setTargetAtTime(0, t, 0.03);
       } else if (carve === "odds") {
         this.carveFilt.type = "peaking";
         this.carveFilt.frequency.setTargetAtTime(f0 * 3, t, 0.03);
@@ -1842,7 +2030,17 @@ class Voice {
     const base = this.baseCutoff(p);
     const hz = clamp(base * (Math.pow(2, oct) - 1), -18000, 18000);
     this.modCutoff.offset.setTargetAtTime(hz, t, 0.02);
-    if (m.aReso) this.filter.Q.setTargetAtTime(liveFilterQ(p.filterResonance, m.reso * 18), t, 0.03);
+    if (m.aReso) {
+      const q = liveFilterQ(p.filterResonance, m.reso * 18);
+      this.filter.Q.setTargetAtTime(q, t, 0.03);
+      if (this.filterWorklet) {
+        this.filterWorklet.parameters.get("resonance")?.setTargetAtTime(
+          clamp(q / FILTER_Q_CEIL, 0, 1),
+          t,
+          0.03,
+        );
+      }
+    }
     if (m.aFm) this.fmGain.gain.setTargetAtTime(Math.max(0, (p.fmAmount + m.fm) * this.baseFreq * 6), t, 0.02);
     if (m.aLvl) {
       const oscAOn = p.moduleEnable?.["osc.a"] !== false;
@@ -1885,6 +2083,26 @@ function loadSpectralModule(ctx: AudioContext): Promise<boolean> {
       }
     })();
     spectralModuleReady.set(ctx, p);
+  }
+  return p;
+}
+
+const filterModuleReady = new WeakMap<BaseAudioContext, Promise<boolean>>();
+function loadFilterModule(ctx: AudioContext): Promise<boolean> {
+  let p = filterModuleReady.get(ctx);
+  if (!p) {
+    p = (async () => {
+      try {
+        if (!ctx.audioWorklet) return false;
+        const url = new URL("worklets/filter-processor.js", document.baseURI).toString();
+        await ctx.audioWorklet.addModule(url);
+        return true;
+      } catch (err) {
+        console.warn("[FireCommand] filter worklet failed to load — biquad path kept:", err);
+        return false;
+      }
+    })();
+    filterModuleReady.set(ctx, p);
   }
   return p;
 }
@@ -2041,12 +2259,17 @@ export class FireCommandSynth {
 
   /** Skip wall-clock voice GC / mod interval — required for OfflineAudioContext bounce. */
   offlineSafe = false;
+  /** Ladder/SVF AudioWorklet available for new voices. */
+  filterWorkletReady = false;
 
   constructor(ctxIn: BaseAudioContext, dest: AudioNode) {
     const ctx = ctxIn as AudioContext;
     this.ctx = ctx;
     this.patch = { ...DEFAULT_FIRE_PATCH };
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
+
+    // Preload filter bite worklet (non-blocking); voices fall back to biquad until ready.
+    void loadFilterModule(ctx).then((ok) => { this.filterWorkletReady = ok; });
 
     // Pre-render every wavetable into pitch-mip × subframe PeriodicWave banks.
     // Energy-normalized (disableNormalization) so bright frames stay bright.
@@ -2310,7 +2533,7 @@ export class FireCommandSynth {
     if (this.offlineSafe) return;
     if (this.modTimer) return;
     this.idleFrames = 0;
-    this.modTimer = setInterval(this.updateMod, 1000 / 60);
+    this.modTimer = setInterval(this.updateMod, 1000 / 120);
   }
 
   private stopModTimer(): void {
@@ -2522,6 +2745,8 @@ export class FireCommandSynth {
     if (p.moduleEnable?.["fire.sec.warp"] === false) return false;
     const amt = Math.abs(p.warpAmount ?? 1);
     if (amt < 0.001) return false;
+    const mode = p.warpMode ?? "classic";
+    if (mode !== "classic") return true;
     return Math.abs(p.warpStretch ?? 0) > 0.001
       || Math.abs(p.warpTilt ?? 0) > 0.001
       || (p.warpComb ?? 0) > 0.001;
@@ -2535,7 +2760,8 @@ export class FireCommandSynth {
     const stretch = (p.warpStretch ?? 0) * amt;
     const tilt = (p.warpTilt ?? 0) * amt;
     const comb = (p.warpComb ?? 0) * Math.abs(amt);
-    const sig = `${stretch}|${tilt}|${comb}|${amt}`;
+    const mode = p.warpMode ?? "classic";
+    const sig = `${mode}|${stretch}|${tilt}|${comb}|${amt}`;
     if (sig !== this.warpedSig) {
       this.warpedBanks.clear();
       this.warpedSig = sig;
@@ -2549,7 +2775,7 @@ export class FireCommandSynth {
         for (let k = 0; k < SUBFRAMES; k++) {
           const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
           const { real, imag } = harmonicsAt(key, f, maxP);
-          const warped = applyWarp(imag, stretch, tilt, comb);
+          const warped = applyWarp(imag, stretch, tilt, comb, mode);
           normalizeSpectrum(warped);
           bank.push(this.ctx.createPeriodicWave(real, warped, { disableNormalization: true }));
         }
@@ -2655,7 +2881,7 @@ export class FireCommandSynth {
     // Idle gate: sleep the 60 Hz timer after ~5 s with no voices (tails need
     // a few seconds). noteOn / playNote / setPatch restart it.
     if (this.voices.size === 0) {
-      if (++this.idleFrames > 300) {
+      if (++this.idleFrames > 600) {
         this.stopModTimer();
         return;
       }
@@ -2833,7 +3059,7 @@ export class FireCommandSynth {
         const posA = dutyMorph(p.oscATable, baseA);
         const posB = dutyMorph(p.oscBTable, baseB);
         v.setWtA(posA, p.oscAContinuity ?? 0.72);
-        v.setWtB(posB);
+        v.setWtB(posB, p.oscAContinuity ?? 0.72);
         dispA = posA;
         dispB = posB;
         if (v.hasGroupC()) {
@@ -2841,7 +3067,7 @@ export class FireCommandSynth {
             p.oscCTable,
             clamp(p.oscCPos + envMod * p.oscCEnv + lfoMod * p.oscCLfo + matrixWC, 0, 1),
           );
-          v.setWtC(posC);
+          v.setWtC(posC, p.oscAContinuity ?? 0.72);
           dispC = posC;
         }
         // Keep noise storm / burst / translate live while notes hold
@@ -3503,7 +3729,7 @@ export class FireCommandSynth {
       case "spectralMode": case "spectralAmount": case "spectralMix":
       case "spectralLow": case "spectralHigh": case "spectralWetOnly":
         this.applySpectral(p); break;
-      case "warpStretch": case "warpTilt": case "warpComb": case "warpAmount":
+      case "warpStretch": case "warpTilt": case "warpComb": case "warpAmount": case "warpMode":
         // Debounced: knob scrubs settle before the warped banks re-render.
         if (this.warpTimer) clearTimeout(this.warpTimer);
         this.warpTimer = setTimeout(() => {
@@ -3534,6 +3760,7 @@ export class FireCommandSynth {
       case "filterType": case "filterCutoff": case "filterResonance":
       case "filterEnvAmount": case "filterEnvResoAmount": case "filterKeyTrack":
       case "filterCarve": case "filterCarveAmount": case "filterSlope": case "filterDrivePos":
+      case "filterModel":
         for (const v of this.voices) v.setFilterLive(p); break;
       case "filterDrive":
         this.filterDriveCurve = makeFilterDriveCurve(p.filterDrive);
@@ -4088,14 +4315,14 @@ export const DEFAULT_FIRE_PATCH: FirePatch = {
   oscBTable: "saw", oscBPos: 0.4, oscBEnv: 0, oscBLfo: 0, oscBOctave: 0, oscBDetune: 0, oscBLevel: 0,
   oscBInherit: "off", oscBPhaseLock: false, fmAtoB: 0,
   oscCTable: "harmonic", oscCPos: 0.4, oscCEnv: 0, oscCLfo: 0, oscCOctave: -1, oscCDetune: 0, oscCLevel: 0,
-  warpStretch: 0, warpTilt: 0, warpComb: 0, warpAmount: 1,
+  warpStretch: 0, warpTilt: 0, warpComb: 0, warpAmount: 1, warpMode: "classic",
   unison: 1, unisonDetune: 0, unisonWidth: 0.5,
   unisonMix: 1, unisonAnchor: true, unisonDistribution: "linear", unisonPhase: "locked",
   unisonTemporalSpread: 0, unisonTemporalMode: "ltr", unisonEnvSpread: 0,
   subWave: "sine", subLevel: 0, subPhaseAlign: true, subTranslate: 0,
   noiseLevel: 0, noiseColor: 0, noiseMode: "bed", noiseDensity: 0.45, noiseGrain: 0.35,
   fmAmount: 0, fmRatio: 2, fmBtoA: 0, ringAmount: 0, ringFreq: 220,
-  filterType: "lowpass", filterCutoff: 2600, filterResonance: 0.7, filterEnvAmount: 0, filterEnvResoAmount: 0,
+  filterType: "lowpass", filterModel: "biquad", filterCutoff: 2600, filterResonance: 0.7, filterEnvAmount: 0, filterEnvResoAmount: 0,
   filterKeyTrack: 0.3,
   filterDrive: 0, filterDrivePos: "post", filterSlope: 1, filterCarve: "off", filterCarveAmount: 0,
   ampAttack: 0.01, ampDecay: 0.25, ampSustain: 0.8, ampRelease: 0.35, velAmount: 1, velAttack: 0,

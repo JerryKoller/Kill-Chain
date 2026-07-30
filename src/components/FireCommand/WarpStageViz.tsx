@@ -77,6 +77,7 @@ export function WarpStageViz() {
   const tilt = useFireCommandStore((s) => s.patch.warpTilt) ?? 0;
   const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
   const amount = useFireCommandStore((s) => s.patch.warpAmount) ?? 1;
+  const warpMode = useFireCommandStore((s) => s.patch.warpMode) ?? "classic";
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -85,20 +86,21 @@ export function WarpStageViz() {
   const flashRef = useRef(0);
   const dragMode = useRef<"xy" | "comb" | null>(null);
   const prevKey = useRef("");
-  const st = useRef({ stretch, tilt, comb, amount });
-  st.current = { stretch, tilt, comb, amount };
+  const st = useRef({ stretch, tilt, comb, amount, warpMode });
+  st.current = { stretch, tilt, comb, amount, warpMode };
 
   const active = Math.abs(amount) > 0.01 && (
-    Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01
+    warpMode !== "classic"
+    || Math.abs(stretch) > 0.01 || Math.abs(tilt) > 0.01 || comb > 0.01
   );
 
   useEffect(() => {
-    const key = `${stretch.toFixed(3)}|${tilt.toFixed(3)}|${comb.toFixed(3)}|${amount.toFixed(3)}`;
+    const key = `${warpMode}|${stretch.toFixed(3)}|${tilt.toFixed(3)}|${comb.toFixed(3)}|${amount.toFixed(3)}`;
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [stretch, tilt, comb, amount]);
+  }, [stretch, tilt, comb, amount, warpMode]);
 
   useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
@@ -165,14 +167,16 @@ export function WarpStageViz() {
     const stopLoop = startStageVizLoop(
       (now) => {
       const { w: W, h: Hh } = sizeRef.current;
-      const { stretch: rawS, tilt: rawT, comb: rawCb, amount: amt = 1 } = st.current;
+      const { stretch: rawS, tilt: rawT, comb: rawCb, amount: amt = 1, warpMode: mode = "classic" } = st.current;
       const S = rawS * amt;
       const T = rawT * amt;
       const Cb = rawCb * Math.abs(amt);
       flashRef.current *= 0.88;
 
-      const warped = applyWarp(BASE_SAW, S, T, Cb);
-      const dormant = Math.abs(amt) < 0.01 || (Math.abs(rawS) < 0.01 && Math.abs(rawT) < 0.01 && rawCb < 0.01);
+      const warped = applyWarp(BASE_SAW, S, T, Cb, mode);
+      const dormant = Math.abs(amt) < 0.01 || (
+        mode === "classic" && Math.abs(rawS) < 0.01 && Math.abs(rawT) < 0.01 && rawCb < 0.01
+      );
       const energy = dormant ? 0.12 : 0.35 + (Math.abs(S) + Math.abs(T) + Cb) * 0.35;
 
       ctx.clearRect(0, 0, W, Hh);
