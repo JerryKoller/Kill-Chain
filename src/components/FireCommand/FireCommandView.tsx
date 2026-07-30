@@ -505,6 +505,11 @@ export function FireCommandView() {
   );
 
   useEffect(() => {
+    // Fire's sync() forces global bypass = !routeThroughFx so the synth
+    // can ride Kill-Chain FX. Remember the pre-Fire value and restore it
+    // on leave without clobbering Fire's routeThroughFx preference
+    // (audioStore.setBypass would flip that flag).
+    const bypassBeforeFire = useAudioStore.getState().bypass;
     useFireCommandStore.getState().sync();
     // Persisted mixer/limiter/duck state lands on the engine buses (v1.6).
     useFireSequencerStore.getState().syncFireMixer();
@@ -524,6 +529,10 @@ export function FireCommandView() {
         if (seq.playing) seq.stop();
       } catch { /* ignore */ }
       useFireCommandStore.getState().panic();
+      try {
+        useAudioStore.setState({ bypass: bypassBeforeFire });
+        getEngine().setBypass(bypassBeforeFire);
+      } catch { /* engine mid-teardown */ }
     };
   }, []);
 

@@ -294,7 +294,17 @@ export default function App() {
               </Suspense>
             )}
           </div>
-          {view === "fire" ? <FireTransportDock /> : <TransportBar />}
+          {/* Keep TransportBar mounted while Fire is open. Swapping it out
+              destroyed the shared <audio> element and orphaned the
+              MediaElementSource — Library/Airspace play-bar resume then
+              failed after leaving Fire. Hide it and show the Fire dock. */}
+          {view === "fire" && <FireTransportDock />}
+          <div
+            className={view === "fire" ? "hidden" : undefined}
+            aria-hidden={view === "fire"}
+          >
+            <TransportBar />
+          </div>
         </main>
       </div>
 

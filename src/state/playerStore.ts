@@ -185,6 +185,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   element: null,
 
   attachElement: (el) => {
+    // Same element re-attach (TransportBar remount effect, StrictMode): keep
+    // listeners as-is and just ensure the engine graph is wired.
+    if (get().element === el) {
+      el.preload = "auto";
+      el.loop = get().loopMode === "track";
+      el.volume = get().volume;
+      el.muted = get().muted;
+      try {
+        getEngine().attachAudioElement(el);
+      } catch (err) {
+        console.warn("[player] re-attach failed (will retry on play):", err);
+      }
+      return;
+    }
+
     el.preload = "auto";
     el.loop = get().loopMode === "track";
     el.volume = get().volume;
@@ -242,6 +257,33 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         set({ status: "paused" });
       }
     });
+
+    // If the previous <audio> was destroyed (e.g. TransportBar unmounted),
+    // the store still knows the track — rehydrate src + scrub position so
+    // play-bar resume works on the replacement element.
+    const savedSrc = get().src;
+    const savedPos = get().position;
+    const savedStatus = get().status;
+    if (savedSrc && el.getAttribute("src") !== savedSrc && el.src !== savedSrc) {
+      el.src = savedSrc;
+      el.load();
+      const restorePos = () => {
+        if (savedPos > 0 && Number.isFinite(savedPos)) {
+          try {
+            el.currentTime = Math.min(savedPos, el.duration || savedPos);
+          } catch { /* ignore seek race */ }
+        }
+        set({
+          duration: el.duration || get().duration,
+          position: el.currentTime || savedPos,
+          // Dead element may have left status stuck on "playing".
+          status: savedStatus === "playing" ? "paused" : savedStatus,
+        });
+      };
+      if (el.readyState >= 1) restorePos();
+      else el.addEventListener("loadedmetadata", restorePos, { once: true });
+    }
+
     set({ element: el });
     try {
       getEngine().attachAudioElement(el);
@@ -761,6 +803,26 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }
     const el = get().element;
     if (!el) return;
+    // Defensive: if the <audio> node was replaced without src, rehydrate
+    // from the store before attempting play (Fire dock swap / remount).
+    const savedSrc = get().src;
+    if (savedSrc && !el.currentSrc && !el.getAttribute("src")) {
+      el.src = savedSrc;
+      el.load();
+      const pos = get().position;
+      if (pos > 0) {
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            try {
+              el.currentTime = Math.min(pos, el.duration || pos);
+            } catch { /* ignore */ }
+            resolve();
+          };
+          if (el.readyState >= 1) done();
+          else el.addEventListener("loadedmetadata", done, { once: true });
+        });
+      }
+    }
     // One source at a time: playing a file silences the synth/sequencer and
     // pauses whatever is playing inside Airspace.
     claimSource("file");
