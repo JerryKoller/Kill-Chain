@@ -16,10 +16,10 @@
 import {
   WAVETABLE_IDS,
   SUBFRAMES,
+  NUM_PARTIALS,
   MIP_PARTIALS,
   harmonicsAt,
-  harmonicsForWave,
-  normalizeSpectrum,
+  loudnessGain,
   mipLevelForFreq,
   applyWarp,
   type WarpMode,
@@ -676,14 +676,28 @@ function liveFilterQ(base: number, extra = 0): number {
 }
 
 /**
- * Unison level trim. Random/even/alternating voices are mostly incoherent
- * (1/√N). True `locked` phase is coherent — peaks scale ~N, so 1/√N left
- * locked stacks ~√N too hot after the real-phase fix landed.
+ * Unison level trim.
+ *
+ * Perceived loudness of a stack tracks its RMS, which sums as 1/√N once the
+ * voices decorrelate — so 1/√N is the body-correct trim and what makes a
+ * supersaw sound fat. The only case that genuinely peaks ~N (and needs 1/N to
+ * stay clip-safe) is a TRULY coherent stack: `locked` phase with negligible
+ * detune. Real supersaws always carry detune, so we blend from 1/N → 1/√N as
+ * detune grows, restoring the body a flat 1/N was stealing from locked stacks.
  */
-export function unisonLevelNorm(count: number, phase: UnisonPhaseMode): number {
+export function unisonLevelNorm(
+  count: number,
+  phase: UnisonPhaseMode,
+  detuneCents = 0,
+): number {
   const n = Math.max(1, count | 0);
-  if (phase === "locked") return 1 / n;
-  return 1 / Math.sqrt(n);
+  if (n <= 1) return 1;
+  const energy = 1 / Math.sqrt(n);
+  if (phase !== "locked") return energy;
+  // ~6 cents of spread is enough to fully decorrelate the onset.
+  const decorr = Math.min(1, Math.abs(detuneCents) / 6);
+  const coherent = 1 / n;
+  return coherent + (energy - coherent) * decorr;
 }
 
 /**
@@ -1032,7 +1046,7 @@ class Voice {
       : null;
     this.baseFreq = midiToFreq(midi);
     this.unisonCount = Math.round(clamp(Math.min(p.unison, liveUnisonCap(p)), 1, MAX_UNISON));
-    this.uNorm = unisonLevelNorm(this.unisonCount, p.unisonPhase ?? "locked");
+    this.uNorm = unisonLevelNorm(this.unisonCount, p.unisonPhase ?? "locked", p.unisonDetune ?? 0);
     // Analog Life: persistent DNA personality + note variance.
     const seed = (p.analogDnaSeed ?? 0x73a9c412) >>> 0;
     this.voiceSlot = Math.abs(midi + Math.round(velocity * 17)) % 48;
@@ -1365,7 +1379,7 @@ class Voice {
     const anchor = p.unisonAnchor !== false;
     const mid = (this.unisonCount - 1) / 2;
     const phaseMode = p.unisonPhase ?? "locked";
-    this.uNorm = unisonLevelNorm(unisonOn ? this.unisonCount : 1, phaseMode);
+    this.uNorm = unisonLevelNorm(unisonOn ? this.unisonCount : 1, phaseMode, detune);
     for (let i = 0; i < this.unisonCount; i++) {
       const isAnchor = anchor && this.unisonCount > 1 && Math.abs(i - mid) < 0.51;
       const choirScale = isAnchor ? 0 : mix;
@@ -2303,14 +2317,23 @@ export class FireCommandSynth {
     void loadFilterModule(ctx).then((ok) => { this.filterWorkletReady = ok; });
 
     // Pre-render every wavetable into pitch-mip × subframe PeriodicWave banks.
-    // Energy-normalized (disableNormalization) so bright frames stay bright.
+    // Constant-loudness gain is derived once per subframe from the full-res
+    // spectrum and reused across mips, so tables sit at an even level and a
+    // note gliding across a pitch-mip boundary doesn't step in volume.
     for (const id of WAVETABLE_IDS) {
       const mips: PeriodicWave[][] = [];
+      const gains = new Array<number>(SUBFRAMES);
+      for (let k = 0; k < SUBFRAMES; k++) {
+        const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+        gains[k] = loudnessGain(harmonicsAt(id, f, NUM_PARTIALS).imag);
+      }
       for (const maxP of MIP_PARTIALS) {
         const frames: PeriodicWave[] = [];
         for (let k = 0; k < SUBFRAMES; k++) {
           const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
-          const { real, imag } = harmonicsForWave(id, f, maxP);
+          const { real, imag } = harmonicsAt(id, f, maxP);
+          const g = gains[k]!;
+          for (let n = 1; n < imag.length; n++) imag[n]! *= g;
           frames.push(ctx.createPeriodicWave(real, imag, { disableNormalization: true }));
         }
         mips.push(frames);
@@ -2801,13 +2824,21 @@ export class FireCommandSynth {
     let mips = this.warpedBanks.get(key);
     if (!mips) {
       mips = [];
+      // Full-res warped gain per subframe, reused across mips (see base build).
+      const gains = new Array<number>(SUBFRAMES);
+      for (let k = 0; k < SUBFRAMES; k++) {
+        const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+        const full = applyWarp(harmonicsAt(key, f, NUM_PARTIALS).imag, stretch, tilt, comb, mode);
+        gains[k] = loudnessGain(full);
+      }
       for (const maxP of MIP_PARTIALS) {
         const bank: PeriodicWave[] = [];
         for (let k = 0; k < SUBFRAMES; k++) {
           const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
           const { real, imag } = harmonicsAt(key, f, maxP);
           const warped = applyWarp(imag, stretch, tilt, comb, mode);
-          normalizeSpectrum(warped);
+          const g = gains[k]!;
+          for (let n = 1; n < warped.length; n++) warped[n]! *= g;
           bank.push(this.ctx.createPeriodicWave(real, warped, { disableNormalization: true }));
         }
         mips.push(bank);

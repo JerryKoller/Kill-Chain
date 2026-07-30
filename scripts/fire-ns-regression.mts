@@ -9,7 +9,13 @@ import {
   unisonLevelNorm,
   filterResoCompGain,
 } from "../src/audio/dsp/FireCommandSynth.ts";
-import { normalizeSpectrum, WT_TARGET_ENERGY } from "../src/audio/dsp/wavetables.ts";
+import {
+  normalizeSpectrum,
+  spectrumRms,
+  spectrumPeak,
+  WT_TARGET_RMS,
+  WT_PEAK_CEIL,
+} from "../src/audio/dsp/wavetables.ts";
 import { applyLoudnessSafety } from "../src/lib/fireModuleLocks.ts";
 
 let failed = 0;
@@ -81,22 +87,43 @@ assert(morphFrameGains(0).g0 === 1 && morphFrameGains(0).g1 === 0, "morph gains 
 assert(morphFrameGains(1).g0 === 0 && morphFrameGains(1).g1 === 1, "morph gains at frac 1");
 
 // ── Unison norm ───────────────────────────────────────────────────────
-assert(Math.abs(unisonLevelNorm(4, "locked") - 0.25) < 1e-9, "locked unison uses 1/N");
+assert(Math.abs(unisonLevelNorm(4, "locked") - 0.25) < 1e-9, "coherent locked unison uses 1/N");
 assert(Math.abs(unisonLevelNorm(4, "random") - 0.5) < 1e-9, "random unison uses 1/√N");
-assert(unisonLevelNorm(7, "locked") < unisonLevelNorm(7, "even"), "locked quieter than even at same count");
+assert(unisonLevelNorm(7, "locked") < unisonLevelNorm(7, "even"), "coherent locked quieter than even at same count");
+assert(
+  unisonLevelNorm(7, "locked", 20) > unisonLevelNorm(7, "locked", 0),
+  "detuned locked stack regains body vs coherent",
+);
+assert(
+  Math.abs(unisonLevelNorm(7, "locked", 20) - 1 / Math.sqrt(7)) < 1e-9,
+  "well-detuned locked → 1/√N body",
+);
 
 // ── Filter reso compensation ──────────────────────────────────────────
 assert(filterResoCompGain(0.707) === 1, "no trim at Butterworth Q");
 assert(filterResoCompGain(14) < 0.5, "high Q gets meaningful input trim");
 assert(filterResoCompGain(14) > 0.2, "high Q trim does not mute the filter");
 
-// ── Spectrum peak bound ───────────────────────────────────────────────
-const imag = new Float32Array(65);
-for (let n = 1; n < imag.length; n++) imag[n] = 1 / n;
-normalizeSpectrum(imag, WT_TARGET_ENERGY);
-let peakBound = 0;
-for (let n = 1; n < imag.length; n++) peakBound += Math.abs(imag[n]!);
-assert(peakBound <= 1.15 + 1e-6, `spectrum peak bound ≤ 1.15 (got ${peakBound.toFixed(3)})`);
+// ── Spectrum normalization: constant loudness + true-peak ceiling ─────
+// Pure sine is not peak-limited → hits the loudness target exactly.
+const sine = new Float32Array(65);
+sine[1] = 1;
+normalizeSpectrum(sine);
+assert(Math.abs(spectrumRms(sine) - WT_TARGET_RMS) < 1e-6, `sine RMS hits loudness target (got ${spectrumRms(sine).toFixed(3)})`);
+
+// Bright saw: loudness at/under target, true peak bounded near the ceiling.
+const saw = new Float32Array(65);
+for (let n = 1; n < saw.length; n++) saw[n] = 1 / n;
+normalizeSpectrum(saw);
+assert(spectrumRms(saw) <= WT_TARGET_RMS + 1e-6, `saw RMS at/under target (got ${spectrumRms(saw).toFixed(3)})`);
+assert(spectrumPeak(saw) <= WT_PEAK_CEIL + 0.12, `saw true peak bounded (got ${spectrumPeak(saw).toFixed(3)})`);
+
+// Very spiky spectrum (all-ones) must be crest-limited: peak bounded, RMS below target.
+const spiky = new Float32Array(65);
+for (let n = 1; n < spiky.length; n++) spiky[n] = 1;
+normalizeSpectrum(spiky);
+assert(spectrumPeak(spiky) <= WT_PEAK_CEIL + 0.12, `spiky spectrum peak-limited (got ${spectrumPeak(spiky).toFixed(3)})`);
+assert(spectrumRms(spiky) < WT_TARGET_RMS, `spiky spectrum sits below loudness target (got ${spectrumRms(spiky).toFixed(3)})`);
 
 // ── Loudness safety ───────────────────────────────────────────────────
 const hot = cloneFirePatch({

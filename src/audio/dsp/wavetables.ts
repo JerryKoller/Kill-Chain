@@ -58,15 +58,64 @@ export const MIP_PARTIALS: readonly number[] = (() => {
 /** Nyquist safety fraction for mip selection / bandlimiting. */
 export const WT_BANDLIMIT_FRAC = 0.45;
 
-/** Target ∑ aₙ² after RMS normalize (sine fundamental → a₁ = 1). */
-export const WT_TARGET_ENERGY = 1;
+/**
+ * Constant-loudness normalization targets.
+ *
+ * Frames are normalized to a fixed perceived loudness (RMS) so switching
+ * tables or morphing across a table doesn't lurch the volume, then bounded by
+ * their TRUE time-domain peak so spiky spectra can't overload the voice bus.
+ *
+ * This replaces the old ∑|aₙ| "coherent-peak" bound, which was the wrong
+ * metric on both ends: it crushed bright waves (a saw came out ~12 dB under a
+ * sine) yet failed to bound genuinely spiky frames — leaving a ~15 dB loudness
+ * spread across the banks and parking the default patch's morph position in a
+ * thin, quiet spot.
+ */
+export const WT_TARGET_RMS = 0.5;
+export const WT_PEAK_CEIL = 1.0;
+
+/** RMS of a sine series aₙ (index 0 unused): √(½·∑aₙ²). Analytic, cheap. */
+export function spectrumRms(imag: Float32Array): number {
+  let e = 0;
+  for (let n = 1; n < imag.length; n++) e += imag[n]! * imag[n]!;
+  return Math.sqrt(e * 0.5);
+}
+
+/** True time-domain peak of a sine series — one cheap single-cycle render. */
+export function spectrumPeak(imag: Float32Array): number {
+  const N = imag.length - 1;
+  if (N < 1) return 0;
+  // ~4 samples past the top partial resolves the peak; capped for cost.
+  const S = Math.min(2048, Math.max(256, N * 4));
+  let peak = 0;
+  for (let i = 0; i < S; i++) {
+    const x = (2 * Math.PI * i) / S;
+    let s = 0;
+    for (let n = 1; n <= N; n++) {
+      const a = imag[n]!;
+      if (a !== 0) s += a * Math.sin(n * x);
+    }
+    const abs = s < 0 ? -s : s;
+    if (abs > peak) peak = abs;
+  }
+  return peak;
+}
 
 /**
- * Soft cap on ∑|aₙ| (worst-case coherent peak for a sine series).
- * 1.75 let bright frames clip the voice bus after disableNormalization;
- * ~1.15 keeps RMS character vs dull frames without hot peaks.
+ * Constant-loudness gain for a frame: hit WT_TARGET_RMS, but back off if that
+ * would push the true peak past WT_PEAK_CEIL (so spiky frames stay peak-safe).
+ *
+ * Derive this from the FULL-resolution spectrum and reuse it across the frame's
+ * pitch mips, so a note gliding across a mip boundary keeps constant loudness.
  */
-const WT_PEAK_BOUND = 1.15;
+export function loudnessGain(imag: Float32Array): number {
+  const rms = spectrumRms(imag);
+  if (rms < 1e-9) return 1;
+  let g = WT_TARGET_RMS / rms;
+  const peak = spectrumPeak(imag) * g;
+  if (peak > WT_PEAK_CEIL) g *= WT_PEAK_CEIL / peak;
+  return g;
+}
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -195,29 +244,15 @@ export function mipLevelForFreq(f0: number, sampleRate: number): number {
 }
 
 /**
- * Energy (RMS-style) normalize of a sine-series imag buffer, with a soft peak
- * bound so bright frames stay bright relative to dull ones without clipping.
- * Prefers musical loudness over peak-flattening via createPeriodicWave.
+ * In-place constant-loudness normalize of a sine-series imag buffer.
+ *
+ * Prefer computing `loudnessGain()` from the full-resolution frame and applying
+ * it across that frame's mips (keeps loudness stable across pitch-mip changes);
+ * this convenience path normalizes a single spectrum on its own.
  */
-export function normalizeSpectrum(
-  imag: Float32Array,
-  targetEnergy = WT_TARGET_ENERGY,
-): void {
-  const N = imag.length - 1;
-  let e = 0;
-  for (let n = 1; n <= N; n++) e += imag[n]! * imag[n]!;
-  if (e > 1e-12) {
-    const g = Math.sqrt(targetEnergy / e);
-    for (let n = 1; n <= N; n++) imag[n]! *= g;
-  } else {
-    imag[1] = Math.sqrt(targetEnergy);
-  }
-  let peakBound = 0;
-  for (let n = 1; n <= N; n++) peakBound += Math.abs(imag[n]!);
-  if (peakBound > WT_PEAK_BOUND) {
-    const g = WT_PEAK_BOUND / peakBound;
-    for (let n = 1; n <= N; n++) imag[n]! *= g;
-  }
+export function normalizeSpectrum(imag: Float32Array): void {
+  const g = loudnessGain(imag);
+  for (let n = 1; n < imag.length; n++) imag[n]! *= g;
 }
 
 /** Zero partials above `maxPartials` (1-based inclusive keep). */
