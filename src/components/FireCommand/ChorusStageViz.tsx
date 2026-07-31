@@ -342,15 +342,17 @@ export function paintChorus(
     telX += w + 14;
   };
   tel(`${delayMs.toFixed(1)}ms · ${model.toUpperCase()} · ${nV}v`, C_DEPTH, 0.72);
+  // Ordered ahead of rate/depth: this is the reading the per-lane labels used to
+  // carry, so it has to survive the narrowest panel.
+  if (driftHi > 0) {
+    tel(`DRIFT ${driftLo.toFixed(1)}–${driftHi.toFixed(1)}ms`, C_HOT, 0.7);
+  }
   tel(
     `RATE ${p.rate < 1 ? p.rate.toFixed(2) : p.rate.toFixed(1)}Hz · DEPTH ${Math.round(p.depth * 100)}`,
     C_RATE,
     0.68,
   );
   tel(`SPREAD ${Math.round(spread * 100)}`, C_R, 0.66);
-  if (driftHi > 0) {
-    tel(`DRIFT ${driftLo.toFixed(1)}–${driftHi.toFixed(1)}ms`, C_HOT, 0.7);
-  }
 
   // Rate / Depth crosshair (the drag target).
   const hx = rateN * W;

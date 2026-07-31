@@ -264,7 +264,12 @@ export function paintSpectral(
     for (let i = 0; i < N; i++) SHOWN[i] = SCRATCH[i]!;
   }
 
-  const thr = p.mode === "gate" ? amount * 0.5 : 0;
+  // The gate threshold tracks the field's own peak, so it always has something
+  // to cut into — a fixed level either punches everything out of a quiet field
+  // or nothing out of a loud one.
+  let peak = 0;
+  for (let i = 0; i < N; i++) if (SHOWN[i]! > peak) peak = SHOWN[i]!;
+  const thr = p.mode === "gate" ? amount * 0.92 * Math.max(0.25, peak) : 0;
   /** Magnitude → lit rows. Floored well above zero so mix never blanks the grid. */
   const vScale = 0.62 + mix * 0.38;
   const rowsOf = (v: number) => clamp(Math.round(clamp(v, 0, 1) * vScale * rows), 0, rows);
