@@ -41,6 +41,7 @@ import {
   pill,
   plate,
   VIZ_FONT_LABEL,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 176;
@@ -149,6 +150,9 @@ export function paintPluck(
   ctx.restore();
   // -60 dB: 1/1000 of full scale, so a hair above the floor line.
   const quietY = floorY - ampH * 0.06;
+  // At full velocity the envelope peak reaches y≈28, so the labels that ride
+  // above it get floored out of the reserved top strip.
+  const peakLabelY = Math.max(floorY - ampH - 4, VIZ_TOP_LABEL_Y + 14);
   ctx.save();
   ctx.setLineDash([3, 4]);
   ctx.strokeStyle = hexA(C_MID, 0.26);
@@ -247,7 +251,7 @@ export function paintPluck(
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "left";
   ctx.fillStyle = hexA(C_GLOW, 0.7 * alive);
-  ctx.fillText(`STRIKE ${(model.strike * 1000).toFixed(1)}ms`, strikeX + 5, floorY - ampH - 4);
+  ctx.fillText(`STRIKE ${(model.strike * 1000).toFixed(1)}ms`, strikeX + 5, peakLabelY);
 
   // ── tail-end marker: where the ring crosses inaudible ──
   const tailX = strikeX + tailLen;
@@ -324,7 +328,7 @@ export function paintPluck(
     ctx.font = "800 10px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "right";
     ctx.fillStyle = hexA(C_GLOW, 0.9);
-    ctx.fillText(`◉ ${stageName}`, W - padR, floorY - ampH - 4);
+    ctx.fillText(`◉ ${stageName}`, W - padR, peakLabelY);
   }
 
   pill(ctx, W * 0.5, 3, p.on ? `${(p.model ?? "classic").toUpperCase()} · ${stageName}` : "SLEEP", C_GLOW, { glow: flash });

@@ -34,6 +34,8 @@ import {
   plate,
   VIZ_FONT_LABEL,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 168;
@@ -274,29 +276,37 @@ export function paintGate(
   lit(ctx, () => drawGlow(ctx, padX + usable * clamp(p.depth, 0, 1), stripY + 2.5, 6 + flash * 3, C_GLOW, 0.7 * dim));
 
   // ── telemetry ──
-  ctx.font = VIZ_FONT_LABEL;
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so it can't collide at any panel width.
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_DEPTH, 0.72 * dim);
-  ctx.fillText(`DEPTH ${Math.round(p.depth * 100)}`, padX, 16);
-  ctx.fillStyle = hexA(C_GLOW, 0.6 * dim);
-  ctx.fillText(`EDGE ${Math.round(smooth * 100)}`, padX + 74, 16);
-  ctx.font = VIZ_FONT_VALUE;
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(C_RATE, 0.72);
-  ctx.fillText(`${n}ST · ${p.rate.toFixed(1)}Hz`, W - padX, 16);
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number, font: string) => {
+    ctx.font = font;
+    const tw = ctx.measureText(text).width;
+    if (telX + tw > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += tw + 14;
+  };
+  tel(`DEPTH ${Math.round(p.depth * 100)}`, C_DEPTH, 0.72 * dim, VIZ_FONT_LABEL);
+  tel(`EDGE ${Math.round(smooth * 100)}`, C_GLOW, 0.6 * dim, VIZ_FONT_LABEL);
 
-  // Edge bracket — the ramp length, drawn to scale next to the strip.
-  if (r > 1) {
-    const bx = padX + 150;
+  // Edge bracket — the ramp length, drawn to scale next to the edge readout.
+  if (r > 1 && telX + r <= telRight) {
+    const bx = telX;
     ctx.strokeStyle = hexA(C_GLOW, 0.4);
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(bx, 13);
-    ctx.lineTo(bx, 16);
-    ctx.lineTo(bx + r, 16);
-    ctx.lineTo(bx + r, 13);
+    ctx.moveTo(bx, VIZ_TOP_LABEL_Y - 3);
+    ctx.lineTo(bx, VIZ_TOP_LABEL_Y);
+    ctx.lineTo(bx + r, VIZ_TOP_LABEL_Y);
+    ctx.lineTo(bx + r, VIZ_TOP_LABEL_Y - 3);
     ctx.stroke();
+    telX += r + 14;
   }
+
+  tel(`${n}ST · ${p.rate.toFixed(1)}Hz`, C_RATE, 0.72, VIZ_FONT_VALUE);
 
   pill(
     ctx,

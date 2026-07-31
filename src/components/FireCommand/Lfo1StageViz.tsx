@@ -342,7 +342,9 @@ export function paintLfo1(
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "left";
   ctx.fillStyle = hexA(C_DEPTH, 0.5);
-  ctx.fillText("→WT", 12, laneTop + 2);
+  // Sits below the reserved top strip — the gutter's left edge is under the
+  // DOM character eyebrow above y=26.
+  ctx.fillText("→WT", 12, laneTop + 8);
 
   // ── rate / depth telemetry ──
   ctx.font = VIZ_FONT_VALUE;

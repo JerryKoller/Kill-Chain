@@ -156,7 +156,9 @@ export function paintArp(
   const xL = 34;
   const xR = W - 14;
   const span = Math.max(80, xR - xL);
-  const laneTop = 26;
+  // The lane starts below the reserved top strip, so the telemetry row and the
+  // playing-note tag that sit just above it clear the DOM chrome.
+  const laneTop = 34;
   const laneBot = Hh - 46;
   const laneH = laneBot - laneTop;
   const rows = clamp(Math.round(p.octaves), 1, 4);

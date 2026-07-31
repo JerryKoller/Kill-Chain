@@ -33,6 +33,8 @@ import {
   plate,
   VIZ_FONT_LABEL,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 176;
@@ -173,8 +175,10 @@ export function paintAir(
   const padL = 34;
   const padR = 34;
   const span = Math.max(60, W - padL - padR);
-  const zeroY = Math.round(Hh * 0.42);
-  const pxDb = 54 / SPAN_DB;
+  // The plot sits low and slightly shallower than the panel allows, so the top
+  // dB gridline's gutter label clears the reserved top strip.
+  const zeroY = Math.round(Hh * 0.44);
+  const pxDb = 48 / SPAN_DB;
   const plotTop = zeroY - SPAN_DB * pxDb;
   const plotBot = zeroY + SPAN_DB * pxDb;
   const rulerY = plotBot + 10;
@@ -320,19 +324,24 @@ export function paintAir(
   }
 
   // ── readouts ──
-  ctx.font = VIZ_FONT_VALUE;
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so they can't collide at any panel width.
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_LOW, 0.78);
-  ctx.fillText(`L ${m.lowDb >= 0 ? "+" : ""}${m.lowDb.toFixed(1)} dB`, padL, 12);
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(C_HIGH, 0.78);
-  ctx.fillText(`H ${m.highDb >= 0 ? "+" : ""}${m.highDb.toFixed(1)} dB`, W - padL, 12);
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number, font: string) => {
+    ctx.font = font;
+    const w = ctx.measureText(text).width;
+    if (telX + w > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += w + 14;
+  };
+  tel(`L ${m.lowDb >= 0 ? "+" : ""}${m.lowDb.toFixed(1)} dB`, C_LOW, 0.78, VIZ_FONT_VALUE);
+  tel(`H ${m.highDb >= 0 ? "+" : ""}${m.highDb.toFixed(1)} dB`, C_HIGH, 0.78, VIZ_FONT_VALUE);
   if (arch === "tilt") {
     const tiltDb = (m.highDb - m.lowDb) * 0.5;
-    ctx.font = VIZ_FONT_LABEL;
-    ctx.textAlign = "left";
-    ctx.fillStyle = hexA(C_AMT, 0.7);
-    ctx.fillText(`TILT ${tiltDb >= 0 ? "+" : ""}${tiltDb.toFixed(1)} dB`, padL + 88, 12);
+    tel(`TILT ${tiltDb >= 0 ? "+" : ""}${tiltDb.toFixed(1)} dB`, C_AMT, 0.7, VIZ_FONT_LABEL);
   }
 
   pill(

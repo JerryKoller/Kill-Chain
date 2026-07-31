@@ -147,7 +147,9 @@ export function paintAnalogLife(
   const padL = 62;
   const padR = 18;
   const span = Math.max(60, W - padL - padR);
-  const top = 26;
+  // Ribbons start below the reserved top strip so the beat-pip row and its
+  // RATE gutter label, which sit just above them, clear the DOM chrome.
+  const top = 38;
   const bottom = Hh - 34;
 
   // ── beat pips: the drift rate, counted out along the top ──

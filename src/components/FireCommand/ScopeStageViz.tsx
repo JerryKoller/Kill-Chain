@@ -34,6 +34,8 @@ import {
   plate,
   scanlines,
   VIZ_FONT_LABEL,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 168;
@@ -185,6 +187,25 @@ export function paintScope(
   const centreY = Math.round(plotTop + plotH * 0.5);
   const railY = Hh - 28;
 
+  /**
+   * Each mode's calibration row. Packed left-to-right from the reserved top
+   * strip and stopped short of the centred mode pill, so it can't collide at
+   * any panel width.
+   */
+  const topRow = () => {
+    let telX = VIZ_TOP_LABEL_X;
+    const telRight = W * 0.5 - 52;
+    return (text: string, color: string, alpha: number) => {
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "left";
+      const tw = ctx.measureText(text).width;
+      if (telX + tw > telRight) return;
+      ctx.fillStyle = hexA(color, alpha);
+      ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+      telX += tw + 14;
+    };
+  };
+
   // ── Spectrum (FFT) ──────────────────────────────────────────
   if (p.mode === "spectrum") {
     graticule(ctx, padL, plotTop, span, plotH, centreY);
@@ -252,16 +273,10 @@ export function paintScope(
       ctx.fillText(on ? "WAITING FOR SPECTRUM" : "SCOPE BYPASSED", W / 2, centreY);
     }
 
-    ctx.font = VIZ_FONT_LABEL;
-    ctx.textAlign = "left";
-    ctx.fillStyle = hexA(C_GLOW, 0.7);
-    ctx.fillText("FFT", padL + 2, 14);
-    ctx.fillStyle = hexA(C_HOT, 0.72);
-    ctx.fillText(`DISP ${Math.round(p.displayGain * 100)}%`, padL + 34, 14);
-    if (p.freeze) {
-      ctx.fillStyle = hexA(C_GLOW, 0.92);
-      ctx.fillText("FREEZE", padL + 110, 14);
-    }
+    const tel = topRow();
+    tel("FFT", C_GLOW, 0.7);
+    tel(`DISP ${Math.round(p.displayGain * 100)}%`, C_HOT, 0.72);
+    if (p.freeze) tel("FREEZE", C_GLOW, 0.92);
   }
 
   // ── Vectorscope ─────────────────────────────────────────────
@@ -348,15 +363,11 @@ export function paintScope(
     ctx.fillStyle = hexA(C_MID, 0.5);
     ctx.fillText("CORR", sx0 - 6, scaleY + 4);
 
+    const tel = topRow();
+    tel("VECTOR", C_GLOW, 0.7);
+    tel(`ρ ${p.corr >= 0 ? "+" : ""}${p.corr.toFixed(2)}`, p.corr < 0.25 ? C_PEAK : C_HOT, p.corr < 0.25 ? 0.9 : 0.78);
+    tel("L↔R", C, 0.55);
     ctx.font = VIZ_FONT_LABEL;
-    ctx.textAlign = "left";
-    ctx.fillStyle = hexA(C_GLOW, 0.7);
-    ctx.fillText("VECTOR", padL + 2, 14);
-    ctx.fillStyle = p.corr < 0.25 ? hexA(C_PEAK, 0.9) : hexA(C_HOT, 0.78);
-    ctx.fillText(`ρ ${p.corr >= 0 ? "+" : ""}${p.corr.toFixed(2)}`, padL + 56, 14);
-    ctx.textAlign = "right";
-    ctx.fillStyle = hexA(C, 0.55);
-    ctx.fillText("L↔R", padL + span, 14);
     ctx.textAlign = "left";
     ctx.fillStyle = hexA(C, 0.5);
     ctx.fillText("L", cx - r - 12, cy + 3);
@@ -478,22 +489,13 @@ export function paintScope(
 
     // ── calibration row ──
     const sweepMs = Math.max(400, SWEEP_BASE_MS - zoom * 600);
-    ctx.font = VIZ_FONT_LABEL;
-    ctx.textAlign = "left";
-    ctx.fillStyle = hexA(C_GLOW, 0.72);
-    ctx.fillText(`×${zoom.toFixed(1)}`, padL + 2, 14);
-    ctx.fillStyle = hexA(C, 0.6);
-    ctx.fillText(`PH ${phN}`, padL + 36, 14);
-    ctx.fillStyle = hexA(C_HOT, 0.74);
-    ctx.fillText(`DISP ${Math.round(p.displayGain * 100)}%`, padL + 74, 14);
-    ctx.fillStyle = hexA(C_MID, 0.55);
-    ctx.fillText(`${(sweepMs / 10).toFixed(0)} ms/div`, padL + 152, 14);
-    ctx.fillStyle = hexA(C_MID, 0.55);
-    ctx.fillText(`${(1 / Math.max(0.05, amp) / 4).toFixed(2)} V/div`, padL + 226, 14);
-    if (p.freeze) {
-      ctx.fillStyle = hexA(C_GLOW, 0.92);
-      ctx.fillText("FREEZE", padL + 300, 14);
-    }
+    const tel = topRow();
+    tel(`×${zoom.toFixed(1)}`, C_GLOW, 0.72);
+    tel(`PH ${phN}`, C, 0.6);
+    tel(`DISP ${Math.round(p.displayGain * 100)}%`, C_HOT, 0.74);
+    tel(`${(sweepMs / 10).toFixed(0)} ms/div`, C_MID, 0.55);
+    tel(`${(1 / Math.max(0.05, amp) / 4).toFixed(2)} V/div`, C_MID, 0.55);
+    if (p.freeze) tel("FREEZE", C_GLOW, 0.92);
 
     // ── phosphor rail ──
     const railPad = 14;

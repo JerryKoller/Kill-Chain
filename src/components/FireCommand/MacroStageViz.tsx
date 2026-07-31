@@ -37,6 +37,8 @@ import {
   roundRect,
   VIZ_FONT_LABEL,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 176;
@@ -126,7 +128,9 @@ export function paintMacro(
   const padL = 16;
   const padR = 16;
   const span = Math.max(60, W - padL - padR);
-  const railTop = Hh * 0.1;
+  // Rails start below the reserved top strip so the per-helm name that sits
+  // above each channel clears the DOM chrome.
+  const railTop = Hh * 0.2;
   const railBot = Hh * 0.72;
   const railH = railBot - railTop;
   const busY = Hh * 0.8;
@@ -293,15 +297,21 @@ export function paintMacro(
     ctx.fillText(n > 0 ? `→${n}` : "→0", cx, railBot + 11);
   }
 
-  // Top telemetry row.
-  ctx.font = VIZ_FONT_LABEL;
+  // Top telemetry row — packed left-to-right from the reserved top strip and
+  // stopped short of the centred mode pill, so it can't collide at any width.
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_GLOW, 0.66 * dim);
-  ctx.fillText("ASSIGN FAN", 11, 16);
-  ctx.font = VIZ_FONT_VALUE;
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(C_MID, 0.7);
-  ctx.fillText(`${wired}/12 SLOTS · ${nDest} DEST`, W - 11, 16);
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number, font: string) => {
+    ctx.font = font;
+    const tw = ctx.measureText(text).width;
+    if (telX + tw > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += tw + 14;
+  };
+  tel("ASSIGN FAN", C_GLOW, 0.66 * dim, VIZ_FONT_LABEL);
+  tel(`${wired}/12 SLOTS · ${nDest} DEST`, C_MID, 0.7, VIZ_FONT_VALUE);
 
   pill(ctx, W * 0.5, 3, !on ? "BYPASS" : wired === 0 ? "UNWIRED" : `${wired} WIRED`, C_GLOW, {
     glow: flash,

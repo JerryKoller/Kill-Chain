@@ -35,6 +35,8 @@ import {
   plate,
   VIZ_FONT_LABEL,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 168;
@@ -264,17 +266,25 @@ export function paintHuman(
     ctx.fillStyle = hit ? hexA(C_HOT, 0.8 + flash * 0.2) : hexA(C, 0.1);
     ctx.fillRect(padX + i * segW + 1, stripY + 1, segW - 2, 4);
   }
-  ctx.font = VIZ_FONT_LABEL;
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so it can't collide at any panel width.
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
-  ctx.fillText(`FEEL · ${p.label.toUpperCase()}`, padX, 16);
-  ctx.font = VIZ_FONT_VALUE;
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(C_MID, 0.7);
-  ctx.fillText(
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number, font: string) => {
+    ctx.font = font;
+    const tw = ctx.measureText(text).width;
+    if (telX + tw > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += tw + 14;
+  };
+  tel(`FEEL · ${p.label.toUpperCase()}`, C_GLOW, 0.7 * dim, VIZ_FONT_LABEL);
+  tel(
     `SEED ${(p.seed >>> 0).toString(16).toUpperCase()} · ${p.perPlay ? "PER PLAY" : "FIXED"}`,
-    W - padX,
-    16,
+    C_MID,
+    0.7,
+    VIZ_FONT_VALUE,
   );
 
   pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : active ? p.label.toUpperCase() : "GRID", C_GLOW, { glow: flash });

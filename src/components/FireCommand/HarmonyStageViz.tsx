@@ -33,6 +33,8 @@ import {
   strata,
   VIZ_FONT_LABEL,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 168;
@@ -255,14 +257,21 @@ export function paintHarmony(
   // ── telemetry ──
   const rootName = NOTE_NAMES[rootPc] ?? "?";
   const scaleLabel = SCALES.find((sc) => sc.id === p.scaleId)?.label ?? p.scaleId;
-  ctx.font = VIZ_FONT_LABEL;
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so it can't collide at any panel width.
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
-  ctx.fillText(`KEY ${rootName.toUpperCase()} · ${scaleLabel.toUpperCase()}`, 11, 16);
-  ctx.font = VIZ_FONT_VALUE;
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(C_KIN, 0.72);
-  ctx.fillText(`LEVEL ${Math.round(level * 100)} · ${meta.voices}v`, W - 11, 16);
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number, font: string) => {
+    ctx.font = font;
+    const tw = ctx.measureText(text).width;
+    if (telX + tw > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += tw + 14;
+  };
+  tel(`KEY ${rootName.toUpperCase()} · ${scaleLabel.toUpperCase()}`, C_GLOW, 0.7 * dim, VIZ_FONT_LABEL);
+  tel(`LEVEL ${Math.round(level * 100)} · ${meta.voices}v`, C_KIN, 0.72, VIZ_FONT_VALUE);
 
   pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : meta.short.toUpperCase(), C_GLOW, { glow: flash });
 

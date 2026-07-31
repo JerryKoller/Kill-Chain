@@ -136,7 +136,9 @@ export function paintMixer(
   const padR = 78;
   const trackX = padL;
   const trackW = Math.max(60, W - padL - padR);
-  const top = 24;
+  // Lanes start below the reserved top strip, so the L/R pan-axis labels that
+  // sit above them clear the DOM chrome.
+  const top = 32;
   const bot = Hh - 21;
   const slot = (bot - top) / n;
   const laneH = Math.max(12, slot - 3);
@@ -155,9 +157,9 @@ export function paintMixer(
   ctx.font = VIZ_FONT_LABEL;
   ctx.fillStyle = hexA(C_MID, 0.5);
   ctx.textAlign = "left";
-  ctx.fillText("L", trackX, 19);
+  ctx.fillText("L", trackX, top - 5);
   ctx.textAlign = "right";
-  ctx.fillText("R", trackX + trackW, 19);
+  ctx.fillText("R", trackX + trackW, top - 5);
 
   // ── lanes ──
   for (let i = 0; i < n; i++) {

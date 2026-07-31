@@ -32,6 +32,7 @@ import {
   plate,
   strata,
   VIZ_FONT_LABEL,
+  VIZ_TOP_LABEL_X,
 } from "./stageVizKit";
 
 const H = 158;
@@ -194,7 +195,8 @@ export function paintSub(
     ctx.font = VIZ_FONT_LABEL;
     ctx.textAlign = "left";
     ctx.fillStyle = hexA(C_GLOW, 0.35 + trans * 0.4);
-    ctx.fillText(`TRANSLATE ${Math.round(trans * 100)}`, padL + 110, tY - 8);
+    // Starts past VIZ_TOP_LABEL_X so it clears the DOM character eyebrow.
+    ctx.fillText(`TRANSLATE ${Math.round(trans * 100)}`, VIZ_TOP_LABEL_X, tY - 8);
   }
 
   // ── octave rail (tap zone) ──

@@ -35,6 +35,8 @@ import {
   VIZ_FONT_LABEL,
   VIZ_FONT_TITLE,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_RESERVE_R,
 } from "./stageVizKit";
 
 const H = 168;
@@ -223,13 +225,15 @@ export function paintLive(
   ctx.strokeStyle = hexA(atCap ? C_HOT : C_MID, atCap ? 0.85 : 0.22);
   ctx.lineWidth = 1;
   ctx.strokeRect(fieldX + 0.5, barY + 0.5, fieldW - 1, barH - 1);
+  // The bar's captions ride in the reserved top strip, so they stay inside the
+  // window the DOM chrome leaves free rather than tracking the bar's own ends.
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "left";
   ctx.fillStyle = hexA(C_MID, 0.5);
-  ctx.fillText("VOICES", fieldX, barY - 3);
+  ctx.fillText("VOICES", Math.max(fieldX, VIZ_TOP_LABEL_X), barY - 3);
   ctx.textAlign = "right";
   ctx.fillStyle = hexA(atCap ? C_HOT : C_GLOW, 0.85);
-  ctx.fillText(`${p.voices} / ${cells}`, fieldX + fieldW, barY - 3);
+  ctx.fillText(`${p.voices} / ${cells}`, Math.min(fieldX + fieldW, W - VIZ_TOP_RESERVE_R), barY - 3);
 
   const cellFill = cachedGrad(ctx, `cell|${slotTop}|${slotH}`, (c) => {
     const g = c.createLinearGradient(0, slotTop, 0, slotBot);

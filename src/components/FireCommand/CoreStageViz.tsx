@@ -37,6 +37,8 @@ import {
   motionHash,
   plate,
   VIZ_FONT_LABEL,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const ENV_H = 88;
@@ -313,7 +315,8 @@ export function paintCoreLfo(
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "left";
   ctx.fillStyle = hexA(MOD_MID, 0.6);
-  ctx.fillText(`${p.rate.toFixed(2)}Hz · D${Math.round(depth * 100)}`, 10, 14);
+  // Starts past VIZ_TOP_LABEL_X so it clears the DOM character eyebrow.
+  ctx.fillText(`${p.rate.toFixed(2)}Hz · D${Math.round(depth * 100)}`, VIZ_TOP_LABEL_X, VIZ_TOP_LABEL_Y);
 
   grain(ctx, W, Hh, 0.024);
   bezel(ctx, W, Hh, C);

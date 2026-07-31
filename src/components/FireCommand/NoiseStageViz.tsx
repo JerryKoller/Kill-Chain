@@ -32,6 +32,8 @@ import {
   pill,
   plate,
   VIZ_FONT_LABEL,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 158;
@@ -295,14 +297,16 @@ export function paintNoise(
   ctx.fill();
 
   // Density / grain readout — the shift-drag axes finally have numbers.
+  // Starts past VIZ_TOP_LABEL_X so it clears the DOM character eyebrow.
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "left";
+  const lx0 = VIZ_TOP_LABEL_X;
   ctx.fillStyle = hexA(C_MID, 0.6);
-  ctx.fillText(`DENS ${Math.round(dens * 100)}`, 118, 17);
+  ctx.fillText(`DENS ${Math.round(dens * 100)}`, lx0, VIZ_TOP_LABEL_Y);
   ctx.fillStyle = hexA(C_HOT, 0.6);
-  ctx.fillText(`GRAIN ${Math.round(grn * 100)}`, 178, 17);
+  ctx.fillText(`GRAIN ${Math.round(grn * 100)}`, lx0 + 60, VIZ_TOP_LABEL_Y);
   ctx.fillStyle = hexA(C_MID, 0.5);
-  ctx.fillText(`GRIT ${gritLabel(p.mode)}`, 248, 17);
+  ctx.fillText(`GRIT ${gritLabel(p.mode)}`, lx0 + 130, VIZ_TOP_LABEL_Y);
 
   pill(
     ctx,

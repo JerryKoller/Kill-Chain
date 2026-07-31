@@ -33,6 +33,8 @@ import {
   plate,
   VIZ_FONT_LABEL,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 172;
@@ -365,21 +367,25 @@ export function paintGlue(
   ctx.fillText(`PK −${grPeak.toFixed(1)}`, padL + span + 5, ribTop + ribH + 10);
 
   // ── telemetry row ──
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so it can't collide at any panel width.
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_MK, 0.72);
-  ctx.fillText(`THR ${thr.toFixed(0)} dB`, padL, 17);
-  ctx.fillStyle = hexA(C_HOT, 0.8);
-  ctx.fillText(`RAT ${ratio.toFixed(1)}:1`, padL + 76, 17);
-  ctx.fillStyle = hexA(C_MK, 0.76);
-  ctx.fillText(`MKP +${makeupDb.toFixed(1)} dB`, padL + 148, 17);
-  ctx.fillStyle = hexA(C_GR, 0.66);
-  ctx.fillText(`KNEE ${knee.toFixed(0)}`, padL + 240, 17);
-  ctx.fillStyle = hexA(C_VU, 0.62);
-  ctx.fillText(`MIX ${Math.round(mix * 100)}`, padL + 306, 17);
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(adv ? C_GLOW : C_MID, 0.7);
-  ctx.fillText(adv ? `${p.mode.toUpperCase()} · ADV` : p.mode.toUpperCase(), W - 12, 17);
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number) => {
+    const w = ctx.measureText(text).width;
+    if (telX + w > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += w + 14;
+  };
+  tel(adv ? `${p.mode.toUpperCase()} · ADV` : p.mode.toUpperCase(), adv ? C_GLOW : C_MID, 0.7);
+  tel(`THR ${thr.toFixed(0)} dB`, C_MK, 0.72);
+  tel(`RAT ${ratio.toFixed(1)}:1`, C_HOT, 0.8);
+  tel(`MKP +${makeupDb.toFixed(1)} dB`, C_MK, 0.76);
+  tel(`KNEE ${knee.toFixed(0)}`, C_GR, 0.66);
+  tel(`MIX ${Math.round(mix * 100)}`, C_VU, 0.62);
 
   pill(ctx, W * 0.5, 2, on ? punchLabel(punch) : "BYPASS", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
 

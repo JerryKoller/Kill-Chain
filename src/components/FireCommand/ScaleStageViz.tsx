@@ -44,6 +44,8 @@ import {
   VIZ_FONT_LABEL,
   VIZ_FONT_TITLE,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 168;
@@ -125,7 +127,9 @@ export function paintScale(
   plate(ctx, W, Hh, C, { energy: 0.08 + (locked ? 0.24 + density * 0.14 : 0.04) + flash * 0.16, horizon: 0.68 });
 
   const keyW = W / 12;
-  const keyTop = 34;
+  // Keys start low enough that the ROOT tag above them clears the reserved
+  // top strip the DOM chrome owns.
+  const keyTop = 42;
   const keyBot = Hh - 40;
   const keyH = keyBot - keyTop;
   const capH = keyH * 0.6;
@@ -357,14 +361,21 @@ export function paintScale(
     ctx.fillStyle = i === scaleIdx ? hexA(C_HOT, 0.8 + flash * 0.2) : hexA(C, 0.12);
     ctx.fillRect(padX + i * segW + 1, stripY + 1, segW - 2, 4);
   }
-  ctx.font = VIZ_FONT_LABEL;
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so it can't collide at any panel width.
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
-  ctx.fillText(`SCALE · ${meta.label.toUpperCase()}`, padX, 16);
-  ctx.font = VIZ_FONT_VALUE;
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(C_DEGREE, 0.72);
-  ctx.fillText(`${NOTE_NAMES[rootPc]} · ${chromatic ? 12 : steps.length}°`, W - padX, 16);
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number, font: string) => {
+    ctx.font = font;
+    const tw = ctx.measureText(text).width;
+    if (telX + tw > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += tw + 14;
+  };
+  tel(`SCALE · ${meta.label.toUpperCase()}`, C_GLOW, 0.7 * dim, VIZ_FONT_LABEL);
+  tel(`${NOTE_NAMES[rootPc]} · ${chromatic ? 12 : steps.length}°`, C_DEGREE, 0.72, VIZ_FONT_VALUE);
 
   pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : mode.toUpperCase(), C_GLOW, { glow: flash });
 

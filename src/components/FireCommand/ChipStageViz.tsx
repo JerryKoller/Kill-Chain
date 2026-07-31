@@ -224,7 +224,9 @@ export function paintChip(
   ctx.fillText(`NOISE ${noiseLabel(p.noise)} · HOLD ${hold}`, padL, noiseY - CELL - 6);
 
   // ── duty ruler + marker ──
-  const rulerY = snap(Hh * 0.13);
+  // One lattice cell below the reserved top strip, so the tick numerals above
+  // the ruler clear the DOM chrome instead of crowding the top-left corner.
+  const rulerY = snap(Hh * 0.2);
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "center";
   for (const t of DUTY_TICKS) {

@@ -33,6 +33,8 @@ import {
   plate,
   VIZ_FONT_LABEL,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 168;
@@ -338,9 +340,11 @@ export function paintWidth(
   ctx.fillText("−S · R", padL + span - 4, axisY + reach * 0.62 + 6);
 
   // ── correlation meter ──
+  // Sits below the reserved top strip: bar and readout both live in the last
+  // VIZ_TOP_RESERVE_R px, which the DOM status readout owns above y=26.
   const corrW = 62;
   const corrX = W - corrW - 12;
-  const corrY = 14;
+  const corrY = 34;
   ctx.font = VIZ_FONT_VALUE;
   ctx.textAlign = "right";
   ctx.fillStyle = hexA(C_SIDE, 0.8);
@@ -351,14 +355,22 @@ export function paintWidth(
   ctx.fillRect(corrX, corrY, corrW * corr, 5);
 
   // ── telemetry row ──
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mechanism pill, so it can't collide at any panel width.
   ctx.font = VIZ_FONT_LABEL;
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_GLOW, 0.7);
-  ctx.fillText(`MID ${Math.round(mid * 100)}`, padL, 18);
-  ctx.fillStyle = hexA(C_SIDE, 0.68);
-  ctx.fillText(`SIDE ${Math.round(side * 100)}`, padL + 60, 18);
-  ctx.fillStyle = hexA(C_HOT, 0.62);
-  ctx.fillText(monoOn ? `MONO ${Math.round(monoHz)}Hz` : "MONO OFF", padL + 128, 18);
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number) => {
+    const w = ctx.measureText(text).width;
+    if (telX + w > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += w + 14;
+  };
+  tel(`MID ${Math.round(mid * 100)}`, C_GLOW, 0.7);
+  tel(`SIDE ${Math.round(side * 100)}`, C_SIDE, 0.68);
+  tel(monoOn ? `MONO ${Math.round(monoHz)}Hz` : "MONO OFF", C_HOT, 0.62);
 
   pill(ctx, W * 0.5, 2, on ? MECH_LABEL[mech] : "BYPASS", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
 

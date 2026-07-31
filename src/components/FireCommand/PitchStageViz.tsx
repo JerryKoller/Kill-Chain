@@ -135,7 +135,9 @@ export function paintPitch(
   const xL = 40;
   const xR = W - 16;
   const span = Math.max(80, xR - xL);
-  const laneTop = 26;
+  // The lane starts below the reserved top strip, so the semitone axis label
+  // and telemetry row that sit just above it clear the DOM chrome.
+  const laneTop = 34;
   const laneBot = Hh - 52;
   const mid = (laneTop + laneBot) * 0.5;
   const halfH = (laneBot - laneTop) * 0.5;

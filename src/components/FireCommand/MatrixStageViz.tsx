@@ -169,7 +169,9 @@ export function paintMatrix(
   const bayR = W - 44;
   const cols = DST_META.length;
   const colGap = (bayR - bayL) / Math.max(1, cols - 1);
-  const railTop = topY + 8;
+  // Rails hang low enough that the DST column names above them clear the
+  // reserved top strip.
+  const railTop = topY + 14;
   const railBot = botY - 8;
   const colX = (i: number) => bayL + i * colGap;
 

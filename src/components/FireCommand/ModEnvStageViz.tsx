@@ -311,7 +311,9 @@ export function paintModEnv(
     ctx.font = VIZ_FONT_LABEL;
     ctx.textAlign = "left";
     ctx.fillStyle = hexA(col, 0.62);
-    ctx.fillText(`${i}`, px + s + 3, py - 4);
+    // Level-centred beside the node rather than above it — a node at full level
+    // sits on TOP, and a label above that lands in the reserved top strip.
+    ctx.fillText(`${i}`, px + s + 3, py + 3);
   }
 
   // Sustain flag — a stem up to the top rail with an S on it.

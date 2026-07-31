@@ -34,6 +34,8 @@ import {
   VIZ_FONT_LABEL,
   VIZ_FONT_TITLE,
   VIZ_FONT_VALUE,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
 } from "./stageVizKit";
 
 const H = 176;
@@ -151,7 +153,9 @@ export function paintScenes(
   const span = Math.max(80, W - padL - padR);
   const stopW = span / Math.max(1, n);
   const stX = (i: number) => padL + (i + 0.5) * stopW;
-  const cardTop = 26;
+  // Cards hang below the reserved top strip so the mode badge above each one
+  // clears the DOM chrome at any scene count.
+  const cardTop = 36;
   const cardH = 60;
   const cardW = Math.min(212, stopW * 0.82);
   const trackY = Hh * 0.59;
@@ -323,21 +327,29 @@ export function paintScenes(
   lit(ctx, () => drawGlow(ctx, padL + span * (occ / Math.max(1, n)), railY + 2.5, 7 + flash * 4, C_GLOW, 0.75 * dim));
 
   // ── header telemetry ──
-  ctx.font = VIZ_FONT_LABEL;
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so it can't collide at any panel width.
   ctx.textAlign = "left";
-  ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
-  ctx.fillText(`MODE · ${modeMeta.label.toUpperCase()}`, 11, 16);
-  ctx.font = VIZ_FONT_VALUE;
-  ctx.textAlign = "right";
-  ctx.fillStyle = hexA(C_MID, 0.72);
-  ctx.fillText(
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number, font: string) => {
+    ctx.font = font;
+    const tw = ctx.measureText(text).width;
+    if (telX + tw > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += tw + 14;
+  };
+  tel(`MODE · ${modeMeta.label.toUpperCase()}`, C_GLOW, 0.7 * dim, VIZ_FONT_LABEL);
+  tel(
     p.transition === "morphMs"
       ? `XFER · MORPH ${Math.round(p.morphMs)}ms`
       : p.transition === "nextBar"
         ? "XFER · NEXT BAR"
         : "XFER · IMMEDIATE",
-    W - 11,
-    16,
+    C_MID,
+    0.72,
+    VIZ_FONT_VALUE,
   );
 
   pill(ctx, W * 0.5, 3, !on ? "BYPASS" : moving ? "MORPH" : modeMeta.short, C_GLOW, { glow: flash });
