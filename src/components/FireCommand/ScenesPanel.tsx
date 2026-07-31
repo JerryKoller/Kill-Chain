@@ -13,6 +13,7 @@ import {
   occupiedCount,
   firstEmptySlot,
 } from "./ScenesStageViz";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const SCENES_C = FC.scenes;
 export const SCENES_C_GLOW = bandShade(FC_BAND.perf, 0.98);
@@ -38,7 +39,7 @@ export function ScenesMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -67,7 +68,7 @@ export function ScenesModeStrip({
 }) {
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCENES_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCENES_C}66` }}>
         Mode
       </span>
       {SCENE_MODES.map((m) => {
@@ -108,13 +109,11 @@ export function ScenesQuickActions({
   onActiveSlot: (i: number) => void;
 }) {
   const scenes = useFireCommandStore((s) => s.scenes);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["scenes"] !== false);
   const sceneTransition = useFireCommandStore((s) => s.sceneTransition);
   const setSceneTransition = useFireCommandStore((s) => s.setSceneTransition);
   const captureScene = useFireCommandStore((s) => s.captureScene);
   const recallScene = useFireCommandStore((s) => s.recallScene);
   const clearScene = useFireCommandStore((s) => s.clearScene);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
   const occ = occupiedCount(scenes);
 
   const cycle = (dir: 1 | -1) => {
@@ -206,19 +205,7 @@ export function ScenesQuickActions({
       >
         Wipe
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("scenes", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${SCENES_C}66`, color: SCENES_C_GLOW, background: `${SCENES_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass scenes module UI" : "Engage scenes"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="scenes" color={SCENES_C} name="Scenes" onTextColor={SCENES_C_GLOW} />
     </div>
   );
 }

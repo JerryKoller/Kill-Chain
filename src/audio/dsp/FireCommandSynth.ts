@@ -70,6 +70,30 @@ export type {
 } from "./toneDifferentiation";
 export type { WarpMode } from "./wavetables";
 
+/** Valid wavetable ids — unknown ids fall back to "saw". */
+const WAVETABLE_ID_SET = new Set<string>(WAVETABLE_IDS);
+
+/** Spectral warp settings a warped bank is rendered against. */
+type WarpSpec = { stretch: number; tilt: number; comb: number; mode: WarpMode };
+
+/** Sample&hold step edge time — short enough to read as a step, long enough not to click. */
+const SH_SLEW_SEC = 0.0015;
+
+/** Phaser feedback ceiling — loop peak stays near +11 dB instead of +20 dB. */
+const PHASER_FB_CEIL = 0.72;
+
+/** S-curve glide: fixed smoothstep table + one reusable curve buffer. */
+const GLIDE_CURVE_N = 16;
+const SMOOTHSTEP_LUT = (() => {
+  const a = new Float32Array(GLIDE_CURVE_N);
+  for (let i = 0; i < GLIDE_CURVE_N; i++) {
+    const u = i / (GLIDE_CURVE_N - 1);
+    a[i] = u * u * (3 - 2 * u);
+  }
+  return a;
+})();
+const GLIDE_CURVE_SCRATCH = new Float32Array(GLIDE_CURVE_N);
+
 export type FireFilterType = "lowpass" | "bandpass" | "highpass" | "notch";
 export type SubWave = "sine" | "triangle" | "square" | "sawtooth";
 export type LfoWave = "sine" | "triangle" | "sawtooth" | "square" | "sample-hold";
@@ -781,6 +805,24 @@ function clampFmDev(hz: number, sampleRate: number): number {
   return clamp(hz, 0, sampleRate * 0.33);
 }
 
+/**
+ * Bound the A↔B cross-FM round trip.
+ *
+ * Both directions live is a real graph cycle (Chromium runs it with an implicit
+ * one-render-quantum delay), so a high index in both directions self-oscillates
+ * into broadband hash regardless of the per-direction Nyquist clamp. Cap the
+ * round-trip index while keeping the balance the patch asked for.
+ */
+export const CROSS_FM_LOOP_MAX = 6;
+export function boundCrossFm(devBtoA: number, devAtoB: number, f0: number): [number, number] {
+  if (devBtoA <= 0 || devAtoB <= 0) return [devBtoA, devAtoB];
+  const base = Math.max(1, f0);
+  const loop = (devBtoA / base) * (devAtoB / base);
+  if (loop <= CROSS_FM_LOOP_MAX) return [devBtoA, devAtoB];
+  const s = Math.sqrt(CROSS_FM_LOOP_MAX / loop);
+  return [devBtoA * s, devAtoB * s];
+}
+
 function makeDriveCurve(
   drive: number,
   mode: DriveMode = "soft",
@@ -878,6 +920,24 @@ function makeFilterDriveCurve(drive: number): Float32Array<ArrayBuffer> {
   for (let i = 0; i < n; i++) {
     const x = ((i / (n - 1)) * 2 - 1) * CLIP_RANGE;
     curve[i] = (1 - w) * soft(x) + w * Math.tanh(k * x) * makeup;
+  }
+  return curve;
+}
+
+/**
+ * Delay feedback-path saturator.
+ *
+ * Small-signal slope is exactly unity, so the loop gain stays governed by the
+ * feedback gain alone — no runaway however hard this is driven. Loud repeats
+ * compress and grow harmonics instead, which is how tape / BBD echoes behave.
+ */
+export function makeFbDriveCurve(drive: number): Float32Array<ArrayBuffer> {
+  const n = 2048;
+  const curve = new Float32Array(n);
+  const k = 1 + clamp(drive, 0, 1) * 4;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / k;
   }
   return curve;
 }
@@ -1453,13 +1513,11 @@ class Voice {
       if (curve === "linear") {
         osc.frequency.linearRampToValueAtTime(f, t + Math.max(0.008, glideSec));
       } else if (curve === "s") {
-        const n = 16;
-        const arr = new Float32Array(n);
-        for (let i = 0; i < n; i++) {
-          const u = i / (n - 1);
-          const s = u * u * (3 - 2 * u);
-          arr[i] = cur + (f - cur) * s;
-        }
+        // setValueCurveAtTime copies the array, so one scratch buffer serves
+        // every oscillator — a 7-wide unison × dual-morph × 3 groups retune was
+        // allocating 42 Float32Arrays per note.
+        const arr = GLIDE_CURVE_SCRATCH;
+        for (let i = 0; i < GLIDE_CURVE_N; i++) arr[i] = cur + (f - cur) * SMOOTHSTEP_LUT[i]!;
         try {
           osc.frequency.setValueCurveAtTime(arr, t, Math.max(0.01, glideSec));
         } catch {
@@ -1566,9 +1624,10 @@ class Voice {
       this.fmOsc.frequency.setValueAtTime(this.baseFreq * r2, t);
       this.fmGain.gain.setValueAtTime(clampFmDev((0.15 + l1 * 0.85) * modIdx * this.baseFreq * (4 + fb * 4), sr), t);
       const xm = (p.fmBtoA ?? 0.15 + fb * 0.5) * this.baseFreq * 4 / this.unisonCount;
-      this.xmodGain.gain.setTargetAtTime(clampFmDev(xm, sr), t, 0.02);
       const abAmt = Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.45 : 0);
-      this.xmodGainAB.gain.setTargetAtTime(clampFmDev(abAmt * this.baseFreq * 4 / this.unisonCount, sr), t, 0.02);
+      const [xmBA, xmAB] = boundCrossFm(xm, abAmt * this.baseFreq * 4 / this.unisonCount, this.baseFreq);
+      this.xmodGain.gain.setTargetAtTime(clampFmDev(xmBA, sr), t, 0.02);
+      this.xmodGainAB.gain.setTargetAtTime(clampFmDev(xmAB, sr), t, 0.02);
       return;
     }
     if (!fmOn) {
@@ -1578,9 +1637,14 @@ class Voice {
       const syncBoost = chipOn && p.hardSync && acidMix > 0.25
         ? Math.max(p.fmBtoA ?? 0, 0.55 + acidMix * 0.4)
         : 0;
-      this.xmodGain.gain.setTargetAtTime(clampFmDev(syncBoost * this.baseFreq * 10 / this.unisonCount, this.ctx.sampleRate), t, 0.02);
       const ab = (p.fmAtoB ?? 0) > 0.001 || p.oscBInherit === "fm" ? Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.55 : 0) : 0;
-      this.xmodGainAB.gain.setTargetAtTime(clampFmDev(ab * this.baseFreq * 4 / this.unisonCount, this.ctx.sampleRate), t, 0.02);
+      const [sBA, sAB] = boundCrossFm(
+        syncBoost * this.baseFreq * 10 / this.unisonCount,
+        ab * this.baseFreq * 4 / this.unisonCount,
+        this.baseFreq,
+      );
+      this.xmodGain.gain.setTargetAtTime(clampFmDev(sBA, this.ctx.sampleRate), t, 0.02);
+      this.xmodGainAB.gain.setTargetAtTime(clampFmDev(sAB, this.ctx.sampleRate), t, 0.02);
       return;
     }
     const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
@@ -1593,9 +1657,10 @@ class Voice {
     // Hard sync feel: strong B→A cross-mod (PeriodicWave can't hard-reset phase).
     const syncBoost = syncWanted ? Math.max(p.fmBtoA ?? 0, 0.88) : (p.fmBtoA ?? 0);
     const xm = syncBoost * this.baseFreq * (syncWanted ? 10 : 4) / this.unisonCount;
-    this.xmodGain.gain.setTargetAtTime(clampFmDev(xm, sr), t, 0.02);
     const abAmt = Math.max(p.fmAtoB ?? 0, p.oscBInherit === "fm" ? 0.55 : 0);
-    this.xmodGainAB.gain.setTargetAtTime(clampFmDev(abAmt * this.baseFreq * 4 / this.unisonCount, sr), t, 0.02);
+    const [xmBA, xmAB] = boundCrossFm(xm, abAmt * this.baseFreq * 4 / this.unisonCount, this.baseFreq);
+    this.xmodGain.gain.setTargetAtTime(clampFmDev(xmBA, sr), t, 0.02);
+    this.xmodGainAB.gain.setTargetAtTime(clampFmDev(xmAB, sr), t, 0.02);
   }
 
   private baseCutoff(p: FirePatch): number {
@@ -1662,23 +1727,29 @@ class Voice {
             (1 + (Math.random() * 2 - 1) * choirSpread * 0.8) *
             (1 + voiceIdentityUnit(p.analogDnaSeed ?? 1, this.voiceSlot, 3) * lifeCouple * 0.25),
         );
-      const velAtk = clamp(p.velAttack ?? 0, 0, 1);
+      // Asleep envelope modules bypass their time shaping: the amp holds a flat
+      // gate (velocity still scales it) and the filter envelope contributes
+      // nothing. Without this, sleeping either one only dimmed its panel.
+      const ampEnvOn = p.moduleEnable?.["env.amp"] !== false;
+      const filtEnvOn = p.moduleEnable?.["env.filt"] !== false;
+      const velAtk = ampEnvOn ? clamp(p.velAttack ?? 0, 0, 1) : 0;
       let ampAtk = this.liveAttackSec != null ? this.liveAttackSec : j(p.ampAttack);
+      if (!ampEnvOn) ampAtk = 0.004;
       ampAtk = Math.max(0.001, ampAtk * (1 - velAtk * clamp(velocity, 0, 1) * 0.85));
       const ampDec = j(p.ampDecay);
-      const hold = Math.max(0, p.ampHold ?? 0);
+      const hold = ampEnvOn ? Math.max(0, p.ampHold ?? 0) : 0;
       const filtAtk = this.liveAttackSec != null
         ? Math.min(j(p.filtAttack), Math.max(0.002, this.liveAttackSec * 1.25))
         : j(p.filtAttack);
       const filtDec = j(p.filtDecay);
       // Curve shapes approximated via ramp vs setTarget tau.
-      const atkCurve = p.ampCurveAttack ?? "lin";
+      const atkCurve = ampEnvOn ? (p.ampCurveAttack ?? "lin") : "lin";
       const decCurve = p.ampCurveDecay ?? "exp";
       const retrig = p.ampRetrigger ?? "zero";
       const startLvl = retrig === "current" || retrig === "legato"
         ? Math.max(0, this.ampEnv.offset.value)
         : 0;
-      const gateish = (p.ampModel ?? "vca") === "gate";
+      const gateish = (p.ampModel ?? "vca") === "gate" || !ampEnvOn;
       const susLvl = gateish ? peak : peak * p.ampSustain;
 
       this.ampEnv.offset.cancelScheduledValues(t);
@@ -1686,11 +1757,20 @@ class Voice {
       if (atkCurve === "lin" || atkCurve === "step") {
         this.ampEnv.offset.linearRampToValueAtTime(peakPunch, t + ampAtk);
       } else {
-        this.ampEnv.offset.setTargetAtTime(peakPunch, t, Math.max(0.003, ampAtk / (atkCurve === "exp" ? 2.2 : 3.5)));
+        // setTargetAtTime is asymptotic, so aiming AT the peak only reached ~89%
+        // of it (exp) before decay took over — every curved attack lost its top
+        // and started decaying early. Aim past the peak so the curve arrives at
+        // peakPunch exactly when the attack ends, then pin it there.
+        const tau = Math.max(0.003, ampAtk / (atkCurve === "exp" ? 2.2 : 3.5));
+        const k = Math.exp(-ampAtk / tau);
+        const aim = Math.max(0, (peakPunch - startLvl * k) / (1 - k));
+        this.ampEnv.offset.setTargetAtTime(aim, t, tau);
+        this.ampEnv.offset.setValueAtTime(peakPunch, t + ampAtk);
       }
       const afterAtk = t + ampAtk + hold;
       if (overshoot > 0.02) {
-        this.ampEnv.offset.setValueAtTime(peakPunch, t + ampAtk);
+        // Both attack branches now land exactly on peakPunch at t + ampAtk, so
+        // the overshoot fall can ramp straight off that value.
         this.ampEnv.offset.linearRampToValueAtTime(peak, t + ampAtk + Math.min(0.04, ampAtk * 0.5));
       }
       const decTau = Math.max(0.005, ampDec / (decCurve === "lin" ? 8 : 3));
@@ -1705,7 +1785,7 @@ class Voice {
       }
       const acidMix = clamp(p.chipAcidMix ?? 0.35, 0, 1);
       const accent = clamp(p.accentAmount ?? 0, 0, 1) * clamp(velocity, 0, 1) * (0.15 + acidMix * 0.85);
-      let envAmt = p.filterEnvAmount + accent * 1.15;
+      let envAmt = filtEnvOn ? p.filterEnvAmount + accent * 1.15 : 0;
       // Filter-type-aware sweep scaling.
       if (p.filterType === "bandpass" || p.filterType === "notch") envAmt *= 0.85;
       const peakOff = clamp(base * Math.pow(2, envAmt * 4.5), 20, 20000) - base;
@@ -1714,7 +1794,7 @@ class Voice {
       this.filterEnv.offset.linearRampToValueAtTime(peakOff, t + filtAtk);
       this.filterEnv.offset.setTargetAtTime(peakOff * p.filtSustain, t + filtAtk, Math.max(0.005, filtDec / 3));
       // Dual destination: resonance follows filter envelope.
-      const resoAmt = clamp(p.filterEnvResoAmount ?? 0, -1, 1);
+      const resoAmt = filtEnvOn ? clamp(p.filterEnvResoAmount ?? 0, -1, 1) : 0;
       if (Math.abs(resoAmt) > 0.02) {
         const qPeak = liveFilterQ(p.filterResonance, resoAmt * 14);
         this.filter.Q.cancelScheduledValues(t);
@@ -1797,7 +1877,9 @@ class Voice {
       this.scheduleEnd(tail);
       return;
     }
-    const rel = Math.max(0.01, p.ampRelease);
+    // Asleep amp envelope = no time shaping at all, so release is a declick.
+    const ampEnvOn = p.moduleEnable?.["env.amp"] !== false;
+    const rel = ampEnvOn ? Math.max(0.01, p.ampRelease) : 0.012;
     const future = t > now + 0.001;
     // For scheduled (future) releases, hold the envelope's ramp value at `t`
     // rather than snapshotting `.value` now — the attack may still be running.
@@ -1811,11 +1893,12 @@ class Voice {
       }
     };
     hold(this.ampEnv.offset);
-    const relCurve = p.ampCurveRelease ?? "exp";
+    const relCurve = ampEnvOn ? (p.ampCurveRelease ?? "exp") : "lin";
     const relTau = rel / (relCurve === "lin" ? 8 : relCurve === "s" ? 3.5 : 4);
     this.ampEnv.offset.setTargetAtTime(0, t, Math.max(0.004, relTau));
     hold(this.filterEnv.offset);
-    this.filterEnv.offset.setTargetAtTime(0, t, Math.max(0.01, p.filtRelease) / 4);
+    const filtRel = p.moduleEnable?.["env.filt"] !== false ? Math.max(0.01, p.filtRelease) : 0.02;
+    this.filterEnv.offset.setTargetAtTime(0, t, filtRel / 4);
     const tail = (t - now) + rel * 4 + 0.15;
     this.scheduleEnd(tail);
   }
@@ -2245,6 +2328,17 @@ export class FireCommandSynth {
   private readonly dR: DelayNode;
   private readonly dFbLR: GainNode;
   private readonly dFbRL: GainNode;
+  // In-loop feedback conditioning. Without these the repeats never darkened
+  // (delayFbFilter only dimmed the shared post-delay tone LPF, which coloured
+  // the DRY signal instead) and nothing bounded low-end/hiss accumulation at
+  // high feedback.
+  private readonly dFbSatLR: WaveShaperNode;
+  private readonly dFbSatRL: WaveShaperNode;
+  private readonly dFbLpLR: BiquadFilterNode;
+  private readonly dFbLpRL: BiquadFilterNode;
+  private readonly dFbHpLR: BiquadFilterNode;
+  private readonly dFbHpRL: BiquadFilterNode;
+  private lastFbDriveKey = -1;
   private readonly dPanL: StereoPannerNode;
   private readonly dPanR: StereoPannerNode;
   private readonly delayWet: GainNode;
@@ -2262,6 +2356,12 @@ export class FireCommandSynth {
   private readonly airOut: GainNode;
   private readonly reverbIn: GainNode;
   private readonly reverbPredelay: DelayNode;
+  // Tail EQ lives on the WET path. reverbHighCut / reverbLowDecay used to be
+  // folded into the shared post-delay tone LPF, which band-limited the DRY bus
+  // to 12 kHz whenever the reverb module was merely enabled — audible as a
+  // washed-out top end on patches with reverbMix at 0.
+  private readonly revHiCut: BiquadFilterNode;
+  private readonly revLowShelf: BiquadFilterNode;
   private readonly reverbConv: ConvolverNode;
   private readonly reverbDry: GainNode;
   private readonly reverbWet: GainNode;
@@ -2281,6 +2381,16 @@ export class FireCommandSynth {
   private readonly widthSideL: GainNode;
   private readonly widthSideR: GainNode;
   private readonly widthSideHp: BiquadFilterNode;
+  // Mechanism stages: three parallel side-path branches, exactly one live at a
+  // time. "ms" routes straight through, so the network is still the exact
+  // identity at w = 1; "microdelay" lags the side, "decorrelate" runs it
+  // through an allpass pair that scrambles phase without touching magnitude.
+  private readonly widthSideDirect: GainNode;
+  private readonly widthSideDelay: DelayNode;
+  private readonly widthSideDelayAmt: GainNode;
+  private readonly widthSideAp1: BiquadFilterNode;
+  private readonly widthSideAp2: BiquadFilterNode;
+  private readonly widthSideApAmt: GainNode;
   private readonly widthSideAmt: GainNode;
   private readonly widthSideInv: GainNode;
   private readonly widthMerge: ChannelMergerNode;
@@ -2297,7 +2407,10 @@ export class FireCommandSynth {
   private nesNoiseBuffer: AudioBuffer | null = null;
   private gbNoiseBuffer: AudioBuffer | null = null;
   private periodicNoiseBuffer: AudioBuffer | null = null;
-  private readonly banks = new Map<string, PeriodicWave[][]>();
+  /** table id → sparse per-mip frame banks. Built on demand (see baseBankFor). */
+  private readonly banks = new Map<string, (PeriodicWave[] | undefined)[]>();
+  /** table id → per-subframe constant-loudness gains, shared across that table's mips. */
+  private readonly bankGains = new Map<string, number[]>();
   private readonly voices = new Set<Voice>();
   private readonly held = new Map<number, Voice>();
   private monoVoice: Voice | null = null;
@@ -2376,30 +2489,10 @@ export class FireCommandSynth {
       }
     });
 
-    // Pre-render every wavetable into pitch-mip × subframe PeriodicWave banks.
-    // Constant-loudness gain is derived once per subframe from the full-res
-    // spectrum and reused across mips, so tables sit at an even level and a
-    // note gliding across a pitch-mip boundary doesn't step in volume.
-    for (const id of WAVETABLE_IDS) {
-      const mips: PeriodicWave[][] = [];
-      const gains = new Array<number>(SUBFRAMES);
-      for (let k = 0; k < SUBFRAMES; k++) {
-        const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
-        gains[k] = loudnessGain(harmonicsAt(id, f, NUM_PARTIALS).imag);
-      }
-      for (const maxP of MIP_PARTIALS) {
-        const frames: PeriodicWave[] = [];
-        for (let k = 0; k < SUBFRAMES; k++) {
-          const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
-          const { real, imag } = harmonicsAt(id, f, maxP);
-          const g = gains[k]!;
-          for (let n = 1; n < imag.length; n++) imag[n]! *= g;
-          frames.push(ctx.createPeriodicWave(real, imag, { disableNormalization: true }));
-        }
-        mips.push(frames);
-      }
-      this.banks.set(id, mips);
-    }
+    // Wave banks are built on demand (see baseBankFor / warmBanks): rendering
+    // every table × mip × subframe up front is thousands of PeriodicWaves and
+    // stalled first paint. Warm just what the starting patch will ask for.
+    this.warmBanks(this.patch);
 
     this.output = ctx.createGain();
     this.voiceBus = ctx.createGain();
@@ -2468,6 +2561,24 @@ export class FireCommandSynth {
     this.dR = ctx.createDelay(2.0);
     this.dFbLR = ctx.createGain();
     this.dFbRL = ctx.createGain();
+    this.dFbSatLR = ctx.createWaveShaper();
+    this.dFbSatRL = ctx.createWaveShaper();
+    this.dFbSatLR.oversample = "2x";
+    this.dFbSatRL.oversample = "2x";
+    this.dFbLpLR = ctx.createBiquadFilter();
+    this.dFbLpRL = ctx.createBiquadFilter();
+    this.dFbHpLR = ctx.createBiquadFilter();
+    this.dFbHpRL = ctx.createBiquadFilter();
+    for (const f of [this.dFbLpLR, this.dFbLpRL]) {
+      f.type = "lowpass";
+      f.frequency.value = 18000;
+      f.Q.value = 0.5;
+    }
+    for (const f of [this.dFbHpLR, this.dFbHpRL]) {
+      f.type = "highpass";
+      f.frequency.value = 40;
+      f.Q.value = 0.5;
+    }
     this.dPanL = ctx.createStereoPanner();
     this.dPanR = ctx.createStereoPanner();
     this.dPanL.pan.value = -0.9;
@@ -2501,6 +2612,14 @@ export class FireCommandSynth {
     this.reverbIn = ctx.createGain();
     this.reverbPredelay = ctx.createDelay(0.25);
     this.reverbPredelay.delayTime.value = 0;
+    this.revHiCut = ctx.createBiquadFilter();
+    this.revHiCut.type = "lowpass";
+    this.revHiCut.frequency.value = 12000;
+    this.revHiCut.Q.value = 0.5;
+    this.revLowShelf = ctx.createBiquadFilter();
+    this.revLowShelf.type = "lowshelf";
+    this.revLowShelf.frequency.value = 220;
+    this.revLowShelf.gain.value = 0;
     this.reverbConv = ctx.createConvolver();
     this.reverbDry = ctx.createGain();
     this.reverbWet = ctx.createGain();
@@ -2529,6 +2648,22 @@ export class FireCommandSynth {
     this.widthSideHp.type = "highpass";
     this.widthSideHp.frequency.value = 20;
     this.widthSideHp.Q.value = 0.7;
+    this.widthSideDirect = ctx.createGain();
+    this.widthSideDirect.gain.value = 1;
+    this.widthSideDelay = ctx.createDelay(0.02);
+    this.widthSideDelay.delayTime.value = 0.00045;
+    this.widthSideDelayAmt = ctx.createGain();
+    this.widthSideDelayAmt.gain.value = 0;
+    this.widthSideAp1 = ctx.createBiquadFilter();
+    this.widthSideAp1.type = "allpass";
+    this.widthSideAp1.frequency.value = 380;
+    this.widthSideAp1.Q.value = 0.7;
+    this.widthSideAp2 = ctx.createBiquadFilter();
+    this.widthSideAp2.type = "allpass";
+    this.widthSideAp2.frequency.value = 2200;
+    this.widthSideAp2.Q.value = 0.7;
+    this.widthSideApAmt = ctx.createGain();
+    this.widthSideApAmt.gain.value = 0;
     this.widthSideAmt = ctx.createGain();
     this.widthSideAmt.gain.value = 1;
     this.widthSideInv = ctx.createGain();
@@ -2583,8 +2718,9 @@ export class FireCommandSynth {
     this.tremolo.connect(this.dL);
     this.dL.connect(this.dPanL).connect(this.delayWet);
     this.dR.connect(this.dPanR).connect(this.delayWet);
-    this.dL.connect(this.dFbLR).connect(this.dR);
-    this.dR.connect(this.dFbRL).connect(this.dL);
+    // Cross-coupled feedback, each pass through saturation → band limiting.
+    this.dL.connect(this.dFbLR).connect(this.dFbSatLR).connect(this.dFbHpLR).connect(this.dFbLpLR).connect(this.dR);
+    this.dR.connect(this.dFbRL).connect(this.dFbSatRL).connect(this.dFbHpRL).connect(this.dFbLpRL).connect(this.dL);
     this.delayWet.connect(this.delayOut);
     this.delayOut.connect(this.tone);
     this.tone.connect(this.punchIn);
@@ -2593,7 +2729,8 @@ export class FireCommandSynth {
     this.punchOut.connect(this.punchMakeup).connect(this.airIn);
     this.airIn.connect(this.airLow).connect(this.airHigh).connect(this.airOut).connect(this.reverbIn);
     this.reverbIn.connect(this.reverbDry).connect(this.reverbOut);
-    this.reverbIn.connect(this.reverbPredelay).connect(this.reverbConv).connect(this.reverbWet).connect(this.reverbOut);
+    this.reverbIn.connect(this.reverbPredelay).connect(this.revHiCut).connect(this.revLowShelf)
+      .connect(this.reverbConv).connect(this.reverbWet).connect(this.reverbOut);
     // Spectral FX sits between reverb and autopan (freezing reverb tails is
     // the point). At spectralMode "off" the signal takes the plain dry gain —
     // zero added latency, zero worklet cost; the worklet is loaded lazily on
@@ -2610,7 +2747,11 @@ export class FireCommandSynth {
     this.widthSplit.connect(this.widthSideR, 1);        // S = (L−R)/2
     this.widthSideL.connect(this.widthSideHp);
     this.widthSideR.connect(this.widthSideHp);
-    this.widthSideHp.connect(this.widthSideAmt);         // S × width (mono-below HPF)
+    // S × width (mono-below HPF), then one of three mechanism branches.
+    this.widthSideHp.connect(this.widthSideDirect).connect(this.widthSideAmt);
+    this.widthSideHp.connect(this.widthSideDelay).connect(this.widthSideDelayAmt).connect(this.widthSideAmt);
+    this.widthSideHp.connect(this.widthSideAp1).connect(this.widthSideAp2)
+      .connect(this.widthSideApAmt).connect(this.widthSideAmt);
     this.widthMid.connect(this.widthMerge, 0, 0);
     this.widthMid.connect(this.widthMerge, 0, 1);
     this.widthSideAmt.connect(this.widthMerge, 0, 0);   // L' = M + wS
@@ -2764,12 +2905,19 @@ export class FireCommandSynth {
   /** Short LFSR-ish / periodic noise buffers for chip characters. */
   private static makeChipNoise(ctx: AudioContext, mode: ChipNoiseMode): AudioBuffer {
     const sr = ctx.sampleRate;
+    // Step lengths are pinned to time, not samples: a fixed sample count made
+    // the loop pitch and LFSR rate track the device sample rate (a 96 kHz
+    // machine heard these an octave up from a 48 kHz one).
+    const stepSamples = Math.max(1, Math.round(sr / 48000));
     if (mode === "periodic") {
-      // Metallic short loop — harsh digital tone noise.
-      const len = 48;
+      // Metallic short loop — harsh digital tone noise (~1 kHz at any rate).
+      const len = 48 * stepSamples;
       const buf = ctx.createBuffer(1, len, sr);
       const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = (((i * 7) & 15) / 7.5 - 1) * 0.95;
+      for (let i = 0; i < len; i++) {
+        const s = Math.floor(i / stepSamples);
+        d[i] = (((s * 7) & 15) / 7.5 - 1) * 0.95;
+      }
       return buf;
     }
     // Hold / Soft: long buffer with stepped LFSR bits (4-bit / softer hold).
@@ -2777,7 +2925,7 @@ export class FireCommandSynth {
     const buf = ctx.createBuffer(1, len, sr);
     const d = buf.getChannelData(0);
     let reg = 1;
-    const hold = mode === "nes" ? 10 : 5;
+    const hold = (mode === "nes" ? 10 : 5) * stepSamples;
     let bit = 0;
     for (let i = 0; i < len; i++) {
       if (i % hold === 0) {
@@ -2844,18 +2992,82 @@ export class FireCommandSynth {
     return this.activeBankFor(id, mip);
   }
 
+  /**
+   * Per-subframe constant-loudness gains for a table, derived once from the
+   * full-resolution spectrum and reused across that table's mips — so tables
+   * sit at an even level and a note gliding across a mip boundary doesn't step.
+   */
+  private baseGainsFor(id: string): number[] {
+    let gains = this.bankGains.get(id);
+    if (gains) return gains;
+    gains = new Array<number>(SUBFRAMES);
+    for (let k = 0; k < SUBFRAMES; k++) {
+      const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+      gains[k] = loudnessGain(harmonicsAt(id, f, NUM_PARTIALS).imag);
+    }
+    this.bankGains.set(id, gains);
+    return gains;
+  }
+
+  /** Render one table's one mip level into SUBFRAMES PeriodicWaves. */
+  private buildFrames(id: string, mip: number, gains: number[], warp: WarpSpec | null): PeriodicWave[] {
+    const maxP = MIP_PARTIALS[mip]!;
+    const frames: PeriodicWave[] = [];
+    for (let k = 0; k < SUBFRAMES; k++) {
+      const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+      const { real, imag } = harmonicsAt(id, f, maxP);
+      const spec = warp
+        ? applyWarp(imag, warp.stretch, warp.tilt, warp.comb, warp.mode)
+        : imag;
+      const g = gains[k]!;
+      for (let n = 1; n < spec.length; n++) spec[n]! *= g;
+      frames.push(this.ctx.createPeriodicWave(real, spec, { disableNormalization: true }));
+    }
+    return frames;
+  }
+
   private baseBankFor(id: string, mip = 0): PeriodicWave[] {
-    const mips = this.banks.get(id) ?? this.banks.get("saw")!;
-    const i = clamp(mip | 0, 0, mips.length - 1);
-    return mips[i]!;
+    const key = WAVETABLE_ID_SET.has(id) ? id : "saw";
+    const i = clamp(mip | 0, 0, MIP_PARTIALS.length - 1);
+    let mips = this.banks.get(key);
+    if (!mips) {
+      mips = new Array<PeriodicWave[] | undefined>(MIP_PARTIALS.length);
+      this.banks.set(key, mips);
+    }
+    let frames = mips[i];
+    if (!frames) {
+      frames = this.buildFrames(key, i, this.baseGainsFor(key), null);
+      mips[i] = frames;
+    }
+    return frames;
+  }
+
+  /**
+   * Pre-build the banks the patch is about to ask for, off the note-on path.
+   * Two mip levels (bass + mid register) cover ordinary playing; anything
+   * further out builds lazily on first use.
+   */
+  private warmBanks(p: FirePatch): void {
+    const sr = this.ctx.sampleRate;
+    const tables: Array<[string, number]> = [
+      [p.oscATable, p.oscAOctave],
+      [p.oscBTable, p.oscBOctave],
+      [p.oscCTable, p.oscCOctave],
+    ];
+    for (const [id, oct] of tables) {
+      const shift = Math.pow(2, oct ?? 0);
+      this.activeBankFor(id, mipLevelForFreq(110 * shift, sr));
+      this.activeBankFor(id, mipLevelForFreq(440 * shift, sr));
+    }
   }
 
   // ── Spectral warps (v1.7) ──
-  // Base banks stay cached forever; a non-zero warp lazily renders a WARPED
-  // mip×subframe bank per in-use table, invalidated whenever the warp
-  // signature changes. Knob drags are debounced (~80 ms) so scrubbing doesn't
-  // re-render hundreds of waves per mousemove.
-  private readonly warpedBanks = new Map<string, PeriodicWave[][]>();
+  // Base banks stay cached forever; a non-zero warp lazily renders WARPED
+  // subframes per in-use table+mip, invalidated whenever the warp signature
+  // changes. Knob drags are debounced (~80 ms) so scrubbing doesn't re-render
+  // hundreds of waves per mousemove.
+  private readonly warpedBanks = new Map<string, (PeriodicWave[] | undefined)[]>();
+  private readonly warpedGains = new Map<string, number[]>();
   private warpedSig = "";
   private warpTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2882,34 +3094,33 @@ export class FireCommandSynth {
     const sig = `${mode}|${stretch}|${tilt}|${comb}|${amt}`;
     if (sig !== this.warpedSig) {
       this.warpedBanks.clear();
+      this.warpedGains.clear();
       this.warpedSig = sig;
     }
-    const key = this.banks.has(id) ? id : "saw";
+    const key = WAVETABLE_ID_SET.has(id) ? id : "saw";
+    const warp: WarpSpec = { stretch, tilt, comb, mode };
     let mips = this.warpedBanks.get(key);
     if (!mips) {
-      mips = [];
-      // Full-res warped gain per subframe, reused across mips (see base build).
-      const gains = new Array<number>(SUBFRAMES);
-      for (let k = 0; k < SUBFRAMES; k++) {
-        const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
-        const full = applyWarp(harmonicsAt(key, f, NUM_PARTIALS).imag, stretch, tilt, comb, mode);
-        gains[k] = loudnessGain(full);
-      }
-      for (const maxP of MIP_PARTIALS) {
-        const bank: PeriodicWave[] = [];
-        for (let k = 0; k < SUBFRAMES; k++) {
-          const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
-          const { real, imag } = harmonicsAt(key, f, maxP);
-          const warped = applyWarp(imag, stretch, tilt, comb, mode);
-          const g = gains[k]!;
-          for (let n = 1; n < warped.length; n++) warped[n]! *= g;
-          bank.push(this.ctx.createPeriodicWave(real, warped, { disableNormalization: true }));
-        }
-        mips.push(bank);
-      }
+      mips = new Array<PeriodicWave[] | undefined>(MIP_PARTIALS.length);
       this.warpedBanks.set(key, mips);
     }
-    return mips[mipI]!;
+    let frames = mips[mipI];
+    if (!frames) {
+      let gains = this.warpedGains.get(key);
+      if (!gains) {
+        // Full-res warped gain per subframe, reused across this table's mips.
+        gains = new Array<number>(SUBFRAMES);
+        for (let k = 0; k < SUBFRAMES; k++) {
+          const f = SUBFRAMES > 1 ? k / (SUBFRAMES - 1) : 0;
+          const full = applyWarp(harmonicsAt(key, f, NUM_PARTIALS).imag, stretch, tilt, comb, mode);
+          gains[k] = loudnessGain(full);
+        }
+        this.warpedGains.set(key, gains);
+      }
+      frames = this.buildFrames(key, mipI, gains, warp);
+      mips[mipI] = frames;
+    }
+    return frames;
   }
 
   /** Swap all live voices onto the (possibly warped) banks for the current patch. */
@@ -3018,13 +3229,18 @@ export class FireCommandSynth {
     const now = this.ctx.currentTime;
     const p = this.patch;
 
+    // Stepping the S&H value with setValueAtTime was a sample-accurate jump —
+    // audible as a click/zipper on pitch and cutoff. A sub-audio ramp keeps the
+    // stepped character but removes the discontinuity.
     if (p.lfo1Wave === "sample-hold") {
       const step = Math.floor(now * clamp(p.lfo1Rate, 0.01, 40));
       if (step !== this.sh1Step) {
         this.sh1Step = step;
         this.sh1Val = Math.random() * 2 - 1;
-        this.lfo1.sh.offset.cancelScheduledValues(now);
-        this.lfo1.sh.offset.setValueAtTime(this.sh1Val, now);
+        const o = this.lfo1.sh.offset;
+        o.cancelScheduledValues(now);
+        o.setValueAtTime(o.value, now);
+        o.linearRampToValueAtTime(this.sh1Val, now + SH_SLEW_SEC);
       }
     }
     if (p.lfo2Wave === "sample-hold") {
@@ -3032,8 +3248,10 @@ export class FireCommandSynth {
       if (step !== this.sh2Step) {
         this.sh2Step = step;
         this.sh2Val = Math.random() * 2 - 1;
-        this.lfo2.sh.offset.cancelScheduledValues(now);
-        this.lfo2.sh.offset.setValueAtTime(this.sh2Val, now);
+        const o = this.lfo2.sh.offset;
+        o.cancelScheduledValues(now);
+        o.setValueAtTime(o.value, now);
+        o.linearRampToValueAtTime(this.sh2Val, now + SH_SLEW_SEC);
       }
     }
     // Matrix random source — a stepped sample/hold independent of the LFOs.
@@ -3738,6 +3956,7 @@ export class FireCommandSynth {
       this.warpTimer = null;
     }
     this.warpedBanks.clear();
+    this.warpedGains.clear();
     this.warpedSig = "";
     // Hard-kill live voices. fastRelease left ~50 ms zombies whose filter
     // topology (ladder/SVF worklet vs biquad) and dual-morph graph cannot be
@@ -3770,6 +3989,8 @@ export class FireCommandSynth {
     this.applyBusParams(this.patch);
     this.applyLfoParams(this.patch);
     this.applySpectral(this.patch);
+    // Render this patch's banks now rather than on the first note-on.
+    this.warmBanks(this.patch);
   }
 
   /**
@@ -3863,6 +4084,7 @@ export class FireCommandSynth {
       case "oscATable":
       case "oscBTable":
       case "oscCTable":
+        this.warmBanks(p);
         for (const v of this.voices) this.rebindVoiceBanks(v, p); break;
       case "spectralMode": case "spectralAmount": case "spectralMix":
       case "spectralLow": case "spectralHigh": case "spectralWetOnly":
@@ -4088,12 +4310,17 @@ export class FireCommandSynth {
       ap.frequency.setTargetAtTime(center * (0.7 + i * 0.18), t, 0.05);
     }
     const stereo = p.phaserStereo ?? "linked";
-    // Opposed/quadrature: skew R-side allpass via feedback polarity / wet
-    const fbAmt = clamp(p.phaserFeedback ?? 0.35, 0, 0.9);
+    // Opposed/quadrature: skew R-side allpass via feedback polarity / wet.
+    // Feedback around a unity-magnitude allpass chain peaks at ~1/(1-fb): the
+    // old 0.9 ceiling was +20 dB of metallic self-resonance straight into the
+    // drive stage. Cap it, and trim the wet only in the hot end of the range so
+    // patches at the 0.35 default are untouched.
+    const fbAmt = clamp(p.phaserFeedback ?? 0.35, 0, PHASER_FB_CEIL);
+    const fbTrim = 1 - 0.3 * clamp((fbAmt - 0.5) / 0.5, 0, 1);
     const delta = !!(p.fxDeltaAudition);
     this.phaserDry.gain.setTargetAtTime(delta ? 0 : 1, t, 0.02);
     this.phaserWet.gain.setTargetAtTime(
-      this.fxSilenced ? 0 : phMix * (delta ? 1.4 : 1) * (stereo === "opposed" ? 1.1 : 1),
+      this.fxSilenced ? 0 : phMix * fbTrim * (delta ? 1.4 : 1) * (stereo === "opposed" ? 1.1 : 1),
       t,
       0.02,
     );
@@ -4136,8 +4363,10 @@ export class FireCommandSynth {
     this.cDelayR.delayTime.setTargetAtTime(baseDelay * (1.05 + spread * 0.25), t, 0.03);
     this.cPanL.pan.setTargetAtTime(-0.8 * spread, t, 0.03);
     this.cPanR.pan.setTargetAtTime(0.8 * spread, t, 0.03);
-    // Mono-below / chorus low cut via lowProtect + chorusLowCut
-    const chCut = Math.max(lpHz, clamp(p.chorusLowCut ?? 0, 0, 400));
+    // Mono-below / chorus low cut via lowProtect + chorusLowCut. The shared HP
+    // sits upstream of the chorus dry/wet split, so only let a chorus control
+    // touch it while the chorus is actually contributing.
+    const chCut = Math.max(lpHz, chMix > 0.0005 ? clamp(p.chorusLowCut ?? 0, 0, 400) : 0);
     if (chCut > 30) this.lowProtectHp.frequency.setTargetAtTime(chCut, t, 0.05);
 
     const mode = p.delayCascadeMode ?? "echo";
@@ -4156,12 +4385,27 @@ export class FireCommandSynth {
     if (mode === "infinite") fb = Math.min(0.98, Math.max(fb, 0.92));
     if (mode === "slap") fb = Math.min(fb, 0.25);
     if (p.delayFreeze) fb = 0.97;
-    // Feedback-path filter/drive stability
+    // Feedback-path filter/drive: applied INSIDE the loop, so each repeat is
+    // darker and grittier than the last (and hiss / low-end can't stack up).
     const fbDrive = clamp(p.delayFbDrive ?? 0, 0, 1);
     const fbFilt = clamp(p.delayFbFilter ?? 0.35, 0, 1);
     fb = clamp(fb * (1 - fbDrive * 0.08), 0, 0.97);
     this.dFbLR.gain.setTargetAtTime(this.fxSilenced ? 0 : fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
     this.dFbRL.gain.setTargetAtTime(this.fxSilenced ? 0 : fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
+    // Dub-style band limiting: open at 0, ~6.5 kHz at the 0.35 default, tight at 1.
+    const fbLp = clamp(18000 * Math.pow(0.06, fbFilt), 700, 18000);
+    const fbHp = 40 + fbFilt * 140;
+    this.dFbLpLR.frequency.setTargetAtTime(fbLp, t, 0.05);
+    this.dFbLpRL.frequency.setTargetAtTime(fbLp, t, 0.05);
+    this.dFbHpLR.frequency.setTargetAtTime(fbHp, t, 0.05);
+    this.dFbHpRL.frequency.setTargetAtTime(fbHp, t, 0.05);
+    const fbDriveKey = Math.round(fbDrive * 24);
+    if (fbDriveKey !== this.lastFbDriveKey) {
+      this.lastFbDriveKey = fbDriveKey;
+      const curve = fbDrive < 0.02 ? null : makeFbDriveCurve(fbDrive);
+      this.dFbSatLR.curve = curve;
+      this.dFbSatRL.curve = curve;
+    }
     const delayOn = pathFx && on("fx.delay");
     let dMix = delayOn ? clamp(p.delayMix, 0, 1) : 0;
     // Simple duck: reduce wet when voices loud (voice count proxy)
@@ -4173,10 +4417,6 @@ export class FireCommandSynth {
     const tonePos = p.driveTonePos ?? "post";
     const toneHz = clamp(p.tone, 200, 20000);
     this.tone.frequency.setTargetAtTime(tonePos === "pre" ? 20000 : toneHz, t, 0.02);
-    // Feedback filter feel via delay wet tone approximation
-    if (fbFilt > 0.01) {
-      this.tone.frequency.setTargetAtTime(Math.min(toneHz, 18000 - fbFilt * 10000), t, 0.04);
-    }
 
     const reverbOn = pathFx && on("fx.reverb");
     let revMix = reverbOn ? clamp(p.reverbMix, 0, 1) : 0;
@@ -4184,8 +4424,10 @@ export class FireCommandSynth {
     const revOut = clamp(p.reverbOutGain ?? 1, 0, 2);
     this.reverbIn.gain.setTargetAtTime(revIn, t, 0.03);
     const early = clamp(p.reverbEarly ?? 0.45, 0, 1);
-    // Early vs tail: more early → higher dry remainder + shorter perceived wet
-    this.reverbDry.gain.setTargetAtTime(delta ? 0 : ((1 - revMix * 0.4) * (0.7 + early * 0.3)), t, 0.04);
+    // Early vs tail: more early → higher dry remainder. The trim now scales
+    // with mix, so an enabled-but-silent reverb no longer costs 1.6 dB of bus.
+    const revDryTrim = 1 - revMix * (0.4 + (1 - early) * 0.3);
+    this.reverbDry.gain.setTargetAtTime(delta ? 0 : revDryTrim, t, 0.04);
     if (p.reverbFreeze) revMix = Math.max(revMix, 0.85);
     this.reverbWet.gain.setTargetAtTime(
       this.fxSilenced ? 0 : revMix * revOut * (delta ? 1.25 : 1) * (0.65 + (1 - early) * 0.45),
@@ -4197,21 +4439,24 @@ export class FireCommandSynth {
       this.reverbPredelay.delayTime.setTargetAtTime(pre, t, 0.03);
       this.lastPredelay = pre;
     }
-    // Low decay / high cut fold into tone LPF ceiling when reverb engaged
+    // Tail EQ on the wet path only: high cut band-limits the reverb, low decay
+    // tilts how much low-frequency energy the tail keeps.
     const lowDec = clamp(p.reverbLowDecay ?? 0.55, 0, 1);
     const hiCut = clamp(p.reverbHighCut ?? 12000, 1000, 18000);
-    if (reverbOn) {
-      const dampTilt = clamp(p.reverbDamp ?? 0.45, 0, 1) * (1.15 - lowDec * 0.4);
-      this.tone.frequency.setTargetAtTime(Math.min(hiCut, clamp(p.tone, 200, 20000) * (1.1 - dampTilt * 0.35)), t, 0.05);
-    }
+    this.revHiCut.frequency.setTargetAtTime(hiCut, t, 0.05);
+    this.revLowShelf.gain.setTargetAtTime((lowDec - 0.55) * 8, t, 0.05);
 
     const widthOn = on("width");
     const wIn = widthOn ? clamp(p.widthInGain ?? 1, 0, 2) : 1;
     const wOut = widthOn ? clamp(p.widthOutGain ?? 1, 0, 2) : 1;
-    let w = widthOn ? clamp(p.stereoWidth ?? 1, 0, 1.4) : 1;
-    const mech = p.widthMechanism ?? "ms";
-    if (mech === "microdelay") w = 1 + (w - 1) * 0.85;
-    if (mech === "decorrelate") w = Math.min(1.4, w * 1.08);
+    const w = widthOn ? clamp(p.stereoWidth ?? 1, 0, 1.4) : 1;
+    // Mechanism used to be two cosmetic nudges of the same M/S gain. Each mode
+    // now runs its own side-path stage: sub-ms Haas lag, or an allpass pair
+    // that scrambles side phase without touching magnitude.
+    const mech = widthOn ? (p.widthMechanism ?? "ms") : "ms";
+    this.widthSideDirect.gain.setTargetAtTime(mech === "ms" ? 1 : 0, t, 0.04);
+    this.widthSideDelayAmt.gain.setTargetAtTime(mech === "microdelay" ? 1 : 0, t, 0.04);
+    this.widthSideApAmt.gain.setTargetAtTime(mech === "decorrelate" ? 1 : 0, t, 0.04);
     if (mixDelta) {
       // Delta: exaggerate side vs mid (processed difference feel)
       this.widthSideAmt.gain.setTargetAtTime(Math.max(0, w - 1) * 2, t, 0.03);

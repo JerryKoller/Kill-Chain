@@ -8,6 +8,7 @@ import { DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { MACRO_HELM_COLORS, MACRO_KEYS, type MacroKey } from "./MacroStageViz";
 import { MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const MACRO_C = FC.macros;
 export const MACRO_C_GLOW = bandShade(FC_BAND.perf, 0.92);
@@ -54,7 +55,7 @@ export function MacroMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${Math.round(t * 100)}%`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -85,7 +86,7 @@ export function MacroCharacterStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Helm
       </span>
       {MACRO_CHARS.map((p) => {
@@ -100,7 +101,7 @@ export function MacroCharacterStrip() {
               setParam("macro3", p.vals[2]);
               setParam("macro4", p.vals[3]);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -131,7 +132,7 @@ export function MacroSnapStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${MACRO_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${MACRO_C}66` }}>
         All
       </span>
       {MACRO_SNAPS.map((p) => {
@@ -146,7 +147,7 @@ export function MacroSnapStrip() {
               setParam("macro3", p.v);
               setParam("macro4", p.v);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -169,8 +170,6 @@ export function MacroSnapStrip() {
 
 export function MacroQuickActions() {
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["macros"] !== false);
   const m1 = useFireCommandStore((s) => s.patch.macro1) ?? 0;
   const m2 = useFireCommandStore((s) => s.patch.macro2) ?? 0;
   const m3 = useFireCommandStore((s) => s.patch.macro3) ?? 0;
@@ -249,19 +248,13 @@ export function MacroQuickActions() {
       >
         Reset
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("macros", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${MACRO_C}66`, color: MACRO_C_GLOW, background: `${MACRO_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass macros (matrix reads 0)" : "Engage macros"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="macros"
+        color={MACRO_C}
+        name="Macros"
+        onTextColor={MACRO_C_GLOW}
+        titleOn="Sleep Macros (matrix reads 0 — same as Signal Path Off)"
+      />
     </div>
   );
 }

@@ -5,6 +5,7 @@
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const AIR_C = FC.air;
 export const AIR_C_GLOW = bandShade(FC_BAND.mix, 0.92);
@@ -74,7 +75,7 @@ export function AirMeter({
   const left = bipolar ? (pos ? "50%" : `${50 - abs * 50}%`) : "0%";
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -104,7 +105,7 @@ export function AirCharacterStrip() {
   const c = AIR_C;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Sky
       </span>
       {AIR_CHARS.map((p) => {
@@ -120,7 +121,7 @@ export function AirCharacterStrip() {
               setParam("airHigh", p.high);
               setParam("airAmount", p.amt);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -146,7 +147,7 @@ export function AirAmountStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${AIR_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${AIR_C}66` }}>
         Amt
       </span>
       {AIR_AMT_SNAPS.map((p) => {
@@ -156,7 +157,7 @@ export function AirAmountStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("airAmount", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -179,8 +180,6 @@ export function AirAmountStrip() {
 
 export function AirQuickActions() {
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["air"] !== false);
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
       <button
@@ -222,19 +221,7 @@ export function AirQuickActions() {
       >
         Warm
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("air", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${AIR_C}66`, color: AIR_C_GLOW, background: `${AIR_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass air shelves" : "Engage air"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="air" color={AIR_C} name="Air" onTextColor={AIR_C_GLOW} />
     </div>
   );
 }

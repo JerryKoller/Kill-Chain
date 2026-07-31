@@ -1903,7 +1903,7 @@ function TimelineClip({
             {name}
           </div>
           <span
-            className={`shrink-0 text-[7px] font-black uppercase tracking-wide px-1 rounded ${
+            className={`fc-text-floor shrink-0 font-black uppercase tracking-[0.06em] px-1 rounded ${
               unique ? "bg-violet-400/30 text-violet-100" : "bg-black/35 text-white/55"
             }`}
           >

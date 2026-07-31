@@ -63,9 +63,11 @@
   color: rgba(255, 255, 255, 0.4);
 }
 /* Size-only telemetry floor — caller keeps its own color / line-height.
-   Use to lift illegible micro-type (7px) onto the density tokens. */
-[data-fire-root] .fc-text-floor {
-  font-size: var(--fc-text-telemetry);
+   Use to lift illegible micro-type (7px) onto the density tokens. Unscoped
+   with a literal fallback so portals / fullscreen editors that mount outside
+   [data-fire-root] still land on a real size instead of inheriting. */
+.fc-text-floor {
+  font-size: var(--fc-text-telemetry, 9px);
 }
 
 /* Canonical asleep/disabled dim — the one recipe for sleeping modules
@@ -80,6 +82,30 @@
 .fc-focus:focus-visible {
   outline: 2px solid rgba(232, 184, 109, 0.65);
   outline-offset: 1px;
+}
+
+/* ── Collapsed-module chip grids (FireBand + Deck FX rack) ──────────────
+   A 7-wide row is the ideal (one symmetric row per band), but below ~1100px
+   seven chips crush their labels. Halve the row instead (7 → 4+3), then drop
+   to 2-up on the narrowest shells and let the Zzz glyph fall back to the
+   tooltip / aria-label so the name keeps the space. */
+.fc-band-chips {
+  display: grid;
+  gap: 0.375rem;
+  grid-template-columns: repeat(var(--fc-chip-cols, 4), minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .fc-band-chips {
+    grid-template-columns: repeat(var(--fc-chip-cols-md, 4), minmax(0, 1fr));
+  }
+}
+@media (max-width: 820px) {
+  .fc-band-chips {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fc-chip-zzz {
+    display: none;
+  }
 }
 
 /* Density: hide non-essential chrome in Focus */

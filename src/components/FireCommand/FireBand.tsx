@@ -17,11 +17,13 @@ import {
   useLayoutEffect,
   useMemo,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
+import { ASLEEP_STATE, AsleepBadge } from "./ModuleEnableToggle";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FIRE_BANDS, type FireBandId } from "./fireModuleAtlas";
 import { ensureExpanded, setBandModulesFolded, writeFold } from "./fireNavigate";
@@ -30,7 +32,10 @@ import { FireBandLabel } from "./FireSegTabs";
 
 export type BandModuleMeta = {
   id: string;
+  /** Technical name — "Oscillator A". Shown in `technical` label mode. */
   title: string;
+  /** Character nickname — "Osc A". Shown in `character` / `both` label mode. */
+  short: string;
   color: string;
   collapsed: boolean;
   toggle: () => void;
@@ -51,40 +56,49 @@ export function useFireBandRegister(
   collapsed: boolean,
   toggle: () => void,
   enabled: boolean,
+  /** Character nickname; defaults to the title when a module has no separate one. */
+  short?: string,
 ) {
   const band = useContext(BandContext);
   useLayoutEffect(() => {
     if (!band || !id || !enabled) return;
-    band.register({ id, title, color, collapsed, toggle });
+    band.register({ id, title, short: short ?? title, color, collapsed, toggle });
     return () => band.unregister(id);
-  }, [band, id, title, color, collapsed, toggle, enabled]);
+  }, [band, id, title, short, color, collapsed, toggle, enabled]);
 }
 
 function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
   const moduleEnable = useFireCommandStore((s) => s.patch.moduleEnable);
+  const labelMode = useFireCommandStore((s) => s.labelMode);
   if (modules.length === 0) return null;
   // Prefer even atlas-width grids (7 modules → 7 equal chips) so every band
-  // reads as a symmetric row rather than a ragged 3× wrap.
+  // reads as a symmetric row rather than a ragged 3× wrap. Below ~1100px that
+  // crushes labels, so halve the row (7 → 4+3) and drop to 2-up when tiny.
   const n = modules.length;
-  const cols =
-    n <= 4 ? n :
-    n === 5 ? 5 :
-    n === 6 ? 6 :
-    n === 7 ? 7 :
-    4;
+  const cols = n <= 7 ? n : 4;
   return (
     <div
-      className="mb-2 grid gap-1.5"
-      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+      className="fc-band-chips mb-2"
+      style={
+        {
+          "--fc-chip-cols": String(cols),
+          "--fc-chip-cols-md": String(Math.min(4, Math.ceil(n / 2))),
+        } as CSSProperties
+      }
     >
       {modules.map((m) => {
         const awake = moduleEnable?.[m.id] !== false;
+        // Both mode keeps the tight character label and parks the technical
+        // name in the tooltip — a chip has no room for two names.
+        const label = labelMode === "technical" ? m.title : m.short;
+        const alt = m.short === m.title ? "" : labelMode === "technical" ? ` (${m.short})` : ` (${m.title})`;
+        const sleepNote = awake ? "" : ` — ${ASLEEP_STATE} (Signal Path Off)`;
         return (
           <button
             key={m.id}
             type="button"
             onClick={m.toggle}
-            className={`relative flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${awake ? "" : "fc-asleep"}`}
+            className={`fc-focus relative flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition hover:bg-white/[0.06] ${awake ? "" : "fc-asleep"}`}
             style={{
               borderColor: awake ? `${m.color}44` : "rgba(255,255,255,0.12)",
               background: awake
@@ -94,21 +108,18 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
                 ? `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 12px ${m.color}14`
                 : undefined,
             }}
-            title={awake ? `Expand ${m.title}` : `${m.title} — Asleep (Signal Path Off)`}
+            title={`${awake ? "Expand " : ""}${label}${alt}${sleepNote}`}
+            aria-label={`Expand ${label}${sleepNote}`}
             aria-expanded={false}
           >
             <CollapseToggle collapsed color={awake ? m.color : "rgba(255,255,255,0.35)"} />
             <span
-              className="text-[10px] font-semibold uppercase tracking-[0.16em] truncate"
+              className="text-[10px] font-black uppercase tracking-[0.06em] truncate"
               style={{ color: awake ? m.color : "rgba(255,255,255,0.4)" }}
             >
-              {m.title}
+              {label}
             </span>
-            {!awake && (
-              <span className="fc-text-floor absolute right-1 top-1 rounded border border-white/15 bg-black/55 px-1 py-px font-black uppercase tracking-wider text-white/45">
-                Zzz
-              </span>
-            )}
+            {!awake && <AsleepBadge compact className="fc-chip-zzz absolute right-1 top-1" />}
           </button>
         );
       })}
@@ -165,6 +176,7 @@ export function FireBand({
       if (
         cur &&
         cur.title === meta.title &&
+        cur.short === meta.short &&
         cur.color === meta.color &&
         cur.collapsed === meta.collapsed &&
         cur.toggle === meta.toggle
@@ -206,8 +218,9 @@ export function FireBand({
             title={showBody ? `Collapse ${title}` : `Expand ${title}`}
           >
             <CollapseToggle collapsed={!showBody} color={color} />
+            {/* Same band-header tier as FireBandLabel (the non-foldable branch). */}
             <span
-              className="text-[12px] font-semibold uppercase tracking-[0.22em]"
+              className="text-[12px] font-black uppercase tracking-[0.2em]"
               style={{ color }}
             >
               {title}
@@ -219,7 +232,7 @@ export function FireBand({
             )}
             {holdsFocus && (
               <span
-                className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                className="fc-text-floor rounded-md border px-1.5 py-0.5 font-black uppercase tracking-[0.06em]"
                 style={{ borderColor: `${color}66`, color, background: `${color}18` }}
               >
                 Solo
@@ -235,7 +248,7 @@ export function FireBand({
               right={
                 holdsFocus ? (
                   <span
-                    className="rounded-md border px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider"
+                    className="fc-text-floor rounded-md border px-1.5 py-0.5 font-black uppercase tracking-[0.06em]"
                     style={{ borderColor: `${color}66`, color, background: `${color}18` }}
                   >
                     Solo

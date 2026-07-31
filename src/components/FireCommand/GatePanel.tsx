@@ -6,6 +6,7 @@
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { GATE_PRESETS } from "./GateStageViz";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const GATE_C = FC.gate;
 export const GATE_C_GLOW = bandShade(FC_BAND.perf, 0.92);
@@ -65,7 +66,7 @@ export function GateMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -94,7 +95,7 @@ export function GateCharacterStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Chop
       </span>
       {GATE_PRESETS.map((p) => {
@@ -104,7 +105,7 @@ export function GateCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => setParam("gatePattern", [...p.steps])}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -130,7 +131,7 @@ export function GateRateStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${GATE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GATE_C}66` }}>
         Rate
       </span>
       {GATE_RATE_SNAPS.map((p) => {
@@ -140,7 +141,7 @@ export function GateRateStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("gateRate", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -166,7 +167,7 @@ export function GateDepthStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${GATE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GATE_C}66` }}>
         Depth
       </span>
       {GATE_DEPTH_SNAPS.map((p) => {
@@ -176,7 +177,7 @@ export function GateDepthStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("gateDepth", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -202,7 +203,7 @@ export function GateStepsStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${GATE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GATE_C}66` }}>
         Steps
       </span>
       {GATE_STEP_SNAPS.map((p) => {
@@ -212,7 +213,7 @@ export function GateStepsStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("gateSteps", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -235,9 +236,7 @@ export function GateStepsStrip() {
 export function GateQuickActions() {
   const on = useFireCommandStore((s) => s.patch.gateOn);
   const pattern = useFireCommandStore((s) => s.patch.gatePattern);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["gate"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
 
   const setPattern = (p: number[]) => setParam("gatePattern", p.slice(0, 16));
   const shift = (dir: 1 | -1) => {
@@ -328,19 +327,7 @@ export function GateQuickActions() {
       >
         {on ? "Chop" : "Arm"}
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("gate", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${GATE_C}66`, color: GATE_C_GLOW, background: `${GATE_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass gate module" : "Engage gate"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="gate" color={GATE_C} name="Trance Gate" onTextColor={GATE_C_GLOW} />
     </div>
   );
 }

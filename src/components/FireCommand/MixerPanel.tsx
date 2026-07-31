@@ -153,7 +153,7 @@ function MixerCharacterStrip() {
   const duckEnabled = useFireSequencerStore((s) => s.duckEnabled);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${C}66` }}>
         Deck
       </span>
       {MIX_CHARS.map((p) => {
@@ -173,7 +173,7 @@ function MixerCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => applyMixChar(p)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -409,7 +409,7 @@ function Strip({
       </div>
 
       <div className="flex w-full flex-col items-center gap-0.5">
-        <span className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${meta.color}77` }}>Trim</span>
+        <span className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${meta.color}77` }}>Trim</span>
         <input
           type="range"
           min={0}

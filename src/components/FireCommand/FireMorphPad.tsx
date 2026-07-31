@@ -346,7 +346,7 @@ function MorphWeightMeter({ label, value, color }: { label: string; value: numbe
   const t = Math.min(1, value);
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.2rem]" title={`${label} ${Math.round(t * 100)}%`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -871,7 +871,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
           </div>
 
           <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-            <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>
+            <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${C}66` }}>
               Snap
             </span>
             {SNAP_POS.map((s) => {
@@ -881,7 +881,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
                   key={s.id}
                   type="button"
                   onClick={() => goTo(s.x, s.y, true)}
-                  className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+                  className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
                   style={
                     on
                       ? {
@@ -901,7 +901,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
           </div>
 
           <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-            <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>Mode</span>
+            <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${C}66` }}>Mode</span>
             {([
               { id: "morph" as MorphPadMode, label: "MORPH" },
               { id: "crossfade" as MorphPadMode, label: "CROSSFADE" },
@@ -922,7 +922,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
               </button>
             ))}
             <span className="mx-1 text-white/20">·</span>
-            <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>Interp</span>
+            <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${C}66` }}>Interp</span>
             {([
               { id: "linear" as MorphInterp, label: "Linear" },
               { id: "equalPower" as MorphInterp, label: "EqPow" },
@@ -932,7 +932,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
                 key={o.id}
                 type="button"
                 onClick={() => setInterp(o.id)}
-                className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+                className="rounded-md border px-2 py-0.5 text-[9px] font-black"
                 style={
                   interp === o.id
                     ? { borderColor: `${C}99`, background: `${C}33`, color: C_GLOW }
@@ -963,13 +963,13 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
           </div>
 
           <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-            <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${C}66` }}>Capture</span>
+            <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${C}66` }}>Capture</span>
             {CORNERS.map((c) => (
               <button
                 key={c}
                 type="button"
                 onClick={() => setCaptureCorner(c)}
-                className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+                className="rounded-md border px-2 py-0.5 text-[9px] font-black"
                 style={
                   captureCorner === c
                     ? { borderColor: `${CORNER_META[c].color}99`, background: `${CORNER_META[c].color}33`, color: C_GLOW }

@@ -184,6 +184,15 @@ function committedSlots(s: {
   return slotsFromState(s);
 }
 
+/**
+ * Live A/B for anything that SNAPSHOTS the patch (section sound-locks,
+ * persistence). Identical to `slotsFromState` unless a morph is scrubbing, in
+ * which case the transient blend must not be frozen into the snapshot.
+ */
+export function committedFireSlots(): { patchA: FirePatch; patchB: FirePatch } {
+  return committedSlots(useFireCommandStore.getState());
+}
+
 /** Discard a mid-scrub blend (scene morph or morph pad) from live `patch`. */
 function discardMorphBlend(
   get: () => FireCommandState,
@@ -1301,59 +1310,75 @@ export function activeFireEngine() {
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function writePersist(state: FireCommandState): void {
+  const { patchA, patchB } = committedSlots(state);
+  const data: PersistShape & { accordionModeV2: boolean } = {
+    patch: patchA,
+    patchA,
+    patchB,
+    octave: state.octave,
+    presetId: state.presetId,
+    presetIdB: state.presetIdB,
+    editTarget: state.editTarget,
+    routeThroughFx: state.routeThroughFx,
+    arp: state.arp,
+    keyboardMode: state.keyboardMode,
+    fireUiDensity: state.fireUiDensity,
+    fireUiDensityBeforeFocus: state.fireUiDensityBeforeFocus,
+    labelMode: state.labelMode,
+    moduleLocks: state.moduleLocks,
+    accordionMode: state.accordionMode,
+    accordionModeV2: state.accordionMode,
+    pinnedModules: state.pinnedModules,
+    kbdVelGain: state.kbdVelGain,
+    kbdVelCurve: state.kbdVelCurve,
+    kbdDelayMs: state.kbdDelayMs,
+    kbdAttackMs: state.kbdAttackMs,
+    userPresets: state.userPresets,
+    maxVoices: state.maxVoices,
+    mutateAmount: state.mutateAmount,
+    mutateLineage: state.mutateLineage,
+    mutationGenealogy: state.mutationGenealogy,
+    signalPathOrder: state.signalPathOrder,
+    scenes: state.scenes,
+    sceneMeta: state.sceneMeta,
+    sceneProtect: state.sceneProtect,
+    sceneTransition: state.sceneTransition,
+    sceneMorphMs: state.sceneMorphMs,
+    activeSceneSlot: state.activeSceneSlot,
+  };
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (err) {
+    // Quota blown means every future save silently drops ALL Fire state —
+    // surface it. Anything else (private mode, storage disabled) stays quiet.
+    if (err instanceof DOMException && (err.name === "QuotaExceededError" || err.code === 22)) {
+      warnStorageQuota();
+    }
+  }
+}
+
 function schedulePersist(getState: () => FireCommandState): void {
   if (typeof window === "undefined") return;
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
+    persistTimer = null;
     // Read at WRITE time — a snapshot captured at schedule time silently
     // overwrote any field mutated during the debounce window.
-    const state = getState();
-    const { patchA, patchB } = committedSlots(state);
-    const data: PersistShape & { accordionModeV2: boolean } = {
-      patch: patchA,
-      patchA,
-      patchB,
-      octave: state.octave,
-      presetId: state.presetId,
-      presetIdB: state.presetIdB,
-      editTarget: state.editTarget,
-      routeThroughFx: state.routeThroughFx,
-      arp: state.arp,
-      keyboardMode: state.keyboardMode,
-      fireUiDensity: state.fireUiDensity,
-      fireUiDensityBeforeFocus: state.fireUiDensityBeforeFocus,
-      labelMode: state.labelMode,
-      moduleLocks: state.moduleLocks,
-      accordionMode: state.accordionMode,
-      accordionModeV2: state.accordionMode,
-      pinnedModules: state.pinnedModules,
-      kbdVelGain: state.kbdVelGain,
-      kbdVelCurve: state.kbdVelCurve,
-      kbdDelayMs: state.kbdDelayMs,
-      kbdAttackMs: state.kbdAttackMs,
-      userPresets: state.userPresets,
-      maxVoices: state.maxVoices,
-      mutateAmount: state.mutateAmount,
-      mutateLineage: state.mutateLineage,
-      mutationGenealogy: state.mutationGenealogy,
-      signalPathOrder: state.signalPathOrder,
-      scenes: state.scenes,
-      sceneMeta: state.sceneMeta,
-      sceneProtect: state.sceneProtect,
-      sceneTransition: state.sceneTransition,
-      sceneMorphMs: state.sceneMorphMs,
-      activeSceneSlot: state.activeSceneSlot,
-    };
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch (err) {
-      // Quota blown means every future save silently drops ALL Fire state —
-      // surface it. Anything else (private mode, storage disabled) stays quiet.
-      if (err instanceof DOMException && (err.name === "QuotaExceededError" || err.code === 22)) {
-        warnStorageQuota();
-      }
-    }
+    writePersist(getState());
   }, 350);
+}
+
+/**
+ * Write a pending debounced save NOW — the last 350 ms of edits used to die
+ * with the window. No pending timer means the newest state already landed.
+ */
+export function flushFireCommandPersist(): void {
+  if (typeof window === "undefined" || !persistTimer) return;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  writePersist(useFireCommandStore.getState());
 }
 
 // ════════════════════ store ════════════════════
@@ -1794,8 +1819,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       // Reopen wet after Stop so Cave/etc. is audible on the next note.
       eng.unsilenceFx();
       // Keep active pattern sound-lock current (debounced) so arrangement /
-      // export don't resurrect a pre-Cave snapshot.
-      stampLivePatchesOntoActiveSection();
+      // export don't resurrect a pre-Cave snapshot. Same coalesce key as the
+      // undo push, so one knob sweep pays for one stamp instead of dozens.
+      stampLivePatchesOntoActiveSection(`param:${String(key)}`);
       persist();
     },
 
@@ -2444,9 +2470,15 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const recordedMidi = livePitchHeld.get(midi) ?? midi;
       useFireSequencerStore.getState().recordNoteOff(recordedMidi);
       const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
-      if (s.editTarget === "a" && s.arp.enabled && arpModuleOn) {
-        const heldNotes = s.heldNotes.filter((n) => n !== midi);
-        const arpOrder = s.arp.hold ? s.arpOrder : s.arpOrder.filter((n) => n !== midi);
+      // Release by what the PRESS did, not by the arp's state now. Arming the
+      // arp between press and release took the latch branch and left the
+      // directly-sounded voice ringing until panic.
+      const latched = !livePitchHeld.has(midi);
+      const heldNotes = s.heldNotes.filter((n) => n !== midi);
+      const arpOrder = s.arp.enabled && arpModuleOn && s.arp.hold
+        ? s.arpOrder
+        : s.arpOrder.filter((n) => n !== midi);
+      if (s.editTarget === "a" && s.arp.enabled && arpModuleOn && latched) {
         set({ heldNotes, arpOrder });
         return;
       }
@@ -2472,7 +2504,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         chordHeld.delete(midi);
         for (const c of chord) eng.noteOff(c, when);
       }
-      set({ heldNotes: s.heldNotes.filter((n) => n !== midi) });
+      set({ heldNotes, arpOrder });
     },
 
     panic: () => {
@@ -2909,3 +2941,13 @@ registerFireHistoryProvider("fireCommand", {
     schedulePersist(useFireCommandStore.getState);
   },
 });
+
+if (typeof window !== "undefined") {
+  const flushOnLeave = () => {
+    try { flushFireCommandPersist(); } catch { /* ignore */ }
+  };
+  window.addEventListener("beforeunload", flushOnLeave);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushOnLeave();
+  });
+}

@@ -39,7 +39,7 @@ export function LiveMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -71,7 +71,7 @@ export function LiveCharacterStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Stage
       </span>
       {LIVE_CHARS.map((p) => {
@@ -90,7 +90,7 @@ export function LiveCharacterStrip() {
               setRouteThroughFx(p.fx);
               setParam("masterGain", p.master);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -116,7 +116,7 @@ export function LiveVoiceStrip() {
   const setMaxVoices = useFireCommandStore((s) => s.setMaxVoices);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${LIVE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${LIVE_C}66` }}>
         Voices
       </span>
       <select
@@ -152,7 +152,7 @@ export function LiveOctaveStrip() {
   const octs = [2, 3, 4, 5, 6];
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${LIVE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${LIVE_C}66` }}>
         Oct
       </span>
       {octs.map((o) => {
@@ -162,7 +162,7 @@ export function LiveOctaveStrip() {
             key={o}
             type="button"
             onClick={() => setOctave(o)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {

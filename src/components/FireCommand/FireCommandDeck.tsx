@@ -3,7 +3,15 @@
  * Home Clarity: AUDIO PATH · CONTROL PATH · live status · matrix intelligence.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import type { FirePatch, ModDest } from "@/audio/dsp/FireCommandSynth";
@@ -20,6 +28,13 @@ import { useFireLayout } from "./FireLayoutContext";
 import { jumpToModule, jumpToSynthBand, scrollFireCommandTop } from "./fireNavigate";
 import { readScopeFreeze, SCOPE_FREEZE_EVENT, toggleScopeFreeze } from "./scopeFreezeBridge";
 import { FC_BAND } from "./fireColors";
+import {
+  ASLEEP_GLYPH,
+  ASLEEP_STATE,
+  moduleEnableAria,
+  moduleEnableGlyph,
+  moduleEnableTitle,
+} from "./ModuleEnableToggle";
 
 function clamp01(v: number) {
   return Math.max(0, Math.min(1, v));
@@ -264,7 +279,7 @@ function PathCable({
         }}
       />
       <span
-        className="mt-0.5 text-[7px] leading-none"
+        className="fc-text-floor mt-0.5 leading-none"
         style={{ color: nextOn && on ? `${to}cc` : "rgba(255,255,255,0.2)" }}
       >
         {monitor ? "┊" : "▸"}
@@ -334,6 +349,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
   const toggleModuleLock = useFireCommandStore((s) => s.toggleModuleLock);
   const moduleEnable = useFireCommandStore((s) => s.patch.moduleEnable) ?? EMPTY_ENABLE;
   const moduleLocks = useFireCommandStore((s) => s.moduleLocks) ?? EMPTY_LOCKS;
+  const labelMode = useFireCommandStore((s) => s.labelMode);
   const modMatrix = useFireCommandStore((s) => s.patch.modMatrix) ?? [];
   const signalPathOrder = useFireCommandStore((s) => s.signalPathOrder);
   const setSignalPathOrder = useFireCommandStore((s) => s.setSignalPathOrder);
@@ -879,7 +895,10 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                   Collapse
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 md:grid-cols-7">
+              <div
+                className="fc-band-chips"
+                style={{ "--fc-chip-cols": String(FX_RACK.length), "--fc-chip-cols-md": "4" } as CSSProperties}
+              >
                 {FX_RACK.map((fx) => {
                   const enabled = moduleEnable[fx.id] !== false;
                   const wet = fx.wetKey ? Number(patchSlice[fx.wetKey as keyof typeof patchSlice] ?? 0) : 0;
@@ -898,23 +917,29 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                         className="w-full truncate text-left text-[9px] font-semibold"
                         style={{ color: enabled ? FC_BAND.fx : "rgba(255,255,255,0.4)" }}
                         onClick={() => jump(fx.id)}
-                        title={enabled ? `Open ${fx.label}` : `${fx.label} — Asleep`}
+                        title={enabled ? `Open ${fx.label}` : `${fx.label} — ${ASLEEP_STATE}`}
                       >
                         {fx.label}
-                        {!enabled && <span className="fc-text-floor ml-1 text-white/35">zzz</span>}
+                        {!enabled && (
+                          <span className="fc-chip-zzz fc-text-floor ml-1 text-white/35">
+                            {ASLEEP_GLYPH.toLowerCase()}
+                          </span>
+                        )}
                       </button>
                       <div className="mt-0.5 flex items-center justify-between gap-1">
                         <button
                           type="button"
                           onClick={() => setModuleEnable(fx.id, !enabled)}
-                          className={`fc-text-floor rounded border px-1 font-bold ${
+                          className={`fc-focus fc-text-floor rounded border px-1 font-bold ${
                             enabled
                               ? "border-emerald-400/40 text-emerald-200"
                               : "border-white/15 text-white/40"
                           }`}
-                          title={enabled ? `Sleep ${fx.label}` : `Wake ${fx.label}`}
+                          title={moduleEnableTitle(enabled, fx.label)}
+                          aria-label={moduleEnableAria(enabled, fx.label)}
+                          aria-pressed={enabled}
                         >
-                          {enabled ? "On" : "Zzz"}
+                          {moduleEnableGlyph(enabled)}
                         </button>
                         <span className="font-mono text-[8px] text-white/45">{wetPct}%</span>
                       </div>
@@ -1061,12 +1086,12 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                   >
                     <div className="mb-0.5 px-0.5">
                       <div
-                        className="text-[9px] font-black uppercase tracking-[0.16em] truncate"
+                        className="text-[9px] font-black uppercase tracking-[0.18em] truncate"
                         style={{ color: band.color }}
                       >
                         {band.short}
                       </div>
-                      <div className="truncate text-[7px] leading-tight text-white/30">{band.hint}</div>
+                      <div className="fc-text-floor truncate leading-tight text-white/30">{band.hint}</div>
                     </div>
                     <div className="flex flex-col gap-0.5">
                       {band.modules.map((mod) => {
@@ -1116,33 +1141,33 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                                     : "rgba(0,0,0,0.35)",
                                 boxShadow: hot && enabled ? `0 0 8px ${mod.color}33` : undefined,
                               }}
-                              title={`${mod.title}${mod.subtitle ? ` — ${mod.subtitle}` : ""}${!enabled ? " · ASLEEP" : ""}${routes ? ` · ${routes} routes` : ""}${locked ? " · LOCKED" : " · MUT eligible"}`}
+                              title={`${mod.title}${mod.subtitle ? ` — ${mod.subtitle}` : ""}${!enabled ? ` · ${ASLEEP_STATE.toUpperCase()}` : ""}${routes ? ` · ${routes} routes` : ""}${locked ? " · LOCKED" : " · MUT eligible"}`}
                             >
-                              {mod.short}
+                              {labelMode === "technical" ? mod.title : mod.short}
                               {!enabled && (
-                                <span className="ml-1 font-mono text-[7px] text-white/35 normal-case tracking-normal">
-                                  zzz
+                                <span className="fc-text-floor ml-1 font-mono text-white/35 normal-case tracking-normal">
+                                  {ASLEEP_GLYPH.toLowerCase()}
                                 </span>
                               )}
                               {sceneHint && (
-                                <span className="ml-1 font-mono text-[7px] text-white/40 normal-case tracking-normal">
+                                <span className="fc-text-floor ml-1 font-mono text-white/40 normal-case tracking-normal">
                                   {sceneHint}
                                 </span>
                               )}
                             </button>
                             <span className="flex shrink-0 items-center gap-px">
                               {locked && (
-                                <span className="rounded border border-amber-400/40 px-0.5 text-[7px] font-bold text-amber-200/90" title="Locked from randomize">
+                                <span className="fc-text-floor rounded border border-amber-400/40 px-0.5 font-bold text-amber-200/90" title="Locked from randomize">
                                   L
                                 </span>
                               )}
                               {!locked && (
-                                <span className="rounded border border-violet-400/30 px-0.5 text-[7px] font-bold text-violet-200/70" title="Eligible for Natural Selection / mutate">
+                                <span className="fc-text-floor rounded border border-violet-400/30 px-0.5 font-bold text-violet-200/70" title="Eligible for Natural Selection / mutate">
                                   M
                                 </span>
                               )}
                               {routes > 0 && (
-                                <span className="rounded border border-sky-400/35 px-0.5 font-mono text-[7px] text-sky-200/80" title="Mod routes">
+                                <span className="fc-text-floor rounded border border-sky-400/35 px-0.5 font-mono text-sky-200/80" title="Mod routes">
                                   {routes}
                                 </span>
                               )}
@@ -1159,12 +1184,12 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                                       : "border-emerald-400/40 bg-emerald-400/15 text-emerald-200"
                                     : "border-white/15 bg-black/55 text-white/40 hover:text-white/65"
                                 }`}
-                                title={enabled ? `Sleep ${mod.title} (module offline)` : `Wake ${mod.title}`}
-                                aria-label={`${enabled ? "Sleep" : "Wake"} ${mod.title}`}
+                                title={moduleEnableTitle(enabled, mod.title)}
+                                aria-label={moduleEnableAria(enabled, mod.title)}
                                 aria-pressed={enabled}
                                 style={hot && enabled ? { animation: "fire-path-pulse 1.8s ease-in-out infinite" } : undefined}
                               >
-                                {enabled ? "On" : "Zzz"}
+                                {moduleEnableGlyph(enabled)}
                               </button>
                               <button
                                 type="button"

@@ -134,6 +134,8 @@ export class FireVintageAge {
 
   private noiseSrc: AudioBufferSourceNode | null = null;
   private active = false;
+  /** Quantized crush depth — avoids rebuilding a 4 k curve on every param touch. */
+  private lastCrushKey = -1;
   private params: FireVintageAgeParams = { ...NEUTRAL };
 
   constructor(private readonly ctx: AudioContext) {
@@ -322,16 +324,23 @@ export class FireVintageAge {
     this.setActive(on);
     if (!on) return;
 
-    // Bit depth
-    if (a.bitDepth === "off") {
+    // Bit depth + resolution. Downsampling used to be a no-op unless bitDepth
+    // was already crushing; it now loses real bandwidth (band limit at the
+    // target rate's Nyquist, folded into the cassette LPF below) and real
+    // resolution, so the control does something on its own.
+    const srr = clamp(a.sampleRateReduce, 0, 1);
+    if (a.bitDepth === "off" && srr < 0.001) {
       this.crushDry.gain.setTargetAtTime(1, t, 0.02);
       this.crushWet.gain.setTargetAtTime(0, t, 0.02);
     } else {
-      const bits = a.bitDepth === "8bit" ? 8 : 12;
-      // sampleRateReduce darkens further via crush severity
-      const effective = bits - a.sampleRateReduce * (bits === 8 ? 2 : 3);
-      this.crush.curve = makeCrushCurve(effective);
-      const wet = 0.55 + a.sampleRateReduce * 0.45;
+      const bits = a.bitDepth === "8bit" ? 8 : a.bitDepth === "12bit" ? 12 : 14;
+      const effective = Math.max(4, bits - srr * (bits === 8 ? 2 : 3));
+      const crushKey = Math.round(effective * 4);
+      if (crushKey !== this.lastCrushKey) {
+        this.lastCrushKey = crushKey;
+        this.crush.curve = makeCrushCurve(effective);
+      }
+      const wet = a.bitDepth === "off" ? srr * 0.6 : 0.55 + srr * 0.45;
       this.crushDry.gain.setTargetAtTime(1 - wet, t, 0.02);
       this.crushWet.gain.setTargetAtTime(wet, t, 0.02);
     }
@@ -339,7 +348,8 @@ export class FireVintageAge {
     // Cassette generations
     const gen = clamp(a.cassetteGen, 0, 1);
     this.casHpf.frequency.setTargetAtTime(20 + gen * 280, t, 0.05);
-    this.casLpf.frequency.setTargetAtTime(20000 * Math.pow(0.12, gen), t, 0.05);
+    const srNyquist = srr < 0.001 ? 20000 : 24000 * Math.pow(2750 / 24000, srr);
+    this.casLpf.frequency.setTargetAtTime(Math.min(20000 * Math.pow(0.12, gen), srNyquist), t, 0.05);
     this.casSat.curve = makeSoftSat(0.05 + gen * 0.9);
 
     // VHS Hi-Fi

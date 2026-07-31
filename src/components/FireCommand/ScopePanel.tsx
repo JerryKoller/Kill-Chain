@@ -9,7 +9,6 @@ import { FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import type { ScopeVizState } from "./ScopeStageViz";
 import { SCOPE_DEFAULT_VIZ } from "./ScopeStageViz";
-
 export const SCOPE_C = FC.scope;
 export const SCOPE_C_GLOW = bandShade(FC_BAND.mix, 0.94);
 export const SCOPE_C_HOT = bandShade(FC_BAND.mix, 0.68);
@@ -37,7 +36,7 @@ export function ScopeMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -71,7 +70,7 @@ export function ScopeViewStrip({
   ];
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCOPE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCOPE_C}66` }}>
         View
       </span>
       {opts.map((o) => {
@@ -81,7 +80,7 @@ export function ScopeViewStrip({
             key={o.id}
             type="button"
             onClick={() => onChange(o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -111,7 +110,7 @@ export function ScopeZoomStrip({
   const snaps = [0.5, 1, 1.5, 2, 2.5];
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCOPE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCOPE_C}66` }}>
         Zoom
       </span>
       {snaps.map((z) => {
@@ -121,7 +120,7 @@ export function ScopeZoomStrip({
             key={z}
             type="button"
             onClick={() => onChange(z)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -174,18 +173,20 @@ export function ScopeQuickActions({
       >
         Reset
       </button>
+      {/* Path tap ≠ module sleep: this bypasses the SCOPE node, the toggle below sleeps the module. */}
       <button
         type="button"
         onClick={() => setParam("pathScope", !pathOn)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
+        className="fc-focus rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.06em] transition"
         style={
           pathOn
             ? { borderColor: `${SCOPE_C}66`, color: SCOPE_C_GLOW, background: `${SCOPE_C}22` }
             : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
         }
-        title={pathOn ? "Bypass Signal Path scope" : "Engage scope"}
+        title={pathOn ? "Bypass the Signal Path SCOPE tap" : "Engage the Signal Path SCOPE tap"}
+        aria-pressed={pathOn}
       >
-        {pathOn ? "On" : "Bypass"}
+        {pathOn ? "Path On" : "Path Off"}
       </button>
     </div>
   );

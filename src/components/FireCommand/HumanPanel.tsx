@@ -7,6 +7,7 @@ import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { HUMAN_CHARS, humanCharMatch } from "./HumanStageViz";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const HUMAN_C = FC.human;
 export const HUMAN_C_GLOW = bandShade(FC_BAND.perf, 0.96);
@@ -53,7 +54,7 @@ export function HumanMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -82,7 +83,7 @@ export function HumanCharacterStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Feel
       </span>
       {HUMAN_CHARS.map((p) => {
@@ -96,7 +97,7 @@ export function HumanCharacterStrip() {
               setParam("humanizeTiming", p.timing);
               setParam("humanizeVelocity", p.vel);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               hit
                 ? {
@@ -122,7 +123,7 @@ export function HumanTimingStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${HUMAN_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HUMAN_C}66` }}>
         Time
       </span>
       {HUMAN_TIME_SNAPS.map((p) => {
@@ -135,7 +136,7 @@ export function HumanTimingStrip() {
               setParam("humanizeTiming", p.v);
               if (p.v > 0) setParam("humanizeOn", true);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               hit
                 ? {
@@ -160,7 +161,7 @@ export function HumanVelStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${HUMAN_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HUMAN_C}66` }}>
         Vel
       </span>
       {HUMAN_VEL_SNAPS.map((p) => {
@@ -173,7 +174,7 @@ export function HumanVelStrip() {
               setParam("humanizeVelocity", p.v);
               if (p.v > 0) setParam("humanizeOn", true);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               hit
                 ? {
@@ -197,9 +198,7 @@ export function HumanQuickActions() {
   const on = useFireCommandStore((s) => s.patch.humanizeOn);
   const timing = useFireCommandStore((s) => s.patch.humanizeTiming) ?? 0.25;
   const vel = useFireCommandStore((s) => s.patch.humanizeVelocity) ?? 0.2;
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["human"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
   const humanizeNotes = useFireSequencerStore((s) => s.humanizeNotes);
 
   const cycle = (dir: 1 | -1) => {
@@ -289,19 +288,7 @@ export function HumanQuickActions() {
       >
         {on ? "Feel" : "Grid"}
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("human", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${HUMAN_C}66`, color: HUMAN_C_GLOW, background: `${HUMAN_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass humanize" : "Engage humanize"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="human" color={HUMAN_C} name="Humanize" onTextColor={HUMAN_C_GLOW} />
     </div>
   );
 }

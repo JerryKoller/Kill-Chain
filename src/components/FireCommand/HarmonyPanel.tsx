@@ -8,6 +8,7 @@ import { useFireSequencerStore, NOTE_NAMES, SCALES } from "@/state/fireSequencer
 import type { HarmonyMode } from "@/audio/dsp/FireCommandSynth";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { HARMONY_MODES, harmonyModeLabel, harmonyVoiceCount } from "./HarmonyStageViz";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const HARM_C = FC.harmony;
 export const HARM_C_GLOW = bandShade(FC_BAND.perf, 0.92);
@@ -55,7 +56,7 @@ export function HarmMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -83,7 +84,7 @@ export function HarmCharacterStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Kin
       </span>
       {HARM_CHARS.map((p) => {
@@ -96,7 +97,7 @@ export function HarmCharacterStrip() {
               setParam("harmonyMode", p.mode);
               setParam("harmonyLevel", p.level);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -122,7 +123,7 @@ export function HarmModeStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${HARM_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HARM_C}66` }}>
         Mode
       </span>
       {HARMONY_MODES.map((m) => {
@@ -132,7 +133,7 @@ export function HarmModeStrip() {
             key={m.id}
             type="button"
             onClick={() => setParam("harmonyMode", m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -158,7 +159,7 @@ export function HarmLevelStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${HARM_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HARM_C}66` }}>
         Harmony Mix
       </span>
       {HARM_LEVEL_SNAPS.map((p) => {
@@ -168,7 +169,7 @@ export function HarmLevelStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("harmonyLevel", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -192,9 +193,7 @@ export function HarmLevelStrip() {
 export function HarmQuickActions() {
   const mode = useFireCommandStore((s) => s.patch.harmonyMode) ?? "off";
   const level = useFireCommandStore((s) => s.patch.harmonyLevel) ?? 0.6;
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["harmony"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
 
   const cycle = (dir: 1 | -1) => {
     const ids = HARMONY_MODES.map((m) => m.id);
@@ -258,19 +257,7 @@ export function HarmQuickActions() {
       >
         {mode === "off" ? "Arm" : "Live"}
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("harmony", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${HARM_C}66`, color: HARM_C_GLOW, background: `${HARM_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass harmony" : "Engage harmony"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="harmony" color={HARM_C} name="Harmony" onTextColor={HARM_C_GLOW} />
     </div>
   );
 }
@@ -288,7 +275,7 @@ export function HarmScaleBadge() {
         background: `linear-gradient(180deg, ${HARM_C}14, transparent)`,
       }}
     >
-      <div className="text-[7px] font-black uppercase tracking-[0.22em]" style={{ color: `${HARM_C}77` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.28em]" style={{ color: `${HARM_C}77` }}>
         Scale Lock Source
       </div>
       <div className="font-mono text-[12px] font-semibold" style={{ color: HARM_C_GLOW }}>

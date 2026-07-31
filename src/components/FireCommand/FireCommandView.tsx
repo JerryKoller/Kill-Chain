@@ -63,8 +63,9 @@ import { SourceRelationshipStrip } from "./SourceRelationshipStrip";
 import { PerfRelationshipStrip } from "./PerfRelationshipStrip";
 import { PerfScopeBadge } from "./PerfScopeBadge";
 import { PerfMidiLearnButton } from "./PerfMidiLearnButton";
-import { levelVoiceState, forgeState, modActivityCount } from "./sourceModuleState";
-import { ModuleEnableToggle } from "./ModuleEnableToggle";
+import { levelVoiceState, forgeState, circuitState, modActivityCount } from "./sourceModuleState";
+import { ASLEEP_STATE, AsleepBadge, ModuleEnableToggle } from "./ModuleEnableToggle";
+import { FC_CHIP_EYEBROW, FcChip, FcSegStrip, type FcSegOption } from "./fcChip";
 import { UnisonStageViz } from "./UnisonStageViz";
 import { AnalogLifeStageViz } from "./AnalogLifeStageViz";
 import { FilterStageViz } from "./FilterStageViz";
@@ -1625,7 +1626,7 @@ function OscAModMeter({ label, value, color }: { label: string; value: number; c
   const pos = value >= 0;
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${fmtBi(value)}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
@@ -1821,11 +1822,8 @@ function OscAQuickActions() {
       <ModuleEnableToggle
         moduleId="osc.a"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="OSC A"
         onTextColor={bandShade(FC.sources, 0.9)}
-        titleOn="Sleep OSC A (same as Signal Path Off)"
-        titleOff="Wake OSC A (same as Signal Path On)"
       />
       <button
         type="button"
@@ -1995,7 +1993,7 @@ function OscBModMeter({ label, value, color }: { label: string; value: number; c
   const pos = value >= 0;
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${fmtBi(value)}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
@@ -2381,11 +2379,8 @@ function OscBQuickActions() {
       <ModuleEnableToggle
         moduleId="osc.b"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="OSC B"
         onTextColor={bandShade(FC.sources, 0.88)}
-        titleOn="Sleep OSC B (same as Signal Path Off)"
-        titleOff="Wake OSC B (same as Signal Path On)"
       />
       <button
         type="button"
@@ -2560,7 +2555,7 @@ function OscCModMeter({ label, value, color }: { label: string; value: number; c
   const pos = value >= 0;
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${fmtBi(value)}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
@@ -2802,11 +2797,8 @@ function OscCQuickActions() {
       <ModuleEnableToggle
         moduleId="osc.c"
         color={c}
-        onLabel="Sleep"
-        offLabel="Wake"
+        name="OSC C"
         onTextColor={bandShade(FC.sources, 0.75)}
-        titleOn="Sleep OSC C (same as Signal Path Off)"
-        titleOff="Wake OSC C (same as Signal Path On)"
       />
       <button
         type="button"
@@ -2959,7 +2951,7 @@ function WarpModMeter({ label, value, bipolar, color }: { label: string; value: 
   const left = bipolar ? (pos ? "50%" : `${50 - abs * 50}%`) : "0%";
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.5rem]" title={`${label} ${bipolar ? fmtBi(value) : fmtPct(value)}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
@@ -2995,9 +2987,10 @@ function WarpCharacterStrip() {
   const comb = useFireCommandStore((s) => s.patch.warpComb) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = FC.warp;
+  const tone = { color: c, onText: bandShade(FC.sources, 0.9), glow: 10 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}88` }}>
         Character
       </span>
       {WARP_PRESETS.map((p) => {
@@ -3006,29 +2999,20 @@ function WarpCharacterStrip() {
           Math.abs(tilt - p.tilt) < 0.04 &&
           Math.abs(comb - p.comb) < 0.04;
         return (
-          <button
+          <FcChip
             key={p.id}
-            type="button"
+            on={on}
+            tone={tone}
+            caseMode="normal"
             onClick={() => {
               setParam("warpStretch", p.stretch);
               setParam("warpTilt", p.tilt);
               setParam("warpComb", p.comb);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: bandShade(FC.sources, 0.9),
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
             title={`${p.label}: ST ${p.stretch} · TL ${p.tilt} · CB ${p.comb}`}
           >
             {p.label}
-          </button>
+          </FcChip>
         );
       })}
     </div>
@@ -3045,11 +3029,8 @@ function WarpQuickActions() {
       <ModuleEnableToggle
         moduleId="fire.sec.warp"
         color={c}
-        onLabel="Bypass"
-        offLabel="Wake"
+        name="Warp"
         onTextColor={bandShade(FC.sources, 0.75)}
-        titleOn="Sleep Warp (same as Signal Path Off)"
-        titleOff="Wake Warp (same as Signal Path On)"
       />
       <button
         type="button"
@@ -3084,43 +3065,21 @@ function WarpModeStrip() {
   const mode = (useFireCommandStore((s) => s.patch.warpMode) ?? "classic") as WarpMode;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = FC.warp;
-  const opts: { id: WarpMode; label: string; tip: string }[] = [
+  const opts: FcSegOption<WarpMode>[] = [
     { id: "classic", label: "Classic", tip: "Stretch / tilt / comb harmonic remap" },
     { id: "scramble", label: "Scramble", tip: "Deterministic partial permute — alien spectra" },
     { id: "subharmonic", label: "Subharm", tip: "Fold energy into n/2 · n/3 subharmonics" },
     { id: "brickwall", label: "Brick", tip: "Hard harmonic gate — stretch sets the wall" },
   ];
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
-        Mode
-      </span>
-      {opts.map((o) => {
-        const on = mode === o.id;
-        return (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => setParam("warpMode", o.id)}
-            className="fc-focus min-w-[2.6rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: bandShade(FC.sources, 0.92),
-                    boxShadow: `0 0 12px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={o.tip}
-            aria-pressed={on}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<WarpMode>
+      eyebrow="Mode"
+      value={mode}
+      onChange={(v) => setParam("warpMode", v)}
+      options={opts}
+      tone={{ color: c, onText: bandShade(FC.sources, 0.92) }}
+      chipExtra="min-w-[2.6rem]"
+    />
   );
 }
 
@@ -3228,35 +3187,24 @@ function ChipPulsePresets() {
     { label: "50%", v: 0.5 },
     { label: "75%", v: 0.75 },
   ] as const;
+  const tone = { color: c, onText: bandShade(FC.sources, 0.9), glow: 10 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}88` }}>
         PWM
       </span>
-      {presets.map((p) => {
-        const on = Math.abs(duty - p.v) < 0.03;
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("pulseDuty", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: bandShade(FC.sources, 0.9),
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`Pulse width ${p.label}`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {presets.map((p) => (
+        <FcChip
+          key={p.label}
+          on={Math.abs(duty - p.v) < 0.03}
+          tone={tone}
+          mono
+          onClick={() => setParam("pulseDuty", p.v)}
+          title={`Pulse width ${p.label}`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -3265,43 +3213,20 @@ function ChipNoiseModes() {
   const noise = useFireCommandStore((s) => s.patch.chipNoise) ?? "white";
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = FC.chip;
-  const modes: { id: ChipNoiseMode; label: string; hint: string }[] = [
-    { id: "white", label: "White", hint: "Analog hiss" },
-    { id: "nes", label: "Hold", hint: "NES LFSR hold" },
-    { id: "gb", label: "Soft", hint: "Softer stepped noise" },
-    { id: "periodic", label: "Per", hint: "Metallic short loop" },
+  const modes: FcSegOption<ChipNoiseMode>[] = [
+    { id: "white", label: "White", tip: "Analog hiss" },
+    { id: "nes", label: "Hold", tip: "NES LFSR hold" },
+    { id: "gb", label: "Soft", tip: "Softer stepped noise" },
+    { id: "periodic", label: "Per", tip: "Metallic short loop" },
   ];
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
-        Noise
-      </span>
-      {modes.map((m) => {
-        const on = noise === m.id;
-        return (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => setParam("chipNoise", m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: bandShade(FC.sources, 0.9),
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={m.hint}
-            aria-pressed={on}
-          >
-            {m.label}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<ChipNoiseMode>
+      eyebrow="Noise"
+      value={noise}
+      onChange={(v) => setParam("chipNoise", v)}
+      options={modes}
+      tone={{ color: c, onText: bandShade(FC.sources, 0.9), glow: 10 }}
+    />
   );
 }
 
@@ -3309,35 +3234,25 @@ function ChipVoiceStrip() {
   const voices = useFireCommandStore((s) => s.patch.chipVoiceLimit) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = FC.chip;
+  const tone = { color: c, onText: bandShade(FC.sources, 0.9), glow: 10 };
   return (
     <div className="mb-2 flex items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}88` }}>
         Poly
       </span>
-      {[0, 1, 2, 3, 4, 6, 8].map((n) => {
-        const on = Math.round(voices) === n;
-        return (
-          <button
-            key={n}
-            type="button"
-            onClick={() => setParam("chipVoiceLimit", n)}
-            className="min-w-[1.6rem] rounded-md border px-1.5 py-0.5 text-[9px] font-bold tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: bandShade(FC.sources, 0.9),
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={n === 0 ? "Voice limit off" : `Cap at ${n} voices`}
-          >
-            {n === 0 ? "∞" : n}
-          </button>
-        );
-      })}
+      {[0, 1, 2, 3, 4, 6, 8].map((n) => (
+        <FcChip
+          key={n}
+          on={Math.round(voices) === n}
+          tone={tone}
+          mono
+          extra="min-w-[1.6rem]"
+          onClick={() => setParam("chipVoiceLimit", n)}
+          title={n === 0 ? "Voice limit off" : `Cap at ${n} voices`}
+        >
+          {n === 0 ? "∞" : n}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -3352,6 +3267,12 @@ function ChipQuickActions() {
   const acidOn = mix > 0.6 && sync && slide && accent > 0.25;
   return (
     <div className="flex items-center gap-1">
+      <ModuleEnableToggle
+        moduleId="chip"
+        color={c}
+        name="Chip · Acid"
+        onTextColor={bandShade(FC.sources, 0.82)}
+      />
       <button
         type="button"
         onClick={() => {
@@ -3433,9 +3354,11 @@ function ChipPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const voices = useFireCommandStore((s) => s.patch.chipVoiceLimit) ?? 0;
   const noise = useFireCommandStore((s) => s.patch.chipNoise) ?? "white";
   const acidMix = useFireCommandStore((s) => s.patch.chipAcidMix) ?? 0.35;
+  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["chip"] !== false);
   const active =
     Math.abs(duty - 0.5) > 0.02 || sync || slide || accent > 0.02 || voices > 0 || noise !== "white";
   const persona = acidMix < 0.35 ? "CHIP" : acidMix > 0.65 ? "ACID" : "BLEND";
+  const state = circuitState(active, enabled);
 
   return (
     <Section
@@ -3491,8 +3414,9 @@ function ChipPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               border: `1px solid ${active ? `${c}70` : "rgba(255,255,255,0.12)"}`,
               boxShadow: active ? `0 0 14px ${c}50` : undefined,
             }}
+            title={state.detail}
           >
-            {persona}
+            {enabled ? persona : state.pill}
           </div>
         </div>
       </div>
@@ -3529,7 +3453,7 @@ function NoiseModMeter({ label, value, bipolar, color }: { label: string; value:
   const left = bipolar ? (pos ? "50%" : `${50 - abs * 50}%`) : "0%";
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.5rem]" title={`${label} ${bipolar ? fmtBi(value) : fmtPct(value)}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute top-0 h-full rounded-full transition-[width,left] duration-75"
@@ -3566,7 +3490,7 @@ function NoiseCharacterStrip() {
   const c = FC.noise;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Bed
       </span>
       {NOISE_COLOR_PRESETS.map((p) => {
@@ -3581,7 +3505,7 @@ function NoiseCharacterStrip() {
               if (level < 0.02) setParam("noiseLevel", p.level);
               else setParam("noiseLevel", Math.max(level, p.level * 0.6));
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -3614,7 +3538,7 @@ function NoiseGritModes() {
   ];
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Grit
       </span>
       {modes.map((m) => {
@@ -3624,7 +3548,7 @@ function NoiseGritModes() {
             key={m.id}
             type="button"
             onClick={() => setParam("chipNoise", m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -3654,11 +3578,8 @@ function NoiseQuickActions() {
       <ModuleEnableToggle
         moduleId="noise"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="Noise"
         onTextColor={bandShade(FC.sources, 0.78)}
-        titleOn="Sleep Noise (same as Signal Path Off)"
-        titleOff="Wake Noise (same as Signal Path On)"
       />
       <button
         type="button"
@@ -3890,7 +3811,7 @@ function SubOctaveStrip() {
   const cHot = bandShade(FC.sources, 0.88);
   return (
     <div className="mb-2 flex items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Oct
       </span>
       {([-2, -1, 0] as const).map((n) => {
@@ -3938,7 +3859,7 @@ function SubCharacterStrip() {
   const c = FC.sub;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Foundation
       </span>
       {SUB_PRESETS.map((p) => {
@@ -3952,7 +3873,7 @@ function SubCharacterStrip() {
               setParam("subOctave", p.oct);
               if (level < 0.02) setParam("subLevel", p.level);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -3981,11 +3902,8 @@ function SubQuickActions() {
       <ModuleEnableToggle
         moduleId="sub"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="Sub"
         onTextColor={bandShade(FC.sources, 0.8)}
-        titleOn="Sleep Sub (same as Signal Path Off)"
-        titleOff="Wake Sub (same as Signal Path On)"
       />
       <button
         type="button"
@@ -4109,7 +4027,7 @@ function UniVoiceStrip({ deepMode, onToggleDeep }: { deepMode: boolean; onToggle
         <button
           type="button"
           onClick={onToggleDeep}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
           style={
             deepMode
               ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.tone, 0.9), boxShadow: `0 0 10px ${c}44` }
@@ -4164,7 +4082,7 @@ function UniDetunePresets() {
   ] as const;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Detune
       </span>
       {presets.map((p) => {
@@ -4174,7 +4092,7 @@ function UniDetunePresets() {
             key={p.label}
             type="button"
             onClick={() => setParam("unisonDetune", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -4210,7 +4128,7 @@ function UniCharacterStrip() {
   const c = FC.unison;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Choir
       </span>
       {UNI_CHARACTERS.map((p) => {
@@ -4228,7 +4146,7 @@ function UniCharacterStrip() {
               setParam("unisonWidth", p.width);
               setParam("drift", p.drift);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -4260,6 +4178,12 @@ function UniQuickActions() {
   const mono = Math.round(unison) <= 1 && detune < 1;
   return (
     <div className="flex items-center gap-1">
+      <ModuleEnableToggle
+        moduleId="mixer.unison"
+        color={c}
+        name="Unison"
+        onTextColor={bandShade(FC.tone, 0.75)}
+      />
       <button
         type="button"
         onClick={() => {
@@ -4311,7 +4235,7 @@ function UniModMeter({ label, value, max = 1, format, color }: {
   const t = Math.min(1, Math.abs(value) / max);
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.25rem]" title={`${label} ${format(value)}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -4433,7 +4357,7 @@ function UnisonPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("unisonAnchor", !unisonAnchor)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
           style={
             unisonAnchor
               ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.tone, 0.9), boxShadow: `0 0 10px ${c}44` }
@@ -4511,7 +4435,7 @@ function LifeCharacterStrip() {
   const c = FC.analogLife;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Pulse
       </span>
       {LIFE_CHARS.map((p) => {
@@ -4532,7 +4456,7 @@ function LifeCharacterStrip() {
               setParam("tuneVariance", p.tune);
               setParam("envVariance", p.env);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -4559,7 +4483,7 @@ function LifeTempoStrip() {
   const c = FC.analogLife;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Tempo
       </span>
       {LIFE_TEMPO.map((t) => {
@@ -4569,7 +4493,7 @@ function LifeTempoStrip() {
             key={t.id}
             type="button"
             onClick={() => setParam("driftRate", t.rate)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -4602,6 +4526,12 @@ function LifeQuickActions() {
   const still = drift < 0.02 && instab < 0.02 && tune < 0.02 && env < 0.02;
   return (
     <div className="flex items-center gap-1">
+      <ModuleEnableToggle
+        moduleId="analog.life"
+        color={c}
+        name="Analog Life"
+        onTextColor={bandShade(FC.tone, 0.75)}
+      />
       <button
         type="button"
         onClick={() => {
@@ -4683,7 +4613,7 @@ function LifeModMeter({
   const titleText = fullLabel ? `${fullLabel}: ${display}` : `${label} ${display}`;
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={titleText}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -4917,24 +4847,18 @@ function FiltCarveChip({ mode }: { mode: "off" | "fundamental" | "odds" | "evens
     formant: "Formant",
   };
   return (
-    <button
-      type="button"
+    <FcChip
+      on={on}
+      tone={{ color: c, onText: bandShade(FC.tone, 0.92) }}
+      extra="hover:brightness-125"
       onClick={() => {
         setParam("filterCarve", mode);
         if (mode !== "off") setParam("filterCarveAmount", Math.max(0.35, useFireCommandStore.getState().patch.filterCarveAmount ?? 0));
       }}
-      className="fc-focus rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
-      style={{
-        borderColor: on ? `${c}88` : "rgba(255,255,255,0.1)",
-        color: on ? bandShade(FC.tone, 0.92) : "rgba(255,255,255,0.4)",
-        background: on ? `${c}30` : "rgba(0,0,0,0.3)",
-        boxShadow: on ? `0 0 12px ${c}44` : undefined,
-      }}
       title={mode === "formant" ? "Movable F1/F2 formants — Cutoff slides vowels, Carve opens mouths" : `Harmonic carve: ${labels[mode]}`}
-      aria-pressed={on}
     >
       {labels[mode]}
-    </button>
+    </FcChip>
   );
 }
 
@@ -4942,42 +4866,20 @@ function FiltModelStrip() {
   const model = (useFireCommandStore((s) => s.patch.filterModel) ?? "biquad") as FilterModel;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = FC.filter;
-  const opts: { id: FilterModel; label: string; tip: string }[] = [
+  const opts: FcSegOption<FilterModel>[] = [
     { id: "biquad", label: "Eco", tip: "Classic biquad cascade (default / eco)" },
     { id: "ladder", label: "Ladder", tip: "Moog-ish 4-pole ladder worklet — real bite" },
     { id: "svf", label: "SVF", tip: "State-variable filter worklet — sharp character" },
   ];
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
-        Model
-      </span>
-      {opts.map((o) => {
-        const on = model === o.id;
-        return (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => setParam("filterModel", o.id)}
-            className="fc-focus min-w-[2.4rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: bandShade(FC.tone, 0.92),
-                    boxShadow: `0 0 12px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={o.tip}
-            aria-pressed={on}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<FilterModel>
+      eyebrow="Model"
+      value={model}
+      onChange={(v) => setParam("filterModel", v)}
+      options={opts}
+      tone={{ color: c, onText: bandShade(FC.tone, 0.92) }}
+      chipExtra="min-w-[2.4rem]"
+    />
   );
 }
 
@@ -4989,7 +4891,7 @@ function FiltDrivePosChip() {
     <button
       type="button"
       onClick={() => setParam("filterDrivePos", pos === "pre" ? "post" : "pre")}
-      className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+      className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider"
       style={{
         borderColor: `${c}55`,
         color: bandShade(FC.tone, 0.85),
@@ -5006,43 +4908,21 @@ function FiltTypeStrip() {
   const type = useFireCommandStore((s) => s.patch.filterType) ?? "lowpass";
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = FC.filter;
-  const opts: { id: FireFilterType; label: string; tip: string }[] = [
+  const opts: FcSegOption<FireFilterType>[] = [
     { id: "lowpass", label: "LP", tip: "Lowpass — open the top" },
     { id: "bandpass", label: "BP", tip: "Bandpass — carve a window" },
     { id: "highpass", label: "HP", tip: "Highpass — thin the body" },
     { id: "notch", label: "NT", tip: "Notch — cut a slot" },
   ];
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
-        Blade
-      </span>
-      {opts.map((o) => {
-        const on = type === o.id;
-        return (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => setParam("filterType", o.id)}
-            className="min-w-[2.1rem] rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: bandShade(FC.tone, 0.92),
-                    boxShadow: `0 0 12px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={o.tip}
-            aria-pressed={on}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<FireFilterType>
+      eyebrow="Blade"
+      value={type}
+      onChange={(v) => setParam("filterType", v)}
+      options={opts}
+      tone={{ color: c, onText: bandShade(FC.tone, 0.92) }}
+      chipExtra="min-w-[2.1rem]"
+    />
   );
 }
 
@@ -5054,7 +4934,7 @@ function FiltCharacterStrip() {
   const c = FC.filter;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Edge
       </span>
       {FILT_CHARS.map((p) => {
@@ -5073,7 +4953,7 @@ function FiltCharacterStrip() {
                 filterDrive: p.sat,
               });
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -5100,7 +4980,7 @@ function FiltCutoffStrip() {
   const c = FC.filter;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Cut
       </span>
       {FILT_CUT_PRESETS.map((p) => {
@@ -5110,7 +4990,7 @@ function FiltCutoffStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("filterCutoff", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -5139,11 +5019,8 @@ function FiltQuickActions() {
       <ModuleEnableToggle
         moduleId="filter"
         color={c}
-        onLabel="Sleep"
-        offLabel="Wake"
+        name="Filter"
         onTextColor={bandShade(FC.tone, 0.75)}
-        titleOn="Sleep Filter (same as Signal Path Off)"
-        titleOff="Wake Filter (same as Signal Path On)"
       />
       <button
         type="button"
@@ -5198,7 +5075,7 @@ function FiltModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         {bipolar ? (
           <>
@@ -5369,7 +5246,7 @@ function AmpCharacterStrip() {
   const c = FC.envAmp;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Contour
       </span>
       {AMP_CHARS.map((p) => {
@@ -5385,7 +5262,7 @@ function AmpCharacterStrip() {
               setParam("ampRelease", p.r);
               setParam("velAmount", p.vel);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -5418,6 +5295,12 @@ function AmpQuickActions() {
   const gated = sus > 0.95 && a < 0.02 && r < 0.12;
   return (
     <div className="flex items-center gap-1">
+      <ModuleEnableToggle
+        moduleId="env.amp"
+        color={c}
+        name="Amp Envelope"
+        onTextColor={bandShade(FC.tone, 0.75)}
+      />
       <button
         type="button"
         onClick={() => {
@@ -5504,7 +5387,7 @@ function AmpModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -5639,7 +5522,7 @@ function AmpCurveRow() {
     <button
       type="button"
       onClick={onClick}
-      className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+      className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider"
       style={{ borderColor: `${c}55`, color: bandShade(FC.tone, 0.88), background: `${c}18` }}
       title={title}
     >
@@ -5687,7 +5570,7 @@ function ModCharacterStrip() {
   const c = FC.envMod;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Weave
       </span>
       {MOD_CHARS.map((p) => {
@@ -5746,11 +5629,8 @@ function ModQuickActions() {
       <ModuleEnableToggle
         moduleId="env.mod"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="Mod Envelope"
         onTextColor={bandShade(FC.tone, 0.75)}
-        titleOn="Sleep env.mod (same as Signal Path Off)"
-        titleOff="Wake env.mod (same as Signal Path On)"
       />
       <button
         type="button"
@@ -5807,7 +5687,7 @@ function ModModMeter({
   const display = format ? format(value) : bipolar ? fmtBi(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.5rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         {bipolar ? (
           <>
@@ -5975,7 +5855,7 @@ function FenvCharacterStrip() {
   const c = FC.envFilt;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Sweep
       </span>
       {FENV_CHARS.map((p) => {
@@ -5993,7 +5873,7 @@ function FenvCharacterStrip() {
               setParam("filtRelease", p.r);
               setParam("filterEnvAmount", p.amt);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -6026,6 +5906,12 @@ function FenvQuickActions() {
   const flat = Math.abs(amt) < 0.03;
   return (
     <div className="flex items-center gap-1">
+      <ModuleEnableToggle
+        moduleId="env.filt"
+        color={c}
+        name="Filter Envelope"
+        onTextColor={bandShade(FC.tone, 0.75)}
+      />
       <button
         type="button"
         onClick={() => {
@@ -6102,7 +5988,7 @@ function FenvModMeter({
   const display = format ? format(value) : bipolar ? fmtBi(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         {bipolar ? (
           <>
@@ -6241,7 +6127,7 @@ function PluckCharacterStrip() {
   const c = FC.pluck;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Strike
       </span>
       {PLUCK_CHARS.map((p) => {
@@ -6256,7 +6142,7 @@ function PluckCharacterStrip() {
               setParam("lpgColor", p.color);
               setParam("velAmount", p.vel);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -6350,7 +6236,7 @@ function PluckModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.75rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -6466,7 +6352,7 @@ function LpgModelChip({ model }: { model: "fast" | "classic" | "slow" | "aged" |
     <button
       type="button"
       onClick={() => setParam("lpgModel", model)}
-      className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+      className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider"
       style={{
         borderColor: on ? `${c}88` : "rgba(255,255,255,0.1)",
         color: on ? bandShade(FC.tone, 0.94) : "rgba(255,255,255,0.4)",
@@ -6517,7 +6403,7 @@ function Lfo1WaveStrip() {
   const c = FC.lfo;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Wave
       </span>
       {LFO1_WAVES.map((o) => {
@@ -6562,7 +6448,7 @@ function Lfo1DestStrip() {
   ];
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Quick Route
       </span>
       {opts.map((o) => {
@@ -6572,7 +6458,7 @@ function Lfo1DestStrip() {
             key={o.id}
             type="button"
             onClick={() => setParam("lfo1Dest", o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
             style={
               on
                 ? {
@@ -6600,7 +6486,7 @@ function Lfo1CharacterStrip() {
   const c = FC.lfo;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Aura
       </span>
       {LFO1_CHARS.map((p) => {
@@ -6620,7 +6506,7 @@ function Lfo1CharacterStrip() {
               setParam("oscBLfo", p.b);
               setParam("oscCLfo", p.c);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -6647,7 +6533,7 @@ function Lfo1RateStrip() {
   const c = FC.lfo;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Rate
       </span>
       {LFO1_RATES.map((p) => {
@@ -6657,7 +6543,7 @@ function Lfo1RateStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("lfo1Rate", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -6693,11 +6579,8 @@ function Lfo1QuickActions() {
       <ModuleEnableToggle
         moduleId="lfo.1"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="LFO 1"
         onTextColor={bandShade(FC.mod, 0.78)}
-        titleOn="Sleep lfo.1 (same as Signal Path Off)"
-        titleOff="Wake lfo.1 (same as Signal Path On)"
       />
       <button
         type="button"
@@ -6752,7 +6635,7 @@ function Lfo1ModMeter({
   const display = format ? format(value) : bipolar ? fmtBi(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.5rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         {bipolar ? (
           <>
@@ -6940,7 +6823,7 @@ function Lfo2WaveStrip() {
   const c = FC.lfo2;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
         Wave
       </span>
       {LFO2_WAVES.map((o) => {
@@ -6985,7 +6868,7 @@ function Lfo2DestStrip() {
   ];
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Quick Route
       </span>
       {opts.map((o) => {
@@ -6995,7 +6878,7 @@ function Lfo2DestStrip() {
             key={o.id}
             type="button"
             onClick={() => setParam("lfo2Dest", o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
             style={
               on
                 ? {
@@ -7040,7 +6923,7 @@ function Lfo2RelationStrip() {
   return (
     <div className="mb-2 space-y-1.5 rounded-lg border px-2 py-1.5" style={{ borderColor: `${c}33`, background: `${c}0c` }}>
       <div className="flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}88` }}>
           Relation
         </span>
         {rels.map((o) => {
@@ -7050,7 +6933,7 @@ function Lfo2RelationStrip() {
               key={o.id}
               type="button"
               onClick={() => setParam("lfo2Relation", o.id)}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+              className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
               style={
                 on
                   ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.mod, 0.96), boxShadow: `0 0 10px ${c}44` }
@@ -7064,7 +6947,7 @@ function Lfo2RelationStrip() {
       </div>
       {(relation === "phaseOffset" || relation === "mirror" || relation === "invert") && (
         <div className="flex flex-wrap items-center justify-center gap-1">
-          <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>°</span>
+          <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>°</span>
           {phases.map((p) => (
             <button
               key={p}
@@ -7084,7 +6967,7 @@ function Lfo2RelationStrip() {
       )}
       {relation === "ratio" && (
         <div className="flex flex-wrap items-center justify-center gap-1">
-          <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>×</span>
+          <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>×</span>
           {ratios.map((r) => (
             <button
               key={r}
@@ -7103,13 +6986,13 @@ function Lfo2RelationStrip() {
         </div>
       )}
       <div className="flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Drift</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Drift</span>
         {drifts.map((d) => (
           <button
             key={d.id}
             type="button"
             onClick={() => setParam("lfo2DriftMode", d.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={
               drift === d.id
                 ? { borderColor: `${c}99`, background: `${c}28`, color: bandShade(FC.mod, 0.94) }
@@ -7132,7 +7015,7 @@ function Lfo2CharacterStrip() {
   const c = FC.lfo2;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Orbit
       </span>
       {LFO2_CHARS.map((p) => {
@@ -7149,7 +7032,7 @@ function Lfo2CharacterStrip() {
               setParam("lfo2Depth", p.depth);
               setParam("lfo2Dest", p.dest);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -7176,7 +7059,7 @@ function Lfo2RateStrip() {
   const c = FC.lfo2;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Rate
       </span>
       {LFO2_RATES.map((p) => {
@@ -7186,7 +7069,7 @@ function Lfo2RateStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("lfo2Rate", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -7215,7 +7098,7 @@ function Lfo2SyncStrip() {
   const link = bandShade(FC.mod, 0.62);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         ×L1
       </span>
       {LFO2_SYNC.map((p) => {
@@ -7228,7 +7111,7 @@ function Lfo2SyncStrip() {
               const next = Math.min(30, Math.max(0.05, rate1 * p.r));
               setParam("lfo2Rate", Math.round(next * 1000) / 1000);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -7265,11 +7148,8 @@ function Lfo2QuickActions() {
       <ModuleEnableToggle
         moduleId="lfo.2"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="LFO 2"
         onTextColor={bandShade(FC.mod, 0.78)}
-        titleOn="Sleep lfo.2 (same as Signal Path Off)"
-        titleOff="Wake lfo.2 (same as Signal Path On)"
       />
       <button
         type="button"
@@ -7336,7 +7216,7 @@ function Lfo2ModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.8rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -7501,7 +7381,7 @@ function FmCharacterStrip() {
   const c = FC.fm;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Forge
       </span>
       {FM_CHARS.map((p) => {
@@ -7524,7 +7404,7 @@ function FmCharacterStrip() {
               setParam("ringFreq", p.hz);
               setParam("fmFeedback", p.fb);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -7551,7 +7431,7 @@ function FmRatioStrip() {
   const c = FC.fm;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Ratio
       </span>
       {FM_RATIOS.map((p) => {
@@ -7561,7 +7441,7 @@ function FmRatioStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("fmRatio", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -7589,7 +7469,7 @@ function FmRingHzStrip() {
   const c = FC.fm;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Ring Hz
       </span>
       {FM_RING_HZ.map((p) => {
@@ -7602,7 +7482,7 @@ function FmRingHzStrip() {
               setParam("ringFreq", p.v);
               if (ring < 0.05) setParam("ringAmount", 0.45);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -7636,11 +7516,8 @@ function FmQuickActions() {
       <ModuleEnableToggle
         moduleId="fm"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="FM · Ring"
         onTextColor={bandShade(FC.mod, 0.78)}
-        titleOn="Sleep fm (same as Signal Path Off)"
-        titleOff="Wake fm (same as Signal Path On)"
       />
       <button
         type="button"
@@ -7705,7 +7582,7 @@ function FmModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -7785,13 +7662,13 @@ function FmPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
 
       <FmStageViz />
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Ring</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Ring</span>
         {(["ratio", "fixed"] as RingMode[]).map((m) => (
           <button
             key={m}
             type="button"
             onClick={() => setParam("ringMode", m)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase"
             style={
               ringMode === m
                 ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.mod, 0.94) }
@@ -7925,7 +7802,7 @@ function FmRackAlgStrip() {
   const c = FC.fmRack;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Alg
       </span>
       {RACK_ALG_NAMES.map((name, i) => {
@@ -7969,7 +7846,7 @@ function FmRackCharacterStrip() {
   const c = FC.fmRack;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Lattice
       </span>
       {RACK_CHARS.map((p) => {
@@ -7994,7 +7871,7 @@ function FmRackCharacterStrip() {
               setParam("vectorRate", p.vr);
               setParam("vectorDepth", p.vd);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -8035,11 +7912,8 @@ function FmRackQuickActions() {
       <ModuleEnableToggle
         moduleId="fm.rack"
         color={c}
-        onLabel="Park"
-        offLabel="Wake"
+        name="FM Rack"
         onTextColor={bandShade(FC.mod, 0.8)}
-        titleOn="Sleep fm.rack (same as Signal Path Off)"
-        titleOff="Wake fm.rack (same as Signal Path On)"
       />
       <button
         type="button"
@@ -8104,7 +7978,7 @@ function FmRackModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.2rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -8236,7 +8110,7 @@ function FmRackPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <FParamKnob paramKey="fmOp3Ratio" label="R3" min={0.25} max={16} curve="log" format={fmtRatio} def={2} size={42} color={cOps[2]} />
         <FParamKnob paramKey="fmOp4Ratio" label="R4" min={0.25} max={16} curve="log" format={fmtRatio} def={3} size={42} color={cOps[3]} />
         <div className="flex flex-col items-center gap-0.5 min-w-[2.8rem] pb-1" title={`R2 ${r2.toFixed(2)} · R3 ${r3.toFixed(2)} · R4 ${r4.toFixed(2)}`}>
-          <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>Ratios</div>
+          <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${c}88` }}>Ratios</div>
           <div className="font-mono text-[9px] tabular-nums" style={{ color: bandShade(FC.mod, 0.9) }}>
             {r2.toFixed(1)}/{r3.toFixed(1)}/{r4.toFixed(1)}
           </div>
@@ -8295,7 +8169,7 @@ function PitchCharacterStrip() {
   const c = FC.pitch;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Horizon
       </span>
       {PITCH_CHARS.map((p) => {
@@ -8312,7 +8186,7 @@ function PitchCharacterStrip() {
               setParam("glide", p.glide);
               setParam("mono", p.mono);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -8339,7 +8213,7 @@ function PitchAmtStrip() {
   const c = FC.pitch;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Env
       </span>
       {PITCH_AMTS.map((p) => {
@@ -8349,7 +8223,7 @@ function PitchAmtStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("pitchEnvAmount", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -8376,7 +8250,7 @@ function PitchTimeStrip() {
   const c = FC.pitch;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Time
       </span>
       {PITCH_TIMES.map((p) => {
@@ -8386,7 +8260,7 @@ function PitchTimeStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("pitchEnvTime", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -8419,11 +8293,8 @@ function PitchQuickActions() {
       <ModuleEnableToggle
         moduleId="pitch"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="Pitch · Glide"
         onTextColor={bandShade(FC.mod, 0.8)}
-        titleOn="Sleep pitch (same as Signal Path Off)"
-        titleOff="Wake pitch (same as Signal Path On)"
       />
       <button
         type="button"
@@ -8487,7 +8358,7 @@ function PitchModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         {bipolar ? (
           <>
@@ -8596,13 +8467,13 @@ function PitchPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
 
       <PitchStageViz />
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Glide</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Glide</span>
         {([
           { id: "legato" as GlideMode, label: "Legato" },
           { id: "always" as GlideMode, label: "Always" },
         ]).map((o) => (
           <button key={o.id} type="button" onClick={() => setParam("glideMode", o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={glideMode === o.id ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.mod, 0.96) } : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }}
           >{o.label}</button>
         ))}
@@ -8613,7 +8484,7 @@ function PitchPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           { id: "s" as GlideCurve, label: "S" },
         ]).map((o) => (
           <button key={o.id} type="button" onClick={() => setParam("glideCurve", o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={glideCurve === o.id ? { borderColor: `${c}99`, background: `${c}28`, color: bandShade(FC.mod, 0.96) } : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }}
           >{o.label}</button>
         ))}
@@ -8623,7 +8494,7 @@ function PitchPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           { id: "rate" as GlideRateMode, label: "Rate" },
         ]).map((o) => (
           <button key={o.id} type="button" onClick={() => setParam("glideRateMode", o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={glideRateMode === o.id ? { borderColor: `${c}99`, background: `${c}28`, color: bandShade(FC.mod, 0.96) } : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }}
           >{o.label}</button>
         ))}
@@ -8796,7 +8667,7 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       <LiveStageViz />
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Stage</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Stage</span>
         {stageScenes.map((p) => (
           <button
             key={p.id}
@@ -8807,7 +8678,7 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               useFireCommandStore.getState().setRouteThroughFx(p.fx);
               setParam("masterGain", p.master);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={{ borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.55)", background: "rgba(0,0,0,0.3)" }}
           >
             {p.label}
@@ -8816,7 +8687,7 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>POLYPHONY</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>POLYPHONY</span>
         <select
           value={maxVoices}
           onChange={(e) => setMaxVoices(Number(e.target.value))}
@@ -8838,13 +8709,13 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Steal</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Steal</span>
         {steals.map((s) => (
           <button
             key={s.id}
             type="button"
             onClick={() => setParam("voiceSteal", s.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={
               voiceSteal === s.id
                 ? { borderColor: `${c}99`, background: `${c}33`, color: LIVE_C_GLOW }
@@ -8857,13 +8728,13 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Cease</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Cease</span>
         {ceases.map((s) => (
           <button
             key={s.id}
             type="button"
             onClick={() => setParam("ceaseMode", s.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={
               ceaseMode === s.id
                 ? { borderColor: `${LIVE_C_HOT}99`, background: `${LIVE_C_HOT}28`, color: LIVE_C_GLOW }
@@ -9000,7 +8871,7 @@ function ScopePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>View</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>View</span>
         {([
           { id: "oscilloscope" as const, label: "Osc" },
           { id: "spectrum" as const, label: "FFT" },
@@ -9010,7 +8881,7 @@ function ScopePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             key={o.id}
             type="button"
             onClick={() => setMixView(o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={
               mixView === o.id
                 ? { borderColor: `${c}99`, background: `${c}33`, color: SCOPE_C_GLOW }
@@ -9117,7 +8988,7 @@ function AirPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       <AirAmountStrip />
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Arch</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Arch</span>
         {([
           { id: "dual" as AirArch, label: "Dual" },
           { id: "tilt" as AirArch, label: "Tilt" },
@@ -9126,7 +8997,7 @@ function AirPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             key={o.id}
             type="button"
             onClick={() => setParam("airArch", o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={
               arch === o.id
                 ? { borderColor: `${c}99`, background: `${c}33`, color: AIR_C_GLOW }
@@ -9139,7 +9010,7 @@ function AirPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("airMsMode", !msMode)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={
             msMode
               ? { borderColor: `${c}99`, background: `${c}33`, color: AIR_C_GLOW }
@@ -9376,13 +9247,13 @@ function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>Mech</span>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>Mech</span>
         {mechs.map((o) => (
           <button
             key={o.id}
             type="button"
             onClick={() => setParam("widthMechanism", o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={
               mech === o.id
                 ? { borderColor: `${c}99`, background: `${c}33`, color: WIDTH_C_GLOW }
@@ -9395,7 +9266,7 @@ function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("stereoWidth", 0)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={{ borderColor: `${c}55`, color: WIDTH_C_GLOW, background: `${c}1c` }}
           title="Mono audition"
         >
@@ -9404,7 +9275,7 @@ function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("stereoWidth", 1)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={{ borderColor: `${c}55`, color: WIDTH_C_GLOW, background: `${c}1c` }}
           title="Mid / unity audition"
         >
@@ -9492,7 +9363,7 @@ function MixRackChrome() {
           key={s.id}
           type="button"
           onClick={() => setParam("masterChainScene", s.id)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={
             scene === s.id
               ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC_BAND.mix, 0.95) }
@@ -9559,7 +9430,7 @@ function FxRackChrome() {
           key={q}
           type="button"
           onClick={() => setParam("fxQuality", q)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={
             quality === q
               ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.fx, 0.95) }
@@ -9602,7 +9473,7 @@ function FxRackChrome() {
       <button
         type="button"
         onClick={() => setParam("fxSharedMod", !shared)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black"
         style={
           shared
             ? { borderColor: `${c}99`, background: `${c}28`, color: bandShade(FC.fx, 0.95) }
@@ -9619,7 +9490,7 @@ function FxRackChrome() {
           key={s.id}
           type="button"
           onClick={() => applyScene(s.id)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={
             scene === s.id
               ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.fx, 0.95) }
@@ -9680,7 +9551,7 @@ function ReverbCharacterStrip() {
   const c = FC.reverb;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Vault
       </span>
       {REVERB_CHARS.map((p) => {
@@ -9704,7 +9575,7 @@ function ReverbCharacterStrip() {
                 reverbMix: p.mix,
               });
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -9731,7 +9602,7 @@ function ReverbSizeStrip() {
   const c = FC.reverb;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Size
       </span>
       {REVERB_SIZES.map((p) => {
@@ -9741,7 +9612,7 @@ function ReverbSizeStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("reverbSize", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -9768,7 +9639,7 @@ function ReverbMixStrip() {
   const c = FC.reverb;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Mix
       </span>
       {REVERB_MIXES.map((p) => {
@@ -9778,7 +9649,7 @@ function ReverbMixStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("reverbMix", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -9812,11 +9683,8 @@ function ReverbQuickActions() {
       <ModuleEnableToggle
         moduleId="fx.reverb"
         color={c}
-        onLabel="Dry"
-        offLabel="Wake"
+        name="Reverb"
         onTextColor={bandShade(FC.fx, 0.8)}
-        titleOn="Sleep fx.reverb (same as Signal Path Off)"
-        titleOff="Wake fx.reverb (same as Signal Path On)"
       />
       <button
         type="button"
@@ -9887,7 +9755,7 @@ function ReverbModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -9977,7 +9845,7 @@ function ReverbPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("reverbFreeze", !freeze)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={freeze ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.fx, 0.95) } : { borderColor: `${c}55`, color: `${c}cc` }}
           title="Freeze reverb tail"
         >
@@ -10058,7 +9926,7 @@ function DelayCharacterStrip() {
   const c = FC.delay;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Cascade
       </span>
       {DELAY_CHARS.map((p) => {
@@ -10076,7 +9944,7 @@ function DelayCharacterStrip() {
                 delayMix: p.mix,
               });
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -10103,7 +9971,7 @@ function DelayTimeStrip() {
   const c = FC.delay;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Time
       </span>
       {DELAY_TIMES.map((p) => {
@@ -10113,7 +9981,7 @@ function DelayTimeStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("delayTime", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -10140,7 +10008,7 @@ function DelayMixStrip() {
   const c = FC.delay;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Mix
       </span>
       {DELAY_MIXES.map((p) => {
@@ -10150,7 +10018,7 @@ function DelayMixStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("delayMix", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -10182,11 +10050,8 @@ function DelayQuickActions() {
       <ModuleEnableToggle
         moduleId="fx.delay"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="Delay"
         onTextColor={bandShade(FC.fx, 0.8)}
-        titleOn="Sleep fx.delay (same as Signal Path Off)"
-        titleOff="Wake fx.delay (same as Signal Path On)"
       />
       <button
         type="button"
@@ -10253,7 +10118,7 @@ function DelayModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -10345,7 +10210,7 @@ function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               key={m}
               type="button"
               onClick={() => setParam("delayCascadeMode", m)}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-bold capitalize"
+              className="rounded-md border px-2 py-0.5 text-[9px] font-black capitalize"
               style={on ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.fx, 0.95) } : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }}
             >
               {m}
@@ -10355,7 +10220,7 @@ function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("delaySync", !sync)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={sync ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.fx, 0.95) } : { borderColor: `${c}55`, color: `${c}cc` }}
         >
           {sync ? "SYNC" : "Free"}
@@ -10363,7 +10228,7 @@ function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("delayFreeze", !freeze)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={freeze ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.fx, 0.95) } : { borderColor: `${c}55`, color: `${c}cc` }}
           title="Freeze feedback loop"
         >
@@ -10448,7 +10313,7 @@ function ChorusCharacterStrip() {
   const c = FC.chorus;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Drift
       </span>
       {CHORUS_CHARS.map((p) => {
@@ -10464,7 +10329,7 @@ function ChorusCharacterStrip() {
               setParam("chorusDepth", p.depth);
               setParam("chorusMix", p.mix);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -10491,7 +10356,7 @@ function ChorusRateStrip() {
   const c = FC.chorus;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Rate
       </span>
       {CHORUS_RATES.map((p) => {
@@ -10501,7 +10366,7 @@ function ChorusRateStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("chorusRate", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -10528,7 +10393,7 @@ function ChorusMixStrip() {
   const c = FC.chorus;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Mix
       </span>
       {CHORUS_MIXES.map((p) => {
@@ -10538,7 +10403,7 @@ function ChorusMixStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("chorusMix", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -10570,11 +10435,8 @@ function ChorusQuickActions() {
       <ModuleEnableToggle
         moduleId="fx.chorus"
         color={c}
-        onLabel="Mute"
-        offLabel="Wake"
+        name="Chorus"
         onTextColor={bandShade(FC.fx, 0.8)}
-        titleOn="Sleep fx.chorus (same as Signal Path Off)"
-        titleOff="Wake fx.chorus (same as Signal Path On)"
       />
       <button
         type="button"
@@ -10641,7 +10503,7 @@ function ChorusModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -10727,7 +10589,7 @@ function ChorusPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             key={m}
             type="button"
             onClick={() => setParam("chorusModel", m)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold capitalize"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black capitalize"
             style={model === m ? { borderColor: `${c}99`, background: `${c}33`, color: bandShade(FC.fx, 0.95) } : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)" }}
           >
             {m}
@@ -10813,7 +10675,7 @@ function PhaserCharacterStrip() {
   const c = FC.phaser;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Veil
       </span>
       {PHASER_CHARS.map((p) => {
@@ -10829,7 +10691,7 @@ function PhaserCharacterStrip() {
               setParam("phaserDepth", p.depth);
               setParam("phaserMix", p.mix);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -10856,7 +10718,7 @@ function PhaserRateStrip() {
   const c = FC.phaser;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Rate
       </span>
       {PHASER_RATES.map((p) => {
@@ -10866,7 +10728,7 @@ function PhaserRateStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("phaserRate", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -10893,7 +10755,7 @@ function PhaserMixStrip() {
   const c = FC.phaser;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Mix
       </span>
       {PHASER_MIXES.map((p) => {
@@ -10903,7 +10765,7 @@ function PhaserMixStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("phaserMix", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -10935,11 +10797,8 @@ function PhaserQuickActions() {
       <ModuleEnableToggle
         moduleId="fx.phaser"
         color={c}
-        onLabel="Veil"
-        offLabel="Wake"
+        name="Phaser"
         onTextColor={bandShade(FC.fx, 0.8)}
-        titleOn="Sleep fx.phaser (same as Signal Path Off)"
-        titleOff="Wake fx.phaser (same as Signal Path On)"
       />
       <button
         type="button"
@@ -11006,7 +10865,7 @@ function PhaserModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -11091,7 +10950,7 @@ function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       <PhaserMixStrip />
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
           Stereo
         </span>
         {([
@@ -11105,7 +10964,7 @@ function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               key={m.id}
               type="button"
               onClick={() => setParam("phaserStereo", m.id)}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-bold capitalize transition"
+              className="rounded-md border px-2 py-0.5 text-[9px] font-black capitalize transition"
               style={
                 on
                   ? {
@@ -11220,7 +11079,7 @@ function AgeCharacterStrip() {
   const heat = Math.max(cass, wow, vhs, bbd, print, srr, bit !== "off" ? 0.3 : 0);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Archive
       </span>
       {AGE_CHARS.map((p) => {
@@ -11238,7 +11097,7 @@ function AgeCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => ageApplyChar(setParam as (k: keyof FirePatch, v: number | FireBitDepth) => void, p)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -11265,7 +11124,7 @@ function AgeBitStrip() {
   const c = FC.vintage;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Bits
       </span>
       {AGE_BITS.map((m) => {
@@ -11275,7 +11134,7 @@ function AgeBitStrip() {
             key={m.id}
             type="button"
             onClick={() => setParam("bitDepth", m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide transition"
             style={
               on
                 ? {
@@ -11312,7 +11171,7 @@ function AgeBedStrip() {
   ];
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Beds
       </span>
       {beds.map((b) => {
@@ -11331,7 +11190,7 @@ function AgeBedStrip() {
                 setParam(b.key, b.v);
               }
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -11377,11 +11236,8 @@ function AgeQuickActions() {
       <ModuleEnableToggle
         moduleId="fx.vintage"
         color={c}
-        onLabel="Sleep"
-        offLabel="Wake"
+        name="Vintage Age"
         onTextColor={bandShade(FC.fx, 0.8)}
-        titleOn="Sleep fx.vintage (same as Signal Path Off)"
-        titleOff="Wake fx.vintage (same as Signal Path On)"
       />
       <button
         type="button"
@@ -11434,7 +11290,7 @@ function AgeModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         {bipolar ? (
           <>
@@ -11513,7 +11369,7 @@ function AgePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       key={key}
       type="button"
       onClick={() => setParam(key, !on)}
-      className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+      className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide transition"
       style={
         on
           ? {
@@ -11603,7 +11459,7 @@ function AgePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
           AGE
         </span>
         <FParamKnob paramKey="ageMacro" label="Macro" min={0} max={1} format={fmtPct} def={0} size={44} color={cMacro} />
@@ -11707,7 +11563,7 @@ function DriveCharacterStrip() {
   const c = FC.drive;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Crucible
       </span>
       {DRIVE_CHARS.map((p) => {
@@ -11728,7 +11584,7 @@ function DriveCharacterStrip() {
               setParam("crush", p.crush);
               setParam("tone", p.tone);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -11755,7 +11611,7 @@ function DriveModeStrip() {
   const c = FC.drive;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Shape
       </span>
       {DRIVE_MODES.map((m) => {
@@ -11765,7 +11621,7 @@ function DriveModeStrip() {
             key={m.id}
             type="button"
             onClick={() => setParam("driveMode", m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide transition"
             style={
               on
                 ? {
@@ -11792,7 +11648,7 @@ function DriveToneStrip() {
   const c = FC.drive;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Tone
       </span>
       {DRIVE_TONES.map((p) => {
@@ -11802,7 +11658,7 @@ function DriveToneStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("tone", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -11835,11 +11691,8 @@ function DriveQuickActions() {
       <ModuleEnableToggle
         moduleId="fx.drive"
         color={c}
-        onLabel="Cool"
-        offLabel="Wake"
+        name="Drive"
         onTextColor={bandShade(FC.fx, 0.8)}
-        titleOn="Sleep fx.drive (same as Signal Path Off)"
-        titleOff="Wake fx.drive (same as Signal Path On)"
       />
       <button
         type="button"
@@ -11904,7 +11757,7 @@ function DriveModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -12002,7 +11855,7 @@ function DrivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       <DriveToneStrip />
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
           Tone Pos
         </span>
         {([
@@ -12016,7 +11869,7 @@ function DrivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               key={m.id}
               type="button"
               onClick={() => setParam("driveTonePos", m.id)}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+              className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide transition"
               style={
                 on
                   ? {
@@ -12035,7 +11888,7 @@ function DrivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("driveAutoGain", !autoGain)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide transition"
           style={
             autoGain
               ? {
@@ -12499,7 +12352,7 @@ function MtxCharacterStrip() {
   const used = matrix.filter((r) => r.source !== "none" && r.dest !== "none");
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Weave
       </span>
       {MTX_CHARS.map((p) => {
@@ -12516,7 +12369,7 @@ function MtxCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => applyMtxRoutes(setModRoute, p.routes)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -12546,6 +12399,12 @@ function MtxQuickActions() {
   const idle = used.length === 0;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
+      <ModuleEnableToggle
+        moduleId="matrix"
+        color={c}
+        name="Modulation Matrix"
+        onTextColor={bandShade(FC.mod, 0.8)}
+      />
       <button
         type="button"
         onClick={() => {
@@ -12626,7 +12485,7 @@ function MtxModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -12863,7 +12722,7 @@ function ArpCharacterStrip({ arp, setArp }: { arp: ArpSettings; setArp: (p: Part
   const c = FC.arp;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Orbit
       </span>
       {ARP_CHARS.map((p) => {
@@ -12889,7 +12748,7 @@ function ArpCharacterStrip({ arp, setArp }: { arp: ArpSettings; setArp: (p: Part
                 hold: p.hold,
               })
             }
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -12916,6 +12775,12 @@ function ArpQuickActions({ arp, setArp }: { arp: ArpSettings; setArp: (p: Partia
   const idle = !arp.enabled;
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
+      <ModuleEnableToggle
+        moduleId="arp"
+        color={c}
+        name="Arpeggiator"
+        onTextColor={bandShade(FC.mod, 0.8)}
+      />
       <button
         type="button"
         onClick={() => {
@@ -13003,7 +12868,7 @@ function ArpModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.4rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-[width] duration-75"
@@ -13114,7 +12979,7 @@ function ArpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         </span>
         <button
           type="button"
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black"
           style={{ borderColor: `${c}55`, color: `${c}cc`, background: `${c}14` }}
           title="Paint held notes (or a C major stub) across the active Draw channel"
           onClick={() => {
@@ -13714,7 +13579,7 @@ function Keyboard({
                   className="min-w-0 rounded-md border border-white/8 bg-black/30 px-1 py-0.5 text-center"
                   title={knob ? `K${i + 1} → ${knob.label}` : `K${i + 1} unused on this bank`}
                 >
-                  <div className="text-[7px] font-black uppercase tracking-wider text-white/35">K{i + 1}</div>
+                  <div className="fc-text-floor font-black uppercase tracking-[0.06em] text-white/35">K{i + 1}</div>
                   <MpkKnobName label={knob?.label ?? null} color={focusMeta?.color} />
                 </div>
               ))}
@@ -13957,7 +13822,7 @@ function HarmonyPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           className="flex flex-col justify-center gap-2 rounded-xl border bg-black/25 px-3 py-2.5"
           style={{ borderColor: `${HARM_C_MODE}44` }}
         >
-          <div className="text-[7px] font-black uppercase tracking-wider text-center" style={{ color: `${HARM_C_MODE}aa` }}>
+          <div className="fc-text-floor font-black uppercase tracking-[0.06em] text-center" style={{ color: `${HARM_C_MODE}aa` }}>
             Interval
           </div>
           <div className="flex flex-wrap items-center justify-center gap-1">
@@ -14113,7 +13978,7 @@ function ScalePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           className="rounded-xl border bg-black/25 px-2.5 py-2.5"
           style={{ borderColor: `${SCALE_C_MODE}44` }}
         >
-          <div className="mb-1.5 text-center text-[7px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C_MODE}aa` }}>
+          <div className="mb-1.5 text-center fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${SCALE_C_MODE}aa` }}>
             Pitch Cage
           </div>
           <div className="grid grid-cols-12 gap-0.5">
@@ -14283,7 +14148,7 @@ function ChordPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           className="rounded-xl border bg-black/25 px-2.5 py-2.5"
           style={{ borderColor: `${CHORD_C_VOICE}44` }}
         >
-          <div className="mb-1.5 text-center text-[7px] font-black uppercase tracking-wider" style={{ color: `${CHORD_C_VOICE}aa` }}>
+          <div className="mb-1.5 text-center fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${CHORD_C_VOICE}aa` }}>
             Interval Stack
           </div>
           <div className="flex flex-col gap-1">
@@ -14829,7 +14694,7 @@ function SpectralCharacterStrip() {
   const c = FC.spectral;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Lattice
       </span>
       {SPECTRAL_CHARS.map((p) => {
@@ -14848,7 +14713,7 @@ function SpectralCharacterStrip() {
               setParam("spectralAmount", p.amount);
               setParam("spectralMix", p.mix);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -14875,7 +14740,7 @@ function SpectralModeStrip() {
   const c = FC.spectral;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Mode
       </span>
       {SPECTRAL_MODES.map((m) => {
@@ -14885,7 +14750,7 @@ function SpectralModeStrip() {
             key={m.id}
             type="button"
             onClick={() => setParam("spectralMode", m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide transition"
             style={
               on
                 ? {
@@ -14912,7 +14777,7 @@ function SpectralMixStrip() {
   const c = FC.spectral;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Mix
       </span>
       {SPECTRAL_MIXES.map((p) => {
@@ -14922,7 +14787,7 @@ function SpectralMixStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("spectralMix", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -14954,11 +14819,8 @@ function SpectralQuickActions() {
       <ModuleEnableToggle
         moduleId="fx.spectral"
         color={c}
-        onLabel="Sleep"
-        offLabel="Wake"
+        name="Spectral"
         onTextColor={bandShade(FC.fx, 0.8)}
-        titleOn="Sleep fx.spectral (same as Signal Path Off)"
-        titleOff="Wake fx.spectral (same as Signal Path On)"
       />
       <button
         type="button"
@@ -15019,7 +14881,7 @@ function SpectralModMeter({
   const display = format ? format(value) : String(Math.round(t * 100));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[2.6rem]" title={`${label} ${display}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>{label}</div>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>{label}</div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
         {bipolar ? (
           <>
@@ -15132,11 +14994,11 @@ function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       <SpectralMixStrip />
 
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
           FFT
         </span>
         <span
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums"
           title="Spectral STFT size is fixed at 2048 in the worklet (selectable sizes coming later)."
           style={{
             borderColor: `${c}99`,
@@ -15149,7 +15011,7 @@ function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <button
           type="button"
           onClick={() => setParam("spectralWetOnly", !wetOnly)}
-          className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide transition"
+          className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wide transition"
           style={
             wetOnly
               ? {
@@ -15206,7 +15068,11 @@ function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   );
 }
 
-/** Lowpass-gate switch — swaps the amp ADSR for a struck vactrol. */
+/**
+ * Lowpass-gate switch — swaps the amp ADSR for a struck vactrol.
+ * Armed / Disarmed is Pluck's own concept: it is NOT module sleep
+ * (that lives on the Command Map / Signal Path as Wake · Sleep).
+ */
 function LpgToggle() {
   const lpgOn = useFireCommandStore((s) => s.patch.lpgOn);
   const setParam = useFireCommandStore((s) => s.setParam);
@@ -15215,7 +15081,8 @@ function LpgToggle() {
     <button
       type="button"
       onClick={() => setParam("lpgOn", !lpgOn)}
-      className="h-6 px-2.5 rounded-md text-[10px] font-bold border transition"
+      aria-pressed={lpgOn}
+      className="fc-focus h-6 px-2.5 rounded-md text-[10px] font-bold border transition"
       style={
         lpgOn
           ? {
@@ -15226,9 +15093,9 @@ function LpgToggle() {
             }
           : { borderColor: "rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.4)" }
       }
-      title="Arm Pluck Gate (LPG): vactrol strike drives both loudness AND brightness. Sleep to disable module."
+      title="Arm Pluck Gate (LPG): vactrol strike drives both loudness AND brightness. Distinct from module Sleep."
     >
-      {lpgOn ? "Armed" : "Sleep"}
+      {lpgOn ? "Armed" : "Disarmed"}
     </button>
   );
 }
@@ -15349,7 +15216,16 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
   );
   const atlas = collapseKey ? FIRE_MODULE_BY_ID.get(collapseKey) : undefined;
   const labelMode = useFireCommandStore((s) => s.labelMode);
-  useFireBandRegister(collapseKey, title, color, collapsed, toggle, !!chipHosted && !!collapseKey);
+  // Register both name forms so the band chips can honor labelMode too.
+  useFireBandRegister(
+    collapseKey,
+    atlas?.title ?? title,
+    color,
+    collapsed,
+    toggle,
+    !!chipHosted && !!collapseKey,
+    atlas?.short ?? title,
+  );
 
   const displayTitle =
     labelMode === "character" && atlas ? atlas.short
@@ -15399,7 +15275,7 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
     atlas?.subtitle && atlas.subtitle !== atlas.short && atlas.subtitle !== atlas.title
       ? atlas.subtitle
       : null;
-  const asleepStatus = !moduleAwake ? "Asleep — wake on Signal Path or Sleep/Mute" : null;
+  const asleepStatus = !moduleAwake ? `${ASLEEP_STATE} — press Wake here, on the Signal Path, or on the Command Map` : null;
 
   return (
     <GlassPanel
@@ -15422,14 +15298,7 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
             >
               {displayTitle}
             </span>
-            {!moduleAwake && (
-              <span
-                className="shrink-0 rounded border border-white/15 bg-black/55 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-white/45"
-                title="Module offline — same as Signal Path Off"
-              >
-                Asleep
-              </span>
-            )}
+            {!moduleAwake && <AsleepBadge />}
             {locked && <span className="fc-lock-badge" title="Protected from Random Armory / mutation">LOCK</span>}
           </button>
         ) : (

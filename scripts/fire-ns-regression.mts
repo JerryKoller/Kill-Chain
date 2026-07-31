@@ -8,6 +8,9 @@ import {
   morphFrameGains,
   unisonLevelNorm,
   filterResoCompGain,
+  boundCrossFm,
+  makeFbDriveCurve,
+  CROSS_FM_LOOP_MAX,
 } from "../src/audio/dsp/FireCommandSynth.ts";
 import {
   normalizeSpectrum,
@@ -124,6 +127,39 @@ for (let n = 1; n < spiky.length; n++) spiky[n] = 1;
 normalizeSpectrum(spiky);
 assert(spectrumPeak(spiky) <= WT_PEAK_CEIL + 0.12, `spiky spectrum peak-limited (got ${spectrumPeak(spiky).toFixed(3)})`);
 assert(spectrumRms(spiky) < WT_TARGET_RMS, `spiky spectrum sits below loudness target (got ${spectrumRms(spiky).toFixed(3)})`);
+
+// ── Cross-FM round trip must stay bounded ─────────────────────────────
+// Both directions live is a real graph cycle; an unbounded round-trip index
+// self-oscillates into broadband hash.
+const f0 = 220;
+const loopIndex = (pair: [number, number]) => (pair[0] / f0) * (pair[1] / f0);
+const oneWay = boundCrossFm(40 * f0, 0, f0);
+assert(oneWay[0] === 40 * f0, "single-direction cross FM is untouched");
+const mild = boundCrossFm(1.5 * f0, 2 * f0, f0);
+assert(loopIndex(mild) === 3, "mild bidirectional cross FM is untouched");
+const wild = boundCrossFm(8 * f0, 8 * f0, f0);
+assert(loopIndex(wild) <= CROSS_FM_LOOP_MAX + 1e-6, `wild bidirectional cross FM bounded (got ${loopIndex(wild).toFixed(2)})`);
+assert(
+  Math.abs(wild[0] / wild[1] - 1) < 1e-6,
+  "cross FM bound preserves the balance between directions",
+);
+
+// ── Delay feedback saturator: unity small-signal slope, never expanding ──
+for (const drive of [0.1, 0.5, 1]) {
+  const curve = makeFbDriveCurve(drive);
+  // Slope across the two samples straddling zero.
+  const last = curve.length - 1;
+  const i0 = Math.floor(last / 2);
+  const xAt = (i: number) => (i / last) * 2 - 1;
+  const slope = (curve[i0 + 1]! - curve[i0]!) / (xAt(i0 + 1) - xAt(i0));
+  assert(Math.abs(slope - 1) < 0.02, `fb saturator slope ≈ 1 at drive ${drive} (got ${slope.toFixed(3)})`);
+  let expanding = false;
+  for (let i = 0; i < curve.length; i++) {
+    const x = (i / (curve.length - 1)) * 2 - 1;
+    if (Math.abs(curve[i]!) > Math.abs(x) + 1e-6) expanding = true;
+  }
+  assert(!expanding, `fb saturator never expands at drive ${drive} (loop stays stable)`);
+}
 
 // ── Loudness safety ───────────────────────────────────────────────────
 const hot = cloneFirePatch({

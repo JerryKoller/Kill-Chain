@@ -5,6 +5,7 @@
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const WIDTH_C = FC.width;
 export const WIDTH_C_GLOW = bandShade(FC_BAND.mix, 0.92);
@@ -64,7 +65,7 @@ export function WidthMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -90,7 +91,7 @@ export function WidthCharacterStrip() {
   const c = WIDTH_C;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Horizon
       </span>
       {WIDTH_CHARS.map((p) => {
@@ -100,7 +101,7 @@ export function WidthCharacterStrip() {
             key={p.id}
             type="button"
             onClick={() => setParam("stereoWidth", p.w)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -126,7 +127,7 @@ export function WidthSnapStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${WIDTH_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${WIDTH_C}66` }}>
         Snap
       </span>
       {WIDTH_SNAPS.map((p) => {
@@ -136,7 +137,7 @@ export function WidthSnapStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("stereoWidth", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -159,8 +160,6 @@ export function WidthSnapStrip() {
 
 export function WidthQuickActions() {
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["width"] !== false);
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
       <button
@@ -190,19 +189,13 @@ export function WidthQuickActions() {
       >
         Hyper
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("width", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${WIDTH_C}66`, color: WIDTH_C_GLOW, background: `${WIDTH_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass width (force unity)" : "Engage width"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle
+        moduleId="width"
+        color={WIDTH_C}
+        name="Stereo Width"
+        onTextColor={WIDTH_C_GLOW}
+        titleOn="Sleep Stereo Width (forces unity — same as Signal Path Off)"
+      />
     </div>
   );
 }

@@ -6,6 +6,7 @@
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { punchMacroToGlue, type GlueMode } from "@/audio/dsp/mixClarity";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const GLUE_C = FC.glue;
 export const GLUE_C_GLOW = bandShade(FC_BAND.mix, 0.9);
@@ -79,7 +80,7 @@ export function GlueMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -105,7 +106,7 @@ export function GlueCharacterStrip() {
   const c = GLUE_C;
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Anvil
       </span>
       {GLUE_CHARS.map((p) => {
@@ -118,7 +119,7 @@ export function GlueCharacterStrip() {
               setParam("punch", p.punch);
               setParam("glueMode", p.mode);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -144,7 +145,7 @@ export function GlueModeStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${GLUE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GLUE_C}66` }}>
         Mode
       </span>
       {GLUE_MODES.map((p) => {
@@ -154,7 +155,7 @@ export function GlueModeStrip() {
             key={p.id}
             type="button"
             onClick={() => setParam("glueMode", p.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? { borderColor: `${GLUE_C}99`, background: `${GLUE_C}33`, color: GLUE_C_GLOW }
@@ -174,7 +175,7 @@ export function GlueSnapStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${GLUE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GLUE_C}66` }}>
         Snap
       </span>
       {GLUE_SNAPS.map((p) => {
@@ -184,7 +185,7 @@ export function GlueSnapStrip() {
             key={p.label}
             type="button"
             onClick={() => setParam("punch", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold tabular-nums transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
             style={
               on
                 ? {
@@ -207,8 +208,6 @@ export function GlueSnapStrip() {
 
 export function GlueQuickActions() {
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["glue"] !== false);
   return (
     <div className="flex items-center gap-1 flex-wrap justify-end">
       <button
@@ -238,19 +237,7 @@ export function GlueQuickActions() {
       >
         Slam
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("glue", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${GLUE_C}66`, color: GLUE_C_GLOW, background: `${GLUE_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass glue compressor" : "Engage glue"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="glue" color={GLUE_C} name="Bus Glue" onTextColor={GLUE_C_GLOW} />
     </div>
   );
 }

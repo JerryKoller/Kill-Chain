@@ -29,7 +29,7 @@ import { DRUM_LANES, type DrumLane } from "@/audio/dsp/FireDrumKit";
 import { DEFAULT_FIRE_PATCH, cloneFirePatch, makeModMatrix, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { audioUrlForPath } from "@/state/libraryStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
-import { useFireCommandStore, slotsFromState, scheduleSequencerSynthNote, expandSequencerSynthVoices, silenceTransportAudio } from "@/state/fireCommandStore";
+import { useFireCommandStore, slotsFromState, committedFireSlots, scheduleSequencerSynthNote, expandSequencerSynthVoices, silenceTransportAudio } from "@/state/fireCommandStore";
 import {
   type DrumStep,
   type DrumLaneMix,
@@ -1223,31 +1223,62 @@ function syncEnginesToLiveSlots(): void {
   } catch { /* engine / store not ready */ }
 }
 
-/** Stamp live A/B onto the active section so arrangement sound-locks stay current. */
-function stampActiveSectionPatches(get: () => FireSequencerState, set: (p: Partial<FireSequencerState>) => void): void {
-  const s = get();
-  // Still stamp while editing UNIQUE — sound is pattern-level; Cave must not vanish.
-  const sections = s.sections.map((sec) =>
-    sec.id === s.activeSectionId ? withLivePatchSnapshots(sec) : sec,
-  );
-  set({ sections });
+/** Re-stamp the active section, skipping the write when nothing moved. */
+function applyStampToActiveSection(
+  s: Pick<FireSequencerState, "sections" | "activeSectionId">,
+  set: (p: Partial<FireSequencerState>) => void,
+): void {
+  let changed = false;
+  const sections = s.sections.map((sec) => {
+    if (sec.id !== s.activeSectionId) return sec;
+    const next = withLivePatchSnapshots(sec);
+    if (next !== sec) changed = true;
+    return next;
+  });
+  // A no-op stamp must not publish a new sections array — that re-rendered
+  // every roll/grid/arrangement view on each knob tick.
+  if (changed) set({ sections });
 }
 
-/** Debounced public stamp — call after synth knob/preset edits so arrange/export hear Cave etc. */
+/** Stamp live A/B onto the active section so arrangement sound-locks stay current. */
+function stampActiveSectionPatches(get: () => FireSequencerState, set: (p: Partial<FireSequencerState>) => void): void {
+  // Still stamp while editing UNIQUE — sound is pattern-level; Cave must not vanish.
+  applyStampToActiveSection(get(), set);
+}
+
+/** Settle delay for a one-off edit vs. one inside a continuous gesture. */
+const STAMP_SETTLE_MS = 120;
+const STAMP_DRAG_SETTLE_MS = 300;
+/** Same window fireHistory uses to fold a drag into a single undo step. */
+const STAMP_DRAG_WINDOW_MS = 500;
+
 let stampPatchesTimer: ReturnType<typeof setTimeout> | null = null;
-export function stampLivePatchesOntoActiveSection(): void {
+let stampDragKey: string | null = null;
+let stampDragAt = 0;
+
+/**
+ * Debounced public stamp — call after synth knob/preset edits so arrange/export
+ * hear Cave etc. Repeats under the same `dragKey` (one knob, one param) read as
+ * a continuous gesture and settle slower, so a sweep whose pointer stream has
+ * gaps stamps once at the end instead of every 120 ms. Trailing edge only: the
+ * final call of a gesture always schedules a stamp, so the last edit lands.
+ */
+export function stampLivePatchesOntoActiveSection(dragKey?: string): void {
   if (typeof window === "undefined") return;
+  const now = performance.now();
+  const dragging = !!dragKey
+    && dragKey === stampDragKey
+    && now - stampDragAt < STAMP_DRAG_WINDOW_MS;
+  stampDragKey = dragKey ?? null;
+  stampDragAt = now;
   if (stampPatchesTimer) clearTimeout(stampPatchesTimer);
   stampPatchesTimer = setTimeout(() => {
     stampPatchesTimer = null;
+    stampDragKey = null;
     try {
-      const st = useFireSequencerStore.getState();
-      const sections = st.sections.map((sec) =>
-        sec.id === st.activeSectionId ? withLivePatchSnapshots(sec) : sec,
-      );
-      useFireSequencerStore.setState({ sections });
+      applyStampToActiveSection(useFireSequencerStore.getState(), (p) => useFireSequencerStore.setState(p));
     } catch { /* ignore */ }
-  }, 120);
+  }, dragging ? STAMP_DRAG_SETTLE_MS : STAMP_SETTLE_MS);
 }
 
 /** Immediate stamp (export / section switch / mutate) — no debounce. */
@@ -1256,12 +1287,9 @@ export function stampLivePatchesOntoActiveSectionNow(): void {
     clearTimeout(stampPatchesTimer);
     stampPatchesTimer = null;
   }
+  stampDragKey = null;
   try {
-    const st = useFireSequencerStore.getState();
-    const sections = st.sections.map((sec) =>
-      sec.id === st.activeSectionId ? withLivePatchSnapshots(sec) : sec,
-    );
-    useFireSequencerStore.setState({ sections });
+    applyStampToActiveSection(useFireSequencerStore.getState(), (p) => useFireSequencerStore.setState(p));
   } catch { /* ignore */ }
 }
 
@@ -1293,15 +1321,35 @@ function restoreSectionPatches(sec: Section, mode: "store+engine" | "engine" = "
   }
 }
 
+/**
+ * What the last stamp read and what it wrote. Live patches are REPLACED on
+ * every edit (never mutated in place), so a matching source identity plus a
+ * section still holding our own clone proves that slot is already current.
+ * Any other writer of `sec.patchA/B` — undo, project load, sanitize — breaks
+ * the `out` identity and forces a fresh clone.
+ */
+let lastStamp: {
+  secId: string;
+  srcA: FirePatch;
+  srcB: FirePatch;
+  outA: FirePatch;
+  outB: FirePatch;
+} | null = null;
+
 /** Stamp current live patches onto a section (always, per plan). */
 function withLivePatchSnapshots(sec: Section): Section {
   try {
-    const { patchA, patchB } = liveFireSlots();
-    return {
-      ...sec,
-      patchA: structuredClone(patchA),
-      patchB: structuredClone(patchB),
-    };
+    const { patchA, patchB } = committedFireSlots();
+    const memo = lastStamp?.secId === sec.id ? lastStamp : null;
+    // Editing A leaves B's object untouched — cloning both was half wasted
+    // work on every knob tick.
+    const keepA = !!memo && memo.srcA === patchA && sec.patchA === memo.outA;
+    const keepB = !!memo && memo.srcB === patchB && sec.patchB === memo.outB;
+    if (keepA && keepB) return sec;
+    const outA = keepA && sec.patchA ? sec.patchA : structuredClone(patchA);
+    const outB = keepB && sec.patchB ? sec.patchB : structuredClone(patchB);
+    lastStamp = { secId: sec.id, srcA: patchA, srcB: patchB, outA, outB };
+    return { ...sec, patchA: outA, patchB: outB };
   } catch {
     return sec;
   }

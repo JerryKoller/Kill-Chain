@@ -11,6 +11,7 @@ import {
   chordPresetLabel,
   normalizeChordIvs,
 } from "./ChordStageViz";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const CHORD_C = FC.chord;
 export const CHORD_C_GLOW = bandShade(FC_BAND.perf, 0.95);
@@ -38,7 +39,7 @@ export function ChordMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -67,7 +68,7 @@ export function ChordCharacterStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Stack
       </span>
       {CHORD_PRESETS.map((p) => {
@@ -80,7 +81,7 @@ export function ChordCharacterStrip() {
               setParam("chordIntervals", [...p.ivs]);
               if (!on) setParam("chordMemoryOn", true);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               hit
                 ? {
@@ -116,11 +117,11 @@ export function ChordDegreeStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${CHORD_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${CHORD_C}66` }}>
         Deg
       </span>
       <span
-        className="rounded-md border px-2 py-0.5 text-[9px] font-bold"
+        className="rounded-md border px-2 py-0.5 text-[9px] font-black"
         style={{
           borderColor: `${CHORD_C_ROOT}99`,
           background: `${CHORD_C_ROOT}28`,
@@ -162,9 +163,7 @@ export function ChordQuickActions() {
   const on = useFireCommandStore((s) => s.patch.chordMemoryOn);
   const chordMode = useFireCommandStore((s) => s.patch.chordMode) ?? "memory";
   const ivs = useFireCommandStore((s) => s.patch.chordIntervals);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["chord"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
   const learnChordFromHeld = useFireCommandStore((s) => s.learnChordFromHeld);
   const cur = normalizeChordIvs(ivs);
 
@@ -282,19 +281,7 @@ export function ChordQuickActions() {
       >
         {on ? "Armed" : "Idle"}
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("chord", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${CHORD_C}66`, color: CHORD_C_GLOW, background: `${CHORD_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass chord module" : "Engage chord"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="chord" color={CHORD_C} name="Chord Memory" onTextColor={CHORD_C_GLOW} />
     </div>
   );
 }

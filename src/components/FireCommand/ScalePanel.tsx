@@ -7,6 +7,7 @@ import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireSequencerStore, NOTE_NAMES, SCALES, type ScaleId } from "@/state/fireSequencerStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { SCALE_CYCLE, scaleMeta } from "./ScaleStageViz";
+import { ModuleEnableToggle } from "./ModuleEnableToggle";
 
 export const SCALE_C = FC.scale;
 export const SCALE_C_GLOW = bandShade(FC_BAND.perf, 0.94);
@@ -46,7 +47,7 @@ export function ScaleMeter({
   const t = Math.max(0, Math.min(1, value));
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[3.1rem]" title={`${label} ${format()}`}>
-      <div className="text-[7px] font-black uppercase tracking-wider" style={{ color: `${color}aa` }}>
+      <div className="fc-text-floor font-black uppercase tracking-[0.06em]" style={{ color: `${color}aa` }}>
         {label}
       </div>
       <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/50 border border-white/10">
@@ -77,7 +78,7 @@ export function ScaleCharacterStrip() {
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
         Key
       </span>
       {SCALE_CHARS.map((p) => {
@@ -91,7 +92,7 @@ export function ScaleCharacterStrip() {
               setScaleId(p.scaleId);
               setParam("scaleLock", p.lock);
             }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -117,7 +118,7 @@ export function ScaleRootStrip() {
   const setScaleRoot = useFireSequencerStore((s) => s.setScaleRoot);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
         Root
       </span>
       {NOTE_NAMES.map((name, i) => {
@@ -152,7 +153,7 @@ export function ScaleModeStrip() {
   const setScaleId = useFireSequencerStore((s) => s.setScaleId);
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C}66` }}>
+      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
         Mode
       </span>
       {SCALES.map((m) => {
@@ -170,7 +171,7 @@ export function ScaleModeStrip() {
             key={m.id}
             type="button"
             onClick={() => setScaleId(m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-bold transition"
+            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
             style={
               on
                 ? {
@@ -193,11 +194,9 @@ export function ScaleModeStrip() {
 
 export function ScaleQuickActions() {
   const lock = useFireCommandStore((s) => s.patch.scaleLock);
-  const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["scale"] !== false);
   const scaleId = useFireSequencerStore((s) => s.scaleId);
   const root = useFireSequencerStore((s) => s.scaleRoot);
   const setParam = useFireCommandStore((s) => s.setParam);
-  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
   const setScaleRoot = useFireSequencerStore((s) => s.setScaleRoot);
   const setScaleId = useFireSequencerStore((s) => s.setScaleId);
   const detectAndApplyKey = useFireSequencerStore((s) => s.detectAndApplyKey);
@@ -275,19 +274,7 @@ export function ScaleQuickActions() {
       >
         {lock ? "Lock" : "Open"}
       </button>
-      <button
-        type="button"
-        onClick={() => setModuleEnable("scale", !enabled)}
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-        style={
-          enabled
-            ? { borderColor: `${SCALE_C}66`, color: SCALE_C_GLOW, background: `${SCALE_C}22` }
-            : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
-        }
-        title={enabled ? "Bypass scale module" : "Engage scale"}
-      >
-        {enabled ? "On" : "Asleep"}
-      </button>
+      <ModuleEnableToggle moduleId="scale" color={SCALE_C} name="Scale Lock" onTextColor={SCALE_C_GLOW} />
     </div>
   );
 }
@@ -310,7 +297,7 @@ export function ScaleCorrectStrip() {
   return (
     <div className="mb-2 flex flex-col items-center gap-1.5">
       <div className="flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C}66` }}>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
           Correct
         </span>
         {modes.map((m) => {
@@ -323,7 +310,7 @@ export function ScaleCorrectStrip() {
                 setParam("scaleMode", m.id);
                 setParam("scaleLock", m.id !== "guide");
               }}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+              className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
               style={
                 on
                   ? { borderColor: `${SCALE_C_LOCK}99`, background: `${SCALE_C_LOCK}28`, color: SCALE_C_GLOW }
@@ -337,7 +324,7 @@ export function ScaleCorrectStrip() {
         })}
       </div>
       <div className="flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-wider" style={{ color: `${SCALE_C}66` }}>
+        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
           Followers
         </span>
         {([
@@ -352,7 +339,7 @@ export function ScaleCorrectStrip() {
               key={k}
               type="button"
               onClick={() => setParam("scaleFollowers", { ...followers, [k]: !on })}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition"
+              className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
               style={
                 on
                   ? { borderColor: `${SCALE_C}88`, background: `${SCALE_C}22`, color: SCALE_C_GLOW }
