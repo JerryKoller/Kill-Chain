@@ -29,7 +29,6 @@ import { adsrToModEnvPoints, normalizeModEnvPoints } from "@/audio/dsp/toneDiffe
 import { upsertLfoQuickRoute, inferLfoDestFromMatrix } from "@/audio/dsp/modRouting";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
-import { CHARACTER_LINKED_PRESETS } from "@/audio/dsp/fireCharacters";
 import { applyLoudnessSafety, applyModuleLocks, applyNsSafety, applyPerformanceSafety, lockedModuleCount } from "@/lib/fireModuleLocks";
 import { useUIStore } from "@/state/uiStore";
 
@@ -325,8 +324,7 @@ function startArpScheduler(
 }
 
 // ════════════════════ presets ════════════════════
-// The factory bank lives in firePresetBank.ts: ~20 hand-tuned flagships below
-// plus ~500 seeded-deterministic archetype variations generated at load.
+// Factory bank: Init flagship + 220 curated presets (20 × 11 categories).
 
 export { PRESET_CATEGORIES } from "@/audio/dsp/firePresetBank";
 export type { PresetCategory, FirePreset } from "@/audio/dsp/firePresetBank";
@@ -351,11 +349,10 @@ const FLAGSHIP_PRESETS: FirePreset[] = [
   },
 ];
 
-/** Factory bank: Init + remastered curated library + Genesis character presets. */
+/** Factory bank: Init + curated library. */
 export const FIRE_PRESETS: FirePreset[] = [
   ...FLAGSHIP_PRESETS,
   ...GENERATED_PRESETS,
-  ...CHARACTER_LINKED_PRESETS,
 ];
 
 // Fast lookup for loadPreset — linear scans over 500 entries add up.
@@ -944,11 +941,11 @@ export interface MutationRound {
 
 // ════════════════════ persistence ════════════════════
 
-const STORAGE_KEY = "killchain.firecommand.v5";
-// Pre-rebrand key. Read once as a fallback so dialed-in patches and saved
-// user presets survive the Pulse-Fire → Kill-Chain rename; the next persist
-// writes everything back under STORAGE_KEY.
-const LEGACY_STORAGE_KEY = "pulsefire.firecommand.v5";
+const STORAGE_KEY = "killchain.firecommand.v6";
+// Pre-rebrand / pre-clean-slate keys. Read once as a fallback so dialed-in
+// user presets survive upgrades; dirty factory session state is not restored.
+const LEGACY_STORAGE_KEY = "killchain.firecommand.v5";
+const LEGACY_STORAGE_KEY_PULSE = "pulsefire.firecommand.v5";
 // Cap the user preset library — unbounded growth eventually trips the
 // localStorage quota, and a failed persist drops ALL Fire state at once.
 const MAX_USER_PRESETS = 128;
@@ -1106,8 +1103,8 @@ function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
 }
 
 function defaultPatchB(): FirePatch {
-  const preset = FIRE_PRESETS.find((p) => p.id === "hyperspace") ?? FIRE_PRESETS[0];
-  return normalizePatch(preset?.patch ?? {});
+  // Fresh install: both voices start at Init — no factory pad humming under B.
+  return normalizePatch({});
 }
 
 interface PersistShape {
@@ -1180,7 +1177,7 @@ function defaults(): PersistShape {
     patchB,
     octave: 4,
     presetId: "init",
-    presetIdB: "hyperspace",
+    presetIdB: "init",
     editTarget: "a",
     routeThroughFx: true,
     arp: { ...DEFAULT_ARP },
@@ -1244,8 +1241,23 @@ function warnStorageQuota(): void {
 function load(): PersistShape {
   if (typeof window === "undefined") return defaults();
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!raw) return defaults();
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      // Clean slate for live session — only carry forward user-saved presets.
+      const d = defaults();
+      const legacyRaw =
+        window.localStorage.getItem(LEGACY_STORAGE_KEY)
+        ?? window.localStorage.getItem(LEGACY_STORAGE_KEY_PULSE);
+      if (legacyRaw) {
+        try {
+          const legacy = JSON.parse(legacyRaw) as Partial<PersistShape>;
+          if (Array.isArray(legacy.userPresets) && legacy.userPresets.length) {
+            d.userPresets = legacy.userPresets.slice(0, MAX_USER_PRESETS);
+          }
+        } catch { /* ignore corrupt legacy */ }
+      }
+      return d;
+    }
     const parsed = JSON.parse(raw) as Partial<PersistShape> & {
       patch?: Partial<FirePatch>;
       /** Legacy — migrated to keyboardMode on load. */
@@ -2011,7 +2023,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         patchA,
         patchB,
         presetId: "init",
-        presetIdB: "hyperspace",
+        presetIdB: "init",
         editTarget: "a",
         octave: 4,
         routeThroughFx: true,
@@ -2981,7 +2993,7 @@ registerFireHistoryProvider("fireCommand", {
       patchB,
       arp: raw.arp ? { ...DEFAULT_ARP, ...raw.arp } : { ...DEFAULT_ARP },
       presetId: raw.presetId ?? "init",
-      presetIdB: typeof raw.presetIdB === "string" ? raw.presetIdB : "hyperspace",
+      presetIdB: typeof raw.presetIdB === "string" ? raw.presetIdB : "init",
       editTarget,
       // Keep the live user bank — history never owned it.
       maxVoices: typeof raw.maxVoices === "number" ? raw.maxVoices : 12,

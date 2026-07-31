@@ -889,7 +889,7 @@ function starterNotes(): RollNote[] {
  * filter, FX bus) voiced by any preset from the armory; piano-roll notes
  * carry a channel so the two instruments can play different parts at once.
  */
-export const DEFAULT_SYNTH_B_PRESET = "hyperspace";
+export const DEFAULT_SYNTH_B_PRESET = "init";
 
 /** Push the committed Synth B patch from fireCommandStore into the engine. */
 export function syncSynthBEngine(): void {
@@ -918,7 +918,7 @@ function applySynthBPreset(presetId: string): void {
 
 // ── persistence ──
 
-const STORAGE_KEY = "killchain.firesequencer.v1";
+const STORAGE_KEY = "killchain.firesequencer.v2";
 
 interface PersistShape {
   bpm: number;
@@ -1062,7 +1062,8 @@ function blankSection(): Section {
 }
 
 function defaults(): PersistShape {
-  const sec = starterSection();
+  // Blank slate — no starter riff/drums. Play should be silent until the user writes.
+  const sec = blankSection();
   return {
     bpm: 128,
     swing: 0,
@@ -1076,7 +1077,7 @@ function defaults(): PersistShape {
     synthBPresetId: DEFAULT_SYNTH_B_PRESET,
     activeChannel: 0,
     collapsed: false,
-    scaleRoot: 9, // A — the starter riff is A minor
+    scaleRoot: 0, // C
     scaleId: "off",
     scaleSnap: true,
     drumSamples: {},
@@ -1450,7 +1451,7 @@ function load(): PersistShape & ActiveMirror {
         .slice(0, MAX_SECTIONS)
         .map((s, i) => sanitizeSection(s, String.fromCharCode(65 + i)))
         .filter((s): s is Section => s !== null);
-      if (sections.length === 0) sections = [starterSection()];
+      if (sections.length === 0) sections = [blankSection()];
       activeSectionId = sections.some((s) => s.id === p.activeSectionId)
         ? (p.activeSectionId as string)
         : sections[0].id;

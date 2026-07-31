@@ -170,7 +170,7 @@ const DEFAULTS: Omit<SettingsState, "set" | "toggle"> = {
   tooltipsEnabled: true,
   uiSounds: true,
   uiSoundVolume: 0.5,
-  bootSound: true,
+  bootSound: false,
   forceReducedMotion: false,
   bgFx: true,
   moduleColor: true,

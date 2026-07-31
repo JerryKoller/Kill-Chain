@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.2.1";
+export const APP_VERSION = "3.4.0";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -15,31 +15,15 @@ export const PRODUCT_BOOT_SUBTITLE = "Play & reshape audio";
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Retail first-run",
-    body: "Legal agree gate, a 7-step basic tour (Library → Sculptor → Tractor → Armory), and Kill-Chain backup for Settings + Library + Mission Log.",
+    title: "Clean first launch",
+    body: "Fresh installs start silent — Init patches only, empty sequencer, blank Airspace (no preset hum, no YouTube), and boot sound off by default.",
   },
   {
-    title: "Retail help & updates",
-    body: "Settings → Appearance has a First 60 seconds card; About explains manual updates and where to download new installers.",
+    title: "New Fire Command factory library",
+    body: "All old factory presets wiped. 220 newly curated patches (20 × 11 categories) authored for the current synth — absolute Q, ladder/SVF, ops4 FM, warp, LPG, chip duty.",
   },
   {
-    title: "Library repair",
-    body: "Missing-file badges, prune orphans, Reveal in Explorer, and clearer playback errors when a track was moved.",
-  },
-  {
-    title: "Fire Command stability audit",
-    body: "Live keys follow Edit A/B, morph/scene scrub no longer corrupts patches, FX knobs update the bus live, and project open while editing B loads A correctly.",
-  },
-  {
-    title: "Sequencer ↔ synth bridge",
-    body: "Harmony/chord expansions for A and B, per-channel humanize, delay sync tracks BPM, offline bounce matches live expansions (ARP stays live-only).",
-  },
-  {
-    title: "Meters & MIDI",
-    body: "StageViz and tone meters follow the active synth; MIDI Focus no longer steals Learn/mapped CCs; Scale Strict rejects no longer record into the roll.",
-  },
-  {
-    title: "Projects v3",
-    body: ".kcproj now saves edit target, presets, FX route, scenes, octave, and voice count — and restores them on open.",
+    title: "Session storage bump",
+    body: "Fire Command, Sequencer, and Airspace use new storage keys so dirty v3.3 sessions do not reopen humming or mid-stream.",
   },
 ];

@@ -28,7 +28,8 @@ const DEFAULT_BOOKMARKS: AirspaceBookmark[] = [
   { id: "twitch", label: "Twitch", url: "https://www.twitch.tv" },
 ];
 
-const DEFAULT_URL = "https://www.youtube.com";
+/** Fresh install opens blank — no autoplaying YouTube homepage audio. */
+const DEFAULT_URL = "about:blank";
 
 interface AirspaceState {
   /** Last URL the webview navigated to — restored on next launch. */
@@ -57,7 +58,7 @@ interface AirspaceState {
   setMedia: (m: AirspaceMediaSnapshot | null) => void;
 }
 
-const STORAGE_KEY = "audio-playground.airspace.v1";
+const STORAGE_KEY = "audio-playground.airspace.v2";
 
 /** Bumped when the option set / defaults change — stale airOpts reset once. */
 const AIR_OPTS_REV = 2;
@@ -76,7 +77,7 @@ function load(): PersistedShape {
   const fallback: PersistedShape = {
     lastUrl: DEFAULT_URL,
     bookmarks: DEFAULT_BOOKMARKS,
-    pip: true,
+    pip: false,
     adblock: true,
     airMode: "off",
     airOpts: defaultAirOpts(),
@@ -89,7 +90,8 @@ function load(): PersistedShape {
     const parsed = JSON.parse(raw) as Partial<PersistedShape>;
     return {
       lastUrl:
-        typeof parsed.lastUrl === "string" && /^https?:\/\//i.test(parsed.lastUrl)
+        typeof parsed.lastUrl === "string" &&
+        (parsed.lastUrl === "about:blank" || /^https?:\/\//i.test(parsed.lastUrl))
           ? parsed.lastUrl
           : DEFAULT_URL,
       bookmarks: Array.isArray(parsed.bookmarks) && parsed.bookmarks.length > 0
@@ -99,7 +101,7 @@ function load(): PersistedShape {
               typeof b.url === "string" && /^https?:\/\//i.test(b.url),
           )
         : DEFAULT_BOOKMARKS,
-      pip: parsed.pip !== false,
+      pip: parsed.pip === true,
       adblock: parsed.adblock !== false,
       airMode:
         parsed.airMode === "cinema" || parsed.airMode === "music"
@@ -145,7 +147,7 @@ export const useAirspaceStore = create<AirspaceState>((set, get) => {
     media: null,
 
     setLastUrl: (url) => {
-      if (!/^https?:\/\//i.test(url)) return;
+      if (url !== "about:blank" && !/^https?:\/\//i.test(url)) return;
       set({ lastUrl: url });
       schedulePersist({ ...snapshot(), lastUrl: url });
     },
