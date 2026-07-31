@@ -2,6 +2,16 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.4.0] — 2026-07-31 — Clean Install + Fire Command Factory Rebuild
+
+### Changed
+- **Clean first launch** — fresh installs start silent: Init on both synth voices, empty sequencer, blank Airspace (`about:blank`), boot sound off
+- **Factory presets wiped and rebuilt** — 220 new hand-authored presets (20 × 11 categories: Bass, Lead, Pluck, Pad, Keys, Arp, FX, Atmos, Vintage, Chip, FM) for the current synth (absolute Q, ladder/SVF, ops4, warp, LPG)
+- Storage keys bumped (Fire Command v6, Sequencer v2, Airspace v2) so dirty older sessions do not reopen humming or mid-stream; user-saved presets still migrate
+
+### Removed
+- Legacy Vol.2 curated bank and character-mirror factory entries from the default library
+
 ## [3.3.0] — 2026-07-31 — Fire Command Sound Character Restored
 
 ### Fixed

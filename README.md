@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.3.0-c41e3a?style=flat-square" alt="Version 3.3.0" />
+  <img src="https://img.shields.io/badge/version-3.4.0-c41e3a?style=flat-square" alt="Version 3.4.0" />
   <img src="https://img.shields.io/badge/platform-Windows%2064--bit-1e2430?style=flat-square" alt="Windows 64-bit" />
   <img src="https://img.shields.io/badge/license-Proprietary-8b95a8?style=flat-square" alt="Proprietary license" />
 </p>
@@ -26,16 +26,16 @@
 
 ## Download
 
-**[⬇ Download Kill-Chain-Setup-3.3.0.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.3.0.exe)**
+**[⬇ Download Kill-Chain-Setup-3.4.0.exe](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.4.0.exe)**
 
 | | |
 |---|---|
-| **Version** | 3.3.0 |
-| **File** | `Kill-Chain-Setup-3.3.0.exe` |
-| **Size** | ~80 MB |
+| **Version** | 3.4.0 |
+| **File** | `Kill-Chain-Setup-3.4.0.exe` |
+| **Size** | ~79 MB |
 | **Platform** | Windows 10/11 (64-bit) |
 
-<sub>Previous releases: [3.2.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.2.1.exe) · [3.2.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.2.0.exe) · [3.1.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.1.0.exe) · [3.0.13](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.13.exe) · [3.0.12](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.12.exe) · [3.0.11](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.11.exe) · [3.0.10](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.10.exe) · [3.0.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.9.exe) · [3.0.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.8.exe) · [3.0.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.4.exe) · [3.0.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.3.exe) · [3.0.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.2.exe) · [3.0.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.1.exe) · [3.0.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.0.exe) · [2.6.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.1.exe) · [2.6.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.0.exe) · [2.5.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.9.exe) · [2.5.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.8.exe) · [2.5.7](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.7.exe) · [2.5.6](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.6.exe) · [2.5.5](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.5.exe) · [2.5.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.4.exe) · [2.5.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.3.exe) · [2.5.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.2.exe) · [2.5.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.1.exe) · [2.5.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.0.exe) · [2.4.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.1.exe) · [2.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.0.exe) · [1.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-1.4.0.exe)</sub>
+<sub>Previous releases: [3.3.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.3.0.exe) · [3.2.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.2.1.exe) · [3.2.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.2.0.exe) · [3.1.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.1.0.exe) · [3.0.13](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.13.exe) · [3.0.12](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.12.exe) · [3.0.11](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.11.exe) · [3.0.10](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.10.exe) · [3.0.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.9.exe) · [3.0.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.8.exe) · [3.0.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.4.exe) · [3.0.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.3.exe) · [3.0.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.2.exe) · [3.0.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.1.exe) · [3.0.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-3.0.0.exe) · [2.6.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.1.exe) · [2.6.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.6.0.exe) · [2.5.9](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.9.exe) · [2.5.8](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.8.exe) · [2.5.7](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.7.exe) · [2.5.6](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.6.exe) · [2.5.5](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.5.exe) · [2.5.4](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.4.exe) · [2.5.3](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.3.exe) · [2.5.2](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.2.exe) · [2.5.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.1.exe) · [2.5.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.5.0.exe) · [2.4.1](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.1.exe) · [2.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-2.4.0.exe) · [1.4.0](https://github.com/JerryKoller/Kill-Chain/raw/main/Kill-Chain-Setup-1.4.0.exe)</sub>
 
 You can also use the [download page](https://jerrykoller.github.io/Kill-Chain/) if GitHub Pages is enabled on this repo.
 
@@ -44,8 +44,12 @@ You can also use the [download page](https://jerrykoller.github.io/Kill-Chain/) 
 ## Install
 
 1. Download the installer above.
-2. Run `Kill-Chain-Setup-3.3.0.exe` and follow the setup wizard.
+2. Run `Kill-Chain-Setup-3.4.0.exe` and follow the setup wizard.
 3. Launch **Kill Chain** from the Start menu or desktop shortcut.
+
+### Fresh install
+
+A new install boots **completely quiet**: Init patches only (no humming preset), empty sequencer, blank Airspace (no YouTube), and boot sound off. Your own saved presets still migrate if you upgrade.
 
 ### Windows security notice
 
@@ -62,7 +66,7 @@ Because Kill Chain is distributed outside the Microsoft Store, Windows may show 
 | **Calibration** | Hearing test, pure-tone calibration, headphone profiles, and **Deadflat** flattening |
 | **Tractor Beam** | Full Chain Lock console — spectral analysis, health-guarded correction manifests, a searchable **Lock Library**, and hands-free **Auto-Lock** |
 | **3rd Dimension** | 6DOF spatializer — Walk Mode, mission profiles, and optional opentrack head tracking |
-| **Fire Command** | MK IV wavetable weapons platform — 1000 presets, Natural Selection mutate, 12-slot mod matrix, drum machine, piano roll, arrangement, mixer, automation lanes, MIDI record, stem export |
+| **Fire Command** | Full production studio — 220 curated factory presets, Natural Selection, mod matrix, drum machine, piano roll, arrangement, mixer, automation, MIDI, stem export |
 | **Airspace** | In-app browser with route-through-chain playback and per-source memory |
 | **Mission Log** | Per-source memory — every track and stream gets its chain back automatically |
 | **Scope** | High-resolution real-time spectrum and analysis |
@@ -85,7 +89,7 @@ Open the in-app **Glossary** for definitions of every term and module.
 
 See **[CHANGELOG.md](CHANGELOG.md)** for full release notes.
 
-**v3.3.0 highlights:** Fire Command sound character restored — remastered factory presets (real filter Q), wild coherent Natural Selection, richer timbre headroom, sequencer/piano-roll clipping fixes, Genesis character presets back in the library.
+**v3.4.0 highlights:** Fire Command sound character restored — remastered factory presets (real filter Q), wild coherent Natural Selection, richer timbre headroom, sequencer/piano-roll clipping fixes, Genesis character presets back in the library.
 
 **v3.2.1 highlights:** Fire Command stability audit — live A/B routing, morph/scene scrub fixes, live FX knobs, safer project open, sequencer↔synth bridge, MIDI Focus vs Learn, richer `.kcproj`.
 
