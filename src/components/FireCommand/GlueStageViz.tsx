@@ -1,13 +1,39 @@
 /**
  * Glue — Press Anvil stage visualizer.
+ *
+ * IDIOM: the gain reduction trace. A chart recorder running left→right as time,
+ * which is the shape a compressor actually has. The dim trace is the programme
+ * going in, the bright trace is what comes out, and the shaded gap between them
+ * IS the gain reduction. The threshold is a line the programme crosses; the knee
+ * is the soft band around it. Attack and release are not captions — the envelope
+ * follower is simulated across the window, so a fast attack visibly snaps the
+ * gap open and a long release visibly holds it.
+ *
  * Bus DynamicsCompressor via punch (Signal Path Mix · FC.glue).
  * Drag ↕/↔: Punch. Double-click: cycle Off → Soft → Bus → Crush → Slam.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import type { GlueMode } from "@/audio/dsp/mixClarity";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 172;
 const C = FC.glue;
@@ -21,14 +47,30 @@ const C_MK = bandShade(FC_BAND.mix, 0.84);
 
 const PUNCH_CYCLE = [0, 0.25, 0.45, 0.7, 1] as const;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Chart window — 2.4 s of programme across the panel. */
+const WINDOW_MS = 2400;
+/** dB window: headroom above 0 so makeup gain is visible. */
+const DB_TOP = 6;
+const DB_BOT = -48;
+const DB_RANGE = DB_TOP - DB_BOT;
+
+const MAX_STEPS = 512;
+/** Scratch traces — fully rewritten each paint, so never stale. */
+const IN_DB = new Float32Array(MAX_STEPS + 1);
+const OUT_DB = new Float32Array(MAX_STEPS + 1);
+const GR_DB = new Float32Array(MAX_STEPS + 1);
+
+/** Mirrors the engine's punch→glue macro so displayed ballistics are honest. */
+const MODE_BALLISTICS: Record<GlueMode, { atk: number; rel: number; knee: number }> = {
+  soft: { atk: 0.012, rel: 0.28, knee: 12 },
+  glue: { atk: 0.008, rel: 0.18, knee: 6 },
+  bus: { atk: 0.006, rel: 0.14, knee: 4 },
+  punch: { atk: 0.018, rel: 0.12, knee: 3 },
+  slam: { atk: 0.0015, rel: 0.06, knee: 0 },
+};
+
+/** Modes hashed as ordinals so `motionHash` stays numeric. */
+const MODE_IDX: Record<GlueMode, number> = { soft: 0, glue: 1, bus: 2, punch: 3, slam: 4 };
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
@@ -53,64 +95,367 @@ function glueMetrics(punch: number) {
   };
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** Deterministic scatter — the programme is a fixed pattern, not noise. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/**
+ * Deterministic programme level in dB at an absolute time. A ~125 BPM pattern
+ * with accented downbeats — enough transient shape that attack and release
+ * differences are obvious on the trace.
+ */
+function progDb(tms: number): number {
+  const beat = tms / 480;
+  const idx = Math.floor(beat);
+  const ph = beat - idx;
+  const h = hash01(idx * 1.7);
+  const h2 = hash01(idx * 3.3 + 11);
+  const accent = (idx & 3) === 0 ? 1 : 0.6 + h * 0.32;
+  const env = Math.exp(-ph * (2.1 + h2 * 3.6));
+  const bed = 0.15 + h2 * 0.09;
+  return DB_BOT + Math.min(1, bed + env * accent) * -DB_BOT;
+}
+
+/** Soft-knee gain computer — returns reduction in dB (≥ 0). */
+function grFor(inDb: number, thr: number, ratio: number, knee: number): number {
+  const slope = 1 - 1 / Math.max(1, ratio);
+  const over = inDb - thr;
+  if (knee <= 0.01) return over > 0 ? over * slope : 0;
+  const half = knee * 0.5;
+  if (over <= -half) return 0;
+  if (over >= half) return over * slope;
+  const t = over + half;
+  return (slope * t * t) / (2 * knee);
+}
+
+export type GlueVizState = {
+  punch: number;
+  enabled: boolean;
+  mode: GlueMode;
+  useAdvanced: boolean;
+  threshold: number;
+  ratio: number;
+  attack: number;
+  release: number;
+  knee: number;
+  makeup: number;
+  mix: number;
+};
+
+/**
+ * Paint the gain reduction trace. Exported and pure: the compressor envelope is
+ * simulated forward across the window from `now`, so the same inputs always draw
+ * the same frame.
+ */
+export function paintGlue(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: GlueVizState,
+  now: number,
+  flash: number,
+): void {
+  const on = p.enabled;
+  const punch = on ? clamp(p.punch, 0, 1) : 0;
+  const macro = glueMetrics(punch);
+  const ball = MODE_BALLISTICS[p.mode] ?? MODE_BALLISTICS.glue;
+  const adv = p.useAdvanced;
+
+  const thr = adv ? clamp(p.threshold, -60, 0) : macro.threshDb;
+  const ratio = adv ? clamp(p.ratio, 1, 20) : macro.ratio;
+  const atkMs = (adv ? clamp(p.attack, 0.001, 0.1) : ball.atk) * 1000;
+  const relMs = (adv ? clamp(p.release, 0.02, 1) : ball.rel) * 1000;
+  const knee = adv ? clamp(p.knee, 0, 40) : ball.knee;
+  const makeupLin = adv ? clamp(p.makeup, 0.5, 4) : 1 + punch * 0.3;
+  const makeupDb = 20 * Math.log10(makeupLin);
+  const mix = on ? clamp(p.mix, 0, 1) : 0;
+
+  const energy = 0.08 + punch * 0.4 + flash * 0.2;
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.46 });
+
+  // Geometry: dB up, time right, with a reduction ribbon slung underneath.
+  const padL = 40;
+  const padR = 58;
+  const span = Math.max(60, W - padL - padR);
+  const plotTop = 26;
+  const plotH = 82;
+  const plotBot = plotTop + plotH;
+  const ribTop = plotBot + 5;
+  const ribH = 16;
+  const railY = Hh - 26;
+  const dbY = (db: number) => plotTop + ((DB_TOP - clamp(db, DB_BOT, DB_TOP)) / DB_RANGE) * plotH;
+
+  // ── dB grid ──
+  ctx.font = VIZ_FONT_LABEL;
+  for (let db = DB_TOP; db >= DB_BOT; db -= 6) {
+    const y = dbY(db);
+    const major = db % 12 === 0;
+    ctx.fillStyle = hexA(db === 0 ? C_GLOW : C_MID, db === 0 ? 0.2 : major ? 0.1 : 0.05);
+    ctx.fillRect(padL, y, span, 1);
+    if (major) {
+      ctx.textAlign = "right";
+      ctx.fillStyle = hexA(C_MID, 0.42);
+      ctx.fillText(db === 0 ? "0" : String(db), padL - 5, y + 3);
+    }
+  }
+  // Time ruler — 400 ms divisions.
+  for (let i = 0; i <= 6; i++) {
+    const x = padL + (i / 6) * span;
+    ctx.fillStyle = hexA(C_MID, 0.07);
+    ctx.fillRect(x, plotTop, 1, plotH);
+  }
+
+  // ── knee band + threshold ──
+  if (knee > 0.2) {
+    const kTop = dbY(thr + knee * 0.5);
+    const kBot = dbY(thr - knee * 0.5);
+    const kg = cachedGrad(ctx, `knee|${kTop | 0}|${kBot | 0}`, (c) => {
+      const g = c.createLinearGradient(0, kTop, 0, kBot);
+      g.addColorStop(0, hexA(C_GR, 0));
+      g.addColorStop(0.5, hexA(C_GR, 0.18));
+      g.addColorStop(1, hexA(C_GR, 0));
+      return g;
+    });
+    ctx.fillStyle = kg;
+    ctx.fillRect(padL, kTop, span, kBot - kTop);
+  }
+  const thrY = dbY(thr);
+  ctx.strokeStyle = hexA(C_MK, 0.6 + flash * 0.25);
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.moveTo(padL, thrY);
+  ctx.lineTo(padL + span, thrY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MK, 0.78);
+  ctx.fillText(`THR ${thr.toFixed(0)} dB`, padL + span + 5, thrY + 3);
+
+  // ── simulate the compressor across the window ──
+  const steps = Math.round(clamp(span / 4, 96, MAX_STEPS));
+  const dt = WINDOW_MS / steps;
+  const aAtk = 1 - Math.exp(-dt / Math.max(0.5, atkMs));
+  const aRel = 1 - Math.exp(-dt / Math.max(1, relMs));
+  const warm = steps >> 2;
+  let env = 0;
+  let grNow = 0;
+  let grPeak = 0;
+  for (let i = -warm; i <= steps; i++) {
+    const tms = now - WINDOW_MS + (i / steps) * WINDOW_MS;
+    const inDb = progDb(tms);
+    const target = grFor(inDb, thr, ratio, knee);
+    env += (target - env) * (target > env ? aAtk : aRel);
+    if (i < 0) continue;
+    const linIn = Math.pow(10, inDb / 20);
+    const linWet = Math.pow(10, (inDb - env) / 20);
+    const linOut = ((1 - mix) * linIn + mix * linWet) * makeupLin;
+    IN_DB[i] = inDb;
+    OUT_DB[i] = 20 * Math.log10(Math.max(1e-6, linOut));
+    GR_DB[i] = env;
+    if (env > grPeak) grPeak = env;
+    grNow = env;
+  }
+
+  const traceIn = () => {
+    for (let i = 0; i <= steps; i++) {
+      const x = padL + (i / steps) * span;
+      const y = dbY(IN_DB[i]!);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  };
+  const traceOut = () => {
+    for (let i = 0; i <= steps; i++) {
+      const x = padL + (i / steps) * span;
+      const y = dbY(OUT_DB[i]!);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  };
+
+  // ── the reduction gap: what the compressor took away ──
+  ctx.beginPath();
+  traceIn();
+  for (let i = steps; i >= 0; i--) {
+    ctx.lineTo(padL + (i / steps) * span, dbY(OUT_DB[i]!));
+  }
+  ctx.closePath();
+  const gap = cachedGrad(ctx, `gap|${plotTop}|${plotH}|${(punch * 20) | 0}`, (c) => {
+    const g = c.createLinearGradient(0, plotTop, 0, plotBot);
+    g.addColorStop(0, hexA(C_GR, 0.42));
+    g.addColorStop(0.6, hexA(C_HOT, 0.2));
+    g.addColorStop(1, hexA(C_DEEP, 0.06));
+    return g;
+  });
+  ctx.fillStyle = gap;
+  ctx.fill();
+
+  // Input trace stays quiet — it is the reference, not the subject.
+  ctx.strokeStyle = hexA(C_MID, 0.5);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  traceIn();
+  ctx.stroke();
+
+  // Output trace is the instrument reading.
+  glowStroke(ctx, traceOut, C_GLOW, { width: 1.8 + punch * 0.8, glow: 1, alpha: 0.9 });
+
+  // The live edge — where "now" is.
+  lit(ctx, () => {
+    const ny = dbY(OUT_DB[steps]!);
+    drawGlow(ctx, padL + span, ny, 12 + punch * 10 + flash * 8, C_GLOW, 0.7);
+  });
+
+  // ── reduction ribbon ──
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(padL, ribTop, span, ribH);
+  const GR_FULL = 24;
+  ctx.beginPath();
+  ctx.moveTo(padL, ribTop);
+  for (let i = 0; i <= steps; i++) {
+    const x = padL + (i / steps) * span;
+    ctx.lineTo(x, ribTop + Math.min(1, GR_DB[i]! / GR_FULL) * ribH);
+  }
+  ctx.lineTo(padL + span, ribTop);
+  ctx.closePath();
+  const rg = cachedGrad(ctx, `rib|${ribTop}|${ribH}`, (c) => {
+    const g = c.createLinearGradient(0, ribTop, 0, ribTop + ribH);
+    g.addColorStop(0, hexA(C_GR, 0.85));
+    g.addColorStop(1, hexA(C_VU, 0.28));
+    return g;
+  });
+  ctx.fillStyle = rg;
+  ctx.fill();
+  ctx.fillStyle = hexA(C_MID, 0.22);
+  ctx.fillRect(padL, ribTop, span, 1);
+
+  // Attack / release drawn to the ribbon's own time scale — the numbers become
+  // lengths you can compare against how fast the gap actually moved.
+  const msPx = span / WINDOW_MS;
+  const bracket = (x0: number, len: number, col: string, text: string) => {
+    const w = Math.max(3, len * msPx);
+    const y = ribTop + ribH + 7;
+    ctx.strokeStyle = hexA(col, 0.7);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x0, y - 3);
+    ctx.lineTo(x0, y);
+    ctx.lineTo(x0 + w, y);
+    ctx.lineTo(x0 + w, y - 3);
+    ctx.stroke();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(col, 0.72);
+    ctx.fillText(text, x0 + w + 4, y + 3);
+  };
+  bracket(padL, atkMs, C_HOT, `ATK ${atkMs < 10 ? atkMs.toFixed(1) : atkMs.toFixed(0)}ms`);
+  bracket(padL + span * 0.42, relMs, C_VU, `REL ${relMs.toFixed(0)}ms`);
+
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_GR, 0.9);
+  ctx.fillText(`GR −${grNow.toFixed(1)}`, padL + span + 5, ribTop + 11);
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.fillStyle = hexA(C_VU, 0.6);
+  ctx.fillText(`PK −${grPeak.toFixed(1)}`, padL + span + 5, ribTop + ribH + 10);
+
+  // ── telemetry row ──
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MK, 0.72);
+  ctx.fillText(`THR ${thr.toFixed(0)} dB`, padL, 17);
+  ctx.fillStyle = hexA(C_HOT, 0.8);
+  ctx.fillText(`RAT ${ratio.toFixed(1)}:1`, padL + 76, 17);
+  ctx.fillStyle = hexA(C_MK, 0.76);
+  ctx.fillText(`MKP +${makeupDb.toFixed(1)} dB`, padL + 148, 17);
+  ctx.fillStyle = hexA(C_GR, 0.66);
+  ctx.fillText(`KNEE ${knee.toFixed(0)}`, padL + 240, 17);
+  ctx.fillStyle = hexA(C_VU, 0.62);
+  ctx.fillText(`MIX ${Math.round(mix * 100)}`, padL + 306, 17);
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(adv ? C_GLOW : C_MID, 0.7);
+  ctx.fillText(adv ? `${p.mode.toUpperCase()} · ADV` : p.mode.toUpperCase(), W - 12, 17);
+
+  pill(ctx, W * 0.5, 2, on ? punchLabel(punch) : "BYPASS", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
+
+  // ── punch rail: drag affordance, cycle notches, and the ratio teeth ──
+  const railPad = 14;
+  const railW = W - railPad * 2;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(railPad, railY, railW, 6);
+  ctx.fillStyle = hexA(C_HOT, 0.55 + flash * 0.25);
+  ctx.fillRect(railPad, railY + 1, Math.max(2, railW * punch), 4);
+  for (let i = 0; i <= 8; i++) {
+    const tx = railPad + (i / 8) * railW;
+    ctx.fillStyle = hexA(C_GLOW, i / 8 <= punch ? 0.85 : 0.16);
+    ctx.fillRect(tx - 0.6, railY - 2, 1.2, 10);
+  }
+  for (const notch of PUNCH_CYCLE) {
+    const nx = railPad + notch * railW;
+    if (Math.abs(punch - notch) < 0.04) {
+      ctx.fillStyle = hexA(C_GLOW, 0.95);
+      ctx.fillRect(nx - 1.5, railY - 4, 3, 14);
+    }
+  }
+  lit(ctx, () => drawGlow(ctx, railPad + railW * punch, railY + 3, 8 + flash * 5, C_GLOW, 0.85));
+
+  if (!on) {
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, W, Hh);
+  }
+
+  grain(ctx, W, Hh, 0.026);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    on ? "PRESS ANVIL" : "PRESS ANVIL · BYPASS",
+    `${punchLabel(punch)} · ${Math.round(punch * 100)}%`,
+    C_GLOW,
+    on ? C_HOT : C_MID,
+  );
 }
 
 export function GlueStageViz() {
   const punch = useFireCommandStore((s) => s.patch.punch) ?? 0;
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["glue"] !== false);
+  const mode = (useFireCommandStore((s) => s.patch.glueMode) ?? "glue") as GlueMode;
+  const useAdvanced = useFireCommandStore((s) => s.patch.glueUseAdvanced) === true;
+  const threshold = useFireCommandStore((s) => s.patch.glueThreshold) ?? -18;
+  const ratio = useFireCommandStore((s) => s.patch.glueRatio) ?? 3;
+  const attack = useFireCommandStore((s) => s.patch.glueAttack) ?? 0.008;
+  const release = useFireCommandStore((s) => s.patch.glueRelease) ?? 0.18;
+  const knee = useFireCommandStore((s) => s.patch.glueKnee) ?? 6;
+  const makeup = useFireCommandStore((s) => s.patch.glueMakeup) ?? 1;
+  const mix = useFireCommandStore((s) => s.patch.glueMix) ?? 1;
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef(false);
-  const prevKey = useRef("");
-  const grRef = useRef(0);
-  const vuRef = useRef(0.35);
-  const history = useRef<number[]>([]);
-  const sparks = useRef<{ x: number; y: number; vx: number; vy: number; life: number }[]>([]);
-  const st = useRef({ punch, enabled });
-  st.current = { punch, enabled };
+  const prevKey = useRef(0);
+  const st = useRef<GlueVizState>({
+    punch, enabled, mode, useAdvanced, threshold, ratio, attack, release, knee, makeup, mix,
+  });
+  st.current = { punch, enabled, mode, useAdvanced, threshold, ratio, attack, release, knee, makeup, mix };
 
   const live = enabled && punch > 0.03;
 
   useEffect(() => {
-    const key = `${punch.toFixed(3)}|${enabled ? 1 : 0}`;
+    const key = motionHash(
+      punch, enabled, MODE_IDX[mode] ?? 1, useAdvanced, threshold, ratio, attack, release, knee, makeup, mix,
+    );
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [punch, enabled]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [punch, enabled, mode, useAdvanced, threshold, ratio, attack, release, knee, makeup, mix]);
 
   const applyPunch = useCallback(
     (clientX: number, clientY: number) => {
@@ -123,7 +468,7 @@ export function GlueStageViz() {
       const v = clamp(1 - y * 0.75 + (x - 0.5) * 0.15, 0, 1);
       setParam("punch", Math.round(v * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -169,304 +514,35 @@ export function GlueStageViz() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const stopLoop = startStageVizLoop(
-      (t) => {
-      flashRef.current *= 0.9;
-
-      const { w: W, h: Hcss } = sizeRef.current;
-      if (W < 2) return;
-      const { punch: pRaw, enabled: on } = st.current;
-      const p = on ? pRaw : 0;
-      const flash = flashRef.current;
-      const breath = 0.5 + 0.5 * Math.sin(t * 0.0024);
-      const m = glueMetrics(p);
-      const cx = W * 0.5;
-
-      ctx.clearRect(0, 0, W, Hcss);
-
-      // Chassis
-      const bg = ctx.createLinearGradient(0, 0, 0, Hcss);
-      bg.addColorStop(0, hexAlpha(C_DEEP, 0.7 + flash * 0.2));
-      bg.addColorStop(0.45, "rgba(8,4,2,0.96)");
-      bg.addColorStop(1, hexAlpha(C_MID, 0.4 + p * 0.2));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Anvil bed glow
-      const bedY = Hcss * 0.72;
-      const bedG = ctx.createRadialGradient(cx, bedY, 4, cx, bedY, W * (0.22 + p * 0.18));
-      bedG.addColorStop(0, hexAlpha(C_HOT, (0.2 + p * 0.35 + flash * 0.25) * (on ? 1 : 0.3)));
-      bedG.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = bedG;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // ── Press jaws (top plate descends with punch) ──
-      const jawGap = Hcss * (0.28 - p * 0.16);
-      const topJawY = Hcss * 0.18 + (1 - p) * 4;
-      const botJawY = topJawY + jawGap + Hcss * 0.08;
-
-      // Top plate
-      ctx.fillStyle = hexAlpha(C_DEEP, 0.85);
-      ctx.strokeStyle = hexAlpha(C, 0.55 + p * 0.35);
-      ctx.lineWidth = 1.5;
-      const plateW = W * (0.42 + p * 0.08);
-      roundRect(ctx, cx - plateW / 2, topJawY - 10, plateW, 14 + p * 4, 3);
-      ctx.fill();
-      ctx.stroke();
-
-      // Rivets on top plate
-      for (let i = -2; i <= 2; i++) {
-        const rx = cx + i * (plateW / 5.5);
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.45 + p * 0.4);
-        ctx.beginPath();
-        ctx.arc(rx, topJawY - 3, 2.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Bottom anvil
-      ctx.fillStyle = hexAlpha(C_MID, 0.75);
-      roundRect(ctx, cx - plateW / 2 - 6, botJawY, plateW + 12, 16, 2);
-      ctx.fill();
-      ctx.strokeStyle = hexAlpha(C_HOT, 0.5 + p * 0.3);
-      ctx.stroke();
-
-      // Vertical guide posts
-      for (const dir of [-1, 1] as const) {
-        const px = cx + dir * (plateW / 2 + 10);
-        ctx.strokeStyle = hexAlpha(C, 0.25 + p * 0.2);
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(px, topJawY - 14);
-        ctx.lineTo(px, botJawY + 16);
-        ctx.stroke();
-      }
-
-      // Squashed waveform between jaws
-      const waveY = (topJawY + botJawY) / 2;
-      const waveH = Math.max(4, jawGap * 0.55);
-      const squash = 1 - p * 0.72;
-      ctx.beginPath();
-      const pts = 64;
-      for (let i = 0; i <= pts; i++) {
-        const u = i / pts;
-        const x = cx - plateW * 0.42 + u * plateW * 0.84;
-        const sig =
-          Math.sin(u * Math.PI * 6 + t * 0.006) * 0.55 +
-          Math.sin(u * Math.PI * 13 + t * 0.009) * 0.3 +
-          Math.sin(u * Math.PI * 2.2 + t * 0.003) * 0.25;
-        const y = waveY - sig * waveH * squash * (0.85 + breath * 0.15);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.55 + p * 0.4 + flash * 0.2);
-      ctx.lineWidth = 1.6 + p * 1.2;
-      ctx.shadowBlur = 6 + p * 12 + flash * 8;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.6);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Compression "press" force lines when engaged
-      if (p > 0.05) {
-        for (let i = 0; i < 5; i++) {
-          const lx = cx - plateW * 0.3 + (i / 4) * plateW * 0.6;
-          const alpha = (0.15 + p * 0.45) * (0.6 + 0.4 * Math.sin(t * 0.008 + i));
-          ctx.strokeStyle = hexAlpha(C_GR, alpha);
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(lx, topJawY + 6);
-          ctx.lineTo(lx, botJawY - 2);
-          ctx.stroke();
-        }
-      }
-
-      // Sparks when slamming / dragging
-      if (on && (p > 0.55 || dragRef.current || flash > 0.35)) {
-        if (Math.random() < 0.25 + p * 0.4) {
-          const side = Math.random() < 0.5 ? -1 : 1;
-          sparks.current.push({
-            x: cx + side * (plateW * 0.35 + Math.random() * 8),
-            y: waveY + (Math.random() - 0.5) * 6,
-            vx: side * (0.4 + Math.random() * 1.5),
-            vy: -0.5 - Math.random() * 1.8,
-            life: 1,
-          });
-          if (sparks.current.length > 36) sparks.current.shift();
-        }
-      }
-      for (let i = sparks.current.length - 1; i >= 0; i--) {
-        const s = sparks.current[i]!;
-        s.x += s.vx;
-        s.y += s.vy;
-        s.vy += 0.06;
-        s.life -= 0.03;
-        if (s.life <= 0) {
-          sparks.current.splice(i, 1);
-          continue;
-        }
-        ctx.fillStyle = hexAlpha(C_GLOW, s.life * 0.9);
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, 1.2 + s.life * 1.8, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // ── Right: GR VU gauge ──
-      const gcx = W * 0.86;
-      const gcy = Hcss * 0.48;
-      const needleLen = Hcss * 0.28;
-
-      const vuTarget = 0.35 + p * 0.45 + 0.08 * Math.sin(t * 0.005);
-      vuRef.current += (vuTarget - vuRef.current) * 0.1;
-      const grTarget = p * (0.4 + 0.55 * (0.5 + 0.5 * Math.sin(t * 0.0036)));
-      grRef.current += (grTarget - grRef.current) * 0.16;
-      const gr = grRef.current;
-      const vu = vuRef.current;
-
-      history.current.push(gr);
-      if (history.current.length > 36) history.current.shift();
-
-      ctx.strokeStyle = hexAlpha(C, 0.2);
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(gcx, gcy, needleLen, Math.PI * 0.75, Math.PI * 0.25, false);
-      ctx.stroke();
-
-      // GR arc fill
-      ctx.strokeStyle = hexAlpha(C_GR, 0.55 + gr * 0.35);
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(gcx, gcy, needleLen, Math.PI * 0.75, Math.PI * 0.75 + gr * Math.PI * 1.5, false);
-      ctx.stroke();
-
-      history.current.forEach((h, i) => {
-        const age = i / history.current.length;
-        const a = Math.PI * 0.75 + h * Math.PI * 1.5;
-        const r = needleLen * 0.72;
-        ctx.fillStyle = hexAlpha(C_GLOW, age * 0.2 * p);
-        ctx.fillRect(gcx + Math.cos(a) * r - 1, gcy + Math.sin(a) * r - 1, 2.5, 2.5);
-      });
-
-      const grA = Math.PI * 0.75 + gr * Math.PI * 1.5;
-      ctx.strokeStyle = hexAlpha(C_HOT, 0.85);
-      ctx.lineWidth = 2.2;
-      ctx.shadowBlur = 8 + gr * 10;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.7);
-      ctx.beginPath();
-      ctx.moveTo(gcx, gcy);
-      ctx.lineTo(gcx + Math.cos(grA) * needleLen, gcy + Math.sin(grA) * needleLen);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      const vuA = Math.PI * 0.75 + vu * Math.PI * 1.5;
-      ctx.strokeStyle = hexAlpha(C_VU, 0.4 + vu * 0.3);
-      ctx.lineWidth = 1.3;
-      ctx.beginPath();
-      ctx.moveTo(gcx, gcy);
-      ctx.lineTo(gcx + Math.cos(vuA) * needleLen * 0.82, gcy + Math.sin(vuA) * needleLen * 0.82);
-      ctx.stroke();
-
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.9);
-      ctx.beginPath();
-      ctx.arc(gcx, gcy, 3.2, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GR, 0.7);
-      ctx.textAlign = "center";
-      ctx.fillText(`−${m.grDb.toFixed(1)}`, gcx, gcy + needleLen * 0.55 + 10);
-
-      // ── Left: threshold / ratio stack ──
-      const lx = 14;
-      const ly = 16;
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C, 0.55);
-      ctx.fillText("THR", lx, ly);
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      ctx.fillText(`${m.threshDb.toFixed(0)} dB`, lx + 28, ly);
-
-      ctx.fillStyle = hexAlpha(C, 0.55);
-      ctx.fillText("RAT", lx, ly + 14);
-      ctx.fillStyle = hexAlpha(C_HOT, 0.9);
-      ctx.fillText(`${m.ratio.toFixed(1)}:1`, lx + 28, ly + 14);
-
-      ctx.fillStyle = hexAlpha(C, 0.55);
-      ctx.fillText("MKP", lx, ly + 28);
-      ctx.fillStyle = hexAlpha(C_MK, 0.9);
-      ctx.fillText(`+${m.makeupDb.toFixed(1)} dB`, lx + 28, ly + 28);
-
-      // Ratio teeth bar
-      const teethY = Hcss - 28;
-      const teethW = W * 0.36;
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
-      ctx.fillRect(lx, teethY, teethW, 6);
-      const teethFill = (p) * teethW;
-      const tg = ctx.createLinearGradient(lx, 0, lx + teethFill, 0);
-      tg.addColorStop(0, hexAlpha(C_MID, 0.7));
-      tg.addColorStop(1, hexAlpha(C_HOT, 0.95));
-      ctx.fillStyle = tg;
-      ctx.fillRect(lx, teethY, teethFill, 6);
-      for (let i = 0; i <= 8; i++) {
-        const tx = lx + (i / 8) * teethW;
-        ctx.fillStyle = hexAlpha(C_GLOW, i / 8 <= p ? 0.9 : 0.2);
-        ctx.fillRect(tx - 0.5, teethY - 2, 1.2, 10);
-      }
-
-      // Bottom scrub rail
-      const railY = Hcss - 12;
-      const railPad = 14;
-      ctx.strokeStyle = hexAlpha(C, 0.25);
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(W - railPad, railY);
-      ctx.stroke();
-      const thumbX = railPad + p * (W - railPad * 2);
-      ctx.strokeStyle = hexAlpha(C_HOT, 0.75 + flash * 0.2);
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(thumbX, railY);
-      ctx.stroke();
-      for (const notch of PUNCH_CYCLE) {
-        const nx = railPad + notch * (W - railPad * 2);
-        const active = Math.abs(p - notch) < 0.04;
-        ctx.fillStyle = hexAlpha(active ? C_GLOW : C, active ? 0.95 : 0.35);
-        ctx.beginPath();
-        ctx.arc(nx, railY, active ? 3.2 : 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.shadowBlur = 8 + flash * 10;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.7);
-      ctx.beginPath();
-      ctx.arc(thumbX, railY, 5 + flash * 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Labels
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flash * 0.35);
-      ctx.textAlign = "left";
-      ctx.fillText(on ? "PRESS ANVIL" : "PRESS ANVIL · BYPASS", 10, Hcss - 8);
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C, 0.7 + flash * 0.25);
-      ctx.fillText(`${punchLabel(p)} · ${Math.round(p * 100)}%`, W - 10, Hcss - 8);
-
-      if (!on) {
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(0, 0, W, Hcss);
-      }
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.9;
+        paintGlue(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
         active: !!st.current.enabled,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.punch,
+          st.current.enabled,
+          MODE_IDX[st.current.mode] ?? 1,
+          st.current.useAdvanced,
+          st.current.threshold,
+          st.current.ratio,
+          st.current.attack,
+          st.current.release,
+          st.current.knee,
+          st.current.makeup,
+          st.current.mix,
+        ),
       }),
       { minIntervalMs: 22 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
@@ -496,22 +572,4 @@ export function GlueStageViz() {
       <span className="pointer-events-none absolute right-0 top-0 h-2 w-5" style={{ background: C, clipPath: "polygon(0 0, 100% 0, 100% 100%, 30% 100%)", opacity: 0.7 }} />
     </div>
   );
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
 }

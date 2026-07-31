@@ -5,6 +5,7 @@
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, FcChipMark, fcChipCharacterFor, fcChipClass, fcChipStyle } from "./fcChip";
 import {
   CHORD_PRESETS,
   chordMatch,
@@ -12,6 +13,9 @@ import {
   normalizeChordIvs,
 } from "./ChordStageViz";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Performance band — faceted gem chips. */
+const CHORD_CHAR = fcChipCharacterFor("chord");
 
 export const CHORD_C = FC.chord;
 export const CHORD_C_GLOW = bandShade(FC_BAND.perf, 0.95);
@@ -65,39 +69,29 @@ export function ChordCharacterStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = CHORD_C;
   const cur = normalizeChordIvs(ivs);
+  const tone = { color: c, onText: CHORD_C_GLOW, glow: 10 };
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Stack
       </span>
-      {CHORD_PRESETS.map((p) => {
-        const hit = chordMatch(cur, p.ivs);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setParam("chordIntervals", [...p.ivs]);
-              if (!on) setParam("chordMemoryOn", true);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              hit
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: CHORD_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.name} · ${p.ivs.map((n) => (n === 0 ? "0" : `+${n}`)).join(" ")}`}
-          >
-            {p.short}
-          </button>
-        );
-      })}
+      {CHORD_PRESETS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={chordMatch(cur, p.ivs)}
+          tone={tone}
+          character={CHORD_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setParam("chordIntervals", [...p.ivs]);
+            if (!on) setParam("chordMemoryOn", true);
+          }}
+          title={`${p.name} · ${p.ivs.map((n) => (n === 0 ? "0" : `+${n}`)).join(" ")}`}
+        >
+          {p.short}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -115,46 +109,38 @@ export function ChordDegreeStrip() {
     setParam("chordIntervals", normalizeChordIvs([...set]));
   };
 
+  const rootTone = { color: CHORD_C_ROOT, onText: CHORD_C_GLOW, glow: 0 };
+  const degTone = { color: CHORD_C_VOICE, onText: CHORD_C_GLOW, glow: 8 };
+
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${CHORD_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${CHORD_C}66` }}>
         Deg
       </span>
       <span
-        className="rounded-md border px-2 py-0.5 text-[9px] font-black"
-        style={{
-          borderColor: `${CHORD_C_ROOT}99`,
-          background: `${CHORD_C_ROOT}28`,
-          color: CHORD_C_GLOW,
-        }}
+        className={fcChipClass({ caseMode: "normal", character: CHORD_CHAR })}
+        style={fcChipStyle(true, rootTone, CHORD_CHAR)}
         title="Root (always on)"
       >
+        <FcChipMark character={CHORD_CHAR} on color={CHORD_C_ROOT} />
         0
       </span>
-      {CHORD_DEGREE_TOGGLES.map((d) => {
-        const hit = cur.includes(d);
-        return (
-          <button
-            key={d}
-            type="button"
-            onClick={() => toggle(d)}
-            className="rounded-md border px-1.5 py-0.5 text-[9px] font-bold tabular-nums transition min-w-[1.7rem]"
-            style={
-              hit
-                ? {
-                    borderColor: `${CHORD_C_VOICE}99`,
-                    background: `${CHORD_C_VOICE}28`,
-                    color: CHORD_C_GLOW,
-                    boxShadow: `0 0 8px ${CHORD_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`Toggle +${d} semitones`}
-          >
-            +{d}
-          </button>
-        );
-      })}
+      {CHORD_DEGREE_TOGGLES.map((d) => (
+        <FcChip
+          key={d}
+          on={cur.includes(d)}
+          tone={degTone}
+          character={CHORD_CHAR}
+          caseMode="normal"
+          mono
+          padX="sm"
+          extra="min-w-[1.7rem]"
+          onClick={() => toggle(d)}
+          title={`Toggle +${d} semitones`}
+        >
+          +{d}
+        </FcChip>
+      ))}
     </div>
   );
 }

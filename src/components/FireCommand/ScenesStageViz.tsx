@@ -1,14 +1,40 @@
 /**
  * Scenes — Orbit Vault stage visualizer.
+ *
+ * IDIOM: the slot timeline. The eight patch-memory slots are stations laid out
+ * left→right along a transport line; each station card carries its name and its
+ * snapshot fingerprint (energy / warmth / density) as micro bars. The station
+ * you last acted on is lit, and a recall sends a carriage travelling down the
+ * line from the previous station to the new one, dragging an interpolation
+ * trail whose length is the configured morph time.
+ *
  * Eight patch-memory slots (Signal Path Perf · FC.scenes).
  * Click a node to act · top cycles Capture/Recall/Clear · bottom captures next empty.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore, SCENE_SLOTS } from "@/state/fireCommandStore";
 import type { FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  roundRect,
+  strata,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_TITLE,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.scenes;
@@ -59,43 +85,274 @@ export function firstEmptySlot(scenes: (Partial<FirePatch> | null)[]): number {
   return i >= 0 ? i : 0;
 }
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
+function clamp01(v: number) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
+/** Smoothstep — the carriage should ease into a station, not arrive linearly. */
+function ease(t: number) {
+  const u = clamp01(t);
+  return u * u * (3 - 2 * u);
+}
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** One station on the line. */
+export type SceneSlotViz = {
+  filled: boolean;
+  energy: number;
+  warmth: number;
+  density: number;
+  name: string;
+};
+
+export type ScenesVizState = {
+  slots: SceneSlotViz[];
+  enabled: boolean;
+  mode: SceneMode;
+  /** Slot the panel is pointed at. */
+  activeSlot: number;
+  /** Slot the store last committed (−1 when none). */
+  lastSlot: number;
+  transition: "immediate" | "nextBar" | "morphMs";
+  morphMs: number;
+  /** Carriage run: station indices plus the clock it started on. */
+  travel: { from: number; to: number; t0: number; ms: number };
+};
+
+/**
+ * Paint the slot timeline. Exported and pure so it can be rendered headlessly
+ * without mounting the component or waiting on a frame.
+ */
+export function paintScenes(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: ScenesVizState,
+  now: number,
+  flash: number,
+): void {
+  const n = p.slots.length;
+  let occ = 0;
+  for (let i = 0; i < n; i++) if (p.slots[i]!.filled) occ++;
+  const on = p.enabled;
+  const dim = on ? 1 : 0.42;
+  const modeMeta = SCENE_MODES.find((m) => m.id === p.mode) ?? SCENE_MODES[0]!;
+
+  const trav = p.travel;
+  const tRaw = trav.ms > 0 ? (now - trav.t0) / trav.ms : 1;
+  const moving = trav.from >= 0 && trav.from !== trav.to && tRaw < 1;
+  const prog = ease(tRaw);
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy: 0.08 + (occ / Math.max(1, n)) * 0.3 + flash * 0.2, horizon: 0.6 });
+  strata(ctx, W, Hh, C, { count: 5, horizon: 0.2, alpha: 0.06 });
+
+  const padL = 14;
+  const padR = 14;
+  const span = Math.max(80, W - padL - padR);
+  const stopW = span / Math.max(1, n);
+  const stX = (i: number) => padL + (i + 0.5) * stopW;
+  const cardTop = 26;
+  const cardH = 60;
+  const cardW = Math.min(212, stopW * 0.82);
+  const trackY = Hh * 0.59;
+  const railY = Hh * 0.75;
+
+  // ── the transport line ──
+  ctx.fillStyle = hexA(C_MID, 0.18);
+  ctx.fillRect(padL, trackY, span, 1);
+  ctx.fillStyle = hexA(C_DEEP, 0.3);
+  ctx.fillRect(padL, trackY + 1, span, 1);
+  // Sleepers between stations — reads as distance travelled, not a plain rule.
+  for (let i = 0; i < n; i++) {
+    for (let k = 1; k < 4; k++) {
+      const x = stX(i) + (k / 4) * stopW - stopW * 0.5;
+      ctx.fillStyle = hexA(C_MID, 0.08);
+      ctx.fillRect(x, trackY - 2, 1, 5);
+    }
+  }
+
+  // ── stations ──
+  for (let i = 0; i < n; i++) {
+    const s = p.slots[i]!;
+    const cx = stX(i);
+    const x0 = cx - cardW * 0.5;
+    const isActive = i === p.activeSlot;
+    const isLast = i === p.lastSlot;
+    const warmCol = s.warmth > 0.55 ? C_HOT : C_FILL;
+
+    // Card body.
+    if (s.filled) {
+      const wq = (s.warmth * 5) | 0;
+      const eq = (s.energy * 5) | 0;
+      const body = cachedGrad(ctx, `bay|${warmCol}|${wq}|${eq}|${cardH}|${cardTop}`, (c) => {
+        const g = c.createLinearGradient(0, cardTop, 0, cardTop + cardH);
+        g.addColorStop(0, hexA(warmCol, 0.16 + s.energy * 0.2));
+        g.addColorStop(1, hexA(C_DEEP, 0.1));
+        return g;
+      });
+      ctx.fillStyle = body;
+      roundRect(ctx, x0, cardTop, cardW, cardH, 6);
+      ctx.fill();
+      ctx.strokeStyle = hexA(isActive ? C_ACTIVE : C, (isActive ? 0.8 : 0.3 + s.density * 0.2) * dim);
+      ctx.lineWidth = isActive ? 1.6 : 1;
+      roundRect(ctx, x0 + 0.5, cardTop + 0.5, cardW - 1, cardH - 1, 6);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = "rgba(0,0,0,0.34)";
+      roundRect(ctx, x0, cardTop, cardW, cardH, 6);
+      ctx.fill();
+      ctx.save();
+      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = hexA(C_EMPTY, (isActive ? 0.55 : 0.22) * dim);
+      ctx.lineWidth = 1;
+      roundRect(ctx, x0 + 0.5, cardTop + 0.5, cardW - 1, cardH - 1, 6);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Slot index + name.
+    ctx.font = VIZ_FONT_TITLE;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(s.filled ? C_GLOW : C_EMPTY, (s.filled ? 0.92 : 0.45) * dim);
+    ctx.fillText(`${i + 1}`, x0 + 10, cardTop + 15);
+    ctx.font = VIZ_FONT_VALUE;
+    ctx.fillStyle = hexA(s.filled ? C_HOT : C_EMPTY, (s.filled ? 0.72 : 0.34) * dim);
+    const nm = s.filled ? s.name : "EMPTY";
+    const maxChars = Math.max(3, Math.floor((cardW - 34) / 5.6));
+    ctx.fillText(nm.length > maxChars ? `${nm.slice(0, maxChars - 1)}…` : nm, x0 + 20, cardTop + 15);
+
+    // Fingerprint micro bars — the snapshot's shape at a glance.
+    const barL = x0 + 24;
+    const barW = Math.max(20, cardW - 34);
+    const rows: [string, number, string][] = [
+      ["E", s.energy, C_GLOW],
+      ["W", s.warmth, C_HOT],
+      ["D", s.density, C_FILL],
+    ];
+    for (let r = 0; r < 3; r++) {
+      const [tag, val, col] = rows[r]!;
+      const by = cardTop + 26 + r * 11;
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexA(C_MID, 0.42 * dim);
+      ctx.fillText(tag, x0 + 10, by + 3.5);
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(barL, by, barW, 4);
+      if (s.filled) {
+        ctx.fillStyle = hexA(col, (0.3 + val * 0.5) * dim);
+        ctx.fillRect(barL, by, Math.max(1, barW * val), 4);
+      }
+    }
+
+    // Station post down to the line.
+    ctx.fillStyle = hexA(s.filled ? C_FILL : C_EMPTY, (s.filled ? 0.35 : 0.16) * dim);
+    ctx.fillRect(cx - 0.5, cardTop + cardH, 1, trackY - cardTop - cardH);
+    const nodeR = s.filled ? 3.4 + s.energy * 1.8 : 2.2;
+    ctx.fillStyle = hexA(s.filled ? C_GLOW : C_EMPTY, (s.filled ? 0.85 : 0.3) * dim);
+    ctx.beginPath();
+    ctx.arc(cx, trackY + 1, nodeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (isActive && on) {
+      lit(ctx, () => {
+        drawGlow(ctx, cx, cardTop + cardH * 0.5, 34 + flash * 12, C_ACTIVE, 0.16 + flash * 0.2);
+        drawGlow(ctx, cx, trackY + 1, 9 + flash * 5, C_GLOW, 0.6);
+      });
+      // Selection brackets on the lit station.
+      ctx.strokeStyle = hexA(C_ACTIVE, 0.85);
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(x0 - 3, cardTop + 8);
+      ctx.lineTo(x0 - 3, cardTop - 3);
+      ctx.lineTo(x0 + 8, cardTop - 3);
+      ctx.moveTo(x0 + cardW - 8, cardTop - 3);
+      ctx.lineTo(x0 + cardW + 3, cardTop - 3);
+      ctx.lineTo(x0 + cardW + 3, cardTop + 8);
+      ctx.stroke();
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "center";
+      ctx.fillStyle = hexA(C_ACTIVE, 0.9);
+      ctx.fillText(modeMeta.short, cx, cardTop - 7);
+    }
+    if (isLast && !isActive) {
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "center";
+      ctx.fillStyle = hexA(C_HOT, 0.55 * dim);
+      ctx.fillText("LAST", cx, cardTop - 7);
+    }
+  }
+
+  // ── travelling carriage + interpolation trail ──
+  const fromX = stX(trav.from < 0 ? trav.to : trav.from);
+  const toX = stX(trav.to);
+  const carX = fromX + (toX - fromX) * prog;
+  if (moving) {
+    for (let k = 1; k <= 12; k++) {
+      const tt = ease(Math.max(0, tRaw - k * 0.055));
+      const gx = fromX + (toX - fromX) * tt;
+      const a = (1 - k / 13) * 0.4;
+      ctx.fillStyle = hexA(C_GLOW, a);
+      ctx.beginPath();
+      ctx.arc(gx, trackY + 1, 1 + (1 - k / 13) * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.font = VIZ_FONT_VALUE;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_GLOW, 0.7);
+    ctx.fillText(`${Math.round(prog * 100)}%`, carX, trackY + 22);
+  }
+  ctx.fillStyle = "rgba(6,3,8,0.9)";
+  roundRect(ctx, carX - 9, trackY - 4.5, 18, 10, 4);
+  ctx.fill();
+  ctx.fillStyle = hexA(moving ? C_ACTIVE : C_FILL, (moving ? 0.95 : 0.6) * dim);
+  roundRect(ctx, carX - 7.5, trackY - 3, 15, 7, 3);
+  ctx.fill();
+  if (on) {
+    lit(ctx, () => drawGlow(ctx, carX, trackY + 0.5, moving ? 16 : 9, C_GLOW, moving ? 0.85 : 0.4));
+  }
+
+  // ── occupancy rail ──
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(padL, railY, span, 5);
+  ctx.fillStyle = hexA(C_HOT, 0.5 * dim);
+  ctx.fillRect(padL, railY + 1, Math.max(1, span * (occ / Math.max(1, n))), 3);
+  for (let i = 1; i < n; i++) {
+    ctx.fillStyle = hexA(C_DEEP, 0.5);
+    ctx.fillRect(padL + (i / n) * span, railY, 1, 5);
+  }
+  lit(ctx, () => drawGlow(ctx, padL + span * (occ / Math.max(1, n)), railY + 2.5, 7 + flash * 4, C_GLOW, 0.75 * dim));
+
+  // ── header telemetry ──
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
+  ctx.fillText(`MODE · ${modeMeta.label.toUpperCase()}`, 11, 16);
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_MID, 0.72);
+  ctx.fillText(
+    p.transition === "morphMs"
+      ? `XFER · MORPH ${Math.round(p.morphMs)}ms`
+      : p.transition === "nextBar"
+        ? "XFER · NEXT BAR"
+        : "XFER · IMMEDIATE",
+    W - 11,
+    16,
+  );
+
+  pill(ctx, W * 0.5, 3, !on ? "BYPASS" : moving ? "MORPH" : modeMeta.short, C_GLOW, { glow: flash });
+
+  grain(ctx, W, Hh, 0.026);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    !on ? "ORBIT VAULT · BYPASS" : `ORBIT VAULT · ${modeMeta.short} · ${occ}/${n}`,
+    p.activeSlot >= 0 ? `SLOT ${p.activeSlot + 1}` : "TAP NODE",
+    C_GLOW,
+    C,
+  );
 }
 
 export function ScenesStageViz({
@@ -110,45 +367,92 @@ export function ScenesStageViz({
   onActiveSlot: (i: number) => void;
 }) {
   const scenes = useFireCommandStore((s) => s.scenes);
+  const sceneMeta = useFireCommandStore((s) => s.sceneMeta);
+  const transition = useFireCommandStore((s) => s.sceneTransition);
+  const morphMs = useFireCommandStore((s) => s.sceneMorphMs);
+  const lastSlot = useFireCommandStore((s) => s.activeSceneSlot);
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["scenes"] !== false);
   const captureScene = useFireCommandStore((s) => s.captureScene);
   const recallScene = useFireCommandStore((s) => s.recallScene);
   const clearScene = useFireCommandStore((s) => s.clearScene);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 480, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
-  const flashSlotRef = useRef(-1);
-  const prevKey = useRef("");
-  const sparks = useRef<{ x: number; y: number; vx: number; vy: number; life: number }[]>([]);
-  const st = useRef({ scenes, enabled, mode, activeSlot });
-  st.current = { scenes, enabled, mode, activeSlot };
+  const prevKey = useRef(0);
+  const prevActive = useRef(activeSlot);
+  const travelRef = useRef({ from: -1, to: activeSlot, t0: 0, ms: 240 });
+
+  const slots: SceneSlotViz[] = [];
+  for (let i = 0; i < SCENE_SLOTS; i++) {
+    const snap = scenes[i];
+    const fp = sceneFingerprint(snap);
+    slots.push({
+      filled: !!snap,
+      energy: fp.energy,
+      warmth: fp.warmth,
+      density: fp.density,
+      name: sceneMeta?.[i]?.name ?? `Scene ${i + 1}`,
+    });
+  }
+
+  const st = useRef<ScenesVizState>({
+    slots,
+    enabled,
+    mode,
+    activeSlot,
+    lastSlot: lastSlot ?? -1,
+    transition,
+    morphMs,
+    travel: travelRef.current,
+  });
+  st.current = {
+    slots,
+    enabled,
+    mode,
+    activeSlot,
+    lastSlot: lastSlot ?? -1,
+    transition,
+    morphMs,
+    travel: travelRef.current,
+  };
 
   const filled = occupiedCount(scenes);
   const live = enabled && filled > 0;
+  // Bitmask so re-capturing an occupied slot still counts as a change.
+  let fillMask = 0;
+  for (let i = 0; i < SCENE_SLOTS; i++) if (scenes[i]) fillMask |= 1 << i;
+
+  // A recall/capture on a new slot launches the carriage; the run length is the
+  // transition the store will actually use.
+  useEffect(() => {
+    if (activeSlot === prevActive.current) return;
+    travelRef.current = {
+      from: prevActive.current,
+      to: activeSlot,
+      t0: performance.now(),
+      ms: transition === "morphMs" ? Math.max(60, morphMs) : transition === "nextBar" ? 800 : 240,
+    };
+    prevActive.current = activeSlot;
+  }, [activeSlot, transition, morphMs]);
 
   useEffect(() => {
-    const key = `${filled}|${mode}|${activeSlot}|${enabled ? 1 : 0}|${scenes.map((s) => (s ? 1 : 0)).join("")}`;
+    const key = motionHash(fillMask, SCENE_MODES.findIndex((m) => m.id === mode), activeSlot, enabled);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [filled, mode, activeSlot, enabled, scenes]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [fillMask, mode, activeSlot, enabled]);
 
   const actOnSlot = useCallback(
     (i: number) => {
       if (!st.current.enabled) return;
       const m = st.current.mode;
-      flashSlotRef.current = i;
       flashRef.current = 1;
       onActiveSlot(i);
       if (m === "capture") captureScene(i);
       else if (m === "recall") {
-        if (st.current.scenes[i]) recallScene(i);
-      } else if (st.current.scenes[i]) clearScene(i);
+        if (st.current.slots[i]?.filled) recallScene(i);
+      } else if (st.current.slots[i]?.filled) clearScene(i);
     },
     [captureScene, clearScene, onActiveSlot, recallScene],
   );
@@ -163,30 +467,20 @@ export function ScenesStageViz({
     [onModeChange],
   );
 
-  const hitSlot = useCallback((clientX: number, clientY: number): number => {
-    const wrap = wrapRef.current;
-    if (!wrap) return -1;
-    const rect = wrap.getBoundingClientRect();
-    const { w: W, h: Hcss } = sizeRef.current;
-    const cx = W * 0.5;
-    const cy = Hcss * 0.5;
-    const radius = Math.min(W, Hcss) * 0.34;
-    const x = ((clientX - rect.left) / Math.max(1, rect.width)) * W;
-    const y = ((clientY - rect.top) / Math.max(1, rect.height)) * Hcss;
-    let best = -1;
-    let bestD = 28;
-    for (let i = 0; i < SCENE_SLOTS; i++) {
-      const angle = (i / SCENE_SLOTS) * Math.PI * 2 - Math.PI / 2;
-      const nx = cx + Math.cos(angle) * radius;
-      const ny = cy + Math.sin(angle) * radius;
-      const d = Math.hypot(x - nx, y - ny);
-      if (d < bestD) {
-        bestD = d;
-        best = i;
-      }
-    }
-    return best;
-  }, []);
+  /** Nearest station along the width — the timeline's stations are the hit grid. */
+  const hitSlot = useCallback(
+    (clientX: number, _clientY: number): number => {
+      const wrap = wrapRef.current;
+      if (!wrap) return -1;
+      const rect = wrap.getBoundingClientRect();
+      const padL = 14;
+      const span = Math.max(80, rect.width - padL * 2);
+      const x = ((clientX - rect.left) - padL) / span;
+      const i = Math.floor(x * SCENE_SLOTS);
+      return Math.max(0, Math.min(SCENE_SLOTS - 1, i));
+    },
+    [wrapRef],
+  );
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
@@ -201,7 +495,7 @@ export function ScenesStageViz({
         return;
       }
       if (yNorm > 0.88) {
-        const empty = firstEmptySlot(st.current.scenes);
+        const empty = firstEmptySlot(scenes);
         onModeChange("capture");
         actOnSlot(empty);
         return;
@@ -209,7 +503,7 @@ export function ScenesStageViz({
       const slot = hitSlot(e.clientX, e.clientY);
       if (slot >= 0) actOnSlot(slot);
     },
-    [actOnSlot, cycleMode, hitSlot, onModeChange],
+    [actOnSlot, cycleMode, hitSlot, onModeChange, scenes, wrapRef],
   );
 
   useEffect(() => {
@@ -218,258 +512,36 @@ export function ScenesStageViz({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const stopLoop = startStageVizLoop(
-      (t) => {
-      flashRef.current *= 0.9;
-      if (flashRef.current < 0.12) flashSlotRef.current = -1;
-
-      const { w: W, h: Hcss } = sizeRef.current;
-      if (W < 2) return;
-      const s = st.current;
-      const flash = flashRef.current;
-      const breathe = 0.92 + 0.08 * Math.sin(t / 700);
-      const n = SCENE_SLOTS;
-      const occ = occupiedCount(s.scenes);
-      const modeMeta = SCENE_MODES.find((m) => m.id === s.mode) ?? SCENE_MODES[0]!;
-
-      ctx.clearRect(0, 0, W, Hcss);
-
-      const bg = ctx.createRadialGradient(W * 0.5, Hcss * 0.48, 4, W * 0.5, Hcss * 0.5, W * 0.72);
-      bg.addColorStop(0, hexAlpha(C_DEEP, 0.8 + flash * 0.15));
-      bg.addColorStop(0.55, "rgba(14,2,12,0.96)");
-      bg.addColorStop(1, hexAlpha(C_MID, 0.3 + (occ > 0 ? 0.12 : 0)));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Mode strip
-      const padX = 10;
-      const usable = W - padX * 2;
-      const stripY = 6;
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
-      ctx.fillRect(padX, stripY, usable, 8);
-      const segW = usable / SCENE_MODES.length;
-      for (let i = 0; i < SCENE_MODES.length; i++) {
-        const hit = SCENE_MODES[i]!.id === s.mode;
-        ctx.fillStyle = hit ? hexAlpha(C_HOT, 0.85 + flash * 0.15) : hexAlpha(C, 0.12);
-        ctx.fillRect(padX + i * segW + 1, stripY + 1, segW - 2, 6);
-      }
-      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.7);
-      ctx.textAlign = "left";
-      ctx.fillText(`MODE · ${modeMeta.label.toUpperCase()}`, padX, stripY - 1);
-
-      const cx = W * 0.5;
-      const cy = Hcss * 0.52;
-      const radius = Math.min(W, Hcss) * 0.34;
-
-      // Orbit ring
-      ctx.strokeStyle = hexAlpha(C, 0.12 + occ * 0.03);
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = hexAlpha(C, 0.06);
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius * 0.55, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Nebula wisps scale with occupancy
-      for (let w = 0; w < Math.min(4, 1 + occ); w++) {
-        const wx = cx + Math.sin(t * 0.0007 + w) * radius * 0.5;
-        const wy = cy + Math.cos(t * 0.0005 + w * 1.3) * radius * 0.35;
-        const wg = ctx.createRadialGradient(wx, wy, 0, wx, wy, 22 + occ * 4);
-        wg.addColorStop(0, hexAlpha(C_HOT, 0.04 + occ * 0.015 + flash * 0.04));
-        wg.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = wg;
-        ctx.beginPath();
-        ctx.arc(wx, wy, 22 + occ * 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      const nodes: { x: number; y: number; i: number; filled: boolean; fp: ReturnType<typeof sceneFingerprint> }[] = [];
-      for (let i = 0; i < n; i++) {
-        const angle = (i / n) * Math.PI * 2 - Math.PI / 2 + t * 0.00035;
-        const snap = s.scenes[i];
-        const filledSlot = !!snap;
-        const fp = sceneFingerprint(snap);
-        const r = radius * (filledSlot ? 0.92 + fp.energy * 0.08 : 1);
-        nodes.push({
-          x: cx + Math.cos(angle) * r,
-          y: cy + Math.sin(angle) * r,
-          i,
-          filled: filledSlot,
-          fp,
-        });
-      }
-
-      // Links between filled neighbors
-      const filledNodes = nodes.filter((nd) => nd.filled);
-      for (let i = 0; i < filledNodes.length; i++) {
-        const a = filledNodes[i]!;
-        const b = filledNodes[(i + 1) % filledNodes.length]!;
-        if (filledNodes.length < 2) break;
-        const pulse = 0.2 + 0.25 * Math.sin(t / 280 + i);
-        ctx.strokeStyle = hexAlpha(C_FILL, pulse * (0.4 + a.fp.energy * 0.4));
-        ctx.lineWidth = 1.3;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        const mx = (a.x + b.x) / 2 + (cy - (a.y + b.y) / 2) * 0.12;
-        const my = (a.y + b.y) / 2 + ((a.x + b.x) / 2 - cx) * 0.12;
-        ctx.quadraticCurveTo(mx, my, b.x, b.y);
-        ctx.stroke();
-      }
-
-      // Nodes
-      for (const nd of nodes) {
-        const isActive = nd.i === s.activeSlot;
-        const isFlash = nd.i === flashSlotRef.current;
-        const sz = nd.filled
-          ? 6.5 + nd.fp.energy * 3 + (isActive ? 1.5 : 0) + (isFlash ? 2 : 0)
-          : 3.5;
-        const col = nd.filled
-          ? nd.fp.warmth > 0.55
-            ? C_HOT
-            : C_FILL
-          : C_EMPTY;
-        const alpha = nd.filled ? 0.7 + nd.fp.density * 0.25 : 0.25;
-
-        if (nd.filled) {
-          const halo = ctx.createRadialGradient(nd.x, nd.y, 0, nd.x, nd.y, sz * 3);
-          halo.addColorStop(0, hexAlpha(C_GLOW, alpha * 0.55 * breathe));
-          halo.addColorStop(1, hexAlpha(col, 0));
-          ctx.fillStyle = halo;
-          ctx.beginPath();
-          ctx.arc(nd.x, nd.y, sz * 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        ctx.fillStyle = hexAlpha(nd.filled ? C_GLOW : C, alpha);
-        ctx.shadowBlur = nd.filled ? 8 + nd.fp.energy * 10 + (isFlash ? 12 : 0) : 0;
-        ctx.shadowColor = hexAlpha(C_HOT, 0.75);
-        ctx.beginPath();
-        ctx.arc(nd.x, nd.y, sz, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        if (isActive || isFlash) {
-          ctx.strokeStyle = hexAlpha(C_ACTIVE, 0.9);
-          ctx.lineWidth = 1.6;
-          ctx.beginPath();
-          ctx.arc(nd.x, nd.y, sz + 5 + flash * 2, 0, Math.PI * 2);
-          ctx.stroke();
-        } else if (nd.filled) {
-          ctx.strokeStyle = hexAlpha(C, 0.35 + nd.fp.density * 0.25);
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.arc(nd.x, nd.y, sz + 3, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-
-        ctx.font = nd.filled ? "700 9px ui-sans-serif, system-ui, sans-serif" : "600 8px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = nd.filled ? "rgba(20,8,16,0.9)" : hexAlpha(C, 0.45);
-        ctx.textAlign = "center";
-        ctx.fillText(`${nd.i + 1}`, nd.x, nd.y + 3);
-
-        // Density ticks
-        if (nd.filled && nd.fp.density > 0.2) {
-          const ticks = Math.round(nd.fp.density * 4);
-          ctx.strokeStyle = hexAlpha(C_GLOW, 0.35);
-          ctx.lineWidth = 1;
-          for (let k = 0; k < ticks; k++) {
-            const a = -Math.PI / 2 + (k / ticks) * Math.PI * 2;
-            ctx.beginPath();
-            ctx.moveTo(nd.x + Math.cos(a) * (sz + 6), nd.y + Math.sin(a) * (sz + 6));
-            ctx.lineTo(nd.x + Math.cos(a) * (sz + 9), nd.y + Math.sin(a) * (sz + 9));
-            ctx.stroke();
-          }
-        }
-      }
-
-      // Center gem
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.35 + occ * 0.08);
-      ctx.beginPath();
-      ctx.arc(cx, cy, 4 + occ * 0.4, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Sparks from filled slots
-      if (occ > 0 && s.enabled) {
-        if (Math.random() < 0.12 + occ * 0.04) {
-          const nd = filledNodes[Math.floor(Math.random() * filledNodes.length)];
-          if (nd) {
-            sparks.current.push({
-              x: nd.x,
-              y: nd.y,
-              vx: (Math.random() - 0.5) * 0.8,
-              vy: (Math.random() - 0.5) * 0.8,
-              life: 1,
-            });
-            if (sparks.current.length > 40) sparks.current.shift();
-          }
-        }
-        for (let i = sparks.current.length - 1; i >= 0; i--) {
-          const p = sparks.current[i]!;
-          p.x += p.vx;
-          p.y += p.vy;
-          p.life -= 0.02;
-          if (p.life <= 0) {
-            sparks.current.splice(i, 1);
-            continue;
-          }
-          ctx.fillStyle = hexAlpha(C_GLOW, p.life * 0.55);
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, 1.2 + p.life * 1.6, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Bottom hint rail
-      const railY = Hcss - 10;
-      ctx.strokeStyle = hexAlpha(C, 0.22);
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(padX, railY);
-      ctx.lineTo(W - padX, railY);
-      ctx.stroke();
-      const fillT = occ / n;
-      ctx.strokeStyle = hexAlpha(C_HOT, 0.85);
-      ctx.beginPath();
-      ctx.moveTo(padX, railY);
-      ctx.lineTo(padX + fillT * usable, railY);
-      ctx.stroke();
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(padX + fillT * usable, railY, 4.5 + flash * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flash * 0.3);
-      ctx.textAlign = "left";
-      ctx.fillText(
-        !s.enabled
-          ? "ORBIT VAULT · BYPASS"
-          : `ORBIT VAULT · ${modeMeta.short} · ${occ}/${n}`,
-        10,
-        Hcss - 8,
-      );
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C, 0.7);
-      ctx.fillText(
-        s.activeSlot >= 0 ? `SLOT ${s.activeSlot + 1}` : "TAP NODE",
-        W - 10,
-        Hcss - 8,
-      );
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintScenes(ctx, W, Hh, st.current, now, flashRef.current);
       },
-      () => ({
-        flash: flashRef.current,
-        active: !!st.current.enabled,
-        dragging: false,
-        particles: 0,
-        motionKey: `${st.current.mode}|${st.current.activeSlot}`,
-      }),
+      () => {
+        const s = st.current;
+        const t = travelRef.current;
+        // Only the carriage animates; a parked timeline can sleep.
+        const running = t.from >= 0 && t.from !== t.to && performance.now() - t.t0 < t.ms + 60;
+        let mask = 0;
+        for (let i = 0; i < s.slots.length; i++) if (s.slots[i]!.filled) mask |= 1 << i;
+        return {
+          flash: flashRef.current,
+          active: s.enabled && running,
+          visible: visibleRef.current,
+          motionKey: motionHash(
+            s.activeSlot,
+            s.lastSlot,
+            s.enabled,
+            t.t0,
+            mask,
+            s.mode === "capture" ? 0 : s.mode === "recall" ? 1 : 2,
+          ),
+        };
+      },
       { minIntervalMs: 22 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div

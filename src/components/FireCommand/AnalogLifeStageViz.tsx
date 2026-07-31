@@ -1,13 +1,48 @@
 /**
  * LIFE — Organic Pulse stage visualizer.
- * Analog Life: drift · rate · instability · tune/env variance (Signal Path Tone · FC.analogLife).
+ *
+ * IDIOM: drift ribbons. Analog life is not a waveform, it is four slow noise
+ * layers wandering at different speeds, so the panel is four horizontal ribbons
+ * stacked with depth — the back ones dim, thin and slow, the front ones bright,
+ * thick and quick — each one wandering across the full width of the letterbox.
+ * Nothing here is a curve you read a value off; it reads as instability.
+ *
+ *   TREMOR  — fast micro jitter        (analogTremor × rate, frayed by instability)
+ *   BREATH  — medium wander            (analogBreath, the widest excursion)
+ *   CLIMATE — very slow bias           (analogClimate, a long lazy tilt)
+ *   EVENTS  — discrete irregular kicks (analogEvents × envVariance, spikes)
+ *
+ * Drift sets every ribbon's amplitude, rate their speed, tune variance splits
+ * each ribbon into per-voice filaments that pull apart, and env variance fires
+ * the event spikes. Beat pips across the top count out the drift rate in BPM.
+ *
+ * The wander is value noise hashed off the layer index and a quantized time
+ * lattice, not `Math.random`, so an idle panel holds still instead of crawling.
+ *
+ * Drift · Rate · Instability · Tune Δ · Env Δ (Signal Path Tone · FC.analogLife).
  * Drag: Rate ↔ / Life ↕. Bottom rail: Env Δ. Every param paints the living scope.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  scanlines,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.analogLife;
@@ -21,70 +56,321 @@ const C_INST = bandShade(FC.tone, 0.62);
 const C_TUNE = bandShade(FC.tone, 0.72);
 const C_ENV = bandShade(FC.tone, 0.82);
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
-
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/** Classic QRS-ish ECG sample at phase 0..1 */
-function ecgSample(phase: number, amt: number, instab: number, tune: number): number {
-  const p = ((phase % 1) + 1) % 1;
-  let y = 0;
-  // P wave
-  if (p > 0.08 && p < 0.18) y = Math.sin(((p - 0.08) / 0.1) * Math.PI) * 0.18 * amt;
-  // Q
-  if (p > 0.28 && p < 0.32) y = -0.22 * amt;
-  // R spike
-  if (p > 0.32 && p < 0.38) {
-    const t = (p - 0.32) / 0.06;
-    y = t < 0.5 ? t * 2 * amt : (1 - (t - 0.5) * 2) * amt;
-  }
-  // S
-  if (p > 0.38 && p < 0.44) y = -0.28 * amt * (1 - (p - 0.38) / 0.06);
-  // T wave
-  if (p > 0.52 && p < 0.72) y = Math.sin(((p - 0.52) / 0.2) * Math.PI) * 0.32 * amt;
-  // Tune bends baseline into a slow sine
-  y += Math.sin(p * Math.PI * 2 + tune * 4) * tune * 0.12;
-  // Instability noise
-  if (instab > 0.02) y += (Math.random() - 0.5) * instab * 0.35;
-  return y;
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+/**
+ * Smooth value noise over a 1-D lattice. Deterministic in (x, seed), which is
+ * what lets an idle panel hold a frozen field instead of shimmering.
+ */
+function noise1(x: number, seed: number): number {
+  const i = Math.floor(x);
+  const f = x - i;
+  const a = hash01(i * 1.13 + seed * 57.7);
+  const b = hash01((i + 1) * 1.13 + seed * 57.7);
+  const u = f * f * (3 - 2 * f);
+  return (a + (b - a) * u) * 2 - 1;
+}
+
+/** Two octaves — enough to look organic without looking like white noise. */
+function fbm(x: number, seed: number): number {
+  return noise1(x, seed) * 0.7 + noise1(x * 2.7, seed + 11) * 0.3;
+}
+
+/**
+ * Offsets are sampled once per filament into these, then every path walk reads
+ * them back. `glowStroke` replays its path three times, so recomputing noise
+ * inside the walk would triple the cost of the most expensive layer.
+ */
+const MAX_STEPS = 256;
+const OFF_BODY = new Float32Array(MAX_STEPS + 1);
+const OFF_FIL = new Float32Array(MAX_STEPS + 1);
+
+export type AnalogLifeVizState = {
+  drift: number;
+  rate: number;
+  instab: number;
+  tune: number;
+  env: number;
+  tremor: number;
+  breath: number;
+  climate: number;
+  events: number;
+};
+
+type Ribbon = {
+  label: string;
+  col: string;
+  /** Fraction of panel height the ribbon's centreline sits at. */
+  cy: number;
+  /** Lattice cells across the width — low is slow and lazy. */
+  cells: number;
+  /** Scroll speed multiplier against the master rate. */
+  speed: number;
+  /** Amplitude multiplier against drift. */
+  amp: number;
+  /** Ribbon body thickness in px. */
+  thick: number;
+  /** Depth 0 (far) .. 1 (near) — sets alpha and line weight. */
+  depth: number;
+  scale: number;
+  seed: number;
+};
+
+/**
+ * Paint the drift field. Exported and pure so any life setting can be rendered
+ * headlessly without mounting the component.
+ */
+export function paintAnalogLife(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: AnalogLifeVizState,
+  now: number,
+  flash: number,
+): void {
+  const life = Math.max(p.drift, p.instab * 0.9, p.tune * 0.7, p.env * 0.6);
+  const dormant = life < 0.02;
+  const energy = dormant ? 0.06 : 0.18 + life * 0.6;
+  const t = now / 1000;
+  const rate = clamp(p.rate, 0.05, 1);
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.5 });
+
+  const padL = 62;
+  const padR = 18;
+  const span = Math.max(60, W - padL - padR);
+  const top = 26;
+  const bottom = Hh - 34;
+
+  // ── beat pips: the drift rate, counted out along the top ──
+  const bpm = 28 + rate * 92;
+  const beats = Math.max(4, Math.min(48, Math.round(span / 40)));
+  const beatPhase = (t * bpm) / 60;
+  for (let i = 0; i < beats; i++) {
+    const x = padL + ((i + 0.5) / beats) * span;
+    const lit0 = dormant ? 0 : Math.max(0, 1 - Math.abs(((beatPhase % beats) - i)) * 1.6);
+    ctx.fillStyle = hexA(C_RATE, 0.12 + lit0 * 0.6);
+    ctx.fillRect(x - 1, top - 12, 2, 5 + lit0 * 4);
+  }
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_RATE, 0.55);
+  ctx.fillText("RATE", padL - 6, top - 8);
+
+  // ── the four ribbons, far to near ──
+  const ribbons: Ribbon[] = [
+    { label: "CLIMATE", col: C_TUNE, cy: 0.3, cells: 2.2, speed: 0.1, amp: 1.5, thick: 16, depth: 0.15, scale: p.climate, seed: 3 },
+    { label: "BREATH", col: C_DRIFT, cy: 0.46, cells: 5, speed: 0.34, amp: 1.15, thick: 12, depth: 0.45, scale: p.breath, seed: 7 },
+    { label: "TREMOR", col: C_INST, cy: 0.62, cells: 18, speed: 1.5, amp: 0.55, thick: 7, depth: 0.8, scale: p.tremor, seed: 13 },
+    { label: "EVENTS", col: C_ENV, cy: 0.76, cells: 9, speed: 0.5, amp: 0.7, thick: 6, depth: 1, scale: p.events, seed: 23 },
+  ];
+
+  // Per-voice filaments pull apart as tune variance rises.
+  const filaments = 1 + Math.round(clamp(p.tune, 0, 1) * 4);
+
+  for (let r = 0; r < ribbons.length; r++) {
+    const rb = ribbons[r]!;
+    const cy = top + rb.cy * (bottom - top);
+    const gain = clamp(p.drift, 0, 1) * clamp(rb.scale, 0, 1) * rb.amp;
+    const swing = (bottom - top) * 0.13 * gain;
+    const scroll = t * rate * rb.speed;
+    const fray = clamp(p.instab, 0, 1);
+    const isEvents = rb.label === "EVENTS";
+    const alpha = (0.1 + rb.depth * 0.16 + gain * 0.3) * (dormant ? 0.3 : 1);
+
+    // Rail — where the ribbon would sit with no life at all.
+    ctx.strokeStyle = hexA(C_MID, 0.07 + rb.depth * 0.05);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, Math.round(cy) + 0.5);
+    ctx.lineTo(padL + span, Math.round(cy) + 0.5);
+    ctx.stroke();
+
+    const steps = Math.max(40, Math.min(MAX_STEPS, (span / 8) | 0));
+    const sample = (out: Float32Array, fil: number) => {
+      for (let i = 0; i <= steps; i++) {
+        const lattice = (i / steps) * rb.cells + scroll;
+        let v = fbm(lattice + fil * 3.7, rb.seed + fil);
+        if (isEvents) {
+          // Events are irregular kicks, not a wander: a hashed gate that only
+          // fires in the cells env variance opens up.
+          const cell = Math.floor(lattice);
+          const gate = hash01(cell * 3.3 + rb.seed);
+          const local = lattice - cell;
+          // Kicks alternate direction per cell so the row reads as events
+          // rather than a rectified wobble.
+          const sign = cell % 2 === 0 ? 1 : -1;
+          v = gate < 0.12 + clamp(p.env, 0, 1) * 0.4 ? Math.exp(-local * 5) * sign : v * 0.12;
+        }
+        // Instability frays the edge — same hash every frame, so it holds still.
+        const grit = fray * (hash01(i * 2.1 + fil * 17 + rb.seed) - 0.5) * 0.5;
+        out[i] = (v + grit) * swing * (1 - fil * 0.12);
+      }
     };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+    sample(OFF_BODY, 0);
+
+    // Ribbon body: a filled band between the wander and its thickness.
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      ctx.lineTo(padL + (i / steps) * span, cy + OFF_BODY[i]! - rb.thick * 0.5);
+    }
+    for (let i = steps; i >= 0; i--) {
+      ctx.lineTo(padL + (i / steps) * span, cy + OFF_BODY[i]! + rb.thick * 0.5);
+    }
+    ctx.closePath();
+    const body = cachedGrad(ctx, `ribbon|${r}|${Hh}|${(gain * 10) | 0}`, (c) => {
+      const g = c.createLinearGradient(0, cy - rb.thick, 0, cy + rb.thick);
+      g.addColorStop(0, hexA(rb.col, 0.05));
+      g.addColorStop(0.5, hexA(rb.col, 0.45));
+      g.addColorStop(1, hexA(rb.col, 0.05));
+      return g;
+    });
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = body;
+    ctx.fill();
+    ctx.restore();
+
+    // Filaments — one per voice as tune variance splits the pitch.
+    const walk = (out: Float32Array) => {
+      for (let i = 0; i <= steps; i++) {
+        const x = padL + (i / steps) * span;
+        const y = cy + out[i]!;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+    };
+    glowStroke(ctx, () => walk(OFF_BODY), rb.col, {
+      width: 0.8 + rb.depth * 1.4,
+      glow: dormant ? 0 : rb.depth * (0.5 + gain),
+      alpha: (0.3 + rb.depth * 0.45 + gain * 0.25) * (dormant ? 0.35 : 1),
+    });
+    for (let fil = 1; fil < filaments; fil++) {
+      sample(OFF_FIL, fil);
+      ctx.strokeStyle = hexA(rb.col, (0.1 + rb.depth * 0.12) * (dormant ? 0.3 : 1));
+      ctx.lineWidth = 0.7;
+      ctx.beginPath();
+      walk(OFF_FIL);
+      ctx.stroke();
+    }
+
+    // Event spikes get a bloom where they land.
+    if (isEvents && !dormant && p.env > 0.04) {
+      lit(ctx, () => {
+        for (let i = 0; i <= steps; i += 4) {
+          const off = OFF_BODY[i]!;
+          if (Math.abs(off) < swing * 0.55) continue;
+          drawGlow(ctx, padL + (i / steps) * span, cy + off, 6 + p.env * 8, C_ENV, 0.25 + p.env * 0.35);
+        }
+      });
+    }
+
+    // Layer label in the left gutter — the ribbon names itself.
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "right";
+    ctx.fillStyle = hexA(rb.col, (0.4 + rb.depth * 0.3) * (dormant ? 0.5 : 1));
+    ctx.fillText(rb.label, padL - 6, cy + 3);
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(rb.col, 0.34);
+    ctx.fillText(`${Math.round(clamp(rb.scale, 0, 1) * 100)}`, padL + span + 3, cy + 3);
+  }
+
+  // ── vitality strip along the top: one bar per param ──
+  if (W >= 460) {
+    const meters: Array<{ v: number; col: string; label: string }> = [
+      { v: p.drift, col: C_DRIFT, label: "DRIFT" },
+      { v: (p.rate - 0.05) / 0.95, col: C_RATE, label: "RATE" },
+      { v: p.instab, col: C_INST, label: "INST" },
+      { v: p.tune, col: C_TUNE, label: "TUNE" },
+      { v: p.env, col: C_ENV, label: "ENV" },
+    ];
+    ctx.font = VIZ_FONT_LABEL;
+    for (let i = 0; i < meters.length; i++) {
+      const m = meters[i]!;
+      const bx = 136 + i * 92;
+      const bw = 44;
+      ctx.fillStyle = "rgba(0,0,0,0.4)";
+      ctx.fillRect(bx, 10, bw, 6);
+      ctx.fillStyle = hexA(m.col, 0.8);
+      ctx.fillRect(bx, 11, Math.max(1, bw * clamp(m.v, 0, 1)), 4);
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexA(m.col, 0.62);
+      ctx.fillText(m.label, bx + bw + 4, 16);
+    }
+  }
+
+  // Rate / life crosshair — the drag handle's read-back.
+  const hx = ((rate - 0.05) / 0.95) * W;
+  const lifeAmt = Math.max(p.drift / 0.7, p.instab / 0.55, p.tune / 0.4, 0);
+  const hy = (1 - clamp(lifeAmt, 0, 1)) * (Hh * 0.7);
+  ctx.strokeStyle = hexA(C_GLOW, dormant ? 0.1 : 0.36 + flash * 0.3);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(hx - 9, hy);
+  ctx.lineTo(hx + 9, hy);
+  ctx.moveTo(hx, hy - 9);
+  ctx.lineTo(hx, hy + 9);
+  ctx.stroke();
+  ctx.fillStyle = hexA(C_HOT, 0.7 + flash * 0.3);
+  ctx.beginPath();
+  ctx.arc(hx, hy, 3 + flash * 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (dormant) {
+    ctx.fillStyle = "rgba(0,0,0,0.32)";
+    ctx.fillRect(0, 0, W, Hh - 24);
+    ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_GLOW, 0.48);
+    ctx.fillText("STILL · drag to wake organic life", W * 0.5, Hh * 0.5);
+  }
+
+  pill(ctx, W * 0.5, 3, dormant ? "STILL" : "ALIVE", C_GLOW, { glow: flash });
+
+  // ── env Δ rail along the bottom, clear of the footer band ──
+  const railY = Hh - 25;
+  const railW = W - 24;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(12, railY, railW, 6);
+  if (p.env > 0.01) {
+    const eg = cachedGrad(ctx, `envrail|${W}`, (c) => {
+      const g = c.createLinearGradient(12, 0, 12 + railW, 0);
+      g.addColorStop(0, hexA(C_ENV, 0.35));
+      g.addColorStop(1, hexA(C_GLOW, 0.92));
+      return g;
+    });
+    ctx.fillStyle = eg;
+    ctx.fillRect(12, railY + 1, Math.max(2, railW * p.env), 4);
+  }
+  lit(ctx, () => drawGlow(ctx, 12 + railW * p.env, railY + 3, 7 + flash * 4, C_GLOW, 0.8));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_ENV, 0.7);
+  ctx.fillText("ENV Δ", 14, railY - 3);
+
+  scanlines(ctx, W, Hh, 0.03, 3);
+  grain(ctx, W, Hh, 0.03);
+  bezel(ctx, W, Hh, C);
+
+  let right = "STILL";
+  if (!dormant) {
+    const bits: string[] = [];
+    if (p.drift > 0.04) bits.push(`DR${Math.round(p.drift * 100)}`);
+    if (p.instab > 0.04) bits.push(`IN${Math.round(p.instab * 100)}`);
+    if (p.tune > 0.04) bits.push(`TN${Math.round(p.tune * 100)}`);
+    if (p.env > 0.04) bits.push(`EV${Math.round(p.env * 100)}`);
+    bits.push(`~${Math.round(bpm)}bpm`);
+    right = bits.join(" · ");
+  }
+  footer(ctx, W, Hh, "LIFE · ORGANIC PULSE", right, C_GLOW, dormant ? C_MID : C_HOT);
 }
 
 export function AnalogLifeStageViz() {
@@ -93,29 +379,29 @@ export function AnalogLifeStageViz() {
   const instab = useFireCommandStore((s) => s.patch.voiceInstability) ?? 0;
   const tune = useFireCommandStore((s) => s.patch.tuneVariance) ?? 0;
   const env = useFireCommandStore((s) => s.patch.envVariance) ?? 0;
+  const tremor = useFireCommandStore((s) => s.patch.analogTremor) ?? 0.55;
+  const breath = useFireCommandStore((s) => s.patch.analogBreath) ?? 0.45;
+  const climate = useFireCommandStore((s) => s.patch.analogClimate) ?? 0.3;
+  const events = useFireCommandStore((s) => s.patch.analogEvents) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<"xy" | "env" | null>(null);
-  const prevKey = useRef("");
-  const st = useRef({ drift, rate, instab, tune, env });
-  st.current = { drift, rate, instab, tune, env };
+  const prevKey = useRef(0);
+  const st = useRef<AnalogLifeVizState>({ drift, rate, instab, tune, env, tremor, breath, climate, events });
+  st.current = { drift, rate, instab, tune, env, tremor, breath, climate, events };
 
   const alive = drift > 0.02 || instab > 0.02 || tune > 0.02 || env > 0.02;
   const bpm = Math.round(28 + rate * 92);
 
   useEffect(() => {
-    const key = `${drift.toFixed(3)}|${rate.toFixed(3)}|${instab.toFixed(3)}|${tune.toFixed(3)}|${env.toFixed(3)}`;
+    const key = motionHash(drift, rate, instab, tune, env, tremor, breath, climate, events);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [drift, rate, instab, tune, env]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [drift, rate, instab, tune, env, tremor, breath, climate, events]);
 
   const applyXy = useCallback(
     (clientX: number, clientY: number) => {
@@ -125,13 +411,13 @@ export function AnalogLifeStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       const y = clamp((clientY - rect.top) / Math.max(1, rect.height * 0.78), 0, 1);
       const r = 0.05 + x * 0.95;
-      const life = 1 - y;
+      const lifeAmt = 1 - y;
       setParam("driftRate", Math.round(r * 1000) / 1000);
-      setParam("drift", Math.round(life * 0.7 * 1000) / 1000);
-      setParam("voiceInstability", Math.round(life * 0.55 * 1000) / 1000);
-      setParam("tuneVariance", Math.round(life * 0.4 * 1000) / 1000);
+      setParam("drift", Math.round(lifeAmt * 0.7 * 1000) / 1000);
+      setParam("voiceInstability", Math.round(lifeAmt * 0.55 * 1000) / 1000);
+      setParam("tuneVariance", Math.round(lifeAmt * 0.4 * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const applyEnv = useCallback(
@@ -142,7 +428,7 @@ export function AnalogLifeStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       setParam("envVariance", Math.round(x * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -161,7 +447,7 @@ export function AnalogLifeStageViz() {
       wrap.setPointerCapture(e.pointerId);
       applyXy(e.clientX, e.clientY);
     },
-    [applyXy, applyEnv],
+    [applyXy, applyEnv, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -178,7 +464,7 @@ export function AnalogLifeStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     setParam("drift", 0);
@@ -193,342 +479,12 @@ export function AnalogLifeStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const wander = [0, 0, 0, 0, 0];
-    const wanderT = [0, 0, 0, 0, 0];
-    const sparks: Array<{ x: number; y: number; life: number; vx: number; vy: number; hue: number }> = [];
-    const envBeats: Array<{ x: number; life: number; amp: number }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.86;
-
-      const life = Math.max(p.drift, p.instab * 0.9, p.tune * 0.7, p.env * 0.6);
-      const dormant = life < 0.02;
-      const energy = dormant ? 0.08 : 0.22 + life * 0.78;
-      const beatHz = 0.45 + p.rate * 2.4;
-      const beatPhase = (now / 1000) * beatHz;
-
-      ctx.clearRect(0, 0, W, Hh);
-
-      // Warm Tone gold chamber — breathes with drift
-      const breath = dormant ? 0 : (Math.sin(beatPhase * Math.PI * 2) * 0.5 + 0.5) * p.drift;
-      const cx = W * (0.42 + p.tune * 0.08);
-      const cy = Hh * (0.38 - breath * 0.04);
-      const bg = ctx.createRadialGradient(cx, cy, 4, W * 0.5, Hh * 0.48, W * 0.78);
-      bg.addColorStop(0, hexAlpha(C_HOT, 0.1 + energy * 0.32 + flashRef.current * 0.28 + breath * 0.12));
-      bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.58));
-      bg.addColorStop(1, "rgba(6,4,1,0.98)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Soft organic vignette rings
-      if (!dormant && p.drift > 0.05) {
-        for (let r = 0; r < 3; r++) {
-          const rad = 18 + r * 22 + breath * 14 + p.drift * 20;
-          ctx.beginPath();
-          ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-          ctx.strokeStyle = hexAlpha(C_DRIFT, (0.12 - r * 0.03) * p.drift);
-          ctx.lineWidth = 1.2;
-          ctx.stroke();
-        }
-      }
-
-      // Scope grid — denser with rate
-      const grid = Math.max(10, 16 - Math.round(p.rate * 4));
-      ctx.strokeStyle = hexAlpha(C_MID, 0.07 + life * 0.1);
-      ctx.lineWidth = 1;
-      for (let x = 0; x < W; x += grid) {
-        ctx.globalAlpha = x % (grid * 4) === 0 ? 0.4 : 0.14;
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, Hh - 22);
-        ctx.stroke();
-      }
-      for (let y = 0; y < Hh - 22; y += grid) {
-        ctx.globalAlpha = y % (grid * 3) === 0 ? 0.35 : 0.12;
-        ctx.beginPath();
-        ctx.moveTo(0, y + 0.5);
-        ctx.lineTo(W, y + 0.5);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-
-      // Left vitality meters — one per param
-      const meters: Array<{ v: number; col: string; label: string }> = [
-        { v: p.drift, col: C_DRIFT, label: "DR" },
-        { v: (p.rate - 0.05) / 0.95, col: C_RATE, label: "RT" },
-        { v: p.instab, col: C_INST, label: "IN" },
-        { v: p.tune, col: C_TUNE, label: "TN" },
-        { v: p.env, col: C_ENV, label: "EV" },
-      ];
-      const mX = 10;
-      const mH = 28;
-      meters.forEach((m, i) => {
-        const my = 28 + i * (mH + 4);
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(mX, my, 8, mH);
-        const fillH = mH * clamp(m.v, 0, 1);
-        const g = ctx.createLinearGradient(mX, my + mH, mX, my + mH - fillH);
-        g.addColorStop(0, hexAlpha(m.col, 0.35));
-        g.addColorStop(1, hexAlpha(m.col, 0.95));
-        ctx.fillStyle = g;
-        ctx.shadowBlur = m.v > 0.05 ? 6 : 0;
-        ctx.shadowColor = m.col;
-        ctx.fillRect(mX, my + mH - fillH, 8, fillH);
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = hexAlpha(m.col, 0.55 + m.v * 0.4);
-        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "left";
-        ctx.fillText(m.label, mX + 11, my + mH - 2);
-      });
-
-      // Central breathing nucleus (Life amount)
-      const nucleusR = 10 + p.drift * 22 + breath * 8 + flashRef.current * 6;
-      const ng = ctx.createRadialGradient(cx, cy, 0, cx, cy, nucleusR * 1.6);
-      ng.addColorStop(0, hexAlpha(C_GLOW, dormant ? 0.08 : 0.35 + breath * 0.35));
-      ng.addColorStop(0.45, hexAlpha(C_HOT, dormant ? 0.05 : 0.22 + p.drift * 0.25));
-      ng.addColorStop(1, hexAlpha(C, 0));
-      ctx.fillStyle = ng;
-      ctx.beginPath();
-      ctx.arc(cx, cy, nucleusR * 1.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx, cy, nucleusR * 0.35, 0, Math.PI * 2);
-      ctx.fillStyle = hexAlpha(C_GLOW, dormant ? 0.15 : 0.55 + breath * 0.35);
-      ctx.shadowBlur = 12 + p.drift * 16;
-      ctx.shadowColor = C;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Wander targets for multi-voice traces
-      const amt = Math.max(0.05, p.drift * 0.75 + p.instab * 0.85 + p.tune * 0.4);
-      const spd = 0.02 + p.rate * 0.1;
-      for (let i = 0; i < wander.length; i++) {
-        if (Math.random() < 0.03 + p.rate * 0.08) wanderT[i] = (Math.random() * 2 - 1) * amt;
-        wander[i]! += (wanderT[i]! - wander[i]!) * spd;
-      }
-
-      // Primary ECG ribbon (drift + rate)
-      const midY = Hh * 0.42;
-      const ampPx = Hh * (0.14 + p.drift * 0.22);
-      const cycles = 2.2 + p.rate * 2.8;
-      const scroll = beatPhase * 0.85;
-      ctx.beginPath();
-      for (let x = 0; x <= W; x += 2) {
-        const phase = (x / W) * cycles + scroll;
-        const sample = ecgSample(phase, 1, p.instab, p.tune);
-        const wob = wander[0]! * Hh * 0.06;
-        const y = midY - sample * ampPx + wob;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = hexAlpha(C_GLOW, dormant ? 0.2 : 0.55 + energy * 0.4);
-      ctx.lineWidth = 2.4;
-      ctx.shadowBlur = 10 + life * 14 + flashRef.current * 16;
-      ctx.shadowColor = C;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Ghost ECG fill
-      if (!dormant) {
-        ctx.beginPath();
-        ctx.moveTo(0, midY);
-        for (let x = 0; x <= W; x += 3) {
-          const phase = (x / W) * cycles + scroll;
-          const sample = ecgSample(phase, 1, p.instab * 0.5, p.tune);
-          ctx.lineTo(x, midY - sample * ampPx * 0.85 + wander[0]! * Hh * 0.04);
-        }
-        ctx.lineTo(W, midY);
-        ctx.closePath();
-        const fill = ctx.createLinearGradient(0, midY - ampPx, 0, midY + ampPx * 0.4);
-        fill.addColorStop(0, hexAlpha(C_HOT, 0.18 + energy * 0.15));
-        fill.addColorStop(0.55, hexAlpha(C, 0.06));
-        fill.addColorStop(1, hexAlpha(C_DEEP, 0.08));
-        ctx.fillStyle = fill;
-        ctx.fill();
-      }
-
-      // Secondary voice traces (instability / tune)
-      for (let i = 1; i < 4; i++) {
-        const y0 = Hh * (0.22 + i * 0.09);
-        const col = i === 1 ? C_INST : i === 2 ? C_TUNE : C_DRIFT;
-        const a = (0.18 + life * 0.4 - i * 0.03) * (dormant ? 0.25 : 1);
-        ctx.beginPath();
-        for (let x = 0; x <= W; x += 3) {
-          const phase = (x / W) * (cycles * 0.7) + scroll * (0.7 + i * 0.08) + i * 0.2;
-          const sample = ecgSample(phase, 0.55 + p.instab * 0.3, p.instab * 0.7, p.tune);
-          const y = y0 - sample * ampPx * 0.45 + wander[i]! * Hh * 0.08;
-          if (x === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = hexAlpha(col, a);
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-      }
-
-      // Instability sparks
-      if (p.instab > 0.08 && Math.random() < 0.12 + p.instab * 0.35) {
-        sparks.push({
-          x: Math.random() * W,
-          y: midY + (Math.random() - 0.5) * ampPx * 2,
-          life: 1,
-          vx: (Math.random() - 0.5) * 2.5,
-          vy: (Math.random() - 0.5) * 2,
-          hue: Math.random() > 0.5 ? 0 : 1,
-        });
-      }
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const s = sparks[i]!;
-        s.life -= 0.035 + (1 - p.instab) * 0.02;
-        if (s.life <= 0) {
-          sparks.splice(i, 1);
-          continue;
-        }
-        s.x += s.vx;
-        s.y += s.vy;
-        const col = s.hue ? C_INST : C_HOT;
-        ctx.fillStyle = hexAlpha(col, s.life * 0.8);
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, 1.2 + p.instab * 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Tune variance — pitch ladder ticks on right
-      if (p.tune > 0.04) {
-        const steps = 3 + Math.round(p.tune * 5);
-        for (let i = 0; i < steps; i++) {
-          const ty = Hh * 0.18 + (i / Math.max(1, steps - 1)) * Hh * 0.42;
-          const wob = Math.sin(now * 0.003 + i) * p.tune * 4;
-          ctx.strokeStyle = hexAlpha(C_TUNE, 0.25 + p.tune * 0.45);
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(W - 36 + wob, ty);
-          ctx.lineTo(W - 14, ty);
-          ctx.stroke();
-        }
-      }
-
-      // Env variance — spawn breath pulses along rail
-      if (p.env > 0.05 && Math.random() < 0.08 + p.env * 0.2) {
-        envBeats.push({ x: 14 + Math.random() * (W - 28) * p.env, life: 1, amp: 6 + p.env * 14 });
-      }
-      for (let i = envBeats.length - 1; i >= 0; i--) {
-        const b = envBeats[i]!;
-        b.life -= 0.03;
-        if (b.life <= 0) {
-          envBeats.splice(i, 1);
-          continue;
-        }
-        const eh = b.amp * b.life;
-        const eg = ctx.createLinearGradient(b.x, Hh - 22 - eh, b.x, Hh - 22);
-        eg.addColorStop(0, hexAlpha(C_ENV, 0));
-        eg.addColorStop(1, hexAlpha(C_ENV, b.life * 0.55));
-        ctx.fillStyle = eg;
-        ctx.fillRect(b.x - 2, Hh - 22 - eh, 4, eh);
-      }
-
-      // Env rail
-      const railY = Hh - 16;
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(12, railY, W - 24, 7);
-      ctx.strokeStyle = hexAlpha(C_ENV, 0.25);
-      ctx.strokeRect(12.5, railY + 0.5, W - 25, 6);
-      const envW = (W - 24) * p.env;
-      if (p.env > 0.01) {
-        const pulse = (Math.sin(now * 0.005) * 0.5 + 0.5) * p.env;
-        const eg = ctx.createLinearGradient(12, railY, 12 + envW, railY);
-        eg.addColorStop(0, hexAlpha(C_ENV, 0.35));
-        eg.addColorStop(1, hexAlpha(C_GLOW, 0.95));
-        ctx.fillStyle = eg;
-        ctx.shadowBlur = 8 + pulse * 12;
-        ctx.shadowColor = C;
-        ctx.fillRect(12, railY, envW, 7);
-        ctx.shadowBlur = 0;
-      }
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(12 + envW, railY + 3.5, 3.5 + flashRef.current * 1.8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = hexAlpha(C_ENV, 0.7);
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText("ENV Δ", 14, railY - 3);
-
-      // Rate / life crosshair
-      const hx = ((p.rate - 0.05) / 0.95) * W;
-      const lifeAmt = Math.max(p.drift / 0.7, p.instab / 0.55, p.tune / 0.4, 0);
-      const hy = (1 - clamp(lifeAmt, 0, 1)) * (Hh * 0.7);
-      ctx.strokeStyle = hexAlpha(C_GLOW, dormant ? 0.1 : 0.4 + flashRef.current * 0.3);
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(hx - 9, hy);
-      ctx.lineTo(hx + 9, hy);
-      ctx.moveTo(hx, hy - 9);
-      ctx.lineTo(hx, hy + 9);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(hx, hy, 3 + flashRef.current * 2, 0, Math.PI * 2);
-      ctx.fillStyle = hexAlpha(C_HOT, 0.7 + flashRef.current * 0.3);
-      ctx.fill();
-
-      // Heartbeat ring (top-right) — rate drives needle speed via flash sync
-      const gx = W - 30;
-      const gy = 26;
-      const gr = 14;
-      ctx.strokeStyle = hexAlpha(C_MID, 0.3);
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(gx, gy, gr, -Math.PI * 0.75, Math.PI * 0.75);
-      ctx.stroke();
-      const beatFlash = Math.pow(Math.max(0, Math.sin(beatPhase * Math.PI * 2)), 8);
-      const ang = -Math.PI * 0.75 + Math.PI * 1.5 * clamp(life, 0, 1);
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.65 + beatFlash * 0.35);
-      ctx.lineWidth = 2.2;
-      ctx.shadowBlur = 8 + beatFlash * 10;
-      ctx.shadowColor = C;
-      ctx.beginPath();
-      ctx.moveTo(gx, gy);
-      ctx.lineTo(gx + Math.cos(ang) * (gr - 2), gy + Math.sin(ang) * (gr - 2));
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      if (beatFlash > 0.4 && !dormant) {
-        ctx.beginPath();
-        ctx.arc(gx, gy, gr + 2 + beatFlash * 4, 0, Math.PI * 2);
-        ctx.strokeStyle = hexAlpha(C_HOT, beatFlash * 0.45);
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-
-      if (dormant) {
-        ctx.fillStyle = "rgba(0,0,0,0.32)";
-        ctx.fillRect(0, 0, W, Hh - 24);
-        ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.48 + Math.sin(now / 520) * 0.12);
-        ctx.fillText("STILL · drag to wake organic life", W * 0.5, Hh * 0.4);
-      }
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      ctx.fillText("LIFE · ORGANIC PULSE", 12, Hh - 2);
-      ctx.textAlign = "right";
-      if (dormant) {
-        ctx.fillStyle = hexAlpha(C_MID, 0.5);
-        ctx.fillText("STILL", W - 12, Hh - 2);
-      } else {
-        const bits: string[] = [];
-        if (p.drift > 0.04) bits.push(`DR${Math.round(p.drift * 100)}`);
-        if (p.instab > 0.04) bits.push(`IN${Math.round(p.instab * 100)}`);
-        if (p.tune > 0.04) bits.push(`TN${Math.round(p.tune * 100)}`);
-        if (p.env > 0.04) bits.push(`EV${Math.round(p.env * 100)}`);
-        bits.push(`~${Math.round(28 + p.rate * 92)}bpm`);
-        ctx.fillStyle = hexAlpha(C_HOT, 0.88);
-        ctx.fillText(bits.join(" · "), W - 12, Hh - 2);
-      }
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintAnalogLife(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
@@ -538,23 +494,33 @@ export function AnalogLifeStageViz() {
           (st.current.tune ?? 0) > 0.02 ||
           (st.current.env ?? 0) > 0.02,
         dragging: !!dragRef.current,
-        particles: sparks.length,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.drift,
+          st.current.rate,
+          st.current.instab,
+          st.current.tune,
+          st.current.env,
+          st.current.tremor,
+          st.current.breath,
+          st.current.climate,
+          st.current.events,
+        ),
       }),
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, alive ? 0.55 : 0.28),
+        borderColor: hexA(C, alive ? 0.55 : 0.28),
         height: H,
         cursor: "crosshair",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexAlpha(C, alive ? 0.26 : 0.08)}, 0 10px 28px rgba(0,0,0,0.42)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexA(C, alive ? 0.26 : 0.08)}, 0 10px 28px rgba(0,0,0,0.42)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -566,19 +532,19 @@ export function AnalogLifeStageViz() {
       aria-label="Analog life organic pulse"
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Organic Pulse
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 flex items-center gap-1.5 font-mono text-[9px] tabular-nums"
-        style={{ color: hexAlpha(C_HOT, 0.75) }}
+        style={{ color: hexA(C_HOT, 0.75) }}
       >
         <span
           className="inline-block h-1.5 w-1.5 rounded-full"

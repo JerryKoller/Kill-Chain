@@ -6,6 +6,7 @@
 import { useFireCommandStore, SCENE_SLOTS } from "@/state/fireCommandStore";
 import type { FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FcSegStrip, fcChipCharacterFor, type FcSegOption } from "./fcChip";
 import {
   SCENE_MODES,
   type SceneMode,
@@ -14,6 +15,9 @@ import {
   firstEmptySlot,
 } from "./ScenesStageViz";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Performance band — faceted gem chips. */
+const SCENES_CHAR = fcChipCharacterFor("scenes");
 
 export const SCENES_C = FC.scenes;
 export const SCENES_C_GLOW = bandShade(FC_BAND.perf, 0.98);
@@ -66,36 +70,22 @@ export function ScenesModeStrip({
   mode: SceneMode;
   onModeChange: (m: SceneMode) => void;
 }) {
+  const opts: FcSegOption<SceneMode>[] = SCENE_MODES.map((m) => ({
+    id: m.id,
+    label: m.label,
+    tip: m.label,
+  }));
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCENES_C}66` }}>
-        Mode
-      </span>
-      {SCENE_MODES.map((m) => {
-        const on = mode === m.id;
-        return (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => onModeChange(m.id)}
-            className="rounded-md border px-2.5 py-0.5 text-[9px] font-bold transition"
-            style={
-              on
-                ? {
-                    borderColor: `${SCENES_C_MODE}99`,
-                    background: `${SCENES_C_MODE}28`,
-                    color: SCENES_C_GLOW,
-                    boxShadow: `0 0 8px ${SCENES_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={m.label}
-          >
-            {m.label}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<SceneMode>
+      eyebrow="Mode"
+      value={mode}
+      onChange={onModeChange}
+      options={opts}
+      tone={{ color: SCENES_C_MODE, onText: SCENES_C_GLOW, glow: 8 }}
+      caseMode="normal"
+      character={SCENES_CHAR}
+      padX="lg"
+    />
   );
 }
 

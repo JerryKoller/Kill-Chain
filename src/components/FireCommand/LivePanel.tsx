@@ -6,7 +6,11 @@
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
 import { VOICE_CAPS } from "./LiveStageViz";
+
+/** Live Controls sits in the Mix band — console chips with an LED underline. */
+const LIVE_CHAR = fcChipCharacterFor("performance");
 
 export const LIVE_C = FC.performance;
 export const LIVE_C_GLOW = bandShade(FC_BAND.mix, 0.95);
@@ -68,45 +72,36 @@ export function LiveCharacterStrip() {
   const setMaxVoices = useFireCommandStore((s) => s.setMaxVoices);
   const setRouteThroughFx = useFireCommandStore((s) => s.setRouteThroughFx);
   const c = LIVE_C;
+  const tone = { color: c, onText: LIVE_C_GLOW, glow: 10 };
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Stage
       </span>
-      {LIVE_CHARS.map((p) => {
-        const on =
-          mono === p.mono &&
-          maxVoices === p.voices &&
-          fxOn === p.fx &&
-          Math.abs(master - p.master) < 0.08;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setParam("mono", p.mono);
-              setMaxVoices(p.voices);
-              setRouteThroughFx(p.fx);
-              setParam("masterGain", p.master);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: LIVE_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.label} · ${p.mono ? "mono" : "poly"} · ${p.voices}v · ${p.fx ? "FX" : "dry"}`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {LIVE_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={
+            mono === p.mono &&
+            maxVoices === p.voices &&
+            fxOn === p.fx &&
+            Math.abs(master - p.master) < 0.08
+          }
+          tone={tone}
+          character={LIVE_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setParam("mono", p.mono);
+            setMaxVoices(p.voices);
+            setRouteThroughFx(p.fx);
+            setParam("masterGain", p.master);
+          }}
+          title={`${p.label} · ${p.mono ? "mono" : "poly"} · ${p.voices}v · ${p.fx ? "FX" : "dry"}`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -150,34 +145,25 @@ export function LiveOctaveStrip() {
   const octave = useFireCommandStore((s) => s.octave);
   const setOctave = useFireCommandStore((s) => s.setOctave);
   const octs = [2, 3, 4, 5, 6];
+  const tone = { color: LIVE_C_OCT, onText: LIVE_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${LIVE_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${LIVE_C}66` }}>
         Oct
       </span>
-      {octs.map((o) => {
-        const on = octave === o;
-        return (
-          <button
-            key={o}
-            type="button"
-            onClick={() => setOctave(o)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${LIVE_C_OCT}99`,
-                    background: `${LIVE_C_OCT}28`,
-                    color: LIVE_C_GLOW,
-                    boxShadow: `0 0 8px ${LIVE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {o}
-          </button>
-        );
-      })}
+      {octs.map((o) => (
+        <FcChip
+          key={o}
+          on={octave === o}
+          tone={tone}
+          character={LIVE_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setOctave(o)}
+        >
+          {o}
+        </FcChip>
+      ))}
     </div>
   );
 }

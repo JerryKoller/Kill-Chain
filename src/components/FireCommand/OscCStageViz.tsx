@@ -1,18 +1,39 @@
 /**
  * OSC C — Depth Voice stage visualizer.
- * Subterranean third oscillator in Signal Path Sources (FC.oscC).
- * Stratified floor layers; every C control paints the depth stack.
- * Morph rail is interactive. Level 0 = dormant shadow state.
+ *
+ * IDIOM: the octave lattice. The third voice is drawn as a ladder of thin
+ * traces, one rung per octave register (−2 … +2), each carrying the same cycle
+ * at twice the rate of the rung below it. The selected octave is the lit rung —
+ * thick, filled and glowing — so the panel reads as "where in the register this
+ * voice sits", which is the only thing that distinguishes C from A and B.
+ *
+ * Table · Morph · Env · LFO · Octave · Detune · Level (Sources · FC.oscC).
+ * Drag lower half: morph. Double-click: reset morph.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const H = 158;
-const N = 104;
+const N = 128;
 /** Signal Path Sources · Osc C landmark */
 const C = FC.oscC;
 const C_DEEP = bandShade(FC.sources, 0.28);
@@ -24,47 +45,298 @@ const C_LFO = bandShade(FC.sources, 0.7);
 const C_FLOOR = bandShade(FC.sources, 0.35);
 
 const DEFAULT_MORPH = 0.4;
-
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Rungs, high register first — the ladder is read top-down like a score. */
+const RUNGS = [2, 1, 0, -1, -2] as const;
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+/** Frequency territory each rung lands in — kept from the old zone strip. */
+function registerOf(oct: number): string {
+  if (oct <= -2) return "SUB";
+  if (oct === -1) return "SUB BODY";
+  if (oct === 0) return "DEPTH BODY";
+  return "MID";
+}
+
+const frameBank = new Map<string, Float32Array[]>();
+function tableFrames(id: string): Float32Array[] {
+  const hit = frameBank.get(id);
+  if (hit) return hit;
+  const out: Float32Array[] = [];
+  for (let i = 0; i < FRAME_COUNT; i++) out.push(frameSamples(id, i / (FRAME_COUNT - 1), N));
+  if (frameBank.size > 24) frameBank.clear();
+  frameBank.set(id, out);
+  return out;
+}
+
+const cycle = new Float32Array(N);
+
+export type OscCState = {
+  table: string;
+  level: number;
+  pos: number;
+  env: number;
+  lfo: number;
+  oct: number;
+  detune: number;
+  /** Engine-side morph for C; falls back to `pos`. */
+  livePos: number;
+};
+
+export function paintOscC(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: OscCState,
+  now: number,
+  flash: number,
+): void {
+  const lvl = clamp(p.level, 0, 1);
+  const dormant = lvl < 0.02;
+  const energy = dormant ? 0.05 : 0.18 + lvl * 0.82;
+  const envAbs = Math.abs(p.env);
+  const lfoAbs = Math.abs(p.lfo);
+  const detNorm = Math.min(1, Math.abs(p.detune) / 50);
+  const morph = clamp(p.livePos, 0, 1);
+  const oct = Math.round(clamp(p.oct, -2, 2));
+  const eBucket = (energy * 12) | 0;
+
+  const frames = tableFrames(p.table);
+  const cur = morph * (FRAME_COUNT - 1);
+  const lo = Math.floor(cur);
+  const hi = Math.min(lo + 1, FRAME_COUNT - 1);
+  const frac = cur - lo;
+  {
+    const fLo = frames[lo]!;
+    const fHi = frames[hi]!;
+    const bend = envAbs > 0.01 ? p.env * 0.18 : 0;
+    for (let i = 0; i < N; i++) {
+      let v = fLo[i]! * (1 - frac) + fHi[i]! * frac;
+      if (bend !== 0) v *= 1 + bend * Math.sign(v) * Math.abs(v);
+      cycle[i] = clamp(v, -1.4, 1.4);
+    }
+  }
+
+  ctx.clearRect(0, 0, W, Hh);
+  // Deep register sits low, so the chamber's light pools under the ladder.
+  plate(ctx, W, Hh, C, { energy, horizon: 0.78 });
+
+  // ── ladder geometry ──
+  const padL = 62;
+  const padR = 86;
+  const span = Math.max(60, W - padL - padR);
+  const topY = Hh * 0.22;
+  const ladderH = Hh * 0.5;
+  const rungGap = ladderH / (RUNGS.length - 1);
+  const railY = Hh - 26;
+  const breath = 0.95 + 0.05 * Math.sin(now / 700);
+  const yFor = (o: number) => topY + ((2 - o) / 4) * ladderH;
+
+  /** Sampled cycle at a fractional phase (0..1 of one cycle). */
+  const at = (phase: number) => {
+    const j = (((phase % 1) + 1) % 1) * N;
+    const j0 = Math.floor(j);
+    const j1 = (j0 + 1) % N;
+    const jf = j - j0;
+    return cycle[j0]! * (1 - jf) + cycle[j1]! * jf;
+  };
+
+  // Rung baselines — the lattice itself, visible even when the voice is off.
+  for (const o of RUNGS) {
+    const y = yFor(o);
+    const on = o === oct;
+    ctx.fillStyle = hexA(on ? C_HOT : C_MID, on ? 0.26 : 0.1);
+    ctx.fillRect(padL, y, span, 1);
+    // Stringer ties at both ends make it read as one ladder, not five lines.
+    ctx.fillStyle = hexA(C_DEEP, 0.3);
+    ctx.fillRect(padL - 8, y - 0.5, 8, 2);
+    ctx.fillRect(padL + span, y - 0.5, 8, 2);
+  }
+  ctx.fillStyle = hexA(C_DEEP, 0.22);
+  ctx.fillRect(padL - 9, yFor(2), 2, ladderH);
+  ctx.fillRect(padL + span + 7, yFor(2), 2, ladderH);
+
+  // ── the rungs: same cycle, one octave apart per step ──
+  // Idle rungs are hairlines, so they can be walked at a coarser stride.
+  const drawRung = (o: number, active: boolean) => {
+    const step = active ? 3 : 5;
+    const y0 = yFor(o);
+    const cycles = Math.pow(2, o + 2);
+    const amp = active ? rungGap * 0.74 * (0.35 + energy * 0.65) * (0.94 + flash * 0.1) : rungGap * 0.24 * (0.4 + energy * 0.6);
+    const phase = now * 0.0002 * cycles;
+
+    if (active) {
+      // Fill the lit rung down to its own baseline so it carries weight.
+      ctx.beginPath();
+      ctx.moveTo(padL, y0);
+      for (let x = 0; x <= span; x += step) {
+        ctx.lineTo(padL + x, y0 - at((x / span) * cycles + phase) * amp * breath);
+      }
+      ctx.lineTo(padL + span, y0);
+      ctx.closePath();
+      ctx.fillStyle = cachedGrad(ctx, `osccRung|${Hh}|${eBucket}`, (c) => {
+        const g = c.createLinearGradient(0, 0, 0, Hh);
+        g.addColorStop(0, hexA(C_GLOW, 0.16 + energy * 0.2));
+        g.addColorStop(0.62, hexA(C_FLOOR, 0.16 + energy * 0.18));
+        g.addColorStop(1, hexA(C_DEEP, 0.04));
+        return g;
+      });
+      ctx.fill();
+    }
+
+    const path = () => {
+      for (let x = 0; x <= span; x += step) {
+        const xx = padL + x;
+        const yy = y0 - at((x / span) * cycles + phase) * amp * breath;
+        if (x === 0) ctx.moveTo(xx, yy);
+        else ctx.lineTo(xx, yy);
+      }
     };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+    if (active) {
+      glowStroke(ctx, path, C_GLOW, {
+        width: 2.6,
+        glow: 0.5 + energy * 0.7,
+        alpha: (dormant ? 0.3 : 0.55) + energy * 0.4,
+      });
+    } else {
+      ctx.strokeStyle = hexA(C_MID, 0.1 + energy * 0.14);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      path();
+      ctx.stroke();
+    }
+  };
+
+  for (const o of RUNGS) if (o !== oct) drawRung(o, false);
+  drawRung(oct, true);
+
+  // Detune: a second copy of the lit rung sliding out of phase.
+  if (detNorm > 0.04) {
+    const y0 = yFor(oct);
+    const cycles = Math.pow(2, oct + 2);
+    const amp = rungGap * 0.62 * (0.35 + energy * 0.65);
+    const slip = detNorm * 0.18 + Math.sin(now * 0.0016) * detNorm * 0.06;
+    ctx.strokeStyle = hexA(C_FLOOR, 0.3 + detNorm * 0.4);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let x = 0; x <= span; x += 4) {
+      const xx = padL + x;
+      const yy = y0 + 3 - at((x / span) * cycles + slip) * amp * breath;
+      if (x === 0) ctx.moveTo(xx, yy);
+      else ctx.lineTo(xx, yy);
+    }
+    ctx.stroke();
+  }
+
+  // LFO: a light pulse travelling the lit rung, direction from polarity.
+  if (lfoAbs > 0.03 && !dormant) {
+    lit(ctx, () => {
+      const y0 = yFor(oct);
+      const cycles = Math.pow(2, oct + 2);
+      const amp = rungGap * 0.74 * (0.35 + energy * 0.65);
+      const n = 3 + Math.floor(lfoAbs * 6);
+      for (let s = 0; s < n; s++) {
+        const u = (((s / n + now * 0.0004 * (1 + lfoAbs * 2.5) * (p.lfo >= 0 ? 1 : -1)) % 1) + 1) % 1;
+        const x = padL + u * span;
+        const y = y0 - at(u * cycles + now * 0.0002 * cycles) * amp * breath;
+        drawGlow(ctx, x, y, 5 + lfoAbs * 10, C_LFO, 0.28 + lfoAbs * 0.42);
+      }
+    });
+  }
+
+  // Env polarity: lifts the ladder's light up or lets it sink.
+  if (envAbs > 0.02 && !dormant) {
+    lit(ctx, () => {
+      const y = yFor(oct) - Math.sign(p.env) * rungGap * 1.1;
+      for (let k = 0; k < 5; k++) {
+        drawGlow(ctx, padL + ((k + 0.5) / 5) * span, y, 14 + envAbs * 12, C_ENV, 0.06 + envAbs * 0.14);
+      }
+    });
+  }
+
+  // Register gutters: octave on the left, frequency territory on the right.
+  ctx.font = VIZ_FONT_LABEL;
+  for (const o of RUNGS) {
+    const y = yFor(o) + 3;
+    const on = o === oct;
+    ctx.textAlign = "right";
+    ctx.fillStyle = hexA(on ? C_GLOW : C_MID, on ? 0.9 : 0.32);
+    ctx.fillText(o === 0 ? "±0 OCT" : `${o > 0 ? "+" : "−"}${Math.abs(o)} OCT`, padL - 14, y);
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(on ? C_HOT : C_MID, on ? 0.8 : 0.26);
+    ctx.fillText(registerOf(o), padL + span + 14, y);
+  }
+
+  // ── morph rail (the drag surface) ──
+  for (let f = 0; f < FRAME_COUNT; f++) {
+    const fx = padL + (f / (FRAME_COUNT - 1)) * span;
+    ctx.fillStyle = hexA(C_GLOW, f === lo || f === hi ? 0.5 : 0.14);
+    ctx.fillRect(fx - 0.5, railY - 5, 1, 5);
+  }
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(padL, railY, span, 5);
+  ctx.save();
+  ctx.translate(padL, railY);
+  ctx.fillStyle = cachedGrad(ctx, `osccRail|${(span / 40) | 0}`, (c) => {
+    const g = c.createLinearGradient(0, 0, span, 0);
+    g.addColorStop(0, hexA(C_DEEP, 0.55));
+    g.addColorStop(1, hexA(C_GLOW, 0.98));
+    return g;
+  });
+  ctx.fillRect(0, 0, Math.max(2, span * morph), 5);
+  ctx.restore();
+  const mx = padL + morph * span;
+  ctx.strokeStyle = hexA(C_GLOW, 0.26);
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  ctx.moveTo(mx, railY);
+  ctx.lineTo(mx, yFor(oct));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  lit(ctx, () => drawGlow(ctx, mx, railY + 2.5, 9 + flash * 6, C_GLOW, 0.85));
+  ctx.fillStyle = hexA(C_GLOW, 0.95);
+  ctx.beginPath();
+  ctx.arc(mx, railY + 2.5, 3.4 + flash * 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  pill(
+    ctx,
+    W * 0.5,
+    3,
+    `${registerOf(oct)} · MORPH ${Math.round(morph * 100)}%`,
+    C_GLOW,
+    { glow: flash },
+  );
+
+  // Dormant veil — C is the voice most often left at zero.
+  if (dormant) {
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, W, Hh);
+    ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_GLOW, 0.55 + Math.sin(now / 500) * 0.1);
+    ctx.fillText("DISABLED — raise Level to wake", W * 0.5, Hh * 0.48);
+  }
+
+  grain(ctx, W, Hh, 0.026);
+  bezel(ctx, W, Hh, C);
+  const octLabel = oct === 0 ? "±0" : oct > 0 ? `+${oct}` : `${oct}`;
+  const bits: string[] = [`${Math.round(lvl * 100)}%`];
+  if (envAbs > 0.04) bits.push(`ENV ${p.env > 0 ? "+" : "−"}${Math.round(envAbs * 100)}`);
+  if (lfoAbs > 0.04) bits.push(`LFO ${Math.round(lfoAbs * 100)}`);
+  if (detNorm > 0.04) bits.push(`${p.detune > 0 ? "+" : ""}${Math.round(p.detune)}¢`);
+  footer(
+    ctx,
+    W,
+    Hh,
+    `OSC C · ${wavetableName(p.table).toUpperCase()} · ${octLabel}oct`,
+    dormant ? "OFF AT 0" : bits.join(" · "),
+    C_GLOW,
+    dormant ? C_MID : C_HOT,
+  );
 }
 
 export function OscCStageViz() {
@@ -77,30 +349,22 @@ export function OscCStageViz() {
   const detune = useFireCommandStore((s) => s.patch.oscCDetune);
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
-  const tableFlashRef = useRef(0);
   const dragRef = useRef(false);
-  const prevKey = useRef("");
+  const prevKey = useRef(0);
   const prevTable = useRef(table);
-  const st = useRef({ table, level, pos, env, lfo, oct, detune });
-  st.current = { table, level, pos, env, lfo, oct, detune };
+  const st = useRef<OscCState>({ table, level, pos, env, lfo, oct, detune, livePos: pos });
+  st.current = { table, level, pos, env, lfo, oct, detune, livePos: st.current.livePos };
 
   useEffect(() => {
-    const key = `${table}|${level.toFixed(3)}|${pos.toFixed(3)}|${env.toFixed(3)}|${lfo.toFixed(3)}|${oct}|${detune}`;
-    if (key !== prevKey.current) {
+    const key = motionHash(level, pos, env, lfo, oct, detune);
+    if (key !== prevKey.current || table !== prevTable.current) {
       prevKey.current = key;
+      prevTable.current = table;
       flashRef.current = 1;
     }
-    if (table !== prevTable.current) {
-      prevTable.current = table;
-      tableFlashRef.current = 1;
-    }
   }, [table, level, pos, env, lfo, oct, detune]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
   const setMorphFromClientX = useCallback(
     (clientX: number) => {
@@ -112,7 +376,7 @@ export function OscCStageViz() {
       const t = clamp((clientX - rect.left - xL) / Math.max(1, xR - xL), 0, 1);
       setParam("oscCPos", Math.round(t * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -126,7 +390,7 @@ export function OscCStageViz() {
       wrap.setPointerCapture(e.pointerId);
       setMorphFromClientX(e.clientX);
     },
-    [setMorphFromClientX],
+    [setMorphFromClientX, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -143,7 +407,7 @@ export function OscCStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* already released */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     setParam("oscCPos", DEFAULT_MORPH);
@@ -154,328 +418,48 @@ export function OscCStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const cache: Float32Array[] = [];
-    let cacheTable = "";
-    const ensure = (id: string) => {
-      if (cacheTable === id && cache.length) return;
-      cache.length = 0;
-      for (let i = 0; i < FRAME_COUNT; i++) cache.push(frameSamples(id, i / (FRAME_COUNT - 1), N));
-      cacheTable = id;
-    };
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.88;
-      tableFlashRef.current *= 0.92;
-
-      let livePos = p.pos;
-      try {
-        livePos = activeFireEngine().getMorphPositions().c;
-      } catch { /* offline / boot */ }
-
-      ensure(p.table);
-      ctx.clearRect(0, 0, W, Hh);
-
-      const dormant = p.level < 0.02;
-      const energy = dormant ? 0.05 : 0.18 + p.level * 0.82;
-      const envAbs = Math.abs(p.env);
-      const lfoAbs = Math.abs(p.lfo);
-      const detNorm = Math.min(1, Math.abs(p.detune) / 50);
-      // Lower octave sinks the stack; higher lifts it
-      const depthBias = (-clamp(p.oct, -2, 2) + 2) / 4; // -2 → 1, +2 → 0
-      const octZoom = Math.pow(2, clamp(p.oct, -2, 2) * 0.34);
-      const tf = tableFlashRef.current;
-      const strata = 3 + Math.abs(p.oct) + (detNorm > 0.1 ? 1 : 0);
-
-      // Depth well — glow sits low
-      const floorY = Hh * (0.55 + depthBias * 0.12);
-      const bg = ctx.createLinearGradient(0, 0, 0, Hh);
-      bg.addColorStop(0, "rgba(2,0,1,0.98)");
-      bg.addColorStop(0.35, hexAlpha(C_DEEP, 0.35 + energy * 0.15));
-      bg.addColorStop(0.72, hexAlpha(C_FLOOR, 0.22 + energy * 0.35 + flashRef.current * 0.2));
-      bg.addColorStop(1, hexAlpha(C_HOT, 0.08 + energy * 0.2));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Floor bloom under morph
-      const fx = W * (0.25 + livePos * 0.5);
-      const floorGlow = ctx.createRadialGradient(fx, floorY, 2, fx, floorY, W * 0.45);
-      floorGlow.addColorStop(0, hexAlpha(C_GLOW, (dormant ? 0.04 : 0.2) + energy * 0.35 + flashRef.current * 0.25));
-      floorGlow.addColorStop(1, hexAlpha(C, 0));
-      ctx.fillStyle = floorGlow;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Sediment strata lines
-      for (let s = 0; s < strata; s++) {
-        const sy = Hh * 0.22 + s * ((Hh * 0.55) / strata) + depthBias * 8;
-        ctx.strokeStyle = hexAlpha(C_MID, 0.06 + energy * 0.06 + (s === strata - 1 ? 0.08 : 0));
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(8, sy);
-        ctx.lineTo(W - 8, sy);
-        ctx.stroke();
-      }
-
-      if (envAbs > 0.02) {
-        const rise = p.env >= 0 ? Hh * 0.25 : Hh * 0.75;
-        const rb = ctx.createRadialGradient(W * 0.5, rise, 0, W * 0.5, rise, Hh * 0.5);
-        rb.addColorStop(0, hexAlpha(C_ENV, 0.35 * envAbs * energy));
-        rb.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = rb;
-        ctx.fillRect(0, 0, W, Hh);
-      }
-
-      const mid = Hh * (0.38 + depthBias * 0.1);
-      const amp = Hh * 0.24 * energy * (0.85 + flashRef.current * 0.22);
-      const xL = 14;
-      const xR = W - 14;
-      const breath = 0.94 + 0.06 * Math.sin(now / 700);
-      const lfoSpin = now * (0.001 + lfoAbs * 0.008) * (p.lfo >= 0 ? 1 : -1);
-
-      const cur = livePos * (FRAME_COUNT - 1);
-      const lo = Math.floor(cur);
-      const hi = Math.min(lo + 1, FRAME_COUNT - 1);
-      const frac = cur - lo;
-
-      const sample = (frame: number, i: number) => {
-        const f = cache[Math.max(0, Math.min(FRAME_COUNT - 1, frame))]!;
-        const ii = ((i * octZoom) % (N - 1) + (N - 1)) % (N - 1);
-        const i0 = Math.floor(ii);
-        const i1 = Math.min(N - 1, i0 + 1);
-        const ft = ii - i0;
-        let v = f[i0]! * (1 - ft) + f[i1]! * ft;
-        if (envAbs > 0.01) {
-          v *= 1 + p.env * 0.18 * Math.sign(v) * Math.abs(v);
-        }
-        return clamp(v, -1.4, 1.4);
-      };
-
-      const waveAt = (i: number) => sample(lo, i) * (1 - frac) + sample(hi, i) * frac;
-
-      // Stacked depth ghosts — sink below mid
-      const layers = Math.max(2, Math.min(6, 2 + Math.abs(p.oct) + Math.floor(detNorm * 2)));
-      for (let L = layers; L >= 1; L--) {
-        const depth = L / layers;
-        const yOff = L * (5 + depthBias * 4 + detNorm * 3);
-        const xInset = L * 2.5;
-        const helix = lfoSpin * 0.35 + L * 0.4;
-        ctx.beginPath();
-        for (let i = 0; i < N; i++) {
-          const v = waveAt(i);
-          const x = xL + xInset + (i / (N - 1)) * (xR - xL - xInset * 2);
-          const y = mid + yOff + Math.sin(helix + i * 0.05) * (2 + lfoAbs * 6) - v * amp * (1.1 - depth * 0.55) * breath;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = hexAlpha(L === 1 ? C_HOT : C_MID, (0.08 + energy * 0.12) * (1.2 - depth));
-        ctx.lineWidth = L === 1 ? 1.4 : 1;
-        ctx.stroke();
-      }
-
-      // Primary wave + underglow fill toward floor
-      ctx.beginPath();
-      const ys: number[] = [];
-      for (let i = 0; i < N; i++) {
-        const v = waveAt(i);
-        const x = xL + (i / (N - 1)) * (xR - xL);
-        const y = mid - v * amp * breath;
-        ys.push(y);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.lineTo(xR, Hh - 28);
-      ctx.lineTo(xL, Hh - 28);
-      ctx.closePath();
-      const under = ctx.createLinearGradient(0, mid - amp, 0, Hh - 20);
-      under.addColorStop(0, hexAlpha(C_GLOW, (0.28 + energy * 0.35) * (dormant ? 0.25 : 1)));
-      under.addColorStop(0.55, hexAlpha(C_FLOOR, 0.16 * energy));
-      under.addColorStop(1, hexAlpha(C_DEEP, 0.02));
-      ctx.fillStyle = under;
-      ctx.fill();
-
-      // Detune: second submerged ghost
-      if (detNorm > 0.04) {
-        const phase = detNorm * N * 0.1;
-        ctx.beginPath();
-        for (let i = 0; i < N; i++) {
-          const j = (i + phase) % N;
-          const j0 = Math.floor(j);
-          const j1 = (j0 + 1) % N;
-          const jf = j - j0;
-          const v = waveAt(j0) * (1 - jf) + waveAt(j1) * jf;
-          const x = xL + (i / (N - 1)) * (xR - xL);
-          const y = mid + 4 + detNorm * 8 - v * amp * breath * 0.85;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = hexAlpha(C_FLOOR, 0.35 + detNorm * 0.4);
-        ctx.lineWidth = 1.6;
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = C;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-      }
-
-      ctx.beginPath();
-      for (let i = 0; i < N; i++) {
-        const x = xL + (i / (N - 1)) * (xR - xL);
-        if (i === 0) ctx.moveTo(x, ys[i]!);
-        else ctx.lineTo(x, ys[i]!);
-      }
-      ctx.strokeStyle = hexAlpha(C_HOT, (dormant ? 0.25 : 0.5) + energy * 0.45);
-      ctx.lineWidth = 2.7;
-      ctx.shadowBlur = 12 + energy * 16 + flashRef.current * 20;
-      ctx.shadowColor = C;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // LFO bubbles rising from floor
-      if (lfoAbs > 0.03 && !dormant) {
-        const n = 3 + Math.floor(lfoAbs * 6);
-        for (let s = 0; s < n; s++) {
-          const u = (s / n + now * 0.00035 * (1 + lfoAbs * 2.5)) % 1;
-          const x = xL + ((u + s * 0.13) % 1) * (xR - xL);
-          const rise = Hh - 30 - u * (Hh * 0.45 + lfoAbs * 20);
-          const rad = 2.5 + lfoAbs * 4 * (1 - u);
-          const rg = ctx.createRadialGradient(x, rise, 0, x, rise, rad);
-          rg.addColorStop(0, hexAlpha(C_LFO, 0.5 * lfoAbs * energy * (1 - u)));
-          rg.addColorStop(1, hexAlpha(C, 0));
-          ctx.fillStyle = rg;
-          ctx.beginPath();
-          ctx.arc(x, rise, rad, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Harmonic stubs anchored to floor
-      const partials = 4 + Math.floor(livePos * 10);
-      for (let k = 1; k <= partials; k++) {
-        const px = xL + (k / (partials + 1)) * (xR - xL);
-        const hgt = (3 + (1 - k / partials) * 14 * energy) * (0.6 + depthBias * 0.4);
-        ctx.fillStyle = hexAlpha(C_MID, 0.1 + energy * 0.18);
-        ctx.fillRect(px - 1, Hh - 34 - hgt, 2.4, hgt);
-      }
-
-      // Morph rail on the floor
-      const railY = Hh - 20;
-      for (let f = 0; f < FRAME_COUNT; f++) {
-        const fxx = xL + (f / (FRAME_COUNT - 1)) * (xR - xL);
-        ctx.fillStyle = hexAlpha(C_GLOW, f === lo || f === hi ? 0.5 : 0.14);
-        ctx.fillRect(fxx - 0.5, railY - 5, 1, 5);
-      }
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(xL, railY, xR - xL, 5);
-      const fillW = (xR - xL) * livePos;
-      const mg = ctx.createLinearGradient(xL, railY, xL + fillW, railY);
-      mg.addColorStop(0, hexAlpha(C_DEEP, 0.55));
-      mg.addColorStop(1, hexAlpha(C_GLOW, 0.98));
-      ctx.fillStyle = mg;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = C;
-      ctx.fillRect(xL, railY, fillW, 5);
-      ctx.shadowBlur = 0;
-
-      const mx = xL + livePos * (xR - xL);
-      const beam = ctx.createLinearGradient(mx, railY, mx, mid);
-      beam.addColorStop(0, hexAlpha(C_GLOW, 0.65));
-      beam.addColorStop(1, hexAlpha(C, 0.03));
-      ctx.strokeStyle = beam;
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(mx, railY);
-      ctx.lineTo(mx, mid);
-      ctx.stroke();
-
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = C;
-      ctx.beginPath();
-      ctx.arc(mx, railY + 2.5, 3.8 + flashRef.current * 2.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Dormant veil
-      if (dormant) {
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(0, 0, W, Hh);
-        ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + Math.sin(now / 500) * 0.1);
-        ctx.fillText("DISABLED — raise Level to wake", W * 0.5, Hh * 0.48);
-      }
-
-      // Frequency territory — Depth body vs Sub bedrock
-      {
-        const zoneY = 22;
-        const zones = [
-          { label: "SUB", w: 0.18, col: FC.sub },
-          { label: "DEPTH BODY", w: 0.32, col: C },
-          { label: "MID", w: 0.5, col: C_MID },
-        ];
-        let zx = 12;
-        for (const z of zones) {
-          const zw = (W - 24) * z.w;
-          ctx.fillStyle = hexAlpha(z.col, dormant ? 0.08 : 0.14);
-          ctx.fillRect(zx, zoneY, zw - 2, 10);
-          ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-          ctx.fillStyle = hexAlpha(z.col, 0.55);
-          ctx.textAlign = "center";
-          ctx.fillText(z.label, zx + zw / 2, zoneY + 8);
-          zx += zw;
-        }
-      }
-
-      if (tf > 0.05) {
-        const wipe = ctx.createLinearGradient(0, 0, 0, Hh);
-        wipe.addColorStop(0, hexAlpha(C_GLOW, 0));
-        wipe.addColorStop(0.7, hexAlpha(C_FLOOR, 0.22 * tf));
-        wipe.addColorStop(1, hexAlpha(C_GLOW, 0.15 * tf));
-        ctx.fillStyle = wipe;
-        ctx.fillRect(0, 0, W, Hh);
-      }
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.88);
-      const octLabel = p.oct === 0 ? "±0" : p.oct > 0 ? `+${p.oct}` : `${p.oct}`;
-      ctx.fillText(`OSC C · ${wavetableName(p.table).toUpperCase()} · ${octLabel}oct`, 12, Hh - 6);
-      ctx.textAlign = "right";
-      if (dormant) {
-        ctx.fillStyle = hexAlpha(C_MID, 0.55);
-        ctx.fillText("OFF AT 0", W - 12, Hh - 6);
-      } else {
-        const bits: string[] = [`${Math.round(p.level * 100)}%`];
-        if (envAbs > 0.04) bits.push(`ENV ${p.env > 0 ? "+" : "−"}${Math.round(envAbs * 100)}`);
-        if (lfoAbs > 0.04) bits.push(`LFO ${Math.round(lfoAbs * 100)}`);
-        if (detNorm > 0.04) bits.push(`${p.detune > 0 ? "+" : ""}${Math.round(p.detune)}¢`);
-        ctx.fillStyle = hexAlpha(C_HOT, 0.85);
-        ctx.fillText(bits.join(" · "), W - 12, Hh - 6);
-      }
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintOscC(ctx, W, Hh, st.current, now, flashRef.current);
       },
-      () => ({
-        flash: flashRef.current,
-        active: (st.current.level ?? 0) > 0.01,
-        dragging: !!dragRef.current,
-        particles: 0,
-        motionKey: JSON.stringify(st.current),
-      }),
+      () => {
+        let live = st.current.pos;
+        try {
+          live = activeFireEngine().getMorphPositions().c;
+        } catch { /* offline / boot */ }
+        st.current.livePos = live;
+        return {
+          flash: flashRef.current,
+          active: (st.current.level ?? 0) > 0.01,
+          dragging: !!dragRef.current,
+          visible: visibleRef.current,
+          motionKey: motionHash(
+            st.current.level,
+            live,
+            st.current.env,
+            st.current.lfo,
+            st.current.oct,
+            st.current.detune,
+          ),
+        };
+      },
       { minIntervalMs: 20 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, level < 0.02 ? 0.28 : 0.5),
+        borderColor: hexA(C, level < 0.02 ? 0.28 : 0.5),
         height: H,
         cursor: "ew-resize",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 36px ${hexAlpha(C, level < 0.02 ? 0.08 : 0.22)}, 0 10px 28px rgba(0,0,0,0.4)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 36px ${hexA(C, level < 0.02 ? 0.08 : 0.22)}, 0 10px 28px rgba(0,0,0,0.4)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -490,19 +474,19 @@ export function OscCStageViz() {
       aria-valuenow={Math.round(pos * 100)}
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.55) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.55) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.55) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.55) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Depth Voice
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
-        style={{ color: hexAlpha(C_HOT, 0.7) }}
+        style={{ color: hexA(C_HOT, 0.7) }}
       >
         {oct <= -1 ? `${oct}oct · ` : ""}{Math.round(pos * 100)}%
       </div>

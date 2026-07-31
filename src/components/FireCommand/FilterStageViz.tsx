@@ -1,14 +1,45 @@
 /**
  * FILT — Spectral Blade stage visualizer.
- * Filter: type · cutoff · reso · env amt · key track · sat (Signal Path Tone · FC.filter).
- * Drag: Cutoff ↔ / Reso ↕. Bottom rail: Sat. Env ghosts the blade. Key track paints the ladder.
+ *
+ * IDIOM: the frequency response. Stages are a ~10:1 letterbox, so the panel is
+ * one log-Hz axis running left→right with gain in dB running up — a real
+ * analyzer trace rather than an abstract glow. Cutoff is where the curve turns,
+ * resonance is how tall the peak stands, and slope is how steeply it falls:
+ * cascaded stages read as 12 / 24 / 36 dB per octave because the trace lives in
+ * a dB space where those are straight lines of different gradient.
+ *
+ * The four types draw their own silhouettes (LP falls, HP rises, BP is an
+ * island, NT is a spike downward), drive blooms the peak and lifts a soft
+ * shoulder around it, and the carve modes cut their own dip or blow the formant
+ * pair open on top of everything else. Env amount ghosts a second trace at the
+ * modulated cutoff; key track ghosts one an octave either side of the reference
+ * note so you can see the cutoff being dragged along by the keyboard.
+ *
+ * Type · Cutoff · Reso · Slope · Carve · Env · KeyTrack · Drive (Tone · FC.filter).
+ * Drag: Cutoff ↔ / Reso ↕. Bottom rail: Sat. Double-click: cycle LP→BP→HP→NT.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { FireFilterType } from "@/audio/dsp/FireCommandSynth";
+import type { FilterCarveMode, FilterModel } from "@/audio/dsp/toneDifferentiation";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.filter;
@@ -29,16 +60,17 @@ const CUT_MAX = 18000;
 const RES_MIN = 0.1;
 const RES_MAX = 28;
 
-const TYPE_CYCLE: FireFilterType[] = ["lowpass", "bandpass", "highpass", "notch"];
+/** dB window the trace lives in — wide enough that 36 dB/oct still fits a decade. */
+const DB_LO = -42;
+const DB_HI = 24;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Harmonic carves key off the played note; A3 stands in for it in the readout. */
+const F0_REF = 220;
+
+const DECADES = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000] as const;
+const DB_TICKS = [18, 12, 6, 0, -6, -12, -18, -24, -30, -36] as const;
+
+const TYPE_CYCLE: FireFilterType[] = ["lowpass", "bandpass", "highpass", "notch"];
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
@@ -52,45 +84,459 @@ function logNorm(f: number, lo: number, hi: number) {
   return Math.log(clamp(f, lo, hi) / lo) / Math.log(hi / lo);
 }
 
-function filterGain(type: FireFilterType, f: number, cutoff: number, res: number): number {
-  const r = f / Math.max(30, cutoff);
-  const peak = Math.min(1, Math.log10(Math.max(1, res)) * 0.78);
-  const bump = peak * Math.exp(-Math.pow(Math.log2(Math.max(1e-6, r)), 2) * 9);
-  let g: number;
-  if (type === "lowpass") g = 1 / Math.sqrt(1 + Math.pow(r, 4));
-  else if (type === "highpass") g = 1 / Math.sqrt(1 + Math.pow(1 / Math.max(1e-6, r), 4));
-  else if (type === "bandpass") g = Math.exp(-Math.pow(Math.log2(Math.max(1e-6, r)), 2) * 1.4);
-  else g = 1 - Math.exp(-Math.pow(Math.log2(Math.max(1e-6, r)), 2) * 9);
-  return Math.min(1.65, g + (type === "notch" ? 0 : bump));
+/** Deterministic scatter — a fixed speck field, so drive heat doesn't crawl. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** Numeric stand-in for an enum string, so `motionHash` sees mode switches. */
+function strCode(s: string): number {
+  return (s.length << 9) ^ (s.charCodeAt(0) | 0) ^ ((s.charCodeAt(1) | 0) << 4);
+}
+
+/**
+ * One biquad stage in dB. The analog prototype is used rather than an ad-hoc
+ * bump, so the resonance peak grows out of Q the way it does in the filter.
+ */
+function stageDb(type: FireFilterType, r: number, q: number): number {
+  const r2 = r * r;
+  const gap = 1 - r2;
+  const den = Math.sqrt(gap * gap + (r / q) * (r / q));
+  let m: number;
+  if (type === "highpass") m = r2 / den;
+  else if (type === "bandpass") m = (r / q) / den;
+  else if (type === "notch") m = Math.abs(gap) / den;
+  else m = 1 / den;
+  return 20 * Math.log10(Math.max(1e-7, m));
+}
+
+/** Peaking / notching bell in log-frequency — `q` narrows it, `gainDb` signs it. */
+function bellDb(f: number, f0: number, q: number, gainDb: number): number {
+  const oct = Math.log2(Math.max(1e-6, f / f0));
+  return gainDb * Math.exp(-(oct * oct) * q * q * 0.5);
+}
+
+/** High shelf — the hiss-region cut the `noise` carve applies. */
+function shelfDb(f: number, f0: number, gainDb: number): number {
+  const oct = Math.log2(Math.max(1e-6, f / f0));
+  return gainDb * (0.5 + 0.5 * Math.tanh(oct * 1.6));
+}
+
+/** Carve contribution, mirroring the engine's peaking / notch / shelf choices. */
+function carveDb(carve: FilterCarveMode, amt: number, f: number, cut: number): number {
+  if (carve === "off" || amt < 0.02) return 0;
+  if (carve === "formant") {
+    const f1 = clamp(cut * (0.35 + amt * 0.2), 220, 1000);
+    const f2 = clamp(cut * (0.95 + amt * 1.1), 650, 3800);
+    return bellDb(f, f1, 2.2 + amt * 4.5, 1.5 + amt * 5) + bellDb(f, f2, 1.8 + amt * 3.5, 1.2 + amt * 4);
+  }
+  if (carve === "fundamental") return bellDb(f, F0_REF, 0.7 + amt * 8, -(6 + amt * 30));
+  if (carve === "odds") return bellDb(f, F0_REF * 3, 1 + amt * 6, -amt * 18);
+  if (carve === "evens") return bellDb(f, F0_REF * 2, 1 + amt * 6, -amt * 18);
+  return shelfDb(f, 4500, -amt * 14);
+}
+
+/** Drive lifts a soft shoulder either side of cutoff before it saturates. */
+function driveDb(drive: number, f: number, cut: number): number {
+  if (drive < 0.02) return 0;
+  const oct = Math.log2(Math.max(1e-6, f / cut));
+  return drive * 3.2 * Math.exp(-(oct * oct) * 0.22);
+}
+
+/** Which partials the carve is aimed at — drawn as floor ticks. */
+function carvePartials(carve: FilterCarveMode): readonly number[] {
+  if (carve === "fundamental") return [1];
+  if (carve === "odds") return [3, 5, 7];
+  if (carve === "evens") return [2, 4, 6];
+  return [];
+}
+
+export type FilterVizState = {
+  type: FireFilterType;
+  cutoff: number;
+  res: number;
+  envAmt: number;
+  keyTrack: number;
+  sat: number;
+  slope: number;
+  carve: FilterCarveMode;
+  carveAmt: number;
+  model: FilterModel;
+};
+
+/**
+ * Paint the response. Exported and pure so a whole patch sweep can be rendered
+ * headlessly without mounting the component or waiting on a RAF frame.
+ */
+export function paintFilter(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: FilterVizState,
+  now: number,
+  flash: number,
+): void {
+  const cut = clamp(p.cutoff, CUT_MIN, CUT_MAX);
+  const res = clamp(p.res, RES_MIN, RES_MAX);
+  const q = clamp(res, 0.5, 30);
+  const slope = clamp(Math.round(p.slope || 1), 1, 3);
+  const carve = p.carve ?? "off";
+  const carveAmt = clamp(p.carveAmt ?? 0, 0, 1);
+  const heat = clamp(p.sat, 0, 1);
+  const envAmt = clamp(p.envAmt, -1, 1);
+  const keyTrack = clamp(p.keyTrack, 0, 1);
+  // Peak height in dB is the honest "how resonant is this" number.
+  const peakDb = Math.max(0, 20 * Math.log10(q)) * (p.type === "notch" ? 0 : 1);
+  const peakN = clamp(peakDb / 24, 0, 1);
+  const energy = 0.18 + peakN * 0.4 + heat * 0.32 + Math.abs(envAmt) * 0.14 + flash * 0.2;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.72 });
+
+  // ── geometry: one log-Hz axis across the whole width ──
+  const padL = 44;
+  const padR = 26;
+  const span = Math.max(60, W - padL - padR);
+  const top = 26;
+  const floorY = Hh - 40;
+  const plotH = floorY - top;
+
+  const xOf = (f: number) => padL + logNorm(f, F_LO, F_HI) * span;
+  const yOf = (db: number) => floorY - ((clamp(db, DB_LO, DB_HI) - DB_LO) / (DB_HI - DB_LO)) * plotH;
+
+  const respDb = (f: number, cutoff: number) =>
+    stageDb(p.type, f / Math.max(20, cutoff), q) * slope
+    + carveDb(carve, carveAmt, f, cutoff)
+    + driveDb(heat, f, cutoff);
+
+  // ── graticule: decade verticals, dB horizontals ──
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (let i = 0; i < DECADES.length; i++) {
+    const f = DECADES[i]!;
+    const x = Math.round(xOf(f)) + 0.5;
+    const major = f === 100 || f === 1000 || f === 10000;
+    ctx.strokeStyle = hexA(C_MID, major ? 0.2 + energy * 0.08 : 0.09);
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, floorY);
+    ctx.stroke();
+  }
+  for (let i = 0; i < DB_TICKS.length; i++) {
+    const db = DB_TICKS[i]!;
+    const y = Math.round(yOf(db)) + 0.5;
+    ctx.strokeStyle = hexA(C_MID, db === 0 ? 0.26 : 0.07);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + span, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Axis legends — Hz along the floor, dB up the left gutter.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  ctx.fillStyle = hexA(C_MID, 0.5);
+  for (let i = 0; i < DECADES.length; i++) {
+    const f = DECADES[i]!;
+    ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, xOf(f), floorY + 10);
+  }
+  ctx.textAlign = "right";
+  for (const db of [18, 0, -18, -36] as const) {
+    ctx.fillStyle = hexA(C_MID, db === 0 ? 0.6 : 0.4);
+    ctx.fillText(db > 0 ? `+${db}` : `${db}`, padL - 5, yOf(db) + 3);
+  }
+
+  // ── key-track ghosts: the same curve an octave either side of the note ──
+  if (keyTrack > 0.02) {
+    const swing = keyTrack * 2;
+    for (const dir of [-1, 1] as const) {
+      const ghostCut = clamp(cut * Math.pow(2, dir * swing), CUT_MIN, CUT_MAX);
+      ctx.beginPath();
+      for (let i = 0; i <= 120; i++) {
+        const f = F_LO * Math.pow(F_HI / F_LO, i / 120);
+        const x = xOf(f);
+        const y = yOf(respDb(f, ghostCut));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = hexA(C_KEY, 0.1 + keyTrack * 0.18);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    // Keyboard pips on the frequency axis — the notes the tracking reads from.
+    const keys = Math.round(5 + keyTrack * 9);
+    for (let i = 0; i < keys; i++) {
+      const f = logLerp(i / Math.max(1, keys - 1), 110, 3520);
+      const x = xOf(f);
+      const h = 4 + keyTrack * 8;
+      ctx.fillStyle = hexA(C_KEY, 0.16 + keyTrack * 0.4);
+      ctx.fillRect(x - 1, floorY - h, 2, h);
+    }
+  }
+
+  // ── env ghost: where the filter envelope drags cutoff to ──
+  const envCut = clamp(cut * Math.pow(2, envAmt * 3.5), CUT_MIN, CUT_MAX);
+  if (Math.abs(envAmt) > 0.03) {
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    for (let i = 0; i <= 160; i++) {
+      const f = F_LO * Math.pow(F_HI / F_LO, i / 160);
+      const x = xOf(f);
+      const y = yOf(respDb(f, envCut));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = hexA(C_ENV, 0.3 + Math.abs(envAmt) * 0.4);
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
+
+    // Sweep arrow along the cutoff rail at the top of the plot.
+    const ax = xOf(cut);
+    const bx = xOf(envCut);
+    const ay = top + 9;
+    const dir = Math.sign(bx - ax) || 1;
+    ctx.strokeStyle = hexA(C_ENV, 0.62);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, ay);
+    ctx.stroke();
+    ctx.fillStyle = hexA(C_ENV, 0.85);
+    ctx.beginPath();
+    ctx.moveTo(bx, ay);
+    ctx.lineTo(bx - dir * 7, ay - 4);
+    ctx.lineTo(bx - dir * 7, ay + 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_ENV, 0.7);
+    ctx.fillText("ENV", (ax + bx) * 0.5, ay - 5);
+  }
+
+  // ── the response trace ──
+  const N = 320;
+  let peakX = xOf(cut);
+  let peakY = yOf(0);
+  let peakVal = -999;
+  ctx.beginPath();
+  ctx.moveTo(padL, floorY);
+  for (let i = 0; i <= N; i++) {
+    const f = F_LO * Math.pow(F_HI / F_LO, i / N);
+    const db = respDb(f, cut);
+    const x = padL + (i / N) * span;
+    const y = yOf(db);
+    if (db > peakVal) {
+      peakVal = db;
+      peakX = x;
+      peakY = y;
+    }
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(padL + span, floorY);
+  ctx.closePath();
+  const fill = cachedGrad(
+    ctx,
+    `fresp|${W}|${Hh}|${(peakN * 12) | 0}|${(heat * 12) | 0}`,
+    (c) => {
+      const g = c.createLinearGradient(0, top, 0, floorY);
+      g.addColorStop(0, hexA(C_GLOW, 0.3 + peakN * 0.2 + heat * 0.12));
+      g.addColorStop(0.45, hexA(C_HOT, 0.13));
+      g.addColorStop(1, hexA(C_DEEP, 0.03));
+      return g;
+    },
+  );
+  ctx.fillStyle = fill;
+  ctx.fill();
+
+  const trace = () => {
+    for (let i = 0; i <= N; i++) {
+      const f = F_LO * Math.pow(F_HI / F_LO, i / N);
+      const x = padL + (i / N) * span;
+      const y = yOf(respDb(f, cut));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  };
+  glowStroke(ctx, trace, C_GLOW, {
+    width: 2.2,
+    glow: 0.7 + peakN * 0.8 + flash * 0.6,
+    alpha: 0.82 + energy * 0.18,
+  });
+
+  // Resonance bloom — drive turns the peak into a saturating flare.
+  if (peakN > 0.04 || heat > 0.05) {
+    lit(ctx, () => {
+      drawGlow(ctx, peakX, peakY, 12 + peakN * 34 + heat * 20, C_RESO, 0.22 + peakN * 0.4 + heat * 0.3);
+      drawGlow(ctx, peakX, peakY, 5 + peakN * 12, C_GLOW, 0.3 + peakN * 0.45 + flash * 0.25);
+    });
+  }
+
+  // Drive heat: specks lifting off the peak, hashed so the field never crawls.
+  if (heat > 0.05) {
+    lit(ctx, () => {
+      const n = 6 + Math.round(heat * 12);
+      for (let i = 0; i < n; i++) {
+        const t = (hash01(i * 7.7) + now / (2800 - heat * 1400)) % 1;
+        const x = peakX + (hash01(i * 3.3) - 0.5) * (70 + heat * 110);
+        const y = peakY - t * (24 + heat * 40);
+        drawGlow(ctx, x, y, 3 + heat * 4, C_SAT, (1 - t) * heat * 0.45);
+      }
+    });
+  }
+
+  // Carve markers: the partials (or formant pair) the carve is aimed at.
+  const partials = carvePartials(carve);
+  if (carveAmt > 0.02 && partials.length > 0) {
+    ctx.save();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    for (let i = 0; i < partials.length; i++) {
+      const n = partials[i]!;
+      const x = xOf(clamp(F0_REF * n, F_LO, F_HI));
+      const a = (0.5 - i * 0.12) * (0.35 + carveAmt * 0.65);
+      ctx.strokeStyle = hexA(C_CUT, a);
+      ctx.setLineDash([2, 3]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, floorY);
+      ctx.lineTo(x, floorY - 16);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = hexA(C_CUT, a);
+      ctx.fillText(`${n}f`, x, floorY - 19);
+    }
+    ctx.restore();
+  } else if (carveAmt > 0.02 && carve === "formant") {
+    const f1 = clamp(cut * (0.35 + carveAmt * 0.2), 220, 1000);
+    const f2 = clamp(cut * (0.95 + carveAmt * 1.1), 650, 3800);
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_CUT, 0.4 + carveAmt * 0.4);
+    ctx.fillText("F1", xOf(f1), yOf(respDb(f1, cut)) - 8);
+    ctx.fillText("F2", xOf(f2), yOf(respDb(f2, cut)) - 8);
+  }
+
+  // ── cutoff marker + type glyph ──
+  const cx = xOf(cut);
+  // Only breathes while drive is pushing it; otherwise a paused canvas would
+  // freeze the marker at whatever brightness the last frame happened to hold.
+  const pulse = heat > 0.05 ? 0.62 + 0.38 * Math.sin(now / 380) : 0.82;
+  const laser = cachedGrad(ctx, `flaser|${Hh}|${top}|${floorY}`, (c) => {
+    const g = c.createLinearGradient(0, top, 0, floorY);
+    g.addColorStop(0, hexA(C_GLOW, 0.12));
+    g.addColorStop(0.45, hexA(C_GLOW, 0.5));
+    g.addColorStop(1, hexA(C_CUT, 0.16));
+    return g;
+  });
+  ctx.save();
+  ctx.globalAlpha = 0.55 * pulse + flash * 0.3;
+  ctx.fillStyle = laser;
+  ctx.fillRect(cx - 1.5, top, 3, plotH);
+  ctx.restore();
+  lit(ctx, () => drawGlow(ctx, cx, peakY, 10 + flash * 10, C_GLOW, 0.35 * pulse));
+
+  ctx.save();
+  ctx.translate(cx, top + 2);
+  ctx.fillStyle = hexA(C_CUT, 0.62);
+  ctx.strokeStyle = hexA(C_CUT, 0.75);
+  ctx.lineWidth = 1.6;
+  if (p.type === "lowpass" || p.type === "highpass") {
+    const s = p.type === "lowpass" ? -1 : 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(s * 8, 9);
+    ctx.lineTo(s * -8, 9);
+    ctx.closePath();
+    ctx.fill();
+  } else if (p.type === "bandpass") {
+    ctx.strokeRect(-9, 1, 18, 8);
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-6, 1);
+    ctx.lineTo(6, 9);
+    ctx.moveTo(6, 1);
+    ctx.lineTo(-6, 9);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Crosshair at cutoff × its own gain — the drag handle's read-back.
+  const hy = yOf(respDb(cut, cut));
+  ctx.strokeStyle = hexA(C_GLOW, 0.42 + flash * 0.3);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, hy);
+  ctx.lineTo(cx + 8, hy);
+  ctx.moveTo(cx, hy - 8);
+  ctx.lineTo(cx, hy + 8);
+  ctx.stroke();
+  ctx.fillStyle = hexA(C_HOT, 0.9);
+  ctx.beginPath();
+  ctx.arc(cx, hy, 3 + flash * 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ── telemetry row (clear of the DOM eyebrow at the left, readout at the right) ──
+  if (W >= 460) {
+    const cols = Math.max(96, Math.min(150, (W - 240) / 5));
+    const x0 = 136;
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_HOT, 0.72);
+    ctx.fillText(`SLOPE ${slope * 12}dB/OCT`, x0, 16);
+    ctx.fillStyle = hexA(C_RESO, 0.66);
+    ctx.fillText(`PEAK +${peakDb.toFixed(1)}dB`, x0 + cols, 16);
+    ctx.fillStyle = hexA(C_CUT, 0.64);
+    ctx.fillText(
+      carve === "off" || carveAmt < 0.02 ? "CARVE OFF" : `CARVE ${carve.toUpperCase()} ${Math.round(carveAmt * 100)}`,
+      x0 + cols * 2,
+      16,
+    );
+    ctx.fillStyle = hexA(C_KEY, 0.62);
+    ctx.fillText(`KEY ${Math.round(keyTrack * 100)}`, x0 + cols * 3, 16);
+    ctx.fillStyle = hexA(C_MID, 0.6);
+    ctx.fillText(`${(p.model ?? "biquad").toUpperCase()}`, x0 + cols * 4, 16);
+  }
+
+  pill(ctx, W * 0.5, 3, p.type.toUpperCase(), C_GLOW, { glow: flash });
+
+  // ── sat rail along the bottom, clear of the footer band ──
+  const railY = Hh - 25;
+  const railW = W - 24;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(12, railY, railW, 6);
+  if (heat > 0.01) {
+    const sg = cachedGrad(ctx, `satrail|${W}`, (c) => {
+      const g = c.createLinearGradient(12, 0, 12 + railW, 0);
+      g.addColorStop(0, hexA(C_HOT, 0.4));
+      g.addColorStop(1, hexA(C_SAT, 0.92));
+      return g;
+    });
+    ctx.fillStyle = sg;
+    ctx.fillRect(12, railY + 1, Math.max(2, railW * heat), 4);
+  }
+  lit(ctx, () => drawGlow(ctx, 12 + railW * heat, railY + 3, 7 + flash * 4, C_GLOW, 0.8));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_SAT, 0.7);
+  ctx.fillText("SAT", 14, railY - 3);
+
+  grain(ctx, W, Hh, 0.028);
+  bezel(ctx, W, Hh, C);
+
+  const bits: string[] = [];
+  bits.push(cut >= 1000 ? `${(cut / 1000).toFixed(cut >= 10000 ? 1 : 2)}k` : `${Math.round(cut)}Hz`);
+  bits.push(`Q${res.toFixed(1)}`);
+  if (slope > 1) bits.push(`${slope * 12}dB`);
+  if (Math.abs(envAmt) > 0.04) bits.push(`E${envAmt > 0 ? "+" : ""}${Math.round(envAmt * 100)}`);
+  if (keyTrack > 0.05) bits.push(`K${Math.round(keyTrack * 100)}`);
+  if (heat > 0.04) bits.push(`S${Math.round(heat * 100)}`);
+  if (carve !== "off" && carveAmt > 0.04) bits.push(`${carve.slice(0, 3).toUpperCase()}${Math.round(carveAmt * 100)}`);
+  footer(ctx, W, Hh, "FILT · SPECTRAL BLADE", bits.join(" · "), C_GLOW, C_HOT);
 }
 
 export function FilterStageViz() {
@@ -100,29 +546,28 @@ export function FilterStageViz() {
   const envAmt = useFireCommandStore((s) => s.patch.filterEnvAmount) ?? 0;
   const keyTrack = useFireCommandStore((s) => s.patch.filterKeyTrack) ?? 0.3;
   const sat = useFireCommandStore((s) => s.patch.filterDrive) ?? 0;
+  const slope = useFireCommandStore((s) => s.patch.filterSlope) ?? 1;
+  const carve = useFireCommandStore((s) => s.patch.filterCarve) ?? "off";
+  const carveAmt = useFireCommandStore((s) => s.patch.filterCarveAmount) ?? 0;
+  const model = useFireCommandStore((s) => s.patch.filterModel) ?? "biquad";
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<"xy" | "sat" | null>(null);
-  const prevKey = useRef("");
-  const waterfallRef = useRef<number[][]>([]);
-  const st = useRef({ type, cutoff, res, envAmt, keyTrack, sat });
-  st.current = { type, cutoff, res, envAmt, keyTrack, sat };
+  const prevKey = useRef(0);
+  const st = useRef<FilterVizState>({ type, cutoff, res, envAmt, keyTrack, sat, slope, carve, carveAmt, model });
+  st.current = { type, cutoff, res, envAmt, keyTrack, sat, slope, carve, carveAmt, model };
 
   const sculpted = Math.abs(Math.log10(cutoff / 2600)) > 0.08 || res > 1.2 || Math.abs(envAmt) > 0.05 || sat > 0.05 || keyTrack > 0.35;
 
   useEffect(() => {
-    const key = `${type}|${cutoff.toFixed(1)}|${res.toFixed(2)}|${envAmt.toFixed(3)}|${keyTrack.toFixed(3)}|${sat.toFixed(3)}`;
+    const key = motionHash(cutoff, res, envAmt, keyTrack, sat, slope, carveAmt, strCode(type), strCode(carve));
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [type, cutoff, res, envAmt, keyTrack, sat]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [type, cutoff, res, envAmt, keyTrack, sat, slope, carve, carveAmt]);
 
   const applyXy = useCallback(
     (clientX: number, clientY: number) => {
@@ -137,7 +582,7 @@ export function FilterStageViz() {
       setParam("filterCutoff", Math.round(cut));
       setParam("filterResonance", Math.round(q * 100) / 100);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const applySat = useCallback(
@@ -148,7 +593,7 @@ export function FilterStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       setParam("filterDrive", Math.round(x * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -167,7 +612,7 @@ export function FilterStageViz() {
       wrap.setPointerCapture(e.pointerId);
       applyXy(e.clientX, e.clientY);
     },
-    [applyXy, applySat],
+    [applyXy, applySat, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -184,7 +629,7 @@ export function FilterStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     const i = TYPE_CYCLE.indexOf(st.current.type);
@@ -197,377 +642,44 @@ export function FilterStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const sparks: Array<{ x: number; y: number; life: number; vx: number; vy: number }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.86;
-
-      const PAD = 14;
-      const top = 22;
-      const usableH = Hh - 42;
-      const peak = Math.min(1, Math.log10(Math.max(1, p.res)) * 0.78);
-      const heat = p.sat;
-      const energy = 0.2 + peak * 0.45 + heat * 0.35 + Math.abs(p.envAmt) * 0.15 + flashRef.current * 0.2;
-
-      const xOf = (f: number) => PAD + logNorm(f, F_LO, F_HI) * (W - PAD * 2);
-      const yOf = (g: number) => top + (1 - Math.min(1, g / 1.65)) * usableH;
-
-      ctx.clearRect(0, 0, W, Hh);
-
-      // Tone-gold chamber
-      const cxGlow = xOf(p.cutoff);
-      const bg = ctx.createRadialGradient(cxGlow, Hh * 0.38, 4, W * 0.5, Hh * 0.5, W * 0.78);
-      bg.addColorStop(0, hexAlpha(C_HOT, 0.1 + energy * 0.28 + heat * 0.22));
-      bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.58));
-      bg.addColorStop(1, "rgba(6,5,1,0.98)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Saturation heat wash
-      if (heat > 0.04) {
-        const hg = ctx.createLinearGradient(0, top + usableH, 0, top);
-        hg.addColorStop(0, hexAlpha(C_SAT, 0.08 + heat * 0.28));
-        hg.addColorStop(0.55, hexAlpha(C_HOT, 0.04 * heat));
-        hg.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = hg;
-        ctx.fillRect(0, 0, W, Hh);
-      }
-
-      // Log frequency grid
-      ctx.strokeStyle = hexAlpha(C_MID, 0.1 + energy * 0.06);
-      ctx.lineWidth = 1;
-      for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
-        const x = xOf(f);
-        ctx.globalAlpha = f === 1000 || f === 100 ? 0.45 : 0.18;
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, top);
-        ctx.lineTo(x + 0.5, top + usableH);
-        ctx.stroke();
-      }
-      for (let i = 0; i <= 4; i++) {
-        const y = top + (usableH / 4) * i;
-        ctx.globalAlpha = i === 2 ? 0.35 : 0.14;
-        ctx.beginPath();
-        ctx.moveTo(PAD, y + 0.5);
-        ctx.lineTo(W - PAD, y + 0.5);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-
-      // Key-track ladder (right side) — denser / brighter with keyTrack
-      if (p.keyTrack > 0.02) {
-        const keys = Math.round(4 + p.keyTrack * 8);
-        for (let i = 0; i < keys; i++) {
-          const t = i / Math.max(1, keys - 1);
-          const f = logLerp(t, 110, 3520);
-          const x = xOf(f);
-          const h = 6 + p.keyTrack * 10;
-          ctx.fillStyle = hexAlpha(C_KEY, 0.18 + p.keyTrack * 0.45);
-          ctx.fillRect(x - 1, top + usableH - h, 2, h);
-          if (i % 2 === 0) {
-            ctx.fillStyle = hexAlpha(C_KEY, 0.35 + p.keyTrack * 0.3);
-            ctx.fillRect(x - 1.5, top + usableH - h - 3, 3, 3);
-          }
-        }
-        // Sweep arc hint from cutoff
-        ctx.strokeStyle = hexAlpha(C_KEY, 0.2 + p.keyTrack * 0.35);
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 4]);
-        ctx.beginPath();
-        ctx.arc(cxGlow, top + usableH, 18 + p.keyTrack * 28, -Math.PI * 0.85, -Math.PI * 0.15);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-
-      // Sample response curve
-      const N = 140;
-      const pts: { x: number; y: number; g: number; f: number }[] = [];
-      for (let i = 0; i <= N; i++) {
-        const f = F_LO * Math.pow(F_HI / F_LO, i / N);
-        const g = filterGain(p.type, f, p.cutoff, p.res);
-        pts.push({ x: xOf(f), y: yOf(g), g, f });
-      }
-
-      // Waterfall history
-      const hist = waterfallRef.current;
-      hist.unshift(pts.map((pt) => pt.y));
-      if (hist.length > 20) hist.pop();
-      for (let h = hist.length - 1; h >= 1; h--) {
-        const line = hist[h]!;
-        const age = h / hist.length;
-        ctx.beginPath();
-        for (let i = 0; i < line.length; i++) {
-          const x = pts[i]!.x;
-          const y = line[i]! + h * 0.7;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = hexAlpha(C_MID, (1 - age) * 0.18);
-        ctx.lineWidth = 0.9;
-        ctx.stroke();
-      }
-
-      // Env ghost curve (cutoff shifted by env amount)
-      if (Math.abs(p.envAmt) > 0.03) {
-        const envCut = clamp(p.cutoff * Math.pow(2, p.envAmt * 3.5), CUT_MIN, CUT_MAX);
-        ctx.beginPath();
-        for (let i = 0; i <= N; i += 2) {
-          const f = F_LO * Math.pow(F_HI / F_LO, i / N);
-          const g = filterGain(p.type, f, envCut, p.res);
-          const x = xOf(f);
-          const y = yOf(g);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = hexAlpha(C_ENV, 0.35 + Math.abs(p.envAmt) * 0.4);
-        ctx.lineWidth = 1.4;
-        ctx.setLineDash([4, 4]);
-        ctx.shadowBlur = 6;
-        ctx.shadowColor = C_ENV;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.setLineDash([]);
-
-        // Env arrow
-        const dx = p.envAmt * (W * 0.08);
-        const ay = top + 10;
-        ctx.strokeStyle = hexAlpha(C_ENV, 0.7);
-        ctx.lineWidth = 1.6;
-        ctx.beginPath();
-        ctx.moveTo(cxGlow, ay);
-        ctx.lineTo(cxGlow + dx, ay);
-        ctx.stroke();
-        ctx.fillStyle = hexAlpha(C_ENV, 0.85);
-        ctx.beginPath();
-        ctx.moveTo(cxGlow + dx, ay);
-        ctx.lineTo(cxGlow + dx - Math.sign(dx || 1) * 7, ay - 4);
-        ctx.lineTo(cxGlow + dx - Math.sign(dx || 1) * 7, ay + 4);
-        ctx.closePath();
-        ctx.fill();
-        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(C_ENV, 0.65);
-        ctx.textAlign = "center";
-        ctx.fillText("ENV", cxGlow + dx * 0.5, ay - 6);
-      }
-
-      // Filled blade body
-      ctx.beginPath();
-      ctx.moveTo(PAD, top + usableH);
-      for (const pt of pts) ctx.lineTo(pt.x, pt.y);
-      ctx.lineTo(W - PAD, top + usableH);
-      ctx.closePath();
-      const fill = ctx.createLinearGradient(0, top, 0, top + usableH);
-      fill.addColorStop(0, hexAlpha(C_GLOW, 0.35 + peak * 0.25 + heat * 0.15));
-      fill.addColorStop(0.45, hexAlpha(C_HOT, 0.14 + energy * 0.1));
-      fill.addColorStop(1, hexAlpha(C_DEEP, 0.04));
-      ctx.fillStyle = fill;
-      ctx.fill();
-
-      // Resonance bloom at peak
-      let peakPt = pts[0]!;
-      for (const pt of pts) if (pt.g > peakPt.g) peakPt = pt;
-      if (peak > 0.06) {
-        for (let r = 0; r < 4; r++) {
-          const ringPhase = ((now / 700) + r * 0.25) % 1;
-          const ringR = 10 + ringPhase * (22 + peak * 30);
-          ctx.strokeStyle = hexAlpha(C_RESO, (0.45 + peak * 0.35) * (1 - ringPhase));
-          ctx.lineWidth = 2 - ringPhase * 1.4;
-          ctx.shadowBlur = 8 + peak * 12;
-          ctx.shadowColor = C;
-          ctx.beginPath();
-          ctx.arc(peakPt.x, peakPt.y, ringR, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-        ctx.shadowBlur = 0;
-        const bloom = ctx.createRadialGradient(peakPt.x, peakPt.y, 0, peakPt.x, peakPt.y, 20 + peak * 30);
-        bloom.addColorStop(0, hexAlpha(C_GLOW, 0.5 + peak * 0.4 + flashRef.current * 0.25));
-        bloom.addColorStop(0.5, hexAlpha(C_RESO, 0.18));
-        bloom.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = bloom;
-        ctx.beginPath();
-        ctx.arc(peakPt.x, peakPt.y, 20 + peak * 30, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Main spectral blade stroke
-      ctx.beginPath();
-      for (let i = 0; i < pts.length; i++) {
-        const pt = pts[i]!;
-        if (i === 0) ctx.moveTo(pt.x, pt.y);
-        else ctx.lineTo(pt.x, pt.y);
-      }
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.75 + energy * 0.25);
-      ctx.lineWidth = 2.6;
-      ctx.shadowBlur = 12 + peak * 14 + flashRef.current * 16;
-      ctx.shadowColor = C;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Type-shaped edge highlight (blade tip markers)
-      if (p.type === "lowpass" || p.type === "highpass") {
-        ctx.fillStyle = hexAlpha(C_CUT, 0.55);
-        ctx.beginPath();
-        ctx.moveTo(cxGlow, top + 4);
-        ctx.lineTo(cxGlow + (p.type === "lowpass" ? -8 : 8), top + 14);
-        ctx.lineTo(cxGlow + (p.type === "lowpass" ? 8 : -8), top + 14);
-        ctx.closePath();
-        ctx.fill();
-      } else if (p.type === "bandpass") {
-        ctx.strokeStyle = hexAlpha(C_CUT, 0.7);
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(cxGlow - 10, top + 4, 20, 8);
-      } else {
-        // Notch — cut mark
-        ctx.strokeStyle = hexAlpha(C_CUT, 0.8);
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(cxGlow - 7, top + 6);
-        ctx.lineTo(cxGlow + 7, top + 14);
-        ctx.moveTo(cxGlow + 7, top + 6);
-        ctx.lineTo(cxGlow - 7, top + 14);
-        ctx.stroke();
-      }
-
-      // Cutoff laser blade
-      const pulse = 0.6 + 0.4 * Math.sin(now / 380);
-      const laser = ctx.createLinearGradient(cxGlow - 2, top, cxGlow + 2, top + usableH);
-      laser.addColorStop(0, hexAlpha(C_GLOW, 0.15 * pulse));
-      laser.addColorStop(0.5, hexAlpha("#fff8e0", 0.55 * pulse + flashRef.current * 0.25));
-      laser.addColorStop(1, hexAlpha(C_CUT, 0.2 * pulse));
-      ctx.fillStyle = laser;
-      ctx.shadowBlur = 10 * pulse + flashRef.current * 8;
-      ctx.shadowColor = C;
-      ctx.fillRect(cxGlow - 2, top, 4, usableH);
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.55);
-      ctx.setLineDash([5, 5]);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(cxGlow, top);
-      ctx.lineTo(cxGlow, top + usableH);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Crosshair at cutoff × reso
-      const hy = yOf(filterGain(p.type, p.cutoff, p.cutoff, p.res));
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.45 + flashRef.current * 0.3);
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(cxGlow - 8, hy);
-      ctx.lineTo(cxGlow + 8, hy);
-      ctx.moveTo(cxGlow, hy - 8);
-      ctx.lineTo(cxGlow, hy + 8);
-      ctx.stroke();
-      ctx.fillStyle = hexAlpha(C_HOT, 0.85);
-      ctx.beginPath();
-      ctx.arc(cxGlow, hy, 3 + flashRef.current * 2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Sat sparks along the floor
-      if (heat > 0.06 && Math.random() < 0.15 + heat * 0.4) {
-        sparks.push({
-          x: PAD + Math.random() * (W - PAD * 2),
-          y: top + usableH - 2,
-          life: 1,
-          vx: (Math.random() - 0.5) * 1.5,
-          vy: -1 - Math.random() * 2.5 * heat,
-        });
-      }
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const s = sparks[i]!;
-        s.life -= 0.03;
-        if (s.life <= 0) {
-          sparks.splice(i, 1);
-          continue;
-        }
-        s.x += s.vx;
-        s.y += s.vy;
-        ctx.fillStyle = hexAlpha(C_SAT, s.life * 0.75);
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, 1.2 + heat * 1.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Sat rail
-      const railY = Hh - 16;
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(12, railY, W - 24, 7);
-      ctx.strokeStyle = hexAlpha(C_SAT, 0.25);
-      ctx.strokeRect(12.5, railY + 0.5, W - 25, 6);
-      const satW = (W - 24) * p.sat;
-      if (p.sat > 0.01) {
-        const sg = ctx.createLinearGradient(12, railY, 12 + satW, railY);
-        sg.addColorStop(0, hexAlpha(C_HOT, 0.4));
-        sg.addColorStop(1, hexAlpha(C_SAT, 0.95));
-        ctx.fillStyle = sg;
-        ctx.shadowBlur = 8 + heat * 10;
-        ctx.shadowColor = C;
-        ctx.fillRect(12, railY, satW, 7);
-        ctx.shadowBlur = 0;
-      }
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(12 + satW, railY + 3.5, 3.5 + flashRef.current * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = hexAlpha(C_SAT, 0.7);
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText("SAT", 14, railY - 3);
-
-      // Mode chip
-      const modeLabel = p.type.toUpperCase();
-      ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-      const modeW = ctx.measureText(modeLabel).width + 12;
-      const chipX = W * 0.5 - modeW * 0.5;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(chipX, 6, modeW, 13);
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.55 + flashRef.current * 0.3);
-      ctx.lineWidth = 1;
-      ctx.strokeRect(chipX, 6, modeW, 13);
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.textAlign = "center";
-      ctx.fillText(modeLabel, W * 0.5, 16);
-
-      // Footer
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      ctx.fillText("FILT · SPECTRAL BLADE", 12, Hh - 2);
-      ctx.textAlign = "right";
-      const bits: string[] = [];
-      bits.push(p.cutoff >= 1000 ? `${(p.cutoff / 1000).toFixed(p.cutoff >= 10000 ? 1 : 2)}k` : `${Math.round(p.cutoff)}Hz`);
-      bits.push(`Q${p.res.toFixed(1)}`);
-      if (Math.abs(p.envAmt) > 0.04) bits.push(`E${p.envAmt > 0 ? "+" : ""}${Math.round(p.envAmt * 100)}`);
-      if (p.keyTrack > 0.05) bits.push(`K${Math.round(p.keyTrack * 100)}`);
-      if (p.sat > 0.04) bits.push(`S${Math.round(p.sat * 100)}`);
-      ctx.fillStyle = hexAlpha(C_HOT, 0.88);
-      ctx.fillText(bits.join(" · "), W - 12, Hh - 2);
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintFilter(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
-        active: false,
+        active: (st.current.sat ?? 0) > 0.05,
         dragging: !!dragRef.current,
-        particles: sparks.length,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.cutoff,
+          st.current.res,
+          st.current.envAmt,
+          st.current.keyTrack,
+          st.current.sat,
+          st.current.slope,
+          st.current.carveAmt,
+          strCode(st.current.type),
+          strCode(st.current.carve),
+        ),
       }),
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, sculpted ? 0.55 : 0.3),
+        borderColor: hexA(C, sculpted ? 0.55 : 0.3),
         height: H,
         cursor: "crosshair",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexAlpha(C, sculpted ? 0.26 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexA(C, sculpted ? 0.26 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -579,19 +691,19 @@ export function FilterStageViz() {
       aria-label="Filter spectral blade"
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Spectral Blade
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
-        style={{ color: hexAlpha(C_HOT, 0.75) }}
+        style={{ color: hexA(C_HOT, 0.75) }}
       >
         {type.slice(0, 2)}
       </div>

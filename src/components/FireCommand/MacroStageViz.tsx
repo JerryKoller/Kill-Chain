@@ -1,13 +1,43 @@
 /**
  * Macros — Helm Quartet stage visualizer.
+ *
+ * IDIOM: the assignment fan. Four helm rails stand across the width, each
+ * showing its macro's level as a filled carriage position; from every carriage
+ * a fan line sweeps down to the destination bus that spans the whole panel. At
+ * 10:1 the composition is the harness, not the meters — the rails are slim
+ * markers and the fan is what reads.
+ *
+ * Line thickness is the route amount, solid lines land on a filled tap
+ * (positive polarity) and dashed lines on a hollow one (inverted), and the
+ * travelling dots only move while the driving macro is actually open — so a
+ * wired-but-idle macro visibly sends nothing.
+ *
  * Four performance macros → mod matrix (Signal Path Perf · FC.macros).
  * Drag each helm ↕ to set level. Double-click: cycle characters / zero.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  mixHex,
+  motionHash,
+  pill,
+  plate,
+  roundRect,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.macros;
@@ -38,46 +68,261 @@ const CHAR_CYCLE: ReadonlyArray<readonly [number, number, number, number]> = [
   [0, 0.5, 1, 0.5],
 ];
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
-
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+/** Deterministic phase offset — flow dots must not crawl on an idle canvas. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/** Point on a cubic bezier — the flow dots ride the fan lines. */
+function cubicAt(a: number, b: number, c: number, d: number, t: number): number {
+  const u = 1 - t;
+  return u * u * u * a + 3 * u * u * t * b + 3 * u * t * t * c + t * t * t * d;
+}
+
+/** One fan line: which helm drives which bus stop, and how hard. */
+export type MacroLink = { m: number; d: number; amount: number };
+
+export type MacroVizState = {
+  /** Four macro levels, 0..1. */
+  values: number[];
+  enabled: boolean;
+  /** Distinct wired destinations in matrix order — the bus stops. */
+  dests: string[];
+  links: MacroLink[];
+  /** Checksum of the wiring, so a re-aimed route wakes a parked canvas. */
+  sig: number;
+};
+
+/**
+ * Paint the assignment fan. Exported and pure so it can be rendered headlessly
+ * without mounting the component or waiting on a frame.
+ */
+export function paintMacro(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: MacroVizState,
+  now: number,
+  flash: number,
+): void {
+  const on = p.enabled;
+  const vals = p.values;
+  let peak = 0;
+  for (let i = 0; i < 4; i++) {
+    const v = on ? vals[i] ?? 0 : 0;
+    if (v > peak) peak = v;
+  }
+  const dim = on ? 1 : 0.32;
+  const energy = 0.06 + peak * 0.34 + flash * 0.16;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.8 });
+
+  const padL = 16;
+  const padR = 16;
+  const span = Math.max(60, W - padL - padR);
+  const railTop = Hh * 0.1;
+  const railBot = Hh * 0.72;
+  const railH = railBot - railTop;
+  const busY = Hh * 0.8;
+  const nDest = p.dests.length;
+  const wired = p.links.length;
+
+  // ── destination bus: every wired mod-matrix target, spread over the width ──
+  ctx.fillStyle = hexA(C_MID, 0.14 + peak * 0.1);
+  ctx.fillRect(padL, busY, span, 1);
+  const stopW = nDest > 0 ? span / nDest : span;
+  const busX = (d: number) => padL + (d + 0.5) * stopW;
+
+  if (nDest === 0) {
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_MID, 0.34);
+    ctx.fillText("NO ROUTES WIRED — MATRIX EMPTY", W * 0.5, busY - 7);
+  }
+  for (let d = 0; d < nDest; d++) {
+    const bx = busX(d);
+    ctx.fillStyle = hexA(C_MID, 0.3 * dim);
+    ctx.fillRect(bx - 0.5, busY, 1, 5);
+    const name = p.dests[d] ?? "";
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_HOT, 0.5 * dim);
+    ctx.fillText(name.length > 13 ? `${name.slice(0, 12)}…` : name, bx, busY - 7);
+  }
+
+  // ── the fan: one sweep per wired route ──
+  for (let li = 0; li < wired; li++) {
+    const link = p.links[li]!;
+    const col = MACRO_HELM_COLORS[link.m] ?? C_HOT;
+    const v = on ? vals[link.m] ?? 0 : 0;
+    const amt = clamp(link.amount, -1, 1);
+    const mag = Math.abs(amt);
+    const pos = amt >= 0;
+    const x0 = padL + span * ((link.m + 0.5) / 4);
+    const y0 = railBot - v * railH;
+    const x1 = busX(link.d);
+    const bend = (busY - y0) * 0.58;
+    const path = () => {
+      ctx.moveTo(x0, y0);
+      ctx.bezierCurveTo(x0, y0 + bend, x1, busY - bend, x1, busY);
     };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+    // Idle macros keep their wiring visible but stop delivering.
+    const carry = 0.14 + v * 0.86;
+    const a = (0.08 + mag * 0.46) * carry * dim;
+    const width = 0.6 + mag * 2.6;
+    const color = pos ? col : mixHex(col, C_DEEP, 0.55);
+
+    ctx.save();
+    if (!pos) ctx.setLineDash([3, 4]);
+    if (a > 0.24) {
+      glowStroke(ctx, path, color, { width, glow: 0.7 * carry, alpha: a });
+    } else {
+      ctx.strokeStyle = hexA(color, a);
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      path();
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Landing tap: filled triangle into the bus for +, hollow out of it for −.
+    ctx.beginPath();
+    if (pos) {
+      ctx.moveTo(x1 - 3.4, busY - 5);
+      ctx.lineTo(x1 + 3.4, busY - 5);
+      ctx.lineTo(x1, busY);
+      ctx.closePath();
+      ctx.fillStyle = hexA(color, (0.35 + mag * 0.55) * carry * dim);
+      ctx.fill();
+    } else {
+      ctx.moveTo(x1 - 3.4, busY);
+      ctx.lineTo(x1 + 3.4, busY);
+      ctx.lineTo(x1, busY - 5);
+      ctx.closePath();
+      ctx.strokeStyle = hexA(color, (0.4 + mag * 0.5) * carry * dim);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // Flow dot — travels only while the macro is open. Phase from a hash so an
+    // idle panel renders identically every time.
+    if (v > 0.03 && mag > 0.02 && on) {
+      const speed = 0.00012 + mag * v * 0.00042;
+      const t = (now * speed + hash01(li * 7.77)) % 1;
+      const fx = cubicAt(x0, x0, x1, x1, t);
+      const fy = cubicAt(y0, y0 + bend, busY - bend, busY, t);
+      lit(ctx, () => {
+        drawGlow(ctx, fx, fy, 5 + mag * 5, C_GLOW, (0.3 + mag * 0.5) * v);
+        ctx.fillStyle = hexA(C_GLOW, 0.8 * v);
+        ctx.fillRect(fx - 0.9, fy - 0.9, 1.8, 1.8);
+      });
+    }
+  }
+
+  // ── four helm rails ──
+  for (let i = 0; i < 4; i++) {
+    const v = on ? vals[i] ?? 0 : 0;
+    const col = MACRO_HELM_COLORS[i] ?? C_HOT;
+    const cx = padL + span * ((i + 0.5) / 4);
+    const vy = railBot - v * railH;
+
+    // Recessed channel + quarter ladder.
+    ctx.fillStyle = "rgba(0,0,0,0.42)";
+    roundRect(ctx, cx - 5, railTop, 10, railH, 5);
+    ctx.fill();
+    ctx.strokeStyle = hexA(col, 0.16 * dim);
+    ctx.lineWidth = 1;
+    roundRect(ctx, cx - 4.5, railTop + 0.5, 9, railH - 1, 4.5);
+    ctx.stroke();
+    for (let q = 0; q <= 4; q++) {
+      const ty = railBot - (q / 4) * railH;
+      ctx.fillStyle = hexA(C_MID, q === 0 || q === 4 ? 0.28 : 0.14);
+      ctx.fillRect(cx - 11, ty, 5, 1);
+    }
+
+    // Filled position — a fixed-span gradient clipped to the value.
+    const body = cachedGrad(ctx, `helm|${col}|${railTop | 0}|${railBot | 0}`, (c) => {
+      const g = c.createLinearGradient(0, railBot, 0, railTop);
+      g.addColorStop(0, hexA(col, 0.18));
+      g.addColorStop(1, hexA(col, 0.78));
+      return g;
+    });
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(cx - 4, vy, 8, railBot - vy);
+    ctx.clip();
+    ctx.globalAlpha = dim;
+    ctx.fillStyle = body;
+    ctx.fillRect(cx - 4, railTop, 8, railH);
+    ctx.restore();
+
+    // Carriage cap — the "helm" the pointer drags.
+    const capW = 30;
+    ctx.fillStyle = "rgba(6,3,8,0.9)";
+    roundRect(ctx, cx - capW * 0.5, vy - 4.5, capW, 9, 3);
+    ctx.fill();
+    ctx.fillStyle = hexA(col, (0.55 + v * 0.4) * dim);
+    roundRect(ctx, cx - capW * 0.5 + 1.5, vy - 3, capW - 3, 6, 2);
+    ctx.fill();
+    ctx.fillStyle = hexA(C_GLOW, (0.6 + v * 0.35) * dim);
+    ctx.fillRect(cx - capW * 0.5 + 3, vy - 0.5, capW - 6, 1);
+    if (on) {
+      lit(ctx, () => drawGlow(ctx, cx, vy, 12 + v * 14 + flash * 6, col, 0.2 + v * 0.5));
+    }
+
+    // Readouts: name above the channel, level on the carriage.
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(col, 0.72 * dim);
+    ctx.fillText(`M${i + 1}`, cx, railTop - 5);
+    ctx.font = VIZ_FONT_VALUE;
+    ctx.fillStyle = hexA(C_GLOW, (0.6 + v * 0.35) * dim);
+    ctx.fillText(`${Math.round(v * 100)}`, cx + capW * 0.5 + 13, vy + 3);
+
+    // Per-helm fan-out count, so an unwired helm is obvious.
+    let n = 0;
+    for (let li = 0; li < wired; li++) if (p.links[li]!.m === i) n++;
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.fillStyle = hexA(n > 0 ? C_HOT : C_MID, (n > 0 ? 0.6 : 0.3) * dim);
+    ctx.fillText(n > 0 ? `→${n}` : "→0", cx, railBot + 11);
+  }
+
+  // Top telemetry row.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_GLOW, 0.66 * dim);
+  ctx.fillText("ASSIGN FAN", 11, 16);
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_MID, 0.7);
+  ctx.fillText(`${wired}/12 SLOTS · ${nDest} DEST`, W - 11, 16);
+
+  pill(ctx, W * 0.5, 3, !on ? "BYPASS" : wired === 0 ? "UNWIRED" : `${wired} WIRED`, C_GLOW, {
+    glow: flash,
+  });
+
+  if (!on) {
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, W, Hh);
+  }
+
+  grain(ctx, W, Hh, 0.026);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    on ? "HELM QUARTET" : "HELM QUARTET · BYPASS",
+    `Σ${Math.round(peak * 100)} · ${wired} route${wired === 1 ? "" : "s"}`,
+    C_GLOW,
+    C,
+  );
 }
 
 export function MacroStageViz() {
@@ -89,43 +334,50 @@ export function MacroStageViz() {
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["macros"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const values = [m1, m2, m3, m4] as const;
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 480, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragIdx = useRef<number | null>(null);
-  const prevKey = useRef("");
-  const sparks = useRef<{ x: number; y: number; vx: number; vy: number; life: number; m: number }[]>([]);
-  const st = useRef({ values, enabled, routes: [] as string[][] });
-  st.current = {
-    values,
-    enabled,
-    routes: MACRO_KEYS.map((k) =>
-      matrix.filter((r) => r.source === k && r.dest !== "none").map((r) => r.dest),
-    ),
-  };
+  const prevKey = useRef(0);
+  const st = useRef<MacroVizState>({ values: [m1, m2, m3, m4], enabled, dests: [], links: [], sig: 0 });
+
+  // Flatten the matrix into bus stops + fan lines once per render, never per frame.
+  const dests: string[] = [];
+  const links: MacroLink[] = [];
+  let sig = 0;
+  for (const r of matrix) {
+    const m = MACRO_KEYS.indexOf(r.source as MacroKey);
+    if (m < 0 || r.dest === "none" || !r.amount) continue;
+    let d = dests.indexOf(r.dest);
+    if (d < 0) {
+      d = dests.length;
+      dests.push(r.dest);
+    }
+    links.push({ m, d, amount: r.amount });
+    sig = (sig * 31 + ((r.amount * 1000) | 0) + m * 7 + d * 131) | 0;
+  }
+  st.current = { values: [m1, m2, m3, m4], enabled, dests, links, sig };
 
   const energy = Math.max(m1, m2, m3, m4);
   const live = enabled && energy > 0.03;
 
   useEffect(() => {
-    const key = `${m1.toFixed(3)}|${m2.toFixed(3)}|${m3.toFixed(3)}|${m4.toFixed(3)}|${enabled ? 1 : 0}|${matrix.length}`;
+    const key = motionHash(m1, m2, m3, m4, enabled, sig);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [m1, m2, m3, m4, enabled, matrix]);
+  }, [m1, m2, m3, m4, enabled, sig]);
 
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
-
-  const helmAt = useCallback((clientX: number): number => {
-    const wrap = wrapRef.current;
-    if (!wrap) return 0;
-    const rect = wrap.getBoundingClientRect();
-    const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 0.999);
-    return Math.floor(x * 4);
-  }, []);
+  const helmAt = useCallback(
+    (clientX: number): number => {
+      const wrap = wrapRef.current;
+      if (!wrap) return 0;
+      const rect = wrap.getBoundingClientRect();
+      const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 0.999);
+      return Math.floor(x * 4);
+    },
+    [wrapRef],
+  );
 
   const applyHelm = useCallback(
     (clientX: number, clientY: number, idx: number) => {
@@ -138,7 +390,7 @@ export function MacroStageViz() {
       const v = Math.round((1 - plot) * 1000) / 1000;
       setParam(MACRO_KEYS[idx]!, clamp(v, 0, 1));
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -171,10 +423,10 @@ export function MacroStageViz() {
     for (let i = 0; i < CHAR_CYCLE.length; i++) {
       const c = CHAR_CYCLE[i]!;
       const d =
-        Math.abs(c[0] - cur[0]) +
-        Math.abs(c[1] - cur[1]) +
-        Math.abs(c[2] - cur[2]) +
-        Math.abs(c[3] - cur[3]);
+        Math.abs(c[0] - (cur[0] ?? 0)) +
+        Math.abs(c[1] - (cur[1] ?? 0)) +
+        Math.abs(c[2] - (cur[2] ?? 0)) +
+        Math.abs(c[3] - (cur[3] ?? 0));
       if (d < bestD) {
         bestD = d;
         best = i;
@@ -194,185 +446,28 @@ export function MacroStageViz() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const stopLoop = startStageVizLoop(
-      (t) => {
-      flashRef.current *= 0.9;
-
-      const { w: W, h: Hcss } = sizeRef.current;
-      if (W < 2) return;
-      const { values: vals, enabled: on, routes } = st.current;
-      const flash = flashRef.current;
-      const breath = 0.5 + 0.5 * Math.sin(t * 0.002);
-
-      ctx.clearRect(0, 0, W, Hcss);
-
-      // Magenta chamber
-      const bg = ctx.createLinearGradient(0, 0, W, Hcss);
-      bg.addColorStop(0, hexAlpha(C_DEEP, 0.65 + flash * 0.2));
-      bg.addColorStop(0.5, "rgba(8,2,6,0.95)");
-      bg.addColorStop(1, hexAlpha(C_MID, 0.35));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Center constellation glow
-      const eg = Math.max(...vals);
-      const core = ctx.createRadialGradient(W * 0.5, Hcss * 0.42, 4, W * 0.5, Hcss * 0.42, W * 0.35);
-      core.addColorStop(0, hexAlpha(C_GLOW, (0.06 + eg * 0.22 + flash * 0.15) * (on ? 1 : 0.25)));
-      core.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = core;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      const slotW = W / 4;
-      const baseY = Hcss * 0.72;
-      const topY = Hcss * 0.14;
-
-      // Connecting web between active helms
-      for (let i = 0; i < 4; i++) {
-        for (let j = i + 1; j < 4; j++) {
-          const a = vals[i]! * (on ? 1 : 0);
-          const b = vals[j]! * (on ? 1 : 0);
-          if (a < 0.08 || b < 0.08) continue;
-          const xi = slotW * (i + 0.5);
-          const xj = slotW * (j + 0.5);
-          const yi = baseY - a * (baseY - topY);
-          const yj = baseY - b * (baseY - topY);
-          ctx.strokeStyle = hexAlpha(C_HOT, 0.08 + Math.min(a, b) * 0.25);
-          ctx.lineWidth = 1 + Math.min(a, b) * 2;
-          ctx.beginPath();
-          ctx.moveTo(xi, yi);
-          ctx.quadraticCurveTo(W * 0.5, Hcss * 0.35 + breath * 8, xj, yj);
-          ctx.stroke();
-        }
-      }
-
-      for (let i = 0; i < 4; i++) {
-        const v = on ? vals[i]! : 0;
-        const col = MACRO_HELM_COLORS[i]!;
-        const cx = slotW * (i + 0.5);
-        const cy = baseY - v * (baseY - topY);
-        const R = 14 + v * 16 + flash * 3;
-
-        // Column guide
-        ctx.strokeStyle = hexAlpha(col, 0.15 + v * 0.2);
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([3, 4]);
-        ctx.beginPath();
-        ctx.moveTo(cx, topY);
-        ctx.lineTo(cx, baseY + 8);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Fill column
-        const colG = ctx.createLinearGradient(cx, cy, cx, baseY);
-        colG.addColorStop(0, hexAlpha(col, 0.35 + v * 0.35));
-        colG.addColorStop(1, hexAlpha(col, 0.02));
-        ctx.fillStyle = colG;
-        ctx.fillRect(cx - 4 - v * 4, cy, 8 + v * 8, baseY - cy);
-
-        // Helm orb
-        const og = ctx.createRadialGradient(cx - 3, cy - 3, 1, cx, cy, R);
-        og.addColorStop(0, hexAlpha(C_GLOW, 0.95));
-        og.addColorStop(0.35, hexAlpha(col, 0.85));
-        og.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = og;
-        ctx.shadowBlur = 10 + v * 18 + flash * 8;
-        ctx.shadowColor = hexAlpha(col, 0.7);
-        ctx.beginPath();
-        ctx.arc(cx, cy, R, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Ring meter
-        ctx.strokeStyle = hexAlpha(col, 0.25);
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(cx, cy, R + 6, -Math.PI * 0.75, Math.PI * 0.75);
-        ctx.stroke();
-        ctx.strokeStyle = hexAlpha(C_GLOW, 0.7 + v * 0.25);
-        ctx.lineWidth = 3;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.arc(cx, cy, R + 6, -Math.PI * 0.75, -Math.PI * 0.75 + Math.PI * 1.5 * v);
-        ctx.stroke();
-
-        // Label
-        ctx.font = "800 10px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(col, 0.85);
-        ctx.textAlign = "center";
-        ctx.fillText(`M${i + 1}`, cx, baseY + 18);
-        ctx.font = "700 9px ui-monospace, Menlo, monospace";
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.7 + v * 0.25);
-        ctx.fillText(`${Math.round(v * 100)}`, cx, cy + 3);
-
-        // Route chips under helm
-        const dests = routes[i] ?? [];
-        if (dests.length > 0 && v > 0.05) {
-          ctx.font = "600 7px ui-sans-serif, system-ui, sans-serif";
-          ctx.fillStyle = hexAlpha(col, 0.55);
-          const label = dests.slice(0, 2).join(" · ");
-          ctx.fillText(label.length > 14 ? label.slice(0, 13) + "…" : label, cx, topY - 2);
-        }
-
-        // Sparks when high
-        if (on && v > 0.35 && Math.random() < 0.2 * v) {
-          const ang = Math.random() * Math.PI * 2;
-          sparks.current.push({
-            x: cx,
-            y: cy,
-            vx: Math.cos(ang) * (0.4 + v),
-            vy: Math.sin(ang) * (0.4 + v) - 0.3,
-            life: 1,
-            m: i,
-          });
-          if (sparks.current.length > 48) sparks.current.shift();
-        }
-      }
-
-      for (let i = sparks.current.length - 1; i >= 0; i--) {
-        const s = sparks.current[i]!;
-        s.x += s.vx;
-        s.y += s.vy;
-        s.vy += 0.04;
-        s.life -= 0.025;
-        if (s.life <= 0) {
-          sparks.current.splice(i, 1);
-          continue;
-        }
-        const col = MACRO_HELM_COLORS[s.m]!;
-        const pg = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, 3 + s.life * 2);
-        pg.addColorStop(0, hexAlpha(C_GLOW, s.life * 0.85));
-        pg.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = pg;
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, 3 + s.life * 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Identity
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flash * 0.35);
-      ctx.textAlign = "left";
-      ctx.fillText(on ? "HELM QUARTET" : "HELM QUARTET · BYPASS", 10, Hcss - 8);
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C, 0.7);
-      const wired = routes.reduce((n, r) => n + r.length, 0);
-      ctx.fillText(`Σ${Math.round(eg * 100)} · ${wired} route${wired === 1 ? "" : "s"}`, W - 10, Hcss - 8);
-
-      if (!on) {
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(0, 0, W, Hcss);
-      }
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintMacro(ctx, W, Hh, st.current, now, flashRef.current);
       },
-      () => ({
-        flash: flashRef.current,
-        active: !!st.current.enabled,
-        dragging: false,
-        particles: 0,
-        motionKey: JSON.stringify(st.current),
-      }),
+      () => {
+        const s = st.current;
+        const v = s.values;
+        const peak = Math.max(v[0] ?? 0, v[1] ?? 0, v[2] ?? 0, v[3] ?? 0);
+        return {
+          flash: flashRef.current,
+          // Flow dots only need frames when a wired macro is actually open.
+          active: s.enabled && s.links.length > 0 && peak > 0.02,
+          dragging: dragIdx.current !== null,
+          visible: visibleRef.current,
+          motionKey: motionHash(v[0], v[1], v[2], v[3], s.enabled, s.sig, s.dests.length),
+        };
+      },
       { minIntervalMs: 22 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div

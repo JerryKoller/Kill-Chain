@@ -21,6 +21,10 @@ import { useFireLayout } from "./FireLayoutContext";
 import { ensureExpanded } from "./fireNavigate";
 import { MixerStageViz } from "./MixerStageViz";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
+
+/** Mix band — console chips with an LED underline. */
+const MIX_CHAR = fcChipCharacterFor("mixer");
 
 const C = FC.mixer;
 const C_GLOW = bandShade(FC_BAND.mix, 0.92);
@@ -151,45 +155,36 @@ function applyMixChar(char: MixChar) {
 function MixerCharacterStrip() {
   const mixer = useFireSequencerStore((s) => s.mixer);
   const duckEnabled = useFireSequencerStore((s) => s.duckEnabled);
+  const tone = { color: C, onText: C_GLOW, glow: 10 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${C}66` }}>
         Deck
       </span>
-      {MIX_CHARS.map((p) => {
-        const on =
-          (p.id === "unity" &&
-            Math.abs(mixer.a.level - 1) < 0.08 &&
-            Math.abs(mixer.b.level - 1) < 0.08 &&
-            Math.abs(mixer.drums.level - 1) < 0.08 &&
-            !duckEnabled) ||
-          (p.id === "duck" && duckEnabled) ||
-          (p.id === "lead" && mixer.a.level > 1.05 && mixer.b.level < 0.7) ||
-          (p.id === "rhythm" && mixer.drums.level > 1.1) ||
-          (p.id === "wide" && Math.abs(mixer.a.pan) > 0.4 && Math.abs(mixer.b.pan) > 0.4) ||
-          (p.id === "quiet" && mixer.master.level < 0.85 && mixer.a.level < 0.7);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => applyMixChar(p)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${C}99`,
-                    background: `${C}33`,
-                    color: C_GLOW,
-                    boxShadow: `0 0 10px ${C}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={p.label}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {MIX_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={
+            (p.id === "unity" &&
+              Math.abs(mixer.a.level - 1) < 0.08 &&
+              Math.abs(mixer.b.level - 1) < 0.08 &&
+              Math.abs(mixer.drums.level - 1) < 0.08 &&
+              !duckEnabled) ||
+            (p.id === "duck" && duckEnabled) ||
+            (p.id === "lead" && mixer.a.level > 1.05 && mixer.b.level < 0.7) ||
+            (p.id === "rhythm" && mixer.drums.level > 1.1) ||
+            (p.id === "wide" && Math.abs(mixer.a.pan) > 0.4 && Math.abs(mixer.b.pan) > 0.4) ||
+            (p.id === "quiet" && mixer.master.level < 0.85 && mixer.a.level < 0.7)
+          }
+          tone={tone}
+          character={MIX_CHAR}
+          caseMode="normal"
+          onClick={() => applyMixChar(p)}
+          title={p.label}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }

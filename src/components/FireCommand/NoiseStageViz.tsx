@@ -1,14 +1,38 @@
 /**
  * NOISE — Grain Storm stage visualizer.
- * Noise bed level + spectral tilt (Signal Path Sources · FC.noise).
- * Chip noise mode shapes grit. Drag: Color ↔ / Level ↕.
+ *
+ * IDIOM: the grain storm. This is a particle field and nothing else — density
+ * sets how many specks the letterbox holds, grain sets how coarse each one is,
+ * and the colour tilt tips the whole field's vertical distribution (dark rumble
+ * settles on the floor, bright hiss lifts to the ceiling). Burst gates the field
+ * into columns; Storm sweeps sheets of it across the width.
+ *
+ * Every speck comes from a hash of its index, so the field is a fixed
+ * constellation that drifts rather than a new random dust cloud each frame.
+ *
+ * Level · Color · Density · Grain · Storm mode · Chip grit (Sources · FC.noise).
+ * Drag: Color ↔ / Level ↕. Shift or bottom: Density ↔ / Grain ↕.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
-import type { ChipNoiseMode } from "@/audio/dsp/FireCommandSynth";
+import type { ChipNoiseMode, NoiseMode } from "@/audio/dsp/FireCommandSynth";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  grain as filmGrain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const H = 158;
 const C = FC.noise;
@@ -19,17 +43,19 @@ const C_GLOW = bandShade(FC.sources, 0.92);
 const C_DARK = bandShade(FC.sources, 0.38);
 const C_BRIGHT = bandShade(FC.sources, 0.85);
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Burst gating resolution across the width. */
+const GATES = 16;
+/** Storm mode as a number, so it can ride in the allocation-free motion hash. */
+const STORM_IX: Record<NoiseMode, number> = { bed: 0, burst: 1, storm: 2 };
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/** Deterministic scatter — the field is a fixed constellation, not fresh dust. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
 }
 
 function gritSize(mode: ChipNoiseMode): number {
@@ -39,33 +65,275 @@ function gritSize(mode: ChipNoiseMode): number {
   return 1.15;
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+function gritLabel(mode: ChipNoiseMode): string {
+  if (mode === "periodic") return "PER";
+  if (mode === "nes") return "HOLD";
+  if (mode === "gb") return "SOFT";
+  return "WHT";
+}
+
+/**
+ * Field scratch. Preallocated so a 1000-speck storm costs no garbage: one pass
+ * bins specks into three brightness tiers, each tier drawn as a single path.
+ */
+const MAX_SPECKS = 1200;
+const sxBuf = new Float32Array(MAX_SPECKS * 3);
+const syBuf = new Float32Array(MAX_SPECKS * 3);
+const szBuf = new Float32Array(MAX_SPECKS * 3);
+const tierN = new Int32Array(3);
+const gate = new Float32Array(GATES);
+
+export type NoiseState = {
+  level: number;
+  color: number;
+  mode: ChipNoiseMode;
+  stormMode: NoiseMode;
+  density: number;
+  grain: number;
+  enabled: boolean;
+};
+
+export function paintNoise(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: NoiseState,
+  now: number,
+  flash: number,
+): void {
+  const lvl = clamp(p.level, 0, 1);
+  const tilt = clamp(p.color, -1, 1);
+  const dens = clamp(p.density ?? 0.45, 0, 1);
+  const grn = clamp(p.grain ?? 0.35, 0, 1);
+  const storm = p.stormMode ?? "bed";
+  const dormant = lvl < 0.02;
+  const energy = dormant ? 0.08 : 0.2 + lvl * 0.8;
+  const szBase = gritSize(p.mode) * (0.55 + grn * 1.35);
+  const eBucket = (energy * 12) | 0;
+
+  ctx.clearRect(0, 0, W, Hh);
+  // Tilt lifts the chamber's light: rumble pools low, hiss floats high.
+  plate(ctx, W, Hh, C, { energy, horizon: clamp(0.55 - tilt * 0.26, 0.18, 0.86) });
+
+  const fx0 = 24;
+  const fx1 = Math.max(fx0 + 20, W - 26);
+  const fw = fx1 - fx0;
+  const fy0 = 22;
+  const fy1 = Hh - 26;
+  const fh = fy1 - fy0;
+
+  // Spectral wash — which half of the band the noise actually occupies.
+  if (Math.abs(tilt) > 0.04) {
+    ctx.fillStyle = cachedGrad(ctx, `noiseBand|${Hh}|${(tilt * 10) | 0}|${eBucket}`, (c) => {
+      const g = c.createLinearGradient(0, 0, 0, Hh);
+      if (tilt < 0) {
+        g.addColorStop(0, hexA(C_DARK, 0));
+        g.addColorStop(0.62, hexA(C_DARK, 0.07 * Math.abs(tilt)));
+        g.addColorStop(1, hexA(C_DARK, 0.3 * Math.abs(tilt)));
+      } else {
+        g.addColorStop(0, hexA(C_BRIGHT, 0.3 * tilt));
+        g.addColorStop(0.4, hexA(C_HOT, 0.09 * tilt));
+        g.addColorStop(1, hexA(C, 0));
+      }
+      return g;
+    });
+    ctx.fillRect(0, 0, W, Hh);
+  }
+
+  // ── burst gating: the field only exists inside open columns ──
+  for (let g = 0; g < GATES; g++) {
+    if (storm === "bed") {
+      gate[g] = 1;
+      continue;
+    }
+    const ph = (((now * (storm === "burst" ? 0.0016 : 0.0009) + hash01(g * 5.17)) % 1) + 1) % 1;
+    const width = storm === "burst" ? 0.22 + dens * 0.4 : 0.45 + dens * 0.5;
+    gate[g] = ph < width ? 1 - (ph / width) * 0.35 : 0;
+  }
+  if (storm !== "bed") {
+    for (let g = 0; g < GATES; g++) {
+      const open = gate[g]!;
+      if (open <= 0) continue;
+      const gx = fx0 + (g / GATES) * fw;
+      const gw = fw / GATES;
+      ctx.fillStyle = hexA(C_MID, 0.03 + open * 0.05 * energy);
+      ctx.fillRect(gx, fy0, gw - 1, fh);
+      ctx.fillStyle = hexA(C_GLOW, 0.1 + open * 0.3 * energy);
+      ctx.fillRect(gx, fy0, gw - 1, 1);
+      ctx.fillRect(gx, fy1 - 1, gw - 1, 1);
+    }
+  }
+
+  // ── the field ──
+  // Specks are keyed off their index, so the constellation is stable and only
+  // the drift term moves. One pass sorts them into three brightness tiers, then
+  // each tier goes down as a single path — three fills for the whole storm.
+  const nSpecks = Math.min(
+    MAX_SPECKS,
+    Math.floor((storm === "bed" ? 48 : storm === "burst" ? 62 : 80) + dens * 320 * (0.25 + lvl * 0.75)) *
+      Math.max(1, Math.round(W / 900)),
+  );
+  const drift = now * 0.00004 * (1 + lvl * 2);
+  const quant = 1 + grn * 9;
+  const tiltDir = tilt >= 0 ? 1 : -1;
+  tierN[0] = 0;
+  tierN[1] = 0;
+  tierN[2] = 0;
+  for (let i = 0; i < nSpecks; i++) {
+    const bx = hash01(i * 1.13);
+    if (gate[Math.floor(bx * GATES) % GATES]! <= 0) continue;
+    const b = hash01(i * 9.71);
+    const tier = b < 0.55 ? 0 : b < 0.87 ? 1 : 2;
+    const speed = 0.4 + hash01(i * 4.41) * 1.6;
+    const ux = (((bx + drift * speed * tiltDir) % 1) + 1) % 1;
+    const hy = hash01(i * 2.71);
+    // Tilt tips the distribution: dark settles low, bright climbs high.
+    const uy = tilt < -0.05
+      ? Math.pow(hy, 1 / (1 + Math.abs(tilt) * 1.4))
+      : tilt > 0.05
+        ? 1 - Math.pow(1 - hy, 1 / (1 + tilt * 1.4))
+        : hy;
+    const cnt = tierN[tier]!;
+    const slot = tier * MAX_SPECKS + cnt;
+    sxBuf[slot] = Math.round((fx0 + ux * fw) / quant) * quant;
+    syBuf[slot] = fy0 + uy * fh;
+    szBuf[slot] = szBase * (0.7 + hash01(i * 3.77) * 0.85);
+    tierN[tier] = cnt + 1;
+  }
+  const shimmer = 0.82 + 0.18 * Math.sin(now * 0.003);
+  const fieldA = (dormant ? 0.16 : 0.35 + lvl * 0.5) * shimmer;
+  const tierColor = tilt < -0.15 ? C_DARK : tilt > 0.15 ? C_BRIGHT : C_MID;
+  const tierStyle = [
+    hexA(C_DEEP, fieldA * 0.45),
+    hexA(tierColor, fieldA * 0.8),
+    hexA(C_GLOW, fieldA),
+  ];
+  for (let t = 0; t < 3; t++) {
+    const n = tierN[t]!;
+    if (n === 0) continue;
+    ctx.beginPath();
+    for (let k = 0; k < n; k++) {
+      const slot = t * MAX_SPECKS + k;
+      ctx.rect(sxBuf[slot]!, syBuf[slot]!, szBuf[slot]!, szBuf[slot]!);
+    }
+    ctx.fillStyle = tierStyle[t]!;
+    ctx.fill();
+  }
+
+  // Storm sheets: the field visibly travels rather than just sitting there.
+  if (storm === "storm" && !dormant) {
+    lit(ctx, () => {
+      for (let s = 0; s < 4; s++) {
+        const u = ((now * 0.00022 * (1 + s * 0.4) + s * 0.27) % 1 + 1) % 1;
+        drawGlow(ctx, fx0 + u * fw, fy0 + (0.3 + hash01(s * 6.3) * 0.4) * fh, 34 + dens * 40, C_HOT, 0.05 + dens * 0.12);
+      }
+    });
+  }
+
+  // ── grain hairline: the noise as a signal, roughness = grain ──
+  if (!dormant) {
+    const midY = fy0 + (0.5 - tilt * 0.22) * fh;
+    const hAmp = fh * 0.16 * lvl;
+    const stepPx = 2 + grn * 12;
+    const tick = Math.floor(now * 0.05);
+    ctx.strokeStyle = hexA(C_GLOW, 0.16 + lvl * 0.3);
+    ctx.lineWidth = 1 + grn * 1.4;
+    ctx.beginPath();
+    for (let x = 0; x <= fw; x += stepPx) {
+      const y = midY + (hash01(Math.floor(x / stepPx) * 1.91 + tick * 0.37) - 0.5) * 2 * hAmp;
+      if (x === 0) ctx.moveTo(fx0 + x, y);
+      else ctx.lineTo(fx0 + x, y);
+    }
+    ctx.stroke();
+  }
+
+  // ── spectrum tilt meter (left) ──
+  const meterX = 10;
+  const meterTop = 28;
+  const meterH = Hh - 56;
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(meterX, meterTop, 6, meterH);
+  ctx.save();
+  ctx.translate(meterX, meterTop);
+  ctx.fillStyle = cachedGrad(ctx, `noiseTilt|${meterH | 0}`, (c) => {
+    const g = c.createLinearGradient(0, 0, 0, meterH);
+    g.addColorStop(0, hexA(C_BRIGHT, 0.9));
+    g.addColorStop(0.5, hexA(C_MID, 0.5));
+    g.addColorStop(1, hexA(C_DARK, 0.9));
+    return g;
+  });
+  ctx.fillRect(0, 0, 6, meterH);
+  ctx.restore();
+  const needleY = meterTop + ((1 - tilt) / 2) * meterH;
+  lit(ctx, () => drawGlow(ctx, meterX + 3, needleY, 9, C_GLOW, 0.8));
+  ctx.fillStyle = hexA(C_GLOW, 0.95);
+  ctx.fillRect(meterX - 2, needleY - 1.5, 10, 3);
+
+  // ── level bar (right) ──
+  const lx = W - 16;
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(lx, meterTop, 6, meterH);
+  const lh = meterH * lvl;
+  ctx.fillStyle = hexA(C_GLOW, 0.4 + lvl * 0.5);
+  ctx.fillRect(lx, meterTop + meterH - lh, 6, lh);
+  lit(ctx, () => drawGlow(ctx, lx + 3, meterTop + meterH - lh, 8, C_GLOW, 0.75));
+
+  // Crosshair at the colour / level the drag pad maps to.
+  const hx = ((tilt + 1) / 2) * W;
+  const hyc = (1 - lvl) * Hh;
+  ctx.strokeStyle = hexA(C_GLOW, dormant ? 0.15 : 0.4 + flash * 0.3);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(hx - 8, hyc);
+  ctx.lineTo(hx + 8, hyc);
+  ctx.moveTo(hx, hyc - 8);
+  ctx.lineTo(hx, hyc + 8);
+  ctx.stroke();
+  ctx.fillStyle = hexA(C_HOT, 0.85);
+  ctx.beginPath();
+  ctx.arc(hx, hyc, 2.6 + flash * 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Density / grain readout — the shift-drag axes finally have numbers.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MID, 0.6);
+  ctx.fillText(`DENS ${Math.round(dens * 100)}`, 118, 17);
+  ctx.fillStyle = hexA(C_HOT, 0.6);
+  ctx.fillText(`GRAIN ${Math.round(grn * 100)}`, 178, 17);
+  ctx.fillStyle = hexA(C_MID, 0.5);
+  ctx.fillText(`GRIT ${gritLabel(p.mode)}`, 248, 17);
+
+  pill(
+    ctx,
+    W * 0.5,
+    3,
+    tilt < -0.08 ? "LP DARK" : tilt > 0.08 ? "HP BRIGHT" : "FLAT",
+    C_GLOW,
+    { glow: flash },
+  );
+
+  if (dormant) {
+    ctx.fillStyle = "rgba(0,0,0,0.32)";
+    ctx.fillRect(0, 0, W, Hh);
+    ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_GLOW, 0.5 + Math.sin(now / 500) * 0.1);
+    ctx.fillText("MUTED — drag up to raise storm", W * 0.5, Hh * 0.5);
+  }
+
+  filmGrain(ctx, W, Hh, 0.03);
+  bezel(ctx, W, Hh, C);
+  const stormLabel = storm === "bed" ? "BED" : storm === "burst" ? "BURST" : "STORM";
+  footer(
+    ctx,
+    W,
+    Hh,
+    `NOISE · ${stormLabel} · ${gritLabel(p.mode)}`,
+    dormant ? "OFF" : `${Math.round(lvl * 100)}% · ${tilt > 0 ? "+" : ""}${Math.round(tilt * 100)}`,
+    C_GLOW,
+    dormant ? C_MID : C_HOT,
+  );
 }
 
 export function NoiseStageViz() {
@@ -79,26 +347,22 @@ export function NoiseStageViz() {
   const setParam = useFireCommandStore((s) => s.setParam);
   const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<"xy" | "grain" | null>(null);
-  const prevKey = useRef("");
-  const st = useRef({ level, color, mode, stormMode, density, grain, enabled });
+  const prevKey = useRef(0);
+  const st = useRef<NoiseState>({ level, color, mode, stormMode, density, grain, enabled });
   st.current = { level, color, mode, stormMode, density, grain, enabled };
 
   const silent = !enabled || level < 0.02;
 
   useEffect(() => {
-    const key = `${enabled ? 1 : 0}|${level.toFixed(3)}|${color.toFixed(3)}|${mode}|${stormMode}|${density.toFixed(3)}|${grain.toFixed(3)}`;
+    const key = motionHash(enabled, level, color, density, grain, gritSize(mode), STORM_IX[stormMode]);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
   }, [enabled, level, color, mode, stormMode, density, grain]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
   const applyFromPointer = useCallback(
     (clientX: number, clientY: number, kind: "xy" | "grain") => {
@@ -117,7 +381,7 @@ export function NoiseStageViz() {
       setParam("noiseColor", Math.round((x * 2 - 1) * 1000) / 1000);
       setParam("noiseLevel", Math.round((1 - y) * 1000) / 1000);
     },
-    [setParam, setModuleEnable],
+    [setParam, setModuleEnable, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -130,7 +394,7 @@ export function NoiseStageViz() {
       wrap.setPointerCapture(e.pointerId);
       applyFromPointer(e.clientX, e.clientY, kind);
     },
-    [applyFromPointer],
+    [applyFromPointer, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -147,7 +411,7 @@ export function NoiseStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     setParam("noiseLevel", 0);
@@ -161,211 +425,42 @@ export function NoiseStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const particles = Array.from({ length: 96 }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      age: Math.random(),
-      speed: 0.018 + Math.random() * 0.045,
-      size: 0.6 + Math.random() * 2,
-    }));
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.88;
-
-      const lvl = clamp(p.level, 0, 1);
-      const tilt = clamp(p.color, -1, 1);
-      const dens = clamp(p.density ?? 0.45, 0, 1);
-      const grain = clamp(p.grain ?? 0.35, 0, 1);
-      const storm = p.stormMode ?? "bed";
-      const dormant = lvl < 0.02;
-      const energy = dormant ? 0.08 : 0.2 + lvl * 0.8;
-      const szBase = gritSize(p.mode) * (0.55 + grain * 1.1);
-
-      ctx.clearRect(0, 0, W, Hh);
-
-      // Storm field — pivots with color
-      const cx = W * (0.5 + tilt * 0.18);
-      const cy = Hh * (0.55 - tilt * 0.12);
-      const bg = ctx.createRadialGradient(cx, cy, 4, W * 0.5, Hh * 0.5, W * 0.75);
-      bg.addColorStop(0, hexAlpha(tilt >= 0 ? C_BRIGHT : C_DARK, 0.12 + energy * 0.28 + flashRef.current * 0.25));
-      bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.55));
-      bg.addColorStop(1, "rgba(3,1,2,0.98)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Spectral bands: dark sinks low, bright rises high
-      if (Math.abs(tilt) > 0.04) {
-        const band = ctx.createLinearGradient(0, 0, 0, Hh);
-        if (tilt < 0) {
-          band.addColorStop(0, hexAlpha(C_DARK, 0));
-          band.addColorStop(0.65, hexAlpha(C_DARK, 0.08 * Math.abs(tilt)));
-          band.addColorStop(1, hexAlpha(C_DARK, 0.35 * Math.abs(tilt) * energy));
-        } else {
-          band.addColorStop(0, hexAlpha(C_BRIGHT, 0.32 * tilt * energy));
-          band.addColorStop(0.4, hexAlpha(C_HOT, 0.1 * tilt));
-          band.addColorStop(1, hexAlpha(C, 0));
-        }
-        ctx.fillStyle = band;
-        ctx.fillRect(0, 0, W, Hh);
-      }
-
-      // Living grain storm — density drives count; grain drives size
-      const densN = Math.floor((storm === "bed" ? 40 : storm === "burst" ? 55 : 70) + dens * 280 * lvl);
-      const breathe = 0.88 + 0.12 * Math.sin(now * 0.003);
-      for (let i = 0; i < densN; i++) {
-        if (storm === "storm" && Math.random() > 0.35 + dens * 0.55) continue;
-        if (storm === "burst" && Math.sin(now * 0.008 + i) < 0.15) continue;
-        const x = Math.random() * W;
-        const yBias =
-          tilt < 0
-            ? Math.pow(Math.random(), 1.55)
-            : tilt > 0
-              ? 1 - Math.pow(Math.random(), 1.55)
-              : Math.random();
-        const y = yBias * Hh;
-        const shimmer = 0.15 + lvl * 0.7 + Math.sin((x + y) * 0.04 + now * 0.004) * 0.12;
-        const sz = szBase * (0.7 + Math.random() * 0.8);
-        const col = tilt < -0.15 ? C_DARK : tilt > 0.15 ? C_BRIGHT : C_MID;
-        ctx.fillStyle = hexAlpha(col, shimmer * breathe * (dormant ? 0.25 : 1));
-        ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
-        if (lvl > 0.35 && shimmer > 0.72) {
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.1 * lvl);
-          ctx.fillRect(x - sz * 2, y - 1, sz * 4, 2);
-        }
-      }
-
-      // Drift motes
-      particles.forEach((pt) => {
-        pt.age += pt.speed * (0.25 + lvl * 0.85);
-        if (pt.age > 1) {
-          pt.age = 0;
-          pt.y = tilt < 0 ? 0.05 : tilt > 0 ? 0.95 : Math.random();
-          pt.x = Math.random();
-        }
-        const x = pt.x * W;
-        const drift = tilt * 0.2;
-        const y = clamp((pt.y + (tilt < 0 ? pt.age : tilt > 0 ? -pt.age : pt.age * 0.3) + drift * pt.age * 0.2), 0, 1) * Hh;
-        const life = 1 - pt.age;
-        const alpha = life * (dormant ? 0.08 : lvl * 0.6);
-        const g = ctx.createRadialGradient(x, y, 0, x, y, pt.size * 4);
-        g.addColorStop(0, hexAlpha(C_GLOW, alpha * 0.85));
-        g.addColorStop(0.45, hexAlpha(C_HOT, alpha * 0.35));
-        g.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(x, y, pt.size * 4, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      // Spectrum tilt meter (left)
-      const meterX = 10;
-      const meterTop = 28;
-      const meterH = Hh - 48;
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(meterX, meterTop, 6, meterH);
-      const mg = ctx.createLinearGradient(0, meterTop, 0, meterTop + meterH);
-      mg.addColorStop(0, hexAlpha(C_BRIGHT, 0.9));
-      mg.addColorStop(0.5, hexAlpha(C_MID, 0.5));
-      mg.addColorStop(1, hexAlpha(C_DARK, 0.9));
-      ctx.fillStyle = mg;
-      ctx.fillRect(meterX, meterTop, 6, meterH);
-      const needleY = meterTop + ((1 - tilt) / 2) * meterH;
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = C;
-      ctx.fillRect(meterX - 2, needleY - 1.5, 10, 3);
-      ctx.shadowBlur = 0;
-
-      // Level bar (right)
-      const lx = W - 16;
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(lx, meterTop, 6, meterH);
-      const lh = meterH * lvl;
-      const lg = ctx.createLinearGradient(0, meterTop + meterH - lh, 0, meterTop + meterH);
-      lg.addColorStop(0, hexAlpha(C_GLOW, 0.95));
-      lg.addColorStop(1, hexAlpha(C_DEEP, 0.5));
-      ctx.fillStyle = lg;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = C;
-      ctx.fillRect(lx, meterTop + meterH - lh, 6, lh);
-      ctx.shadowBlur = 0;
-
-      // Crosshair at color/level position
-      const hx = ((tilt + 1) / 2) * W;
-      const hy = (1 - lvl) * Hh;
-      ctx.strokeStyle = hexAlpha(C_GLOW, dormant ? 0.15 : 0.4 + flashRef.current * 0.3);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(hx - 8, hy);
-      ctx.lineTo(hx + 8, hy);
-      ctx.moveTo(hx, hy - 8);
-      ctx.lineTo(hx, hy + 8);
-      ctx.stroke();
-      ctx.fillStyle = hexAlpha(C_HOT, 0.85);
-      ctx.beginPath();
-      ctx.arc(hx, hy, 2.8 + flashRef.current * 2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Filter type badge
-      const filtLabel = tilt < -0.08 ? "LP DARK" : tilt > 0.08 ? "HP BRIGHT" : "FLAT";
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55);
-      ctx.fillText(filtLabel, W * 0.5, 18);
-
-      if (dormant) {
-        ctx.fillStyle = "rgba(0,0,0,0.32)";
-        ctx.fillRect(0, 0, W, Hh);
-        ctx.font = "800 11px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.5 + Math.sin(now / 500) * 0.1);
-        ctx.fillText("MUTED — drag up to raise storm", W * 0.5, Hh * 0.5);
-      }
-
-      ctx.font = "700 11px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      const stormLabel = storm === "bed" ? "BED" : storm === "burst" ? "BURST" : "STORM";
-      const modeLabel = p.mode === "periodic" ? "PER" : p.mode === "nes" ? "HOLD" : p.mode === "gb" ? "SOFT" : "WHT";
-      ctx.fillText(`NOISE · ${stormLabel} · ${modeLabel}`, 12, Hh - 6);
-      ctx.textAlign = "right";
-      if (dormant) {
-        ctx.fillStyle = hexAlpha(C_MID, 0.5);
-        ctx.fillText("OFF", W - 12, Hh - 6);
-      } else {
-        ctx.fillStyle = hexAlpha(C_HOT, 0.85);
-        ctx.fillText(
-          `${Math.round(lvl * 100)}% · ${tilt > 0 ? "+" : ""}${Math.round(tilt * 100)}`,
-          W - 12,
-          Hh - 6,
-        );
-      }
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintNoise(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
         active: (st.current.level ?? 0) > 0.02,
         dragging: !!dragRef.current,
-        particles: 0,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.enabled,
+          st.current.level,
+          st.current.color,
+          st.current.density,
+          st.current.grain,
+          gritSize(st.current.mode),
+          STORM_IX[st.current.stormMode],
+        ),
       }),
       { minIntervalMs: 20 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, silent ? 0.28 : 0.5),
+        borderColor: hexA(C, silent ? 0.28 : 0.5),
         height: H,
         cursor: "crosshair",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 40px ${hexAlpha(C, silent ? 0.08 : 0.22)}, 0 10px 28px rgba(0,0,0,0.4)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 40px ${hexA(C, silent ? 0.08 : 0.22)}, 0 10px 28px rgba(0,0,0,0.4)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -377,19 +472,19 @@ export function NoiseStageViz() {
       aria-label="Noise bed grain storm"
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Grain Storm
       </div>
       <div
-        className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
-        style={{ color: hexAlpha(C_HOT, 0.7) }}
+        className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] uppercase tabular-nums"
+        style={{ color: hexA(C_HOT, 0.7) }}
       >
         {!enabled ? "ASLEEP" : silent ? "SILENT" : `${Math.round(level * 100)}%`}
       </div>

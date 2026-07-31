@@ -20,8 +20,19 @@ export type StageVizIdleHints = {
   dragging?: boolean;
   /** Particle / trail count still decaying. */
   particles?: number;
-  /** Telemetry that must repaint when it changes (params, playStep, voiceCount…). */
+  /**
+   * Telemetry that must repaint when it changes (params, playStep, voiceCount…).
+   *
+   * Prefer `motionHash(...)` from stageVizKit: this is evaluated for every
+   * entry on every frame, so a `JSON.stringify` here allocates ~40 strings per
+   * frame across the view.
+   */
   motionKey?: string | number;
+  /**
+   * False when the canvas is off-screen or hidden (see `useStageCanvas`).
+   * An `active` module used to paint forever even scrolled out of view.
+   */
+  visible?: boolean;
 };
 
 export type StageVizLoopOptions = {
@@ -44,7 +55,7 @@ type Entry = {
   last: number;
   quiet: number;
   paused: boolean;
-  lastMotion: string;
+  lastMotion: string | number;
 };
 
 const entries = new Set<Entry>();
@@ -57,11 +68,17 @@ export function setStageVizPressureSource(fn: (() => number) | null): void {
   pressureSource = fn;
 }
 
+/**
+ * Off-screen entries are skipped before anything else: an invisible canvas
+ * should cost one `hints()` call, not a paint. Motion is still tracked so the
+ * entry repaints once with current state when it scrolls back in.
+ */
 function isBusy(e: Entry): boolean {
   const h = e.hints();
-  const motion = String(h.motionKey ?? "");
+  const motion = h.motionKey ?? "";
   const motionChanged = motion !== e.lastMotion;
   e.lastMotion = motion;
+  if (h.visible === false) return false;
   return (
     !!h.active ||
     !!h.dragging ||
@@ -140,7 +157,7 @@ export function startStageVizLoop(
     quiet: 0,
     paused: false,
     lastMotion: "\u0000",
-  };
+  } as Entry;
 
   entries.add(entry);
   ensurePump();

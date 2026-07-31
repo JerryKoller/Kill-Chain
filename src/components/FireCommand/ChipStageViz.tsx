@@ -1,16 +1,40 @@
 /**
  * CHIP — Acid Circuit stage visualizer.
- * PWM · hard sync · chip noise · accent/slide (Signal Path Sources · FC.chip).
- * Drag horizontally to set pulse duty. Every chip control paints the cart.
+ *
+ * IDIOM: the stair grid. Everything here is snapped to an 8 px pixel lattice —
+ * the pulse is drawn as hard duty blocks, the DAC staircase behind it steps in
+ * 4-bit rungs, the noise is a row of held bits, and nothing is anti-aliased on
+ * purpose. No other module in the instrument is allowed to look blocky, so the
+ * cart reads as 8-bit at a glance.
+ *
+ * Duty · Hard sync · Chip noise · Accent · Slide · Voices (Sources · FC.chip).
+ * Drag: pulse width. Double-click: 50% square.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { ChipNoiseMode } from "@/audio/dsp/FireCommandSynth";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  grain,
+  hexA,
+  lattice,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const H = 158;
+/** Pixel lattice pitch — every coordinate in this panel snaps to it. */
+const CELL = 8;
 const C = FC.chip;
 const C_DEEP = bandShade(FC.sources, 0.42);
 const C_MID = bandShade(FC.sources, 0.55);
@@ -20,17 +44,21 @@ const C_SYNC = bandShade(FC.sources, 0.62);
 const C_NOISE = bandShade(FC.sources, 0.48);
 const C_ACC = bandShade(FC.sources, 0.78);
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Duty landmarks a chip musician actually thinks in. */
+const DUTY_TICKS = [0.125, 0.25, 0.5, 0.75] as const;
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+function snap(v: number): number {
+  return Math.round(v / CELL) * CELL;
+}
+
+/** Deterministic bit source — the LFSR stand-in, stable for a given frame. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
 }
 
 function noiseHold(mode: ChipNoiseMode): number {
@@ -40,33 +68,230 @@ function noiseHold(mode: ChipNoiseMode): number {
   return 1;
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+function noiseLabel(mode: ChipNoiseMode): string {
+  if (mode === "periodic") return "PER";
+  if (mode === "nes") return "HOLD";
+  if (mode === "gb") return "SOFT";
+  return "WHT";
+}
+
+export type ChipState = {
+  duty: number;
+  sync: boolean;
+  noise: ChipNoiseMode;
+  accent: number;
+  slide: boolean;
+  voices: number;
+};
+
+export function paintChip(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: ChipState,
+  now: number,
+  flash: number,
+): void {
+  const duty = clamp(p.duty, 0.05, 0.95);
+  const acc = clamp(p.accent, 0, 1);
+  const energy = 0.22 + Math.abs(duty - 0.5) * 0.7 + acc * 0.4 + (p.sync ? 0.14 : 0);
+  const eBucket = (energy * 12) | 0;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.5 });
+  lattice(ctx, W, Hh, C_MID, CELL, 0.16);
+
+  // ── lattice geometry: whole cells only, no sub-pixel anything ──
+  const padL = snap(24);
+  const padR = snap(24);
+  const span = Math.max(CELL * 8, snap(W - padL - padR));
+  const cols = Math.max(8, Math.floor(span / CELL));
+  const mid = snap(Hh * 0.42);
+  const amp = Math.max(CELL * 2, snap(Hh * 0.2 * (1 + acc * 0.35)));
+  const noiseY = snap(Hh * 0.76);
+  const cycles = 4 + (p.sync ? 1 : 0);
+  // Motion advances in whole cells so the cart never looks smooth.
+  const shift = Math.floor(now * 0.055 * (p.slide ? 0.55 : 1));
+  const phaseAt = (c: number) => ((((c + shift) / cols) * cycles) % 1 + 1) % 1;
+
+  // Centre rail.
+  ctx.fillStyle = hexA(C_MID, 0.26);
+  ctx.fillRect(padL, mid, span, 1);
+
+  // ── 4-bit DAC staircase behind the pulse ──
+  const steps = 8;
+  for (let c = 0; c < cols; c++) {
+    const ph = phaseAt(c);
+    const q = Math.floor(ph * steps) / (steps - 1);
+    const y = snap(mid + amp - q * amp * 2);
+    ctx.fillStyle = hexA(C_DEEP, 0.5);
+    ctx.fillRect(padL + c * CELL, y, CELL - 1, 2);
+  }
+
+  // ── slide: the lagged duty, drawn as a ghost stair ──
+  if (p.slide) {
+    const lag = clamp(duty + Math.sin(now / 400) * 0.09, 0.05, 0.95);
+    ctx.fillStyle = hexA(C_MID, 0.3);
+    for (let c = 0; c < cols; c++) {
+      const y = phaseAt(c) < lag ? mid - amp + CELL : mid + amp - CELL;
+      ctx.fillRect(padL + c * CELL, y, CELL - 1, 2);
+    }
+  }
+
+  // ── the pulse, as duty blocks ──
+  const blockGrad = cachedGrad(ctx, `chipHi|${mid}|${amp}|${eBucket}`, (c) => {
+    const g = c.createLinearGradient(0, mid - amp, 0, mid);
+    g.addColorStop(0, hexA(C_HOT, 0.5 + energy * 0.35));
+    g.addColorStop(1, hexA(C, 0.14 + energy * 0.12));
+    return g;
+  });
+  const lowGrad = cachedGrad(ctx, `chipLo|${mid}|${amp}|${eBucket}`, (c) => {
+    const g = c.createLinearGradient(0, mid, 0, mid + amp);
+    g.addColorStop(0, hexA(C_DEEP, 0.16));
+    g.addColorStop(1, hexA(C_DEEP, 0.4 + energy * 0.16));
+    return g;
+  });
+  for (let c = 0; c < cols; c++) {
+    const high = phaseAt(c) < duty;
+    const x = padL + c * CELL;
+    ctx.fillStyle = high ? blockGrad : lowGrad;
+    ctx.fillRect(x, high ? mid - amp : mid, CELL - 1, amp);
+    // Cap the block so the square edge reads as a hard step.
+    ctx.fillStyle = hexA(high ? C_GLOW : C_MID, high ? 0.75 + energy * 0.25 : 0.28);
+    ctx.fillRect(x, high ? mid - amp : mid + amp - 2, CELL - 1, 2);
+  }
+
+  // Transition walls: the vertical edge of each duty flip.
+  ctx.fillStyle = hexA(C_GLOW, 0.5 + energy * 0.35);
+  for (let c = 1; c < cols; c++) {
+    if ((phaseAt(c) < duty) !== (phaseAt(c - 1) < duty)) {
+      ctx.fillRect(padL + c * CELL - 1, mid - amp, 2, amp * 2);
+    }
+  }
+  lit(ctx, () => {
+    for (let c = 1; c < cols; c++) {
+      if ((phaseAt(c) < duty) !== (phaseAt(c - 1) < duty)) {
+        drawGlow(ctx, padL + c * CELL, mid, 12 + acc * 14, C_GLOW, 0.14 + energy * 0.18);
+      }
+    }
+  });
+
+  // ── hard sync: the phase reset, one bright column per cycle ──
+  if (p.sync) {
+    for (let k = 0; k < cycles; k++) {
+      const c = ((Math.round((k * cols) / cycles) - (shift % cols)) % cols + cols) % cols;
+      const x = padL + c * CELL;
+      ctx.fillStyle = hexA(C_SYNC, 0.85);
+      ctx.fillRect(x, mid - amp - CELL, 2, amp * 2 + CELL * 2);
+      ctx.fillStyle = hexA(C_GLOW, 0.9);
+      ctx.fillRect(x - 2, mid - amp - CELL - 2, 6, 4);
+    }
+    lit(ctx, () => {
+      for (let k = 0; k < cycles; k++) {
+        const c = ((Math.round((k * cols) / cycles) - (shift % cols)) % cols + cols) % cols;
+        drawGlow(ctx, padL + c * CELL, mid, 16, C_SYNC, 0.22);
+      }
+    });
+  }
+
+  // ── accent pops: blocky sparks off the rising edges ──
+  if (acc > 0.05) {
+    const n = 6 + Math.floor(acc * 12);
+    for (let k = 0; k < n; k++) {
+      const t = ((now * 0.0015 * (0.6 + hash01(k * 3.31) * 0.8) + hash01(k * 7.13)) % 1 + 1) % 1;
+      const life = 1 - t;
+      const x = padL + Math.floor(hash01(k * 2.71) * cols) * CELL;
+      const y = snap(mid - amp - t * CELL * 3);
+      ctx.fillStyle = hexA(C_ACC, life * 0.8 * acc);
+      ctx.fillRect(x, y, CELL / 2, CELL / 2);
+    }
+  }
+
+  // ── chip noise: one row of held bits, hold length is the mode ──
+  const hold = noiseHold(p.noise);
+  const tick = Math.floor(now * 0.012 * (hold < 3 ? 2 : 1));
+  ctx.fillStyle = hexA(C_NOISE, 0.1 + energy * 0.07);
+  ctx.fillRect(padL, noiseY - CELL - 2, span, CELL * 2 + 4);
+  for (let c = 0; c < cols; c++) {
+    const g = Math.floor(c / hold);
+    const bit = hash01(g * 1.37 + tick * 0.61) > 0.5;
+    ctx.fillStyle = hexA(bit ? C_HOT : C_DEEP, bit ? 0.5 + energy * 0.25 : 0.35);
+    ctx.fillRect(padL + c * CELL, bit ? noiseY - CELL : noiseY, CELL - 1, CELL);
+  }
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_NOISE, 0.65);
+  ctx.fillText(`NOISE ${noiseLabel(p.noise)} · HOLD ${hold}`, padL, noiseY - CELL - 6);
+
+  // ── duty ruler + marker ──
+  const rulerY = snap(Hh * 0.13);
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  for (const t of DUTY_TICKS) {
+    const x = snap(padL + t * span);
+    const on = Math.abs(t - duty) < 0.02;
+    ctx.fillStyle = hexA(on ? C_GLOW : C_MID, on ? 0.85 : 0.3);
+    ctx.fillRect(x - 1, rulerY, 2, 4);
+    ctx.fillText(`${Math.round(t * 100)}`, x, rulerY - 3);
+  }
+  const dutyX = snap(padL + duty * span);
+  ctx.fillStyle = hexA(C_GLOW, 0.7);
+  ctx.fillRect(dutyX - 1, rulerY, 2, mid - amp - rulerY);
+  ctx.fillRect(dutyX - CELL / 2, rulerY + 4, CELL, 4);
+  lit(ctx, () => drawGlow(ctx, dutyX, rulerY + 6, 10 + flash * 6, C_GLOW, 0.8));
+
+  // ── voice limit: one block per allocated chip voice ──
+  const vCount = Math.round(p.voices);
+  if (vCount > 0) {
+    for (let v = 0; v < vCount; v++) {
+      const on = Math.sin(now / 150 + v * 0.6) > -0.2;
+      const x = W - padR - (vCount - v) * CELL * 2;
+      ctx.fillStyle = hexA(C_GLOW, on ? 0.8 : 0.28);
+      ctx.fillRect(x, rulerY - 2, CELL, CELL + (on ? 4 : 0));
+    }
+    ctx.textAlign = "right";
+    ctx.fillStyle = hexA(C_MID, 0.55);
+    ctx.fillText(`V${vCount}`, W - padR - vCount * CELL * 2 - 4, rulerY + CELL);
+  }
+
+  // ── slide flag: a stepped ramp glyph, not a smooth arrow ──
+  if (p.slide) {
+    const sx = snap(W * 0.5) - CELL * 3;
+    for (let k = 0; k < 4; k++) {
+      ctx.fillStyle = hexA(C_HOT, 0.35 + k * 0.14);
+      ctx.fillRect(sx + k * CELL, rulerY + CELL - k * 2, CELL - 1, 2);
+    }
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_HOT, 0.6);
+    ctx.fillText("SLIDE", sx + CELL * 5, rulerY + CELL);
+  }
+
+  pill(
+    ctx,
+    W * 0.5,
+    3,
+    `${noiseLabel(p.noise)} · ${p.sync ? "SYNC" : "FREE"}${acc > 0.04 ? ` · ACC ${Math.round(acc * 100)}` : ""}`,
+    C_GLOW,
+    { glow: flash },
+  );
+
+  grain(ctx, W, Hh, 0.03);
+  bezel(ctx, W, Hh, C);
+  const tags = [
+    p.sync ? "SYNC" : null,
+    p.slide ? "SLIDE" : null,
+    acc > 0.04 ? `ACC ${Math.round(acc * 100)}` : null,
+    vCount > 0 ? `V${vCount}` : null,
+  ].filter(Boolean) as string[];
+  footer(
+    ctx,
+    W,
+    Hh,
+    `CHIP · PWM ${Math.round(duty * 100)}% · ${String(p.noise).toUpperCase()}`,
+    tags.length ? tags.join(" · ") : "IDLE CART",
+    C_GLOW,
+    tags.length ? C_HOT : C_MID,
+  );
 }
 
 export function ChipStageViz() {
@@ -78,26 +303,22 @@ export function ChipStageViz() {
   const voices = useFireCommandStore((s) => s.patch.chipVoiceLimit) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef(false);
-  const prevKey = useRef("");
-  const st = useRef({ duty, sync, noise, accent, slide, voices });
+  const prevKey = useRef(0);
+  const st = useRef<ChipState>({ duty, sync, noise, accent, slide, voices });
   st.current = { duty, sync, noise, accent, slide, voices };
 
   const active = Math.abs(duty - 0.5) > 0.02 || sync || slide || accent > 0.02 || voices > 0 || noise !== "white";
 
   useEffect(() => {
-    const key = `${duty.toFixed(3)}|${sync}|${noise}|${accent.toFixed(3)}|${slide}|${voices}`;
+    const key = motionHash(duty, sync, accent, slide, voices, noiseHold(noise));
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
   }, [duty, sync, noise, accent, slide, voices]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
   const setDutyFromClientX = useCallback(
     (clientX: number) => {
@@ -109,7 +330,7 @@ export function ChipStageViz() {
       const d = 0.05 + t * 0.9;
       setParam("pulseDuty", Math.round(d * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -124,7 +345,7 @@ export function ChipStageViz() {
       wrap.setPointerCapture(e.pointerId);
       setDutyFromClientX(e.clientX);
     },
-    [setDutyFromClientX],
+    [setDutyFromClientX, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -141,7 +362,7 @@ export function ChipStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     setParam("pulseDuty", 0.5);
@@ -152,261 +373,12 @@ export function ChipStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const sparkles: Array<{ x: number; y: number; life: number; vx: number; vy: number }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.88;
-
-      const dutyC = clamp(p.duty, 0.05, 0.95);
-      const energy = 0.25 + Math.abs(dutyC - 0.5) * 0.8 + p.accent * 0.45 + (p.sync ? 0.15 : 0);
-
-      ctx.clearRect(0, 0, W, Hh);
-
-      // Cart CRT field — Sources coral
-      const bg = ctx.createRadialGradient(W * (0.35 + dutyC * 0.3), Hh * 0.35, 4, W * 0.5, Hh * 0.5, W * 0.72);
-      bg.addColorStop(0, hexAlpha(C_HOT, 0.14 + energy * 0.25 + flashRef.current * 0.28));
-      bg.addColorStop(0.5, hexAlpha(C_DEEP, 0.55));
-      bg.addColorStop(1, "rgba(4,1,2,0.98)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Pixel grid
-      const grid = 10;
-      ctx.strokeStyle = hexAlpha(C_MID, 0.08 + p.accent * 0.08);
-      ctx.lineWidth = 1;
-      for (let x = 0; x < W; x += grid) {
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, Hh);
-        ctx.stroke();
-      }
-      for (let y = 0; y < Hh; y += grid) {
-        ctx.beginPath();
-        ctx.moveTo(0, y + 0.5);
-        ctx.lineTo(W, y + 0.5);
-        ctx.stroke();
-      }
-
-      // Accent wash
-      if (p.accent > 0.04) {
-        const rb = ctx.createRadialGradient(W * 0.5, Hh * 0.3, 0, W * 0.5, Hh * 0.3, Hh * 0.55);
-        rb.addColorStop(0, hexAlpha(C_ACC, 0.28 * p.accent * energy));
-        rb.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = rb;
-        ctx.fillRect(0, 0, W, Hh);
-      }
-
-      const mid = Hh * 0.4;
-      const amp = Hh * 0.2 * (1 + p.accent * 0.4) * (0.9 + flashRef.current * 0.15);
-      const cycles = 4 + (p.sync ? 1 : 0);
-      const scroll = now * 0.00115 * (p.slide ? 0.55 : 1);
-
-      // Slide trail ghost (lagged duty)
-      if (p.slide) {
-        const lagDuty = clamp(dutyC + Math.sin(now / 400) * 0.08, 0.05, 0.95);
-        ctx.beginPath();
-        let first = true;
-        for (let i = 0; i <= W; i += 2) {
-          const u = (i / W) * cycles + scroll * 0.7;
-          const phase = ((u % 1) + 1) % 1;
-          const y = mid - (phase < lagDuty ? amp * 0.7 : -amp * 0.7);
-          if (first) {
-            ctx.moveTo(i, y);
-            first = false;
-          } else ctx.lineTo(i, y);
-        }
-        ctx.strokeStyle = hexAlpha(C_MID, 0.28);
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 4]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-
-      // Pixel PWM square
-      ctx.beginPath();
-      {
-        let first = true;
-        let prevY = mid;
-        for (let i = 0; i <= W; i++) {
-          const u = (i / W) * cycles + scroll;
-          const phase = ((u % 1) + 1) % 1;
-          const y = mid - (phase < dutyC ? amp : -amp);
-          if (first) {
-            ctx.moveTo(i, y);
-            first = false;
-            prevY = y;
-          } else if (y !== prevY) {
-            // Hard pixel edge
-            ctx.lineTo(i, prevY);
-            ctx.lineTo(i, y);
-            prevY = y;
-          } else ctx.lineTo(i, y);
-        }
-      }
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.55 + energy * 0.4);
-      ctx.lineWidth = 2.4;
-      ctx.shadowBlur = 10 + p.accent * 12 + flashRef.current * 16;
-      ctx.shadowColor = C;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Fill under pulse high
-      ctx.beginPath();
-      ctx.moveTo(0, mid);
-      for (let i = 0; i <= W; i += 2) {
-        const u = (i / W) * cycles + scroll;
-        const phase = ((u % 1) + 1) % 1;
-        ctx.lineTo(i, mid - (phase < dutyC ? amp : -amp));
-      }
-      ctx.lineTo(W, mid);
-      ctx.closePath();
-      const fill = ctx.createLinearGradient(0, mid - amp, 0, mid + amp);
-      fill.addColorStop(0, hexAlpha(C_HOT, 0.22 + energy * 0.2));
-      fill.addColorStop(0.5, hexAlpha(C, 0.08));
-      fill.addColorStop(1, hexAlpha(C_DEEP, 0.12));
-      ctx.fillStyle = fill;
-      ctx.fill();
-
-      // Duty marker
-      const dutyX = dutyC * W;
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.55);
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 3]);
-      ctx.beginPath();
-      ctx.moveTo(dutyX, mid - amp - 8);
-      ctx.lineTo(dutyX, mid + amp + 8);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.9);
-      ctx.beginPath();
-      ctx.arc(dutyX, mid - amp - 8, 3 + flashRef.current * 2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Hard sync reset ticks
-      if (p.sync) {
-        ctx.strokeStyle = hexAlpha(C_SYNC, 0.85);
-        ctx.lineWidth = 2;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = C_SYNC;
-        for (let c = 0; c < cycles; c++) {
-          const x = (((c - (scroll % 1)) / cycles) * W + W) % W;
-          ctx.beginPath();
-          ctx.moveTo(x, mid - amp - 8);
-          ctx.lineTo(x, mid + amp + 8);
-          ctx.stroke();
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-          ctx.beginPath();
-          ctx.arc(x, mid - amp - 8, 2.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.shadowBlur = 0;
-      }
-
-      // Chip noise grit band
-      const noiseY = Hh * 0.78;
-      const hold = noiseHold(p.noise);
-      if (p.noise !== "white") {
-        ctx.fillStyle = hexAlpha(C_NOISE, 0.12 + energy * 0.08);
-        ctx.fillRect(0, noiseY - 12, W, 24);
-        ctx.fillStyle = hexAlpha(C_HOT, 0.45 + energy * 0.2);
-        ctx.shadowBlur = 5;
-        ctx.shadowColor = C;
-        for (let x = 0; x < W; x += hold) {
-          const seed = Math.sin(x * 0.37 + now * 0.008 * (hold < 3 ? 2 : 1));
-          const bit = seed > 0 ? 1 : -1;
-          ctx.fillRect(x, noiseY + bit * 6, Math.max(1, hold - 1), 3);
-        }
-        ctx.shadowBlur = 0;
-      } else {
-        // Soft white hiss dots
-        ctx.fillStyle = hexAlpha(C_MID, 0.15);
-        for (let i = 0; i < 40; i++) {
-          const x = ((i * 47 + now * 0.05) % W);
-          const y = noiseY + Math.sin(i * 1.7 + now * 0.01) * 8;
-          ctx.fillRect(x, y, 1.5, 1.5);
-        }
-      }
-
-      // Accent sparkles at edges
-      if (p.accent > 0.12 && Math.random() < 0.18 * p.accent) {
-        const u = Math.random();
-        const phase = ((u * cycles + scroll) % 1 + 1) % 1;
-        if (Math.abs(phase - dutyC) < 0.06 || phase < 0.04) {
-          sparkles.push({
-            x: u * W,
-            y: mid - (phase < dutyC ? amp : -amp),
-            life: 1,
-            vx: (Math.random() - 0.5) * 2.5,
-            vy: (Math.random() - 0.5) * 2 - 1.2,
-          });
-        }
-      }
-      for (let i = sparkles.length - 1; i >= 0; i--) {
-        const sp = sparkles[i]!;
-        sp.life -= 0.028;
-        if (sp.life <= 0) {
-          sparkles.splice(i, 1);
-          continue;
-        }
-        sp.x += sp.vx;
-        sp.y += sp.vy;
-        sp.vy += 0.12;
-        const rg = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, 4);
-        rg.addColorStop(0, hexAlpha(C_ACC, sp.life * 0.85));
-        rg.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = rg;
-        ctx.beginPath();
-        ctx.arc(sp.x, sp.y, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Voice poly bars
-      const vCount = Math.round(p.voices);
-      if (vCount > 0) {
-        const barW = 4;
-        const gap = 2;
-        const total = vCount * (barW + gap);
-        let sx = W - 12 - total;
-        for (let v = 0; v < vCount; v++) {
-          const pulse = Math.sin(now / 140 + v * 0.55) * 0.5 + 0.5;
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.45 + pulse * 0.5);
-          ctx.shadowBlur = 4 * pulse;
-          ctx.shadowColor = C;
-          ctx.fillRect(sx + v * (barW + gap), 10, barW, 6 + pulse * 6);
-          ctx.shadowBlur = 0;
-        }
-      }
-
-      // Slide arrow
-      if (p.slide) {
-        ctx.strokeStyle = hexAlpha(C_HOT, 0.55);
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(W * 0.72, 14);
-        ctx.lineTo(W * 0.88, 14);
-        ctx.lineTo(W * 0.84, 11);
-        ctx.moveTo(W * 0.88, 14);
-        ctx.lineTo(W * 0.84, 17);
-        ctx.stroke();
-      }
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      ctx.fillText(`CHIP · PWM ${Math.round(dutyC * 100)}% · ${String(p.noise).toUpperCase()}`, 12, Hh - 6);
-      ctx.textAlign = "right";
-      const tags = [
-        p.sync ? "SYNC" : null,
-        p.slide ? "SLIDE" : null,
-        p.accent > 0.04 ? `ACC ${Math.round(p.accent * 100)}` : null,
-        vCount > 0 ? `V${vCount}` : null,
-      ].filter(Boolean);
-      ctx.fillStyle = hexAlpha(C_HOT, 0.8);
-      ctx.fillText(tags.length ? tags.join(" · ") : "IDLE CART", W - 12, Hh - 6);
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintChip(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
@@ -418,23 +390,30 @@ export function ChipStageViz() {
           (st.current.voices ?? 0) > 0 ||
           st.current.noise !== "white",
         dragging: !!dragRef.current,
-        particles: sparkles.length,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.duty,
+          st.current.sync,
+          st.current.accent,
+          st.current.slide,
+          st.current.voices,
+          noiseHold(st.current.noise),
+        ),
       }),
       { minIntervalMs: 20 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, active ? 0.5 : 0.28),
+        borderColor: hexA(C, active ? 0.5 : 0.28),
         height: H,
         cursor: "ew-resize",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 40px ${hexAlpha(C, active ? 0.22 : 0.08)}, 0 10px 28px rgba(0,0,0,0.4)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 40px ${hexA(C, active ? 0.22 : 0.08)}, 0 10px 28px rgba(0,0,0,0.4)`,
         imageRendering: "pixelated",
       }}
       onPointerDown={onPointerDown}
@@ -450,19 +429,19 @@ export function ChipStageViz() {
       aria-valuenow={Math.round(duty * 100)}
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Acid Circuit
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
-        style={{ color: hexAlpha(C_HOT, 0.7) }}
+        style={{ color: hexA(C_HOT, 0.7) }}
       >
         {Math.round(duty * 100)}%
       </div>

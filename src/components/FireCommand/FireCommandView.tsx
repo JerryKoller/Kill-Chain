@@ -48,6 +48,8 @@ import {
 } from "@/audio/dsp/mixClarity";
 import { modEnvPresetPoints } from "@/audio/dsp/toneDifferentiation";
 import { WAVETABLES, FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
+import { DialCap, dialCharacterFor, type DialCharacter } from "./dialCharacter";
+import { currentModSources, subscribeModSources, type ModSources } from "./fireLiveBus";
 import { DriveStageViz } from "./DriveStageViz";
 import { AgeStageViz } from "./AgeStageViz";
 import { PhaserStageViz } from "./PhaserStageViz";
@@ -15398,7 +15400,7 @@ function parseDisplayNumber(s: string): number {
 
 function Dial({
   label, value, min, max, curve = "lin", integer = false, bipolar = false, format, def, color = FIRE, size = 40, onChange, modulated,
-  modEnv, modLfo, paramKey,
+  modEnv, modLfo, paramKey, character,
 }: {
   label: string; value: number; min: number; max: number; curve?: "lin" | "log"; integer?: boolean;
   bipolar?: boolean; format: (v: number) => string; def?: number; color?: string; size?: number; onChange: (v: number) => void;
@@ -15408,8 +15410,10 @@ function Dial({
   modEnv?: number;
   /** Destination-knob LFO modulation depth (−1..1), drawn as a range arc. */
   modLfo?: number;
-  /** FirePatch key — enables matrix-driven mod arcs. */
+  /** FirePatch key — enables matrix-driven mod arcs and picks the band character. */
   paramKey?: string;
+  /** Override the band-derived knob character (rare — mostly for one-offs). */
+  character?: DialCharacter;
 }) {
   const modMatrix = useFireCommandStore((s) => s.patch.modMatrix);
   const matrixArcs = paramKey ? matrixArcsForParam(paramKey, modMatrix) : [];
@@ -15428,29 +15432,36 @@ function Dial({
   })();
   const [liveMod, setLiveMod] = useState(0);
   const matrixKey = matrixArcs.map((a) => `${a.source}:${a.amount}`).join("|");
+  // Each modulated knob used to run its own uncapped 60 fps loop that re-read
+  // the engine and re-rendered every frame — up to ~80 loops at once. They all
+  // share one 30 fps poll now, and only re-render when the dot actually moves.
   useEffect(() => {
-    if (!matrixArcs.length) { setLiveMod(0); return; }
-    let raf = 0;
-    const tick = () => {
-      try {
-        const eng = activeFireEngine();
-        let acc = 0;
-        for (const a of matrixArcs) {
-          let src = 0;
-          if (a.source === "lfo1") src = eng.getLfoValue(1);
-          else if (a.source === "lfo2") src = eng.getLfoValue(2);
-          else if (a.source.startsWith("macro")) {
-            const patch = useFireCommandStore.getState().patch;
-            src = a.source === "macro1" ? patch.macro1 : a.source === "macro2" ? patch.macro2 : a.source === "macro3" ? patch.macro3 : patch.macro4;
-          }
-          acc += a.amount * src;
-        }
-        setLiveMod(acc);
-      } catch { /* engine not ready */ }
-      raf = requestAnimationFrame(tick);
+    if (!matrixArcs.length) {
+      setLiveMod(0);
+      return;
+    }
+    const arcs = matrixArcs.map((a) => ({ source: a.source, amount: a.amount }));
+    let last = 0;
+    const apply = (s: ModSources) => {
+      let acc = 0;
+      for (const a of arcs) {
+        const src = a.source === "lfo1" ? s.lfo1
+          : a.source === "lfo2" ? s.lfo2
+            : a.source === "macro1" ? s.macro1
+              : a.source === "macro2" ? s.macro2
+                : a.source === "macro3" ? s.macro3
+                  : a.source === "macro4" ? s.macro4
+                    : 0;
+        acc += a.amount * src;
+      }
+      if (Math.abs(acc - last) < 0.005) return;
+      last = acc;
+      setLiveMod(acc);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    apply(currentModSources());
+    return subscribeModSources(apply);
+    // matrixKey encodes every arc's source + amount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matrixKey]);
   const knobRef = useRef<HTMLDivElement>(null);
   const startY = useRef(0);
@@ -15531,8 +15542,6 @@ function Dial({
   const r = size / 2 - 5;
   const cx = size / 2;
   const cy = size / 2;
-  const ix = cx + Math.sin((angle * Math.PI) / 180) * (r - 2);
-  const iy = cy - Math.cos((angle * Math.PI) / 180) * (r - 2);
   const atDefault = Math.abs(value - resetVal) < Math.abs(max - min) * 1e-4;
   const span = Math.max(min, max) - Math.min(min, max) || 1;
   const degAt = (v: number) => -135 + clamp(toT(clamp(v, min, max)), 0, 1) * 270;
@@ -15570,8 +15579,21 @@ function Dial({
         title="Drag or scroll · Shift = ultra-fine · Double-click reset · Click the value to type it"
       >
         <svg width={size} height={size} className="overflow-visible">
-          <circle cx={cx} cy={cy} r={r + 2} fill="rgba(0,0,0,0.35)" stroke="rgba(255,255,255,0.07)" />
-          <path d={arcPath(cx, cy, r, -135, 135)} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={3.5} strokeLinecap="round" />
+          {/* Band-specific cap, track and pointer. Modulation arcs below stay
+              uniform across bands — they mean the same thing everywhere. */}
+          <DialCap
+            character={character ?? dialCharacterFor(paramKey)}
+            size={size}
+            cx={cx}
+            cy={cy}
+            r={r}
+            angle={angle}
+            fillFrom={fillFrom}
+            fillTo={fillTo}
+            t={t}
+            color={color}
+            dragging={drag}
+          />
           {(() => {
             const env = modEnv ?? 0;
             const lfo = modLfo ?? 0;
@@ -15609,18 +15631,6 @@ function Dial({
             });
             return arcs;
           })()}
-          <line
-            x1={cx + Math.sin((angle * Math.PI) / 180) * (r - 6)}
-            y1={cy - Math.cos((angle * Math.PI) / 180) * (r - 6)}
-            x2={cx + Math.sin((angle * Math.PI) / 180) * (r + 1)}
-            y2={cy - Math.cos((angle * Math.PI) / 180) * (r + 1)}
-            stroke="rgba(255,255,255,0.35)"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-          />
-          <path d={arcPath(cx, cy, r, fillFrom, fillTo)} fill="none" stroke={color} strokeWidth={3.5} strokeLinecap="round" style={{ filter: drag ? `drop-shadow(0 0 5px ${color})` : `drop-shadow(0 0 2px ${color})` }} />
-          <line x1={cx} y1={cy} x2={ix} y2={iy} stroke={color} strokeWidth={2} strokeLinecap="round" />
-          <circle cx={ix} cy={iy} r={3} fill={color} />
           {matrixArcs.length > 0 && Math.abs(liveMod) > 0.02 && (
             <circle cx={lx} cy={ly} r={2.5} fill={matrixArcs[0]!.color} opacity={0.9} style={{ filter: `drop-shadow(0 0 4px ${matrixArcs[0]!.color})` }} />
           )}

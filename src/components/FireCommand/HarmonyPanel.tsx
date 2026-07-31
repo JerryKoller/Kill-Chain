@@ -7,8 +7,12 @@ import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireSequencerStore, NOTE_NAMES, SCALES } from "@/state/fireSequencerStore";
 import type { HarmonyMode } from "@/audio/dsp/FireCommandSynth";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
 import { HARMONY_MODES, harmonyModeLabel, harmonyVoiceCount } from "./HarmonyStageViz";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Performance band — faceted gem chips. */
+const HARM_CHAR = fcChipCharacterFor("harmony");
 
 export const HARM_C = FC.harmony;
 export const HARM_C_GLOW = bandShade(FC_BAND.perf, 0.92);
@@ -82,38 +86,29 @@ export function HarmCharacterStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = HARM_C;
 
+  const tone = { color: c, onText: HARM_C_GLOW, glow: 10 };
+
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Kin
       </span>
-      {HARM_CHARS.map((p) => {
-        const on = mode === p.mode && near(level, p.level, 0.08);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setParam("harmonyMode", p.mode);
-              setParam("harmonyLevel", p.level);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: HARM_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.label} · ${p.mode} @ ${Math.round(p.level * 100)}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {HARM_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={mode === p.mode && near(level, p.level, 0.08)}
+          tone={tone}
+          character={HARM_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setParam("harmonyMode", p.mode);
+            setParam("harmonyLevel", p.level);
+          }}
+          title={`${p.label} · ${p.mode} @ ${Math.round(p.level * 100)}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -121,35 +116,25 @@ export function HarmCharacterStrip() {
 export function HarmModeStrip() {
   const mode = useFireCommandStore((s) => s.patch.harmonyMode) ?? "off";
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: HARM_C_MODE, onText: HARM_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HARM_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${HARM_C}66` }}>
         Mode
       </span>
-      {HARMONY_MODES.map((m) => {
-        const on = mode === m.id;
-        return (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => setParam("harmonyMode", m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${HARM_C_MODE}99`,
-                    background: `${HARM_C_MODE}28`,
-                    color: HARM_C_GLOW,
-                    boxShadow: `0 0 8px ${HARM_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${m.label} · ${m.intervals} · ${m.voices}v`}
-          >
-            {m.short}
-          </button>
-        );
-      })}
+      {HARMONY_MODES.map((m) => (
+        <FcChip
+          key={m.id}
+          on={mode === m.id}
+          tone={tone}
+          character={HARM_CHAR}
+          caseMode="normal"
+          onClick={() => setParam("harmonyMode", m.id)}
+          title={`${m.label} · ${m.intervals} · ${m.voices}v`}
+        >
+          {m.short}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -157,35 +142,26 @@ export function HarmModeStrip() {
 export function HarmLevelStrip() {
   const level = useFireCommandStore((s) => s.patch.harmonyLevel) ?? 0.6;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: HARM_C_LEVEL, onText: HARM_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HARM_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${HARM_C}66` }}>
         Harmony Mix
       </span>
-      {HARM_LEVEL_SNAPS.map((p) => {
-        const on = near(level, p.v, 0.04);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("harmonyLevel", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${HARM_C_LEVEL}99`,
-                    background: `${HARM_C_LEVEL}28`,
-                    color: HARM_C_GLOW,
-                    boxShadow: `0 0 8px ${HARM_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.label}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {HARM_LEVEL_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(level, p.v, 0.04)}
+          tone={tone}
+          character={HARM_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setParam("harmonyLevel", p.v)}
+          title={`${p.label}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }

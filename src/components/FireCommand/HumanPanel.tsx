@@ -6,8 +6,12 @@
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
 import { HUMAN_CHARS, humanCharMatch } from "./HumanStageViz";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Performance band — faceted gem chips. */
+const HUMAN_CHAR = fcChipCharacterFor("human");
 
 export const HUMAN_C = FC.human;
 export const HUMAN_C_GLOW = bandShade(FC_BAND.perf, 0.96);
@@ -80,40 +84,30 @@ export function HumanCharacterStrip() {
   const vel = useFireCommandStore((s) => s.patch.humanizeVelocity) ?? 0.2;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = HUMAN_C;
+  const tone = { color: c, onText: HUMAN_C_GLOW, glow: 10 };
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Feel
       </span>
-      {HUMAN_CHARS.map((p) => {
-        const hit = p.on === on && near(timing, p.timing) && near(vel, p.vel);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setParam("humanizeOn", p.on);
-              setParam("humanizeTiming", p.timing);
-              setParam("humanizeVelocity", p.vel);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              hit
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: HUMAN_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.label} · T${Math.round(p.timing * 100)} V${Math.round(p.vel * 100)}`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {HUMAN_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={p.on === on && near(timing, p.timing) && near(vel, p.vel)}
+          tone={tone}
+          character={HUMAN_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setParam("humanizeOn", p.on);
+            setParam("humanizeTiming", p.timing);
+            setParam("humanizeVelocity", p.vel);
+          }}
+          title={`${p.label} · T${Math.round(p.timing * 100)} V${Math.round(p.vel * 100)}`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -121,37 +115,28 @@ export function HumanCharacterStrip() {
 export function HumanTimingStrip() {
   const timing = useFireCommandStore((s) => s.patch.humanizeTiming) ?? 0.25;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: HUMAN_C_TIME, onText: HUMAN_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HUMAN_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${HUMAN_C}66` }}>
         Time
       </span>
-      {HUMAN_TIME_SNAPS.map((p) => {
-        const hit = near(timing, p.v, 0.04);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => {
-              setParam("humanizeTiming", p.v);
-              if (p.v > 0) setParam("humanizeOn", true);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              hit
-                ? {
-                    borderColor: `${HUMAN_C_TIME}99`,
-                    background: `${HUMAN_C_TIME}28`,
-                    color: HUMAN_C_GLOW,
-                    boxShadow: `0 0 8px ${HUMAN_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {HUMAN_TIME_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(timing, p.v, 0.04)}
+          tone={tone}
+          character={HUMAN_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => {
+            setParam("humanizeTiming", p.v);
+            if (p.v > 0) setParam("humanizeOn", true);
+          }}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -159,37 +144,28 @@ export function HumanTimingStrip() {
 export function HumanVelStrip() {
   const vel = useFireCommandStore((s) => s.patch.humanizeVelocity) ?? 0.2;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: HUMAN_C_VEL, onText: HUMAN_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${HUMAN_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${HUMAN_C}66` }}>
         Vel
       </span>
-      {HUMAN_VEL_SNAPS.map((p) => {
-        const hit = near(vel, p.v, 0.04);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => {
-              setParam("humanizeVelocity", p.v);
-              if (p.v > 0) setParam("humanizeOn", true);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              hit
-                ? {
-                    borderColor: `${HUMAN_C_VEL}99`,
-                    background: `${HUMAN_C_VEL}28`,
-                    color: HUMAN_C_GLOW,
-                    boxShadow: `0 0 8px ${HUMAN_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {HUMAN_VEL_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(vel, p.v, 0.04)}
+          tone={tone}
+          character={HUMAN_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => {
+            setParam("humanizeVelocity", p.v);
+            if (p.v > 0) setParam("humanizeOn", true);
+          }}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }

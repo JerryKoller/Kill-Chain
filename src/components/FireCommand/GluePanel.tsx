@@ -6,7 +6,11 @@
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { punchMacroToGlue, type GlueMode } from "@/audio/dsp/mixClarity";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, FcSegStrip, fcChipCharacterFor, type FcSegOption } from "./fcChip";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Mix band — console chips with an LED underline. */
+const GLUE_CHAR = fcChipCharacterFor("glue");
 
 export const GLUE_C = FC.glue;
 export const GLUE_C_GLOW = bandShade(FC_BAND.mix, 0.9);
@@ -104,38 +108,28 @@ export function GlueCharacterStrip() {
   const punch = useFireCommandStore((s) => s.patch.punch) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = GLUE_C;
+  const tone = { color: c, onText: GLUE_C_GLOW, glow: 10 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Anvil
       </span>
-      {GLUE_CHARS.map((p) => {
-        const on = near(punch, p.punch);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setParam("punch", p.punch);
-              setParam("glueMode", p.mode);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: GLUE_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.label} · ${Math.round(p.punch * 100)}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {GLUE_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={near(punch, p.punch)}
+          tone={tone}
+          character={GLUE_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setParam("punch", p.punch);
+            setParam("glueMode", p.mode);
+          }}
+          title={`${p.label} · ${Math.round(p.punch * 100)}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -143,65 +137,43 @@ export function GlueCharacterStrip() {
 export function GlueModeStrip() {
   const mode = (useFireCommandStore((s) => s.patch.glueMode) ?? "glue") as GlueMode;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const opts: FcSegOption<GlueMode>[] = GLUE_MODES.map((p) => ({ id: p.id, label: p.label }));
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GLUE_C}66` }}>
-        Mode
-      </span>
-      {GLUE_MODES.map((p) => {
-        const on = mode === p.id;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => setParam("glueMode", p.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? { borderColor: `${GLUE_C}99`, background: `${GLUE_C}33`, color: GLUE_C_GLOW }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {p.label}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<GlueMode>
+      eyebrow="Mode"
+      value={mode}
+      onChange={(v) => setParam("glueMode", v)}
+      options={opts}
+      tone={{ color: GLUE_C, onText: GLUE_C_GLOW, glow: 0 }}
+      caseMode="normal"
+      character={GLUE_CHAR}
+    />
   );
 }
 
 export function GlueSnapStrip() {
   const punch = useFireCommandStore((s) => s.patch.punch) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: GLUE_C_HOT, onText: GLUE_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GLUE_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${GLUE_C}66` }}>
         Snap
       </span>
-      {GLUE_SNAPS.map((p) => {
-        const on = near(punch, p.v);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("punch", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${GLUE_C_HOT}99`,
-                    background: `${GLUE_C_HOT}28`,
-                    color: GLUE_C_GLOW,
-                    boxShadow: `0 0 8px ${GLUE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`Punch ${p.label}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {GLUE_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(punch, p.v)}
+          tone={tone}
+          character={GLUE_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setParam("punch", p.v)}
+          title={`Punch ${p.label}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }

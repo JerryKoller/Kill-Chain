@@ -1,14 +1,47 @@
 /**
  * AMP — Breath Contour stage visualizer.
- * Amp ADSR · velocity · LPG park (Signal Path Tone · FC.envAmp).
+ *
+ * IDIOM: the ADSR contour. Stages are a ~10:1 letterbox, so the envelope is
+ * drawn the way a manual draws it — time left→right, level up, each stage
+ * getting its own column of the width. The curve shapes are the real ones the
+ * engine uses (`applyEnvCurve`), so a linear attack is a straight ramp, an
+ * exponential decay dives then flattens, and a log one bulges the other way.
+ * Hold holds the plateau, overshoot pokes a bump through the unity ceiling, and
+ * velocity scaling is shown as a family of fainter contours underneath the live
+ * one — you can see the whole dynamic range of the patch at a glance.
+ *
+ * Stage boundaries are thin verticals with the stage's own time printed above,
+ * so the panel doubles as the numeric readout.
+ *
+ * When the LPG parks the amp envelope, the panel switches to the vactrol
+ * contour that is actually driving amplitude, with the parked ADSR left behind
+ * it as a ghost.
+ *
+ * A · D · S · R · Curves · Hold · Overshoot · Vel · LPG park (Tone · FC.envAmp).
  * Drag stage zones: A / D / S↕ / R. Bottom rail: Vel. Double-click: defaults.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import { applyEnvCurve, type AmpModel, type EnvCurve } from "@/audio/dsp/toneDifferentiation";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
 import { useToneTelemetry } from "./useToneTelemetry";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.envAmp;
@@ -30,14 +63,8 @@ const D_MAX = 3;
 const R_MIN = 0.005;
 const R_MAX = 4;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Velocity contours drawn behind the live one — the patch's dynamic range. */
+const VEL_FAMILY = [0.25, 0.5, 0.75, 1] as const;
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
@@ -51,6 +78,19 @@ function logNorm(v: number, lo: number, hi: number) {
   return Math.log(clamp(v, lo, hi) / lo) / Math.log(hi / lo);
 }
 
+/** Numeric stand-in for an enum string, so `motionHash` sees curve switches. */
+function strCode(s: string): number {
+  return (s.length << 9) ^ (s.charCodeAt(0) | 0) ^ ((s.charCodeAt(1) | 0) << 4);
+}
+
+function fmtT(v: number) {
+  return v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`;
+}
+
+/**
+ * Stage widths. Unchanged from the original so the A / D / S / R drag zones
+ * land on exactly the columns they always did.
+ */
 function envSegments(a: number, d: number, s: number, r: number, usableW: number) {
   const seg = (v: number) => Math.pow(Math.max(0.001, v), 0.5);
   const tot = seg(a) + seg(d) + seg(r) + 0.35;
@@ -61,33 +101,399 @@ function envSegments(a: number, d: number, s: number, r: number, usableW: number
   return { wA, wD, wR, wS };
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+export type AmpEnvVizState = {
+  a: number;
+  d: number;
+  sus: number;
+  r: number;
+  vel: number;
+  parked: boolean;
+  lpgDecay: number;
+  lpgColor: number;
+  atkCurve: EnvCurve;
+  decCurve: EnvCurve;
+  relCurve: EnvCurve;
+  hold: number;
+  overshoot: number;
+  model: AmpModel;
+  /** Live telemetry — passed in so the paint stays pure. */
+  telStage: string;
+  telPhase: number;
+  telLevel: number;
+  voices: number;
+  lpgOn: boolean;
+};
+
+type Geo = {
+  x0: number;
+  x1: number;
+  xH: number;
+  x2: number;
+  x3: number;
+  x4: number;
+  wA: number;
+  wH: number;
+  wD: number;
+  wS: number;
+  wR: number;
+  floorY: number;
+  peakY: number;
+  plotH: number;
+  top: number;
+};
+
+const PAD = 14;
+
+function geometry(p: AmpEnvVizState, W: number, Hh: number): Geo {
+  const usableW = Math.max(60, W - PAD * 2);
+  const { wA, wD, wR, wS } = envSegments(p.a, p.d, p.sus, p.r, usableW);
+  // Hold eats the front of the decay column, so the drag boundaries never move.
+  const hFrac = p.hold > 0.0005 ? clamp(Math.sqrt(p.hold) / (Math.sqrt(p.hold) + Math.sqrt(Math.max(0.001, p.d))), 0, 0.7) : 0;
+  const wH = wD * hFrac;
+  const x0 = PAD;
+  const x1 = x0 + wA;
+  const xH = x1 + wH;
+  const x2 = x1 + wD;
+  const x3 = x2 + wS;
+  const x4 = x3 + wR;
+  // Floor sits clear of the vel rail; the plot keeps 20px of headroom above
+  // unity so an overshoot bump has somewhere to poke into.
+  const floorY = Hh - 34;
+  const plotH = 90;
+  return { x0, x1, xH, x2, x3, x4, wA, wH, wD: wD - wH, wS, wR, floorY, peakY: floorY - plotH, plotH, top: 26 };
+}
+
+/** Peak level including the overshoot poke above unity. */
+function peakOf(p: AmpEnvVizState) {
+  return 1 + clamp(p.overshoot, 0, 1) * 0.18;
+}
+
+/** Walk the contour into the current path. One code path for every contour. */
+function contourPath(ctx: CanvasRenderingContext2D, p: AmpEnvVizState, g: Geo, velScale: number): void {
+  const yOf = (lv: number) => g.floorY - clamp(lv, 0, 1.2) * g.plotH;
+  const peak = peakOf(p);
+  ctx.moveTo(g.x0, yOf(0));
+  const nA = 22;
+  for (let i = 1; i <= nA; i++) {
+    const u = i / nA;
+    ctx.lineTo(g.x0 + g.wA * u, yOf(applyEnvCurve(u, p.atkCurve) * peak * velScale));
+  }
+  // Hold plateau — overshoot settles back toward unity across it.
+  if (g.wH > 0.5) {
+    const nH = 10;
+    for (let i = 1; i <= nH; i++) {
+      const u = i / nH;
+      ctx.lineTo(g.x1 + g.wH * u, yOf((1 + (peak - 1) * Math.exp(-u * 4)) * velScale));
+    }
+  }
+  const startLv = g.wH > 0.5 ? 1 + (peak - 1) * Math.exp(-4) : peak;
+  const nD = 26;
+  for (let i = 1; i <= nD; i++) {
+    const u = i / nD;
+    ctx.lineTo(g.xH + g.wD * u, yOf((startLv + (p.sus - startLv) * applyEnvCurve(u, p.decCurve)) * velScale));
+  }
+  ctx.lineTo(g.x3, yOf(p.sus * velScale));
+  const nR = 24;
+  for (let i = 1; i <= nR; i++) {
+    const u = i / nR;
+    ctx.lineTo(g.x3 + g.wR * u, yOf(p.sus * (1 - applyEnvCurve(u, p.relCurve)) * velScale));
+  }
+}
+
+/** The vactrol contour that replaces the ADSR while the LPG is parked. */
+function lpgPath(ctx: CanvasRenderingContext2D, p: AmpEnvVizState, g: Geo, W: number, tilt: number): void {
+  const yOf = (lv: number) => g.floorY - clamp(lv, 0, 1.2) * g.plotH;
+  const decayN = logNorm(p.lpgDecay, 0.05, 2.5);
+  const span = Math.max(60, W - PAD * 2);
+  const k = 1.2 + (1 - decayN) * 4.2;
+  ctx.moveTo(PAD, yOf(0));
+  const n = 90;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    // A near-instant strike, then the vactrol's exponential fall.
+    const rise = Math.min(1, t / 0.012);
+    const env = rise * Math.exp(-Math.max(0, t - 0.012) * k * tilt) * (0.55 + p.lpgColor * 0.45);
+    ctx.lineTo(PAD + t * span, yOf(env));
+  }
+}
+
+/**
+ * Paint the amp contour. Exported and pure so any A/D/S/R + curve combination
+ * can be rendered headlessly without mounting the component.
+ */
+export function paintAmpEnv(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: AmpEnvVizState,
+  now: number,
+  flash: number,
+): void {
+  const g = geometry(p, W, Hh);
+  const yOf = (lv: number) => g.floorY - clamp(lv, 0, 1.2) * g.plotH;
+  const velScale = 0.55 + clamp(p.vel, 0, 1) * 0.45;
+  const fast = 1 - logNorm(p.a, A_MIN, A_MAX);
+  const energy = p.parked
+    ? 0.2 + p.lpgColor * 0.34 + flash * 0.24
+    : 0.18 + p.sus * 0.24 + fast * 0.14 + flash * 0.24;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.72 });
+
+  // ── level graticule: unity ceiling + quarter lines ──
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const lv = i / 4;
+    const y = Math.round(yOf(lv)) + 0.5;
+    ctx.strokeStyle = hexA(C_MID, i === 4 ? 0.26 : 0.08);
+    ctx.setLineDash(i === 4 ? [3, 3] : []);
+    ctx.beginPath();
+    ctx.moveTo(PAD, y);
+    ctx.lineTo(W - PAD, y);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_MID, 0.5);
+  ctx.fillText("1.0", PAD - 2, yOf(1) + 3);
+  ctx.fillStyle = hexA(C_MID, 0.36);
+  ctx.fillText("0", PAD - 2, yOf(0) + 3);
+
+  if (p.parked) {
+    // ── LPG park: the vactrol is driving amplitude, ADSR left as a ghost ──
+    ctx.beginPath();
+    contourPath(ctx, p, g, velScale);
+    ctx.strokeStyle = hexA(C_MID, 0.22);
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([3, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // The bright band dies sooner than the dark one — colour tilts the pair.
+    ctx.beginPath();
+    lpgPath(ctx, p, g, W, 0.72);
+    ctx.lineTo(W - PAD, g.floorY);
+    ctx.lineTo(PAD, g.floorY);
+    ctx.closePath();
+    const fill = cachedGrad(ctx, `lpgfill|${Hh}|${(p.lpgColor * 10) | 0}`, (c) => {
+      const gr = c.createLinearGradient(0, g.peakY, 0, g.floorY);
+      gr.addColorStop(0, hexA(C_LPG, 0.34));
+      gr.addColorStop(1, hexA(C_DEEP, 0.03));
+      return gr;
+    });
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    glowStroke(ctx, () => lpgPath(ctx, p, g, W, 1.35), C_HOT, { width: 1.3, glow: 0.5, alpha: 0.4 + p.lpgColor * 0.35 });
+    glowStroke(ctx, () => lpgPath(ctx, p, g, W, 0.72), C_GLOW, { width: 2.2, glow: 0.9 + flash * 0.6, alpha: 0.9 });
+
+    lit(ctx, () => drawGlow(ctx, PAD + 4, yOf(0.55 + p.lpgColor * 0.45), 16 + flash * 14, C_GLOW, 0.45 + flash * 0.3));
+
+    ctx.font = "800 10px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_GLOW, 0.7);
+    ctx.fillText("LPG PARKED · drag Decay↔ / Color↕", W * 0.5, g.top + 16);
+
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_LPG, 0.66);
+    ctx.fillText(`DECAY ${Math.round(p.lpgDecay * 1000)}ms`, 136, 16);
+    ctx.fillStyle = hexA(C_HOT, 0.62);
+    ctx.fillText(`COLOR ${Math.round(p.lpgColor * 100)}`, 260, 16);
+    ctx.fillStyle = hexA(C_MID, 0.55);
+    ctx.fillText("ADSR BYPASSED", 368, 16);
+  } else {
+    // ── stage columns ──
+    const cols: Array<{ a: number; b: number; col: string; alpha: number; label: string; time: string }> = [
+      { a: g.x0, b: g.x1, col: C_A, alpha: 0.09, label: "ATK", time: fmtT(p.a) },
+      { a: g.x1, b: g.xH, col: C_D, alpha: 0.12, label: "HOLD", time: fmtT(p.hold) },
+      { a: g.xH, b: g.x2, col: C_D, alpha: 0.07, label: "DEC", time: fmtT(p.d) },
+      { a: g.x2, b: g.x3, col: C_S, alpha: 0.1 + p.sus * 0.08, label: "SUS", time: `${Math.round(p.sus * 100)}%` },
+      { a: g.x3, b: g.x4, col: C_R, alpha: 0.07, label: "REL", time: fmtT(p.r) },
+    ];
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i]!;
+      if (c.b - c.a < 0.5) continue;
+      ctx.fillStyle = hexA(c.col, c.alpha);
+      ctx.fillRect(c.a, g.top, c.b - c.a, g.floorY - g.top);
+    }
+    // Boundary verticals — thin, with the stage time printed above them.
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = hexA(C_MID, 0.3);
+    for (const x of [g.x1, g.xH, g.x2, g.x3, g.x4]) {
+      if (x <= g.x0 + 0.5 || x >= W - PAD) continue;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x) + 0.5, g.top);
+      ctx.lineTo(Math.round(x) + 0.5, g.floorY);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // ── the velocity family, dimmest first ──
+    for (let i = 0; i < VEL_FAMILY.length; i++) {
+      const v = VEL_FAMILY[i]!;
+      if (Math.abs(v - p.vel) < 0.06) continue;
+      ctx.beginPath();
+      contourPath(ctx, p, g, 0.55 + v * 0.45);
+      ctx.strokeStyle = hexA(C_MID, 0.1 + i * 0.035);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // ── the live contour ──
+    ctx.beginPath();
+    contourPath(ctx, p, g, velScale);
+    ctx.lineTo(g.x4, g.floorY);
+    ctx.lineTo(g.x0, g.floorY);
+    ctx.closePath();
+    const fill = cachedGrad(ctx, `ampfill|${Hh}|${(p.sus * 10) | 0}|${(p.vel * 10) | 0}`, (c) => {
+      const gr = c.createLinearGradient(0, g.peakY, 0, g.floorY);
+      gr.addColorStop(0, hexA(C_GLOW, 0.3));
+      gr.addColorStop(0.5, hexA(C_HOT, 0.13));
+      gr.addColorStop(1, hexA(C_DEEP, 0.03));
+      return gr;
+    });
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    glowStroke(ctx, () => contourPath(ctx, p, g, velScale), C_GLOW, {
+      width: 2.3,
+      glow: 0.8 + energy * 0.7 + flash * 0.6,
+      alpha: 0.88,
+    });
+
+    // Overshoot flag — only when it actually pokes through unity.
+    if (p.overshoot > 0.02) {
+      const oy = yOf(peakOf(p) * velScale);
+      lit(ctx, () => drawGlow(ctx, g.x1, oy, 10 + p.overshoot * 14, C_GLOW, 0.3 + p.overshoot * 0.4));
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexA(C_GLOW, 0.7);
+      ctx.fillText(`+${Math.round(p.overshoot * 18)}%`, g.x1 + 4, oy - 4);
+    }
+
+    // Stage handles at the corners the drag zones move.
+    const handles: Array<{ x: number; y: number; col: string }> = [
+      { x: g.x1, y: yOf(peakOf(p) * velScale), col: C_A },
+      { x: g.x2, y: yOf(p.sus * velScale), col: C_D },
+      { x: (g.x2 + g.x3) * 0.5, y: yOf(p.sus * velScale), col: C_S },
+      { x: g.x4, y: yOf(0), col: C_R },
+    ];
+    lit(ctx, () => {
+      for (let i = 0; i < handles.length; i++) {
+        const h = handles[i]!;
+        drawGlow(ctx, h.x, h.y, 7 + flash * 4, h.col, 0.55);
+      }
+    });
+    for (let i = 0; i < handles.length; i++) {
+      const h = handles[i]!;
+      ctx.fillStyle = hexA(h.col, 0.92);
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 3.4 + flash * 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Stage name · curve · time, one row riding just inside the floor line so
+    // the strip below stays clear for the vel rail.
+    const curves: string[] = [p.atkCurve, "", p.decCurve, "", p.relCurve];
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i]!;
+      if (c.b - c.a < 26) continue;
+      const curve = curves[i] ?? "";
+      const text = curve ? `${c.label} ${curve.toUpperCase()} ${c.time}` : `${c.label} ${c.time}`;
+      ctx.fillStyle = hexA(c.col, 0.58);
+      ctx.fillText(text, (c.a + c.b) * 0.5, g.floorY - 5);
+    }
+
+    // ── live playhead ──
+    if (p.voices > 0) {
+      const ph = clamp(p.telPhase, 0, 1);
+      const stage = p.telStage;
+      let cx = g.x0;
+      if (stage === "attack") cx = g.x0 + ph * g.wA;
+      else if (stage === "decay") cx = g.x1 + ph * (g.wH + g.wD);
+      else if (stage === "sustain") cx = g.x2 + ph * g.wS;
+      else if (stage === "release" || stage === "decay_out") cx = g.x3 + ph * g.wR;
+      else if (stage === "strike") cx = g.x0 + ph * (g.wA + g.wH + g.wD) * 0.35;
+      else if (stage === "ring") cx = g.x1 + ph * (g.wD + g.wS) * 0.5;
+      else cx = g.x0 + ph * (g.x4 - g.x0);
+      const cy = yOf(clamp(p.telLevel, 0, 1) * velScale);
+      ctx.strokeStyle = hexA(C_GLOW, 0.6);
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(cx, g.top);
+      ctx.lineTo(cx, cy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      lit(ctx, () => drawGlow(ctx, cx, cy, 14 + flash * 8, C_GLOW, 0.8));
+      ctx.fillStyle = hexA(C_GLOW, 0.98);
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3.6 + flash * 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "center";
+      ctx.fillStyle = hexA(C_GLOW, 0.9);
+      ctx.fillText(stage.slice(0, 6).toUpperCase(), cx, cy - 10);
+    }
+
+    // Telemetry row — clear of the DOM eyebrow / readout.
+    if (W >= 460) {
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexA(C_A, 0.68);
+      ctx.fillText(`ATK ${p.atkCurve.toUpperCase()}`, 136, 16);
+      ctx.fillStyle = hexA(C_D, 0.64);
+      ctx.fillText(`HOLD ${fmtT(p.hold)}`, 236, 16);
+      ctx.fillStyle = hexA(C_GLOW, 0.62);
+      ctx.fillText(`OVER ${Math.round(p.overshoot * 100)}`, 340, 16);
+      ctx.fillStyle = hexA(C_VEL, 0.62);
+      ctx.fillText(`VEL ${Math.round(p.vel * 100)}`, 434, 16);
+    }
+  }
+
+  pill(ctx, W * 0.5, 3, p.parked ? "LPG PARK" : p.model === "gate" ? "GATE" : "ADSR", C_GLOW, { glow: flash });
+
+  // ── vel rail along the bottom, clear of the footer band ──
+  const railY = Hh - 25;
+  const railW = W - 24;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(12, railY, railW, 6);
+  if (p.vel > 0.01) {
+    const vg = cachedGrad(ctx, `velrail|${W}`, (c) => {
+      const gr = c.createLinearGradient(12, 0, 12 + railW, 0);
+      gr.addColorStop(0, hexA(C_HOT, 0.4));
+      gr.addColorStop(1, hexA(C_VEL, 0.92));
+      return gr;
+    });
+    ctx.fillStyle = vg;
+    ctx.fillRect(12, railY + 1, Math.max(2, railW * p.vel), 4);
+  }
+  lit(ctx, () => drawGlow(ctx, 12 + railW * p.vel, railY + 3, 7 + flash * 4, C_GLOW, 0.8));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_VEL, 0.7);
+  ctx.fillText("VEL", 14, railY - 3);
+
+  grain(ctx, W, Hh, 0.028);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    "AMP · BREATH CONTOUR",
+    p.parked
+      ? `LPG · ${Math.round(p.lpgDecay * 1000)}ms · C${Math.round(p.lpgColor * 100)}`
+      : `A${fmtT(p.a)} · D${fmtT(p.d)} · S${Math.round(p.sus * 100)} · R${fmtT(p.r)}`,
+    C_GLOW,
+    C_HOT,
+  );
 }
 
 type DragMode = "A" | "D" | "S" | "R" | "vel" | "lpg" | null;
@@ -102,32 +508,42 @@ export function AmpEnvStageViz() {
   const pluckOn = useFireCommandStore((s) => s.patch.moduleEnable?.["pluck"] !== false);
   const lpgDecay = useFireCommandStore((s) => s.patch.lpgDecay) ?? 0.4;
   const lpgColor = useFireCommandStore((s) => s.patch.lpgColor) ?? 0.7;
+  const atkCurve = useFireCommandStore((s) => s.patch.ampCurveAttack) ?? "lin";
+  const decCurve = useFireCommandStore((s) => s.patch.ampCurveDecay) ?? "exp";
+  const relCurve = useFireCommandStore((s) => s.patch.ampCurveRelease) ?? "exp";
+  const hold = useFireCommandStore((s) => s.patch.ampHold) ?? 0;
+  const overshoot = useFireCommandStore((s) => s.patch.ampOvershoot) ?? 0;
+  const model = useFireCommandStore((s) => s.patch.ampModel) ?? "vca";
   const setParam = useFireCommandStore((s) => s.setParam);
 
   const tel = useToneTelemetry();
   const parked = lpgOn && pluckOn;
+  const telSrc = lpgOn ? tel.pluck : tel.amp;
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
-  const zoneRef = useRef({ x0: 0, x1: 0, x2: 0, x3: 0, x4: 0, top: 22, usableH: 110 });
-  const prevKey = useRef("");
-  const st = useRef({ a, d, sus, r, vel, parked, lpgDecay, lpgColor });
-  st.current = { a, d, sus, r, vel, parked, lpgDecay, lpgColor };
+  const prevKey = useRef(0);
+  const st = useRef<AmpEnvVizState>({
+    a, d, sus, r, vel, parked, lpgDecay, lpgColor,
+    atkCurve, decCurve, relCurve, hold, overshoot, model,
+    telStage: telSrc.stage, telPhase: telSrc.phase, telLevel: telSrc.level, voices: tel.voiceCount, lpgOn,
+  });
+  st.current = {
+    a, d, sus, r, vel, parked, lpgDecay, lpgColor,
+    atkCurve, decCurve, relCurve, hold, overshoot, model,
+    telStage: telSrc.stage, telPhase: telSrc.phase, telLevel: telSrc.level, voices: tel.voiceCount, lpgOn,
+  };
 
   useEffect(() => {
     const key = parked
-      ? `lpg|${lpgDecay.toFixed(3)}|${lpgColor.toFixed(3)}|${vel.toFixed(3)}`
-      : `${a.toFixed(3)}|${d.toFixed(3)}|${sus.toFixed(3)}|${r.toFixed(3)}|${vel.toFixed(3)}`;
+      ? motionHash(1, lpgDecay, lpgColor, vel)
+      : motionHash(a, d, sus, r, vel, hold, overshoot, strCode(atkCurve), strCode(decCurve), strCode(relCurve));
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [a, d, sus, r, vel, parked, lpgDecay, lpgColor]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [a, d, sus, r, vel, parked, lpgDecay, lpgColor, hold, overshoot, atkCurve, decCurve, relCurve]);
 
   const applyDrag = useCallback(
     (clientX: number, clientY: number, mode: DragMode) => {
@@ -154,7 +570,7 @@ export function AmpEnvStageViz() {
       else if (mode === "D") setParam("ampDecay", Math.round(logLerp(x, D_MIN, D_MAX) * 1000) / 1000);
       else if (mode === "R") setParam("ampRelease", Math.round(logLerp(x, R_MIN, R_MAX) * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const hitZone = useCallback((clientX: number, clientY: number): DragMode => {
@@ -165,12 +581,13 @@ export function AmpEnvStageViz() {
     const ly = clientY - rect.top;
     if (ly > H * 0.78) return "vel";
     if (st.current.parked) return "lpg";
-    const z = zoneRef.current;
+    // Same stage columns the paint lays out — one source of truth for both.
+    const z = geometry(st.current, sizeRef.current.w, sizeRef.current.h);
     if (lx < z.x1) return "A";
     if (lx < z.x2) return "D";
     if (lx < z.x3) return "S";
     return "R";
-  }, []);
+  }, [sizeRef, wrapRef]);
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -181,7 +598,7 @@ export function AmpEnvStageViz() {
       wrap.setPointerCapture(e.pointerId);
       applyDrag(e.clientX, e.clientY, mode);
     },
-    [hitZone, applyDrag],
+    [hitZone, applyDrag, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -198,7 +615,7 @@ export function AmpEnvStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     if (st.current.parked) {
@@ -219,334 +636,47 @@ export function AmpEnvStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const sparks: Array<{ x: number; y: number; life: number; vx: number; vy: number }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.86;
-
-      const PAD = 14;
-      const top = 24;
-      const usableH = Hh - 44;
-      const usableW = W - PAD * 2;
-
-      ctx.clearRect(0, 0, W, Hh);
-
-      if (p.parked) {
-        // ── LPG strike mode ──
-        const energy = 0.3 + p.lpgColor * 0.4 + flashRef.current * 0.25;
-        const bg = ctx.createRadialGradient(W * 0.35, Hh * 0.4, 4, W * 0.5, Hh * 0.5, W * 0.75);
-        bg.addColorStop(0, hexAlpha(C_LPG, 0.14 + energy * 0.3));
-        bg.addColorStop(0.5, hexAlpha(C_DEEP, 0.55));
-        bg.addColorStop(1, "rgba(6,5,1,0.98)");
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, W, Hh);
-
-        // Vactrol decay curve
-        const decayNorm = logNorm(p.lpgDecay, 0.05, 2.5);
-        ctx.beginPath();
-        ctx.moveTo(PAD, top);
-        for (let i = 0; i <= 80; i++) {
-          const t = i / 80;
-          const x = PAD + t * usableW;
-          const env = Math.exp(-t * (1.2 + (1 - decayNorm) * 4)) * (0.55 + p.lpgColor * 0.45);
-          const y = top + (1 - env) * usableH;
-          ctx.lineTo(x, y);
-        }
-        ctx.lineTo(PAD + usableW, top + usableH);
-        ctx.lineTo(PAD, top + usableH);
-        ctx.closePath();
-        const fill = ctx.createLinearGradient(0, top, 0, top + usableH);
-        fill.addColorStop(0, hexAlpha(C_GLOW, 0.4));
-        fill.addColorStop(1, hexAlpha(C_DEEP, 0.05));
-        ctx.fillStyle = fill;
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.moveTo(PAD, top);
-        for (let i = 0; i <= 80; i++) {
-          const t = i / 80;
-          const x = PAD + t * usableW;
-          const env = Math.exp(-t * (1.2 + (1 - decayNorm) * 4)) * (0.55 + p.lpgColor * 0.45);
-          ctx.lineTo(x, top + (1 - env) * usableH);
-        }
-        ctx.strokeStyle = hexAlpha(C_GLOW, 0.9);
-        ctx.lineWidth = 2.4;
-        ctx.shadowBlur = 12 + flashRef.current * 14;
-        ctx.shadowColor = C;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        // Strike flash
-        const strike = Math.pow(Math.max(0, Math.sin((now / 900) * Math.PI * 2)), 12);
-        if (strike > 0.2) {
-          const sg = ctx.createRadialGradient(PAD + 8, top + 8, 0, PAD + 8, top + 8, 40 + strike * 30);
-          sg.addColorStop(0, hexAlpha(C_GLOW, strike * 0.7));
-          sg.addColorStop(1, hexAlpha(C, 0));
-          ctx.fillStyle = sg;
-          ctx.fillRect(0, 0, W * 0.5, Hh * 0.6);
-        }
-
-        ctx.font = "800 10px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.7);
-        ctx.fillText("LPG PARKED · drag Decay↔ / Color↕", W * 0.5, Hh * 0.42);
-
-        ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "left";
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-        ctx.fillText("AMP · BREATH CONTOUR", 12, Hh - 2);
-        ctx.textAlign = "right";
-        ctx.fillStyle = hexAlpha(C_HOT, 0.88);
-        ctx.fillText(`LPG · ${Math.round(p.lpgDecay * 1000)}ms · C${Math.round(p.lpgColor * 100)}`, W - 12, Hh - 2);
-      } else {
-        // ── ADSR breath mountain ──
-        const { wA, wD, wR, wS } = envSegments(p.a, p.d, p.sus, p.r, usableW);
-        const x0 = PAD;
-        const x1 = x0 + wA;
-        const x2 = x1 + wD;
-        const x3 = x2 + wS;
-        const x4 = x3 + wR;
-        zoneRef.current = { x0, x1, x2, x3, x4, top, usableH };
-        const yLv = (lv: number) => top + (1 - lv * (0.55 + p.vel * 0.45)) * usableH;
-
-        const energy = 0.22 + p.sus * 0.25 + (1 - logNorm(p.a, A_MIN, A_MAX)) * 0.15 + flashRef.current * 0.25;
-        const breathe = 0.94 + 0.06 * Math.sin(now / 700);
-
-        const bg = ctx.createRadialGradient(x1, yLv(1), 6, W * 0.5, Hh * 0.45, W * 0.78);
-        bg.addColorStop(0, hexAlpha(C_HOT, 0.12 + energy * 0.3 + flashRef.current * 0.25));
-        bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.58));
-        bg.addColorStop(1, "rgba(6,5,1,0.98)");
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, W, Hh);
-
-        // Stage wash bands
-        const bands: Array<{ x0: number; x1: number; col: string; a: number }> = [
-          { x0, x1, col: C_A, a: 0.1 },
-          { x0: x1, x1: x2, col: C_D, a: 0.08 },
-          { x0: x2, x1: x3, col: C_S, a: 0.12 + p.sus * 0.1 },
-          { x0: x3, x1: x4, col: C_R, a: 0.08 },
-        ];
-        for (const b of bands) {
-          ctx.fillStyle = hexAlpha(b.col, b.a);
-          ctx.fillRect(b.x0, top, Math.max(1, b.x1 - b.x0), usableH);
-        }
-
-        // Grid
-        ctx.strokeStyle = hexAlpha(C_MID, 0.12);
-        ctx.lineWidth = 1;
-        for (let i = 1; i < 4; i++) {
-          const gy = top + (usableH / 4) * i;
-          ctx.beginPath();
-          ctx.moveTo(PAD, gy + 0.5);
-          ctx.lineTo(W - PAD, gy + 0.5);
-          ctx.stroke();
-        }
-
-        const mountain = () => {
-          ctx.moveTo(x0, yLv(0));
-          ctx.quadraticCurveTo(x0 + wA * 0.4, yLv(0.85 * breathe), x1, yLv(1 * breathe));
-          ctx.quadraticCurveTo(x1 + wD * 0.4, yLv(p.sus + (1 - p.sus) * 0.25), x2, yLv(p.sus));
-          ctx.lineTo(x3, yLv(p.sus));
-          ctx.quadraticCurveTo(x3 + wR * 0.45, yLv(p.sus * 0.25), x4, yLv(0));
-        };
-
-        // Layered fill
-        for (let layer = 4; layer >= 0; layer--) {
-          ctx.beginPath();
-          mountain();
-          ctx.lineTo(x4, top + usableH);
-          ctx.lineTo(x0, top + usableH);
-          ctx.closePath();
-          const mg = ctx.createLinearGradient(0, top, 0, top + usableH);
-          mg.addColorStop(0, hexAlpha(C_GLOW, (0.32 - layer * 0.05) * breathe));
-          mg.addColorStop(0.5, hexAlpha(C_HOT, 0.14 - layer * 0.02));
-          mg.addColorStop(1, hexAlpha(C_DEEP, 0.02));
-          ctx.fillStyle = mg;
-          ctx.fill();
-        }
-
-        // Contour stroke
-        ctx.beginPath();
-        mountain();
-        ctx.strokeStyle = hexAlpha(C_GLOW, 0.85 + flashRef.current * 0.15);
-        ctx.lineWidth = 2.5;
-        ctx.shadowBlur = 12 + energy * 10 + flashRef.current * 14;
-        ctx.shadowColor = C;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-
-        // Stage handles
-        const handles: Array<{ x: number; y: number; col: string; label: string }> = [
-          { x: x1, y: yLv(1 * breathe), col: C_A, label: "A" },
-          { x: x2, y: yLv(p.sus), col: C_D, label: "D" },
-          { x: (x2 + x3) / 2, y: yLv(p.sus), col: C_S, label: "S" },
-          { x: x4, y: yLv(0), col: C_R, label: "R" },
-        ];
-        for (const h of handles) {
-          ctx.fillStyle = hexAlpha(h.col, 0.9);
-          ctx.shadowBlur = 8;
-          ctx.shadowColor = h.col;
-          ctx.beginPath();
-          ctx.arc(h.x, h.y, 4 + flashRef.current * 1.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-          ctx.fillStyle = hexAlpha(h.col, 0.75);
-          ctx.textAlign = "center";
-          ctx.fillText(h.label, h.x, top - 4);
-        }
-
-        // Sustain energy bars
-        const bars = Math.max(4, Math.round(6 + p.sus * 8));
-        for (let i = 0; i < bars; i++) {
-          const bx = x2 + ((x3 - x2) / bars) * i + 1;
-          const bh = 3 + p.sus * 14 * (0.65 + 0.35 * Math.sin(now / 280 + i)) * breathe * (0.55 + p.vel * 0.45);
-          const barGrad = ctx.createLinearGradient(bx, top + usableH - bh, bx, top + usableH);
-          barGrad.addColorStop(0, hexAlpha(C_S, 0.5 + p.sus * 0.35));
-          barGrad.addColorStop(1, hexAlpha(C_S, 0.05));
-          ctx.fillStyle = barGrad;
-          ctx.fillRect(bx, top + usableH - bh, Math.max(2, (x3 - x2) / bars - 3), bh);
-        }
-
-        // Rising breath particles from attack
-        if (Math.random() < 0.2 + (1 - logNorm(p.a, A_MIN, A_MAX)) * 0.25) {
-          sparks.push({
-            x: x0 + Math.random() * Math.max(8, wA),
-            y: yLv(0.7 + Math.random() * 0.3),
-            life: 1,
-            vx: (Math.random() - 0.5) * 0.8,
-            vy: -0.6 - Math.random() * 1.2,
-          });
-        }
-        for (let i = sparks.length - 1; i >= 0; i--) {
-          const s = sparks[i]!;
-          s.life -= 0.02;
-          if (s.life <= 0) {
-            sparks.splice(i, 1);
-            continue;
-          }
-          s.x += s.vx;
-          s.y += s.vy;
-          ctx.fillStyle = hexAlpha(C_A, s.life * 0.7);
-          ctx.beginPath();
-          ctx.arc(s.x, s.y, 1.2 + s.life, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // Live telemetry cursor
-        const telData = lpgOn ? tel.pluck : tel.amp;
-        const active = tel.voiceCount > 0;
-        if (active && telData) {
-          const level = clamp(telData.level, 0, 1);
-          const stage = telData.stage;
-          let cx = x0;
-          if (stage === "attack") cx = x0 + clamp(telData.phase, 0, 1) * wA;
-          else if (stage === "decay") cx = x1 + clamp(telData.phase, 0, 1) * wD;
-          else if (stage === "sustain") cx = x2 + clamp(telData.phase, 0, 1) * wS;
-          else if (stage === "release" || stage === "decay_out") cx = x3 + clamp(telData.phase, 0, 1) * wR;
-          else if (stage === "strike") cx = x0 + clamp(telData.phase, 0, 1) * (wA + wD) * 0.35;
-          else if (stage === "ring") cx = x1 + clamp(telData.phase, 0, 1) * (wD + wS) * 0.5;
-          else cx = x0 + clamp(telData.phase, 0, 1) * (x4 - x0);
-          const cy = yLv(level * (0.55 + p.vel * 0.45));
-
-          ctx.strokeStyle = hexAlpha(C_GLOW, 0.7);
-          ctx.lineWidth = 1.8;
-          ctx.setLineDash([2, 2]);
-          ctx.beginPath();
-          ctx.moveTo(cx, top);
-          ctx.lineTo(cx, cy);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          ctx.fillStyle = "#fff8e0";
-          ctx.shadowBlur = 16;
-          ctx.shadowColor = C;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 4.5 + flashRef.current * 2, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-
-          ctx.font = "900 9px ui-sans-serif, system-ui, sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-          ctx.fillText(String(stage).slice(0, 6).toUpperCase(), cx, cy - 12);
-        }
-
-        // Stage labels under zones
-        ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        const labels = [
-          { x: (x0 + x1) / 2, t: "ATK", c: C_A },
-          { x: (x1 + x2) / 2, t: "DEC", c: C_D },
-          { x: (x2 + x3) / 2, t: "SUS", c: C_S },
-          { x: (x3 + x4) / 2, t: "REL", c: C_R },
-        ];
-        for (const lb of labels) {
-          ctx.fillStyle = hexAlpha(lb.c, 0.55);
-          ctx.fillText(lb.t, lb.x, top + usableH + 11);
-        }
-
-        ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-        ctx.textAlign = "left";
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-        ctx.fillText("AMP · BREATH CONTOUR", 12, Hh - 2);
-        ctx.textAlign = "right";
-        ctx.fillStyle = hexAlpha(C_HOT, 0.88);
-        const fmt = (v: number) => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`);
-        ctx.fillText(`A${fmt(p.a)} · D${fmt(p.d)} · S${Math.round(p.sus * 100)} · R${fmt(p.r)}`, W - 12, Hh - 2);
-      }
-
-      // Vel rail (always)
-      const railY = Hh - 16;
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(12, railY, W - 24, 7);
-      ctx.strokeStyle = hexAlpha(C_VEL, 0.25);
-      ctx.strokeRect(12.5, railY + 0.5, W - 25, 6);
-      const velW = (W - 24) * p.vel;
-      if (p.vel > 0.01) {
-        const vg = ctx.createLinearGradient(12, railY, 12 + velW, railY);
-        vg.addColorStop(0, hexAlpha(C_HOT, 0.4));
-        vg.addColorStop(1, hexAlpha(C_VEL, 0.95));
-        ctx.fillStyle = vg;
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = C;
-        ctx.fillRect(12, railY, velW, 7);
-        ctx.shadowBlur = 0;
-      }
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(12 + velW, railY + 3.5, 3.5 + flashRef.current * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = hexAlpha(C_VEL, 0.7);
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText("VEL", 14, railY - 3);
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintAmpEnv(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
-        active: tel.voiceCount > 0,
+        active: st.current.voices > 0,
         dragging: !!dragRef.current,
-        particles: sparks.length,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.a,
+          st.current.d,
+          st.current.sus,
+          st.current.r,
+          st.current.vel,
+          st.current.hold,
+          st.current.overshoot,
+          st.current.parked,
+          st.current.lpgDecay,
+          st.current.lpgColor,
+          st.current.telLevel,
+          st.current.voices,
+        ),
       }),
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, parked ? 0.45 : 0.5),
+        borderColor: hexA(C, parked ? 0.45 : 0.5),
         height: H,
         cursor: "crosshair",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexAlpha(C, parked ? 0.18 : 0.24)}, 0 10px 28px rgba(0,0,0,0.42)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexA(C, parked ? 0.18 : 0.24)}, 0 10px 28px rgba(0,0,0,0.42)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -562,19 +692,19 @@ export function AmpEnvStageViz() {
       aria-label="Amp envelope breath contour"
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Breath Contour
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
-        style={{ color: hexAlpha(C_HOT, 0.75) }}
+        style={{ color: hexA(C_HOT, 0.75) }}
       >
         {parked ? "LPG" : "ADSR"}
       </div>

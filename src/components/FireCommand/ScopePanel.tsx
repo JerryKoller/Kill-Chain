@@ -7,8 +7,13 @@ import { useEffect, useRef } from "react";
 import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { FRAME_COUNT, frameSamples, wavetableName } from "@/audio/dsp/wavetables";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, FcSegStrip, fcChipCharacterFor, type FcSegOption } from "./fcChip";
 import type { ScopeVizState } from "./ScopeStageViz";
 import { SCOPE_DEFAULT_VIZ } from "./ScopeStageViz";
+
+/** Mix band — console chips with an LED underline. */
+const SCOPE_CHAR = fcChipCharacterFor("output");
+
 export const SCOPE_C = FC.scope;
 export const SCOPE_C_GLOW = bandShade(FC_BAND.mix, 0.94);
 export const SCOPE_C_HOT = bandShade(FC_BAND.mix, 0.68);
@@ -63,40 +68,21 @@ export function ScopeViewStrip({
   mode: ScopeViewMode;
   onChange: (m: ScopeViewMode) => void;
 }) {
-  const opts: { id: ScopeViewMode; label: string }[] = [
+  const opts: FcSegOption<ScopeViewMode>[] = [
     { id: "all", label: "Dual" },
     { id: "master", label: "Master" },
     { id: "oscs", label: "Stacks" },
   ];
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCOPE_C}66` }}>
-        View
-      </span>
-      {opts.map((o) => {
-        const on = mode === o.id;
-        return (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => onChange(o.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${SCOPE_C}99`,
-                    background: `${SCOPE_C}33`,
-                    color: SCOPE_C_GLOW,
-                    boxShadow: `0 0 10px ${SCOPE_C}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<ScopeViewMode>
+      eyebrow="View"
+      value={mode}
+      onChange={onChange}
+      options={opts}
+      tone={{ color: SCOPE_C, onText: SCOPE_C_GLOW, glow: 10 }}
+      caseMode="normal"
+      character={SCOPE_CHAR}
+    />
   );
 }
 
@@ -108,34 +94,25 @@ export function ScopeZoomStrip({
   onChange: (z: number) => void;
 }) {
   const snaps = [0.5, 1, 1.5, 2, 2.5];
+  const tone = { color: SCOPE_C_HOT, onText: SCOPE_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCOPE_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${SCOPE_C}66` }}>
         Zoom
       </span>
-      {snaps.map((z) => {
-        const on = Math.abs(zoom - z) < 0.08;
-        return (
-          <button
-            key={z}
-            type="button"
-            onClick={() => onChange(z)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${SCOPE_C_HOT}99`,
-                    background: `${SCOPE_C_HOT}28`,
-                    color: SCOPE_C_GLOW,
-                    boxShadow: `0 0 8px ${SCOPE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            ×{z}
-          </button>
-        );
-      })}
+      {snaps.map((z) => (
+        <FcChip
+          key={z}
+          on={Math.abs(zoom - z) < 0.08}
+          tone={tone}
+          character={SCOPE_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => onChange(z)}
+        >
+          ×{z}
+        </FcChip>
+      ))}
     </div>
   );
 }

@@ -6,9 +6,13 @@
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
 import { MACRO_HELM_COLORS, MACRO_KEYS, type MacroKey } from "./MacroStageViz";
 import { MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Performance band — faceted gem chips. */
+const MACRO_CHAR = fcChipCharacterFor("macros");
 
 export const MACRO_C = FC.macros;
 export const MACRO_C_GLOW = bandShade(FC_BAND.perf, 0.92);
@@ -83,41 +87,31 @@ export function MacroCharacterStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   const vals = [m1, m2, m3, m4];
   const c = MACRO_C;
+  const tone = { color: c, onText: MACRO_C_GLOW, glow: 10 };
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Helm
       </span>
-      {MACRO_CHARS.map((p) => {
-        const on = nearAll(vals, p.vals);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setParam("macro1", p.vals[0]);
-              setParam("macro2", p.vals[1]);
-              setParam("macro3", p.vals[2]);
-              setParam("macro4", p.vals[3]);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: MACRO_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={p.label}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {MACRO_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={nearAll(vals, p.vals)}
+          tone={tone}
+          character={MACRO_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setParam("macro1", p.vals[0]);
+            setParam("macro2", p.vals[1]);
+            setParam("macro3", p.vals[2]);
+            setParam("macro4", p.vals[3]);
+          }}
+          title={p.label}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -129,41 +123,32 @@ export function MacroSnapStrip() {
   const m3 = useFireCommandStore((s) => s.patch.macro3) ?? 0;
   const m4 = useFireCommandStore((s) => s.patch.macro4) ?? 0;
   const allSame = near(m1, m2) && near(m2, m3) && near(m3, m4);
+  const tone = { color: MACRO_C_HOT, onText: MACRO_C_GLOW, glow: 8 };
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${MACRO_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${MACRO_C}66` }}>
         All
       </span>
-      {MACRO_SNAPS.map((p) => {
-        const on = allSame && near(m1, p.v);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => {
-              setParam("macro1", p.v);
-              setParam("macro2", p.v);
-              setParam("macro3", p.v);
-              setParam("macro4", p.v);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${MACRO_C_HOT}99`,
-                    background: `${MACRO_C_HOT}28`,
-                    color: MACRO_C_GLOW,
-                    boxShadow: `0 0 8px ${MACRO_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`Set all macros to ${p.label}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {MACRO_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={allSame && near(m1, p.v)}
+          tone={tone}
+          character={MACRO_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => {
+            setParam("macro1", p.v);
+            setParam("macro2", p.v);
+            setParam("macro3", p.v);
+            setParam("macro4", p.v);
+          }}
+          title={`Set all macros to ${p.label}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }

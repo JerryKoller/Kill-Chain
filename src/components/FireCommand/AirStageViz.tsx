@@ -1,14 +1,39 @@
 /**
  * Air — Sky Shelf stage visualizer.
- * Low/high shelves × amount (Signal Path Mix · FC.air).
+ *
+ * IDIOM: the tilt shelf. A real analyser plot — log frequency across the
+ * letterbox, dB up — so the module reads as what it is: a low shelf, a high
+ * shelf, and the arch that decides whether they act independently or see-saw
+ * around 1 kHz. This is the calmest of the six on purpose: graph paper, a grid,
+ * two handles, one curve. Nothing animates, so it costs nothing while idle.
+ *
+ * Low/high shelves × amount, arch and M/S mode (Signal Path Mix · FC.air).
  * Drag left: Low ↕ · right: High ↕ · bottom rail: Amount.
  * Double-click: flatten / cycle characters.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import type { AirArch } from "@/audio/dsp/mixClarity";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lattice,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.air;
@@ -31,18 +56,48 @@ const CHAR_CYCLE = [
 
 type DragMode = "low" | "high" | "amt" | null;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Log frequency axis: 20 Hz → 20 kHz across the plot. */
+const F_LO = 20;
+const F_HI = 20000;
+const F_SPAN = Math.log(F_HI / F_LO);
+
+/** Shelf corners the DSP uses — the plot's landmarks. */
+const F_LOW_SHELF = 180;
+const F_HIGH_SHELF = 6500;
+const F_PIVOT = 1000;
+
+/** Grid reach: ±12 dB, matching the low shelf's full travel. */
+const SPAN_DB = 12;
+const CURVE_STEPS = 160;
+
+/**
+ * The ruler doubles as the landmark row: the shelf corners and the tilt pivot
+ * are decades in their own right, so no second label row is needed.
+ */
+type RulerTick = { hz: number; label: string; major: boolean; mark?: "low" | "pivot" | "high" };
+const RULER: RulerTick[] = [
+  { hz: 20, label: "20", major: true },
+  { hz: 50, label: "50", major: false },
+  { hz: 100, label: "100", major: false },
+  { hz: 180, label: "180", major: true, mark: "low" },
+  { hz: 500, label: "500", major: false },
+  { hz: 1000, label: "1k", major: true, mark: "pivot" },
+  { hz: 2000, label: "2k", major: false },
+  { hz: 6500, label: "6.5k", major: true, mark: "high" },
+  { hz: 20000, label: "20k", major: true },
+];
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
+
+function freqU(hz: number): number {
+  return clamp(Math.log(hz / F_LO) / F_SPAN, 0, 1);
+}
+
+const U_LOW = freqU(F_LOW_SHELF);
+const U_HIGH = freqU(F_HIGH_SHELF);
+const U_PIVOT = freqU(F_PIVOT);
 
 function airLabel(low: number, high: number, amt: number): string {
   if (amt < 0.03) return "FLAT";
@@ -65,63 +120,292 @@ function airMetrics(low: number, high: number, amt: number) {
   };
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/**
+ * Shelf response in dB at a normalized frequency.
+ *
+ * `dual` sums two independent shelves with half-octave transitions; `tilt`
+ * collapses them into one see-saw pivoting at 1 kHz, which is the whole point of
+ * the arch switch and the one thing the old panel could not show.
+ */
+function shelfDb(u: number, lowDb: number, highDb: number, arch: AirArch): number {
+  if (arch === "tilt") {
+    const amount = (highDb - lowDb) * 0.5;
+    return amount * Math.tanh((u - U_PIVOT) / 0.18);
+  }
+  const lo = 1 / (1 + Math.exp((u - U_LOW) / 0.052));
+  const hi = 1 / (1 + Math.exp(-(u - U_HIGH) / 0.052));
+  return lowDb * lo + highDb * hi;
+}
+
+export type AirVizState = {
+  low: number;
+  high: number;
+  amt: number;
+  enabled: boolean;
+  arch: AirArch;
+  msMode: boolean;
+};
+
+/**
+ * Paint the shelf plot. Exported and pure — and time-invariant, so `now` is
+ * unused: this panel looks identical on every frame until a param moves.
+ */
+export function paintAir(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: AirVizState,
+  now: number,
+  flash: number,
+): void {
+  const on = p.enabled;
+  const lowV = on ? clamp(p.low, -1, 1) : 0;
+  const highV = on ? clamp(p.high, -1, 1) : 0;
+  const amt = on ? clamp(p.amt, 0, 1) : 0;
+  const arch = p.arch;
+  const m = airMetrics(lowV, highV, amt);
+  const energy = 0.06 + amt * 0.22 + Math.max(Math.abs(lowV), Math.abs(highV)) * amt * 0.16 + flash * 0.14;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.42 });
+
+  // Geometry: frequency across, dB up, zero line aligned to the drag mapping.
+  const padL = 34;
+  const padR = 34;
+  const span = Math.max(60, W - padL - padR);
+  const zeroY = Math.round(Hh * 0.42);
+  const pxDb = 54 / SPAN_DB;
+  const plotTop = zeroY - SPAN_DB * pxDb;
+  const plotBot = zeroY + SPAN_DB * pxDb;
+  const rulerY = plotBot + 10;
+  const railY = Hh - 26;
+  const dbY = (db: number) => zeroY - clamp(db, -SPAN_DB - 2, SPAN_DB + 2) * pxDb;
+  const lowX = padL + U_LOW * span;
+  const highX = padL + U_HIGH * span;
+  const pivotX = padL + U_PIVOT * span;
+
+  // Recessed plot bed + graph paper.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padL, plotTop, span, plotBot - plotTop);
+  ctx.clip();
+  ctx.fillStyle = hexA(C_DEEP, 0.3);
+  ctx.fillRect(padL, plotTop, span, plotBot - plotTop);
+  lattice(ctx, W, Hh, C_MID, 14, 0.05);
+  ctx.restore();
+  ctx.strokeStyle = hexA(C_MID, 0.16);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padL + 0.5, plotTop + 0.5, span - 1, plotBot - plotTop - 1);
+
+  // ── dB grid ──
+  ctx.font = VIZ_FONT_LABEL;
+  for (let db = SPAN_DB; db >= -SPAN_DB; db -= 6) {
+    const y = dbY(db);
+    const zero = db === 0;
+    ctx.fillStyle = hexA(zero ? C_GLOW : C_MID, zero ? 0.22 : 0.09);
+    ctx.fillRect(padL, y, span, 1);
+    ctx.textAlign = "right";
+    ctx.fillStyle = hexA(zero ? C_GLOW : C_MID, zero ? 0.55 : 0.4);
+    ctx.fillText(zero ? "0" : `${db > 0 ? "+" : ""}${db}`, padL - 5, y + 3);
+  }
+
+  // ── frequency ruler, with the shelf corners called out in their own colour ──
+  const labelAll = span > 520;
+  const markActive = (m: RulerTick["mark"]) =>
+    arch === "tilt"
+      ? m === "pivot" && amt > 0.02
+      : (m === "low" && Math.abs(lowV) > 0.05 && amt > 0.02) ||
+        (m === "high" && Math.abs(highV) > 0.05 && amt > 0.02);
+  ctx.textAlign = "center";
+  for (const r of RULER) {
+    const x = padL + freqU(r.hz) * span;
+    const col = r.mark === "low" ? C_LOW : r.mark === "high" ? C_HIGH : r.mark === "pivot" ? C_GLOW : C_MID;
+    const hot = markActive(r.mark);
+    ctx.fillStyle = hexA(col, r.mark ? (hot ? 0.3 : 0.16) : r.major ? 0.12 : 0.07);
+    ctx.fillRect(x - (r.mark ? 0.5 : 0), plotTop, 1, plotBot - plotTop);
+    if (labelAll || r.major) {
+      ctx.fillStyle = hexA(col, r.mark ? (hot ? 0.8 : 0.5) : 0.42);
+      ctx.fillText(r.label, x, rulerY);
+    }
+  }
+  if (arch === "tilt") {
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_GLOW, 0.6);
+    ctx.fillText("PIVOT", pivotX + 5, plotTop + 10);
+  }
+
+  // ── the curve ──
+  const traceAt = (scale: number) => {
+    for (let i = 0; i <= CURVE_STEPS; i++) {
+      const u = i / CURVE_STEPS;
+      const x = padL + u * span;
+      const y = dbY(shelfDb(u, m.lowDb * scale, m.highDb * scale, arch));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  };
+
+  // Fill from the curve to the zero line — signed, so cuts read as cuts.
+  ctx.beginPath();
+  traceAt(1);
+  ctx.lineTo(padL + span, zeroY);
+  ctx.lineTo(padL, zeroY);
+  ctx.closePath();
+  const fill = cachedGrad(ctx, `airfill|${plotTop | 0}|${plotBot | 0}|${(amt * 20) | 0}`, (c) => {
+    const g = c.createLinearGradient(0, plotTop, 0, plotBot);
+    g.addColorStop(0, hexA(C_HIGH, 0.24 + amt * 0.2));
+    g.addColorStop(0.5, hexA(C, 0.08 + amt * 0.08));
+    g.addColorStop(1, hexA(C_LOW, 0.24 + amt * 0.2));
+    return g;
+  });
+  ctx.fillStyle = fill;
+  ctx.fill();
+
+  if (p.msMode) {
+    // M/S: the side path takes a lighter hand than the mid. Two curves, so the
+    // mode is visible on the plot rather than only in a chip.
+    glowStroke(ctx, () => traceAt(1), C_GLOW, { width: 2, glow: 0.8, alpha: 0.9 });
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = hexA(C_HIGH, 0.62);
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    traceAt(0.7);
+    ctx.stroke();
+    ctx.restore();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_GLOW, 0.8);
+    ctx.fillText("M", padL + span + 4, dbY(shelfDb(1, m.lowDb, m.highDb, arch)) + 3);
+    ctx.fillStyle = hexA(C_HIGH, 0.7);
+    ctx.fillText("S", padL + span + 4, dbY(shelfDb(1, m.lowDb * 0.7, m.highDb * 0.7, arch)) + 3);
+  } else {
+    glowStroke(ctx, () => traceAt(1), C_GLOW, { width: 2.2 + amt * 0.8, glow: 1, alpha: 0.92 });
+  }
+
+  // ── shelf handles ──
+  const handles = arch === "tilt"
+    ? [
+        { x: pivotX - span * 0.16, db: shelfDb(U_PIVOT - 0.16, m.lowDb, m.highDb, arch), col: C_LOW, label: "L" },
+        { x: pivotX + span * 0.16, db: shelfDb(U_PIVOT + 0.16, m.lowDb, m.highDb, arch), col: C_HIGH, label: "H" },
+      ]
+    : [
+        { x: lowX, db: m.lowDb, col: C_LOW, label: "L" },
+        { x: highX, db: m.highDb, col: C_HIGH, label: "H" },
+      ];
+  for (const h of handles) {
+    const y = dbY(h.db);
+    const active = Math.abs(h.db) > 0.4;
+    ctx.strokeStyle = hexA(h.col, active ? 0.4 : 0.16);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(h.x, zeroY);
+    ctx.lineTo(h.x, y);
+    ctx.stroke();
+    lit(ctx, () => drawGlow(ctx, h.x, y, 11 + (active ? 5 : 0) + flash * 4, h.col, 0.6));
+    ctx.fillStyle = hexA(C_GLOW, 0.95);
+    ctx.beginPath();
+    ctx.arc(h.x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = hexA(h.col, 0.85);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(h.x, y, 5.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(h.col, 0.85);
+    ctx.fillText(h.label, h.x, y - 10);
+  }
+
+  // ── readouts ──
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_LOW, 0.78);
+  ctx.fillText(`L ${m.lowDb >= 0 ? "+" : ""}${m.lowDb.toFixed(1)} dB`, padL, 12);
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_HIGH, 0.78);
+  ctx.fillText(`H ${m.highDb >= 0 ? "+" : ""}${m.highDb.toFixed(1)} dB`, W - padL, 12);
+  if (arch === "tilt") {
+    const tiltDb = (m.highDb - m.lowDb) * 0.5;
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_AMT, 0.7);
+    ctx.fillText(`TILT ${tiltDb >= 0 ? "+" : ""}${tiltDb.toFixed(1)} dB`, padL + 88, 12);
+  }
+
+  pill(
+    ctx,
+    W * 0.5,
+    2,
+    !on ? "BYPASS" : p.msMode ? `${arch === "tilt" ? "TILT" : "DUAL SHELF"} · M/S` : arch === "tilt" ? "TILT" : "DUAL SHELF",
+    on ? C_GLOW : C_MID,
+    { glow: flash, height: 12 },
+  );
+
+  // ── amount rail ──
+  const railPad = 14;
+  const railW = W - railPad * 2;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(railPad, railY, railW, 6);
+  ctx.fillStyle = hexA(C_AMT, 0.55 + flash * 0.25);
+  ctx.fillRect(railPad, railY + 1, Math.max(2, railW * amt), 4);
+  for (const notch of [0, 0.25, 0.5, 0.75, 1]) {
+    const nx = railPad + notch * railW;
+    const active = Math.abs(amt - notch) < 0.04;
+    ctx.fillStyle = hexA(active ? C_GLOW : C_AMT, active ? 0.9 : 0.3);
+    ctx.fillRect(nx - 1, railY - 2, 2, 10);
+  }
+  lit(ctx, () => drawGlow(ctx, railPad + railW * amt, railY + 3, 8 + flash * 5, C_GLOW, 0.85));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_AMT, 0.6);
+  ctx.fillText("AMOUNT", railPad, railY - 4);
+
+  if (!on) {
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, W, Hh);
+  }
+
+  grain(ctx, W, Hh, 0.022);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    on ? "SKY SHELF" : "SKY SHELF · BYPASS",
+    `${airLabel(lowV, highV, amt)} · A${Math.round(amt * 100)}`,
+    C_GLOW,
+    on ? C_HOT : C_MID,
+  );
 }
 
 export function AirStageViz() {
   const low = useFireCommandStore((s) => s.patch.airLow) ?? 0;
   const high = useFireCommandStore((s) => s.patch.airHigh) ?? 0;
   const amt = useFireCommandStore((s) => s.patch.airAmount) ?? 0;
+  const arch = (useFireCommandStore((s) => s.patch.airArch) ?? "dual") as AirArch;
+  const msMode = useFireCommandStore((s) => s.patch.airMsMode) === true;
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["air"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
-  const prevKey = useRef("");
-  const motes = useRef<{ x: number; y: number; vx: number; vy: number; life: number; band: number }[]>([]);
-  const st = useRef({ low, high, amt, enabled });
-  st.current = { low, high, amt, enabled };
+  const prevKey = useRef(0);
+  const st = useRef<AirVizState>({ low, high, amt, enabled, arch, msMode });
+  st.current = { low, high, amt, enabled, arch, msMode };
 
   const live = enabled && amt > 0.03 && (Math.abs(low) > 0.04 || Math.abs(high) > 0.04);
 
   useEffect(() => {
-    const key = `${low.toFixed(3)}|${high.toFixed(3)}|${amt.toFixed(3)}|${enabled ? 1 : 0}`;
+    const key = motionHash(low, high, amt, enabled, arch === "tilt", msMode);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [low, high, amt, enabled]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [low, high, amt, enabled, arch, msMode]);
 
   const hitTest = useCallback((clientX: number, clientY: number): DragMode => {
     const wrap = wrapRef.current;
@@ -131,7 +415,7 @@ export function AirStageViz() {
     const x = (clientX - rect.left) / Math.max(1, rect.width);
     if (y > 0.82) return "amt";
     return x < 0.5 ? "low" : "high";
-  }, []);
+  }, [wrapRef]);
 
   const applyAt = useCallback(
     (clientX: number, clientY: number, mode: DragMode) => {
@@ -150,7 +434,7 @@ export function AirStageViz() {
       if (mode === "low") setParam("airLow", clamp(v, -1, 1));
       else setParam("airHigh", clamp(v, -1, 1));
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -201,243 +485,31 @@ export function AirStageViz() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const stopLoop = startStageVizLoop(
-      (t) => {
-      flashRef.current *= 0.9;
-
-      const { w: W, h: Hcss } = sizeRef.current;
-      if (W < 2) return;
-      const { low: lo, high: hi, amt: am, enabled: on } = st.current;
-      const lowV = on ? lo : 0;
-      const highV = on ? hi : 0;
-      const amtV = on ? am : 0;
-      const flash = flashRef.current;
-      const breath = 0.5 + 0.5 * Math.sin(t * 0.0022);
-      const metrics = airMetrics(lowV, highV, amtV);
-      const midY = Hcss * 0.42;
-      const plotH = Hcss * 0.32;
-
-      ctx.clearRect(0, 0, W, Hcss);
-
-      // Sky chamber
-      const bg = ctx.createLinearGradient(0, 0, 0, Hcss);
-      bg.addColorStop(0, hexAlpha(C_HIGH, 0.22 + amtV * 0.18 + flash * 0.12));
-      bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.55));
-      bg.addColorStop(1, hexAlpha(C_LOW, 0.35 + Math.max(0, lowV) * amtV * 0.2));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Horizon glow — brighter when high shelf up
-      const skyG = ctx.createRadialGradient(W * 0.72, Hcss * 0.18, 2, W * 0.65, Hcss * 0.25, W * 0.45);
-      skyG.addColorStop(0, hexAlpha(C_GLOW, (0.08 + Math.max(0, highV) * amtV * 0.45 + flash * 0.2) * (on ? 1 : 0.25)));
-      skyG.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = skyG;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Ground bloom — warmer when low shelf up
-      const groundG = ctx.createRadialGradient(W * 0.28, Hcss * 0.7, 2, W * 0.3, Hcss * 0.65, W * 0.4);
-      groundG.addColorStop(0, hexAlpha(C_LOW, (0.06 + Math.max(0, lowV) * amtV * 0.4 + flash * 0.15) * (on ? 1 : 0.25)));
-      groundG.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = groundG;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Zero line
-      ctx.strokeStyle = hexAlpha(C, 0.18);
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(8, midY);
-      ctx.lineTo(W - 8, midY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Frequency grid
-      for (const u of [0.15, 0.35, 0.55, 0.75]) {
-        ctx.strokeStyle = hexAlpha(C, 0.08);
-        ctx.beginPath();
-        ctx.moveTo(u * W, 12);
-        ctx.lineTo(u * W, Hcss * 0.78);
-        ctx.stroke();
-      }
-
-      // EQ curve
-      const points = 110;
-      const curveY: number[] = [];
-      ctx.beginPath();
-      for (let i = 0; i <= points; i++) {
-        const u = i / points;
-        let shelf = 0;
-        if (u < 0.38) shelf += lowV * (1 - u / 0.38);
-        if (u > 0.52) shelf += highV * ((u - 0.52) / 0.48);
-        const shimmer = Math.sin(u * 14 + t * 0.0024) * 0.035 * amtV * breath;
-        const y = midY - shelf * amtV * plotH - shimmer * plotH;
-        curveY.push(y);
-        if (i === 0) ctx.moveTo(u * W, y);
-        else ctx.lineTo(u * W, y);
-      }
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.4 + amtV * 0.5 + flash * 0.2);
-      ctx.lineWidth = 2.3 + amtV * 1.2;
-      ctx.shadowBlur = 8 + amtV * 16 + flash * 10;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.55);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Fill to zero
-      ctx.lineTo(W, midY);
-      ctx.lineTo(0, midY);
-      ctx.closePath();
-      const fillG = ctx.createLinearGradient(0, Math.min(...curveY, midY), 0, Math.max(...curveY, midY));
-      fillG.addColorStop(0, hexAlpha(C_HIGH, 0.12 + amtV * 0.2));
-      fillG.addColorStop(0.5, hexAlpha(C, 0.06 + amtV * 0.1));
-      fillG.addColorStop(1, hexAlpha(C_LOW, 0.1 + amtV * 0.15));
-      ctx.fillStyle = fillG;
-      ctx.fill();
-
-      // Low / High handles
-      const lowX = W * 0.18;
-      const highX = W * 0.78;
-      const lowY = midY - lowV * amtV * plotH;
-      const highY = midY - highV * amtV * plotH;
-
-      for (const hnd of [
-        { x: lowX, y: lowY, col: C_LOW, active: Math.abs(lowV) > 0.05 && amtV > 0.02, label: "L" },
-        { x: highX, y: highY, col: C_HIGH, active: Math.abs(highV) > 0.05 && amtV > 0.02, label: "H" },
-      ]) {
-        ctx.strokeStyle = hexAlpha(hnd.col, hnd.active ? 0.45 : 0.18);
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(hnd.x, Hcss * 0.78);
-        ctx.lineTo(hnd.x, hnd.y);
-        ctx.stroke();
-
-        const r = 5 + (hnd.active ? 2 : 0) + flash * 2;
-        const hg = ctx.createRadialGradient(hnd.x, hnd.y, 0, hnd.x, hnd.y, r * 2);
-        hg.addColorStop(0, hexAlpha(C_GLOW, 0.85));
-        hg.addColorStop(0.45, hexAlpha(hnd.col, 0.7));
-        hg.addColorStop(1, hexAlpha(hnd.col, 0));
-        ctx.fillStyle = hg;
-        ctx.beginPath();
-        ctx.arc(hnd.x, hnd.y, r * 2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-        ctx.beginPath();
-        ctx.arc(hnd.x, hnd.y, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(hnd.col, 0.8);
-        ctx.textAlign = "center";
-        ctx.fillText(hnd.label, hnd.x, hnd.y - 10);
-      }
-
-      // Floating motes (air particles) — drift with shelves
-      if (on && amtV > 0.05) {
-        if (Math.random() < 0.2 + amtV * 0.35) {
-          const band = Math.random() < 0.45 ? -1 : 1; // low vs high side
-          motes.current.push({
-            x: band < 0 ? W * (0.05 + Math.random() * 0.35) : W * (0.55 + Math.random() * 0.4),
-            y: Hcss * (0.15 + Math.random() * 0.5),
-            vx: (Math.random() - 0.5) * 0.4,
-            vy: -0.15 - Math.random() * 0.35 - Math.max(0, band < 0 ? lowV : highV) * amtV * 0.4,
-            life: 1,
-            band,
-          });
-          if (motes.current.length > 40) motes.current.shift();
-        }
-      }
-      for (let i = motes.current.length - 1; i >= 0; i--) {
-        const m = motes.current[i]!;
-        m.x += m.vx;
-        m.y += m.vy;
-        m.life -= 0.012 + (1 - amtV) * 0.01;
-        if (m.life <= 0 || m.y < 0) {
-          motes.current.splice(i, 1);
-          continue;
-        }
-        const col = m.band < 0 ? C_LOW : C_HIGH;
-        const pg = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, 3 + m.life * 3);
-        pg.addColorStop(0, hexAlpha(C_GLOW, m.life * 0.7 * amtV));
-        pg.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = pg;
-        ctx.beginPath();
-        ctx.arc(m.x, m.y, 3 + m.life * 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Freq labels
-      ctx.font = "600 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillStyle = hexAlpha(C_LOW, 0.55 + Math.abs(lowV) * amtV * 0.35);
-      ctx.fillText("180 Hz", W * 0.18, Hcss * 0.78 + 2);
-      ctx.fillStyle = hexAlpha(C, 0.35);
-      ctx.fillText("1 kHz", W * 0.5, Hcss * 0.78 + 2);
-      ctx.fillStyle = hexAlpha(C_HIGH, 0.55 + Math.abs(highV) * amtV * 0.35);
-      ctx.fillText("6.5 kHz", W * 0.78, Hcss * 0.78 + 2);
-
-      // dB readouts
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_LOW, 0.7);
-      ctx.fillText(`L ${metrics.lowDb >= 0 ? "+" : ""}${metrics.lowDb.toFixed(1)} dB`, 10, 14);
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C_HIGH, 0.7);
-      ctx.fillText(`H ${metrics.highDb >= 0 ? "+" : ""}${metrics.highDb.toFixed(1)} dB`, W - 10, 14);
-
-      // Amount rail
-      const railY = Hcss - 12;
-      const railPad = 14;
-      ctx.strokeStyle = hexAlpha(C_AMT, 0.25);
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(W - railPad, railY);
-      ctx.stroke();
-      const thumbX = railPad + amtV * (W - railPad * 2);
-      ctx.strokeStyle = hexAlpha(C_AMT, 0.75 + flash * 0.2);
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(thumbX, railY);
-      ctx.stroke();
-      for (const notch of [0, 0.25, 0.5, 0.75, 1]) {
-        const nx = railPad + notch * (W - railPad * 2);
-        const active = Math.abs(amtV - notch) < 0.04;
-        ctx.fillStyle = hexAlpha(active ? C_GLOW : C_AMT, active ? 0.95 : 0.35);
-        ctx.beginPath();
-        ctx.arc(nx, railY, active ? 3 : 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.shadowBlur = 8 + flash * 10;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.65);
-      ctx.beginPath();
-      ctx.arc(thumbX, railY, 5 + flash * 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Identity
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flash * 0.35);
-      ctx.textAlign = "left";
-      ctx.fillText(on ? "SKY SHELF" : "SKY SHELF · BYPASS", 10, Hcss - 8);
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C, 0.7 + flash * 0.25);
-      ctx.fillText(`${airLabel(lowV, highV, amtV)} · A${Math.round(amtV * 100)}`, W - 10, Hcss - 8);
-
-      if (!on) {
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(0, 0, W, Hcss);
-      }
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.9;
+        paintAir(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
-        active: !!st.current.enabled,
+        // Nothing here animates — the plot only needs a frame when a param moves.
+        active: false,
         dragging: !!dragRef.current,
         particles: 0,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.low,
+          st.current.high,
+          st.current.amt,
+          st.current.enabled,
+          st.current.arch === "tilt",
+          st.current.msMode,
+        ),
       }),
       { minIntervalMs: 22 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div

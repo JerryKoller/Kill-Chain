@@ -1,13 +1,38 @@
 /**
  * Chord Memory — Stack Vault stage visualizer.
+ *
+ * IDIOM: interval columns. A root line runs the width and each memorised voice
+ * stands on it as a column whose height is its distance in semitones, spread
+ * left→right in voicing order. Every chord tone also throws a full-width
+ * horizontal rule labelled at the right edge, so the stack reads like a chord
+ * chart: an inversion visibly reorders the column profile, an added interval
+ * adds a column and pushes a new rule up the plot.
+ *
  * Memorized interval stack for live input (Signal Path Perf · FC.chord).
  * Click bars to nudge intervals · bottom toggles memory · double-click cycles presets.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  roundRect,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_TITLE,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 168;
 const C = FC.chord;
@@ -53,49 +78,234 @@ export function chordPresetLabel(ivs: number[]): string {
   return hit?.short ?? "Custom";
 }
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
-
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** Interval shorthand for the column and rule labels. */
+function ivName(n: number): string {
+  if (n === 0) return "root";
+  if (n === 1) return "m2";
+  if (n === 2) return "M2";
+  if (n === 3) return "m3";
+  if (n === 4) return "M3";
+  if (n === 5) return "4th";
+  if (n === 6) return "tt";
+  if (n === 7) return "5th";
+  if (n === 8) return "m6";
+  if (n === 9) return "M6";
+  if (n === 10) return "m7";
+  if (n === 11) return "M7";
+  if (n === 12) return "8ve";
+  if (n === 14) return "9th";
+  if (n === 17) return "11th";
+  return `+${n}`;
 }
 
 type DragMode = "nudge" | "arm" | null;
+
+/** Semitones the plot spans — matches the nudge range so drag tracks the column. */
+const IV_SPAN = 19;
+
+export type ChordVizState = {
+  on: boolean;
+  /** Normalized interval stack, root first. */
+  ivs: number[];
+  enabled: boolean;
+  /** Preset shorthand for the chip (resolved outside the paint path). */
+  label: string;
+  /** Voice being dragged, −1 when idle. */
+  dragVoice: number;
+};
+
+/**
+ * Paint the interval columns. Exported and pure so it can be rendered headlessly
+ * without mounting the component or waiting on a frame.
+ */
+export function paintChord(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: ChordVizState,
+  now: number,
+  flash: number,
+): void {
+  const list = p.ivs;
+  const n = Math.max(1, list.length);
+  const armed = p.enabled && p.on;
+  const dim = p.enabled ? 1 : 0.45;
+  const breath = 0.92 + 0.08 * Math.sin(now * 0.0014);
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy: 0.08 + (armed ? 0.26 : 0.02) + flash * 0.16, horizon: 0.74 });
+
+  const padL = 34;
+  const padR = 68;
+  const span = Math.max(80, W - padL - padR);
+  const topY = 30;
+  const rootY = Hh - 44;
+  const plotH = rootY - topY;
+  const yOf = (iv: number) => rootY - (clamp(iv, 0, IV_SPAN) / IV_SPAN) * plotH;
+
+  // ── semitone scale down the left edge ──
+  for (let s = 0; s <= IV_SPAN; s++) {
+    const y = yOf(s);
+    const mark = s === 0 || s === 12 || s === 7 || s === 19;
+    ctx.fillStyle = hexA(C_MID, mark ? 0.24 : 0.08);
+    ctx.fillRect(padL - (mark ? 9 : 5), y, mark ? 9 : 5, 1);
+    if (mark) {
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "right";
+      ctx.fillStyle = hexA(C_MID, 0.45);
+      ctx.fillText(`${s}`, padL - 11, y + 3);
+    }
+  }
+
+  // ── one full-width rule per chord tone: the chart the columns are read against ──
+  for (let i = 0; i < n; i++) {
+    const iv = list[i]!;
+    const y = yOf(iv);
+    const isRoot = iv === 0;
+    const col = isRoot ? C_ROOT : C_VOICE;
+    const a = (armed ? 0.3 + (isRoot ? 0.2 : 0.1) : 0.12) * dim;
+    ctx.save();
+    if (!isRoot) ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = hexA(col, a);
+    ctx.lineWidth = isRoot ? 1.4 : 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(W - 12, y);
+    ctx.stroke();
+    ctx.restore();
+    ctx.font = VIZ_FONT_VALUE;
+    ctx.textAlign = "right";
+    ctx.fillStyle = hexA(isRoot ? C_ROOT : C_GLOW, (armed ? 0.8 : 0.4) * dim);
+    ctx.fillText(isRoot ? "ROOT" : `+${iv} ${ivName(iv)}`, W - 14, y - 4);
+  }
+
+  // ── the columns ──
+  const slotW = span / n;
+  const colW = Math.min(104, slotW * 0.46);
+  for (let i = 0; i < n; i++) {
+    const iv = list[i]!;
+    const isRoot = iv === 0;
+    const cx = padL + (i + 0.5) * slotW;
+    const top = yOf(iv);
+    const h = Math.max(isRoot ? 7 : 3, rootY - top);
+    const col = isRoot ? C_ROOT : C_VOICE;
+    const held = p.dragVoice === i;
+
+    // Plinth shadow so the column sits on the root line.
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    roundRect(ctx, cx - colW * 0.5 - 3, rootY - 2, colW + 6, 6, 2);
+    ctx.fill();
+
+    const body = cachedGrad(ctx, `col|${col}|${topY}|${rootY}|${armed ? 1 : 0}`, (c) => {
+      const g = c.createLinearGradient(0, topY, 0, rootY);
+      g.addColorStop(0, hexA(col, armed ? 0.85 : 0.34));
+      g.addColorStop(1, hexA(C_DEEP, armed ? 0.3 : 0.12));
+      return g;
+    });
+    ctx.save();
+    ctx.globalAlpha = dim * (armed ? breath : 1);
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.rect(cx - colW * 0.5, top, colW, h);
+    ctx.clip();
+    ctx.fillRect(cx - colW * 0.5, topY, colW, rootY - topY);
+    ctx.restore();
+
+    // Semitone rungs inside the column — you can count the interval.
+    if (iv > 0) {
+      ctx.fillStyle = hexA(C_GLOW, (armed ? 0.22 : 0.1) * dim);
+      for (let k = 1; k <= Math.min(iv, IV_SPAN); k++) {
+        const ry = yOf(k);
+        ctx.fillRect(cx - colW * 0.5 + 2, ry, colW - 4, 1);
+      }
+    }
+
+    // Cap + edges.
+    ctx.fillStyle = hexA(C_GLOW, (armed ? 0.9 : 0.45) * dim);
+    ctx.fillRect(cx - colW * 0.5, top - 1.5, colW, 2.5);
+    ctx.strokeStyle = hexA(col, (held ? 0.95 : armed ? 0.5 : 0.22) * dim);
+    ctx.lineWidth = held ? 1.8 : 1;
+    ctx.strokeRect(cx - colW * 0.5 + 0.5, top + 0.5, colW - 1, h - 1);
+    if (armed) {
+      lit(ctx, () => drawGlow(ctx, cx, top, 14 + (held ? 10 : 0) + flash * 6, C_GLOW, 0.35 + (held ? 0.3 : 0)));
+    }
+
+    // Interval label on the cap, voice tag under the root line.
+    ctx.textAlign = "center";
+    ctx.font = VIZ_FONT_TITLE;
+    ctx.fillStyle = hexA(C_GLOW, (armed ? 0.95 : 0.5) * dim);
+    ctx.fillText(isRoot ? "0" : `+${iv}`, cx, top + (h > 22 ? 13 : -6));
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.fillStyle = hexA(col, (armed ? 0.7 : 0.35) * dim);
+    ctx.fillText(ivName(iv), cx, top + (h > 34 ? 24 : -15));
+
+    ctx.fillStyle = hexA(col, (armed ? 0.7 : 0.3) * dim);
+    ctx.beginPath();
+    ctx.moveTo(cx - 4, rootY + 8);
+    ctx.lineTo(cx + 4, rootY + 8);
+    ctx.lineTo(cx, rootY + 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.fillStyle = hexA(C_MID, 0.5 * dim);
+    ctx.fillText(`V${i + 1}`, cx, rootY + 17);
+  }
+
+  // ── root line ──
+  ctx.fillStyle = hexA(C_ROOT, 0.5 * dim);
+  ctx.fillRect(padL - 10, rootY, W - padL - 2, 1.6);
+  if (armed) {
+    lit(ctx, () => drawGlow(ctx, padL + span * 0.5, rootY, 40 + flash * 14, C_ROOT, 0.12));
+  }
+
+  // ── preset strip + telemetry ──
+  const padX = 10;
+  const usable = W - padX * 2;
+  const stripY = 18;
+  const presetIdx = CHORD_PRESETS.findIndex((q) => chordMatch(list, q.ivs));
+  const segW = usable / CHORD_PRESETS.length;
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.fillRect(padX, stripY, usable, 6);
+  for (let i = 0; i < CHORD_PRESETS.length; i++) {
+    ctx.fillStyle = i === presetIdx ? hexA(C_HOT, 0.8 + flash * 0.2) : hexA(C, 0.1);
+    ctx.fillRect(padX + i * segW + 1, stripY + 1, segW - 2, 4);
+  }
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
+  ctx.fillText(`VOICING · ${p.label.toUpperCase()}`, padX, 16);
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_VOICE, 0.72);
+  ctx.fillText(`${n}v · SPREAD ${list[n - 1] ?? 0}st`, W - padX, 16);
+
+  pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : armed ? p.label.toUpperCase() : "IDLE", C_GLOW, { glow: flash });
+
+  // ── arm rail (bottom drag zone) ──
+  const railY = Hh - 25;
+  const armT = !p.enabled ? 0 : p.on ? 1 : 0.12;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(padX, railY, usable, 6);
+  ctx.fillStyle = hexA(C_ARM, 0.5 * dim);
+  ctx.fillRect(padX, railY + 1, Math.max(2, usable * armT), 4);
+  lit(ctx, () => drawGlow(ctx, padX + usable * armT, railY + 3, 7 + flash * 4, C_GLOW, 0.8 * dim));
+
+  grain(ctx, W, Hh, 0.026);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    !p.enabled ? "STACK VAULT · BYPASS" : armed ? `STACK VAULT · ${p.label.toUpperCase()}` : "STACK VAULT · IDLE",
+    `${list.map((v) => (v === 0 ? "0" : `+${v}`)).join(" ")} · ${n}v`,
+    C_GLOW,
+    C,
+  );
+}
 
 export function ChordStageViz() {
   const on = useFireCommandStore((s) => s.patch.chordMemoryOn);
@@ -103,28 +313,36 @@ export function ChordStageViz() {
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["chord"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 480, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const dragVoiceRef = useRef(-1);
-  const prevKey = useRef("");
-  const sparks = useRef<{ x: number; y: number; vx: number; vy: number; life: number }[]>([]);
-  const st = useRef({ on, ivs, enabled });
-  st.current = { on, ivs, enabled };
+  const prevKey = useRef(0);
+  const list = normalizeChordIvs(ivs);
+  const st = useRef<ChordVizState>({
+    on,
+    ivs: list,
+    enabled,
+    label: chordPresetLabel(list),
+    dragVoice: -1,
+  });
+  st.current = {
+    on,
+    ivs: list,
+    enabled,
+    label: chordPresetLabel(list),
+    dragVoice: dragVoiceRef.current,
+  };
 
   const live = enabled && on;
 
   useEffect(() => {
-    const key = `${on ? 1 : 0}|${enabled ? 1 : 0}|${normalizeChordIvs(ivs).join(",")}`;
+    const key = motionHash(on, enabled, list.length, list[1], list[2], list[3], list[4], list[5]);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [on, enabled, ivs]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [on, enabled, ivs, list]);
 
   const setIvs = useCallback(
     (next: number[]) => {
@@ -150,35 +368,39 @@ export function ChordStageViz() {
     [setIvs],
   );
 
-  const hitVoice = useCallback((clientY: number): number => {
-    const wrap = wrapRef.current;
-    if (!wrap) return -1;
-    const rect = wrap.getBoundingClientRect();
-    const y = clientY - rect.top;
-    const list = normalizeChordIvs(st.current.ivs);
-    const top = 22;
-    const bottom = rect.height - 22;
-    const span = Math.max(1, bottom - top);
-    const rowH = span / Math.max(1, list.length);
-    const i = Math.floor((y - top) / rowH);
-    return clamp(i, 0, list.length - 1);
-  }, []);
+  /** Columns are spread across the width, so the voice under the pointer is an x. */
+  const hitVoice = useCallback(
+    (clientX: number): number => {
+      const wrap = wrapRef.current;
+      if (!wrap) return -1;
+      const rect = wrap.getBoundingClientRect();
+      const cur = normalizeChordIvs(st.current.ivs);
+      const padL = 34;
+      const padR = 68;
+      const span = Math.max(80, rect.width - padL - padR);
+      const i = Math.floor(((clientX - rect.left - padL) / span) * Math.max(1, cur.length));
+      return clamp(i, 0, cur.length - 1);
+    },
+    [wrapRef],
+  );
 
+  /** Column height is the interval, so a nudge is vertical. */
   const nudgeVoice = useCallback(
-    (clientX: number, voiceIdx: number) => {
+    (clientY: number, voiceIdx: number) => {
       const wrap = wrapRef.current;
       if (!wrap || voiceIdx < 0) return;
       const rect = wrap.getBoundingClientRect();
-      const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-      // Map x to interval 0..19 semitones (root fixed at 0)
-      const list = normalizeChordIvs(st.current.ivs);
+      const list0 = normalizeChordIvs(st.current.ivs);
       if (voiceIdx === 0) return; // root stays 0
-      const semis = Math.round(x * 19);
-      const next = list.slice();
+      const topY = 30;
+      const rootY = rect.height - 44;
+      const t = clamp((rootY - (clientY - rect.top)) / Math.max(1, rootY - topY), 0, 1);
+      const semis = Math.round(t * 19);
+      const next = list0.slice();
       next[voiceIdx] = Math.max(1, semis);
       setIvs(next);
     },
-    [setIvs],
+    [setIvs, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -199,16 +421,17 @@ export function ChordStageViz() {
         return;
       }
       dragRef.current = "nudge";
-      dragVoiceRef.current = hitVoice(e.clientY);
-      nudgeVoice(e.clientX, dragVoiceRef.current);
+      dragVoiceRef.current = hitVoice(e.clientX);
+      st.current.dragVoice = dragVoiceRef.current;
+      nudgeVoice(e.clientY, dragVoiceRef.current);
     },
-    [cyclePreset, hitVoice, nudgeVoice, setParam],
+    [cyclePreset, hitVoice, nudgeVoice, setParam, wrapRef],
   );
 
   const onPointerMove = useCallback(
     (e: ReactPointerEvent) => {
       if (dragRef.current !== "nudge") return;
-      nudgeVoice(e.clientX, dragVoiceRef.current);
+      nudgeVoice(e.clientY, dragVoiceRef.current);
     },
     [nudgeVoice],
   );
@@ -216,6 +439,7 @@ export function ChordStageViz() {
   const onPointerUp = useCallback(() => {
     dragRef.current = null;
     dragVoiceRef.current = -1;
+    st.current.dragVoice = -1;
   }, []);
 
   useEffect(() => {
@@ -224,212 +448,32 @@ export function ChordStageViz() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const stopLoop = startStageVizLoop(
-      (t) => {
-      flashRef.current *= 0.9;
-
-      const { w: W, h: Hcss } = sizeRef.current;
-      if (W < 2) return;
-      const s = st.current;
-      const flash = flashRef.current;
-      const list = normalizeChordIvs(s.ivs);
-      const armed = s.enabled && s.on;
-      const breathe = 0.92 + 0.08 * Math.sin(t / 700);
-      const label = chordPresetLabel(list);
-      const maxIv = Math.max(12, ...list.map(Math.abs));
-
-      ctx.clearRect(0, 0, W, Hcss);
-
-      const bg = ctx.createRadialGradient(W * 0.35, Hcss * 0.4, 4, W * 0.5, Hcss * 0.5, W * 0.7);
-      bg.addColorStop(0, hexAlpha(C_DEEP, 0.8 + flash * 0.15));
-      bg.addColorStop(0.55, "rgba(12,2,10,0.96)");
-      bg.addColorStop(1, hexAlpha(C_MID, 0.35 + (armed ? 0.15 : 0)));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Preset strip (top)
-      const padX = 10;
-      const usable = W - padX * 2;
-      const stripY = 6;
-      ctx.fillStyle = "rgba(0,0,0,0.4)";
-      ctx.fillRect(padX, stripY, usable, 8);
-      const presetIdx = Math.max(
-        0,
-        CHORD_PRESETS.findIndex((p) => chordMatch(list, p.ivs)),
-      );
-      const segW = usable / CHORD_PRESETS.length;
-      for (let i = 0; i < CHORD_PRESETS.length; i++) {
-        const hit = i === presetIdx && chordMatch(list, CHORD_PRESETS[i]!.ivs);
-        ctx.fillStyle = hit ? hexAlpha(C_HOT, 0.8 + flash * 0.2) : hexAlpha(C, 0.1);
-        ctx.fillRect(padX + i * segW + 1, stripY + 1, segW - 2, 6);
-      }
-      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.7);
-      ctx.textAlign = "left";
-      ctx.fillText(`VOICING · ${label.toUpperCase()}`, padX, stripY - 1);
-
-      // Semitone ruler
-      const top = 24;
-      const bottom = Hcss - 24;
-      const span = bottom - top;
-      const barLeft = W * 0.2;
-      const barMax = W * 0.62;
-
-      ctx.strokeStyle = hexAlpha(C, 0.1);
-      ctx.lineWidth = 1;
-      for (let stn = 0; stn <= 12; stn++) {
-        const x = barLeft + (stn / maxIv) * barMax;
-        ctx.beginPath();
-        ctx.moveTo(x, top);
-        ctx.lineTo(x, bottom);
-        ctx.stroke();
-      }
-
-      // Vault stack bars
-      const rowH = span / Math.max(1, list.length);
-      list.forEach((iv, i) => {
-        const y = top + i * rowH + rowH * 0.2;
-        const barH = Math.max(8, rowH * 0.5);
-        const len = (Math.abs(iv) / maxIv) * barMax + (iv === 0 ? 8 : 0);
-        const pulse = 0.85 + 0.15 * Math.sin(t / 200 + i);
-        const isRoot = iv === 0;
-        const col = isRoot ? C_ROOT : C_VOICE;
-
-        // Floor
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(barLeft, y, barMax, barH);
-
-        const g = ctx.createLinearGradient(barLeft, y, barLeft + len, y);
-        g.addColorStop(0, hexAlpha(col, (armed ? 0.75 : 0.3) * pulse * breathe));
-        g.addColorStop(1, hexAlpha(C_HOT, (armed ? 0.45 : 0.15) * pulse));
-        ctx.fillStyle = g;
-        ctx.shadowBlur = armed ? 10 + pulse * 6 + flash * 4 : 0;
-        ctx.shadowColor = hexAlpha(C_HOT, 0.65);
-        ctx.fillRect(barLeft, y, Math.max(6, len), barH);
-        ctx.shadowBlur = 0;
-
-        // Endpoint gem
-        const ex = barLeft + Math.max(6, len);
-        ctx.fillStyle = hexAlpha(C_GLOW, armed ? 0.9 : 0.4);
-        ctx.beginPath();
-        ctx.arc(ex, y + barH / 2, armed ? 4.5 : 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Label
-        ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(C_GLOW, armed ? 0.85 : 0.45);
-        ctx.textAlign = "left";
-        ctx.fillText(isRoot ? "ROOT" : `+${iv}`, 8, y + barH - 1);
-
-        // Semitone ticks on bar
-        if (armed && iv > 0) {
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.35 * pulse);
-          for (let k = 1; k < iv; k++) {
-            const tx = barLeft + (k / maxIv) * barMax;
-            ctx.fillRect(tx, y + 2, 1, barH - 4);
-          }
-        }
-      });
-
-      // Vertical spine linking voices
-      if (list.length > 1) {
-        ctx.strokeStyle = hexAlpha(C_ARM, armed ? 0.35 + flash * 0.2 : 0.12);
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(barLeft - 6, top + rowH * 0.45);
-        ctx.lineTo(barLeft - 6, top + (list.length - 0.55) * rowH);
-        ctx.stroke();
-        for (let i = 0; i < list.length; i++) {
-          const y = top + i * rowH + rowH * 0.45;
-          ctx.fillStyle = hexAlpha(i === 0 ? C_ROOT : C_VOICE, armed ? 0.8 : 0.35);
-          ctx.beginPath();
-          ctx.arc(barLeft - 6, y, 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Sparks when armed
-      if (armed) {
-        if (Math.random() < 0.22 + list.length * 0.04) {
-          const vi = Math.floor(Math.random() * list.length);
-          const iv = list[vi]!;
-          const y = top + vi * rowH + rowH * 0.45;
-          const x = barLeft + (Math.abs(iv) / maxIv) * barMax * Math.random();
-          sparks.current.push({
-            x,
-            y,
-            vx: (Math.random() - 0.5) * 0.7,
-            vy: -0.25 - Math.random() * 0.5,
-            life: 1,
-          });
-          if (sparks.current.length > 42) sparks.current.shift();
-        }
-        for (let i = sparks.current.length - 1; i >= 0; i--) {
-          const p = sparks.current[i]!;
-          p.x += p.vx;
-          p.y += p.vy;
-          p.life -= 0.018;
-          if (p.life <= 0) {
-            sparks.current.splice(i, 1);
-            continue;
-          }
-          ctx.fillStyle = hexAlpha(C_GLOW, p.life * 0.55);
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, 1.2 + p.life * 1.6, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Arm rail
-      const railY = Hcss - 10;
-      ctx.strokeStyle = hexAlpha(C_ARM, 0.25);
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(padX, railY);
-      ctx.lineTo(W - padX, railY);
-      ctx.stroke();
-      const armT = !s.enabled ? 0 : s.on ? 1 : 0.12;
-      ctx.strokeStyle = hexAlpha(C_ARM, 0.85);
-      ctx.beginPath();
-      ctx.moveTo(padX, railY);
-      ctx.lineTo(padX + armT * usable, railY);
-      ctx.stroke();
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(padX + armT * usable, railY, 4.5 + flash * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flash * 0.3);
-      ctx.textAlign = "left";
-      ctx.fillText(
-        !s.enabled
-          ? "STACK VAULT · BYPASS"
-          : armed
-            ? `STACK VAULT · ${label.toUpperCase()}`
-            : "STACK VAULT · IDLE",
-        10,
-        Hcss - 8,
-      );
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C, 0.7);
-      ctx.fillText(
-        `${list.map((n) => (n === 0 ? "0" : `+${n}`)).join(" ")} · ${list.length}v`,
-        W - 10,
-        Hcss - 8,
-      );
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintChord(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
         active: !!(st.current.on && st.current.enabled),
         dragging: !!dragRef.current,
-        particles: 0,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.on,
+          st.current.enabled,
+          st.current.ivs.length,
+          st.current.ivs[1],
+          st.current.ivs[2],
+          st.current.ivs[3],
+          st.current.ivs[4],
+          st.current.ivs[5],
+          st.current.dragVoice,
+        ),
       }),
       { minIntervalMs: 22 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div

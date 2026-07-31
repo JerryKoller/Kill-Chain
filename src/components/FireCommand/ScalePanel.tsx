@@ -6,8 +6,12 @@
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireSequencerStore, NOTE_NAMES, SCALES, type ScaleId } from "@/state/fireSequencerStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, FcSegStrip, fcChipCharacterFor, type FcSegOption } from "./fcChip";
 import { SCALE_CYCLE, scaleMeta } from "./ScaleStageViz";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Performance band — faceted gem chips. */
+const SCALE_CHAR = fcChipCharacterFor("scale");
 
 export const SCALE_C = FC.scale;
 export const SCALE_C_GLOW = bandShade(FC_BAND.perf, 0.94);
@@ -75,40 +79,30 @@ export function ScaleCharacterStrip() {
   const setScaleRoot = useFireSequencerStore((s) => s.setScaleRoot);
   const setScaleId = useFireSequencerStore((s) => s.setScaleId);
   const c = SCALE_C;
+  const tone = { color: c, onText: SCALE_C_GLOW, glow: 10 };
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Key
       </span>
-      {SCALE_CHARS.map((p) => {
-        const on = nearRoot(root, p.root) && scaleId === p.scaleId && lock === p.lock;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setScaleRoot(p.root);
-              setScaleId(p.scaleId);
-              setParam("scaleLock", p.lock);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: SCALE_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${NOTE_NAMES[p.root]} ${scaleMeta(p.scaleId).label}${p.lock ? " · lock" : " · open"}`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {SCALE_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={nearRoot(root, p.root) && scaleId === p.scaleId && lock === p.lock}
+          tone={tone}
+          character={SCALE_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setScaleRoot(p.root);
+            setScaleId(p.scaleId);
+            setParam("scaleLock", p.lock);
+          }}
+          title={`${NOTE_NAMES[p.root]} ${scaleMeta(p.scaleId).label}${p.lock ? " · lock" : " · open"}`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -116,79 +110,57 @@ export function ScaleCharacterStrip() {
 export function ScaleRootStrip() {
   const root = useFireSequencerStore((s) => s.scaleRoot);
   const setScaleRoot = useFireSequencerStore((s) => s.setScaleRoot);
+  const tone = { color: SCALE_C_ROOT, onText: SCALE_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${SCALE_C}66` }}>
         Root
       </span>
-      {NOTE_NAMES.map((name, i) => {
-        const on = nearRoot(root, i);
-        return (
-          <button
-            key={name}
-            type="button"
-            onClick={() => setScaleRoot(i)}
-            className="rounded-md border px-1.5 py-0.5 text-[9px] font-bold tabular-nums transition min-w-[1.6rem]"
-            style={
-              on
-                ? {
-                    borderColor: `${SCALE_C_ROOT}99`,
-                    background: `${SCALE_C_ROOT}28`,
-                    color: SCALE_C_GLOW,
-                    boxShadow: `0 0 8px ${SCALE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {name}
-          </button>
-        );
-      })}
+      {NOTE_NAMES.map((name, i) => (
+        <FcChip
+          key={name}
+          on={nearRoot(root, i)}
+          tone={tone}
+          character={SCALE_CHAR}
+          caseMode="normal"
+          mono
+          padX="sm"
+          extra="min-w-[1.6rem]"
+          onClick={() => setScaleRoot(i)}
+        >
+          {name}
+        </FcChip>
+      ))}
     </div>
   );
+}
+
+/** Chromatic / Pent / Harm need hand-shortened labels; the rest clip to 5. */
+function scaleShortLabel(id: ScaleId, label: string): string {
+  if (id === "off") return "Chr";
+  if (id === "pentMinor") return "Pent";
+  if (id === "harmMinor") return "Harm";
+  return label.slice(0, 5);
 }
 
 export function ScaleModeStrip() {
   const scaleId = useFireSequencerStore((s) => s.scaleId);
   const setScaleId = useFireSequencerStore((s) => s.setScaleId);
+  const opts: FcSegOption<ScaleId>[] = SCALES.map((m) => ({
+    id: m.id,
+    label: scaleShortLabel(m.id, m.label),
+    tip: `${m.label} · ${m.steps.length} degrees`,
+  }));
   return (
-    <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
-        Mode
-      </span>
-      {SCALES.map((m) => {
-        const on = scaleId === m.id;
-        const short =
-          m.id === "off"
-            ? "Chr"
-            : m.id === "pentMinor"
-              ? "Pent"
-              : m.id === "harmMinor"
-                ? "Harm"
-                : m.label.slice(0, 5);
-        return (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => setScaleId(m.id)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${SCALE_C_MODE}99`,
-                    background: `${SCALE_C_MODE}28`,
-                    color: SCALE_C_GLOW,
-                    boxShadow: `0 0 8px ${SCALE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${m.label} · ${m.steps.length} degrees`}
-          >
-            {short}
-          </button>
-        );
-      })}
-    </div>
+    <FcSegStrip<ScaleId>
+      eyebrow="Mode"
+      value={scaleId}
+      onChange={setScaleId}
+      options={opts}
+      tone={{ color: SCALE_C_MODE, onText: SCALE_C_GLOW, glow: 8 }}
+      caseMode="normal"
+      character={SCALE_CHAR}
+    />
   );
 }
 
@@ -294,37 +266,34 @@ export function ScaleCorrectStrip() {
     { id: "strict" as const, label: "Strict" },
     { id: "fold" as const, label: "Fold" },
   ];
+  // Both rows sit inside a shared column, so they keep their own wrappers
+  // rather than FcSegStrip's `mb-2` row.
+  const modeTone = { color: SCALE_C_LOCK, onText: SCALE_C_GLOW, glow: 0 };
+  const followTone = { color: SCALE_C, onText: SCALE_C_GLOW, glow: 0 };
   return (
     <div className="mb-2 flex flex-col items-center gap-1.5">
       <div className="flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
+        <span className={FC_CHIP_EYEBROW} style={{ color: `${SCALE_C}66` }}>
           Correct
         </span>
-        {modes.map((m) => {
-          const on = mode === m.id;
-          return (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => {
-                setParam("scaleMode", m.id);
-                setParam("scaleLock", m.id !== "guide");
-              }}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-              style={
-                on
-                  ? { borderColor: `${SCALE_C_LOCK}99`, background: `${SCALE_C_LOCK}28`, color: SCALE_C_GLOW }
-                  : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-              }
-              title={`${m.label} correction mode`}
-            >
-              {m.label}
-            </button>
-          );
-        })}
+        {modes.map((m) => (
+          <FcChip
+            key={m.id}
+            on={mode === m.id}
+            tone={modeTone}
+            character={SCALE_CHAR}
+            onClick={() => {
+              setParam("scaleMode", m.id);
+              setParam("scaleLock", m.id !== "guide");
+            }}
+            title={`${m.label} correction mode`}
+          >
+            {m.label}
+          </FcChip>
+        ))}
       </div>
       <div className="flex flex-wrap items-center justify-center gap-1">
-        <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${SCALE_C}66` }}>
+        <span className={FC_CHIP_EYEBROW} style={{ color: `${SCALE_C}66` }}>
           Followers
         </span>
         {([
@@ -332,24 +301,17 @@ export function ScaleCorrectStrip() {
           ["chord", "Chord"],
           ["arp", "Arp"],
           ["pianoRoll", "Roll"],
-        ] as const).map(([k, lab]) => {
-          const on = !!followers[k];
-          return (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setParam("scaleFollowers", { ...followers, [k]: !on })}
-              className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition"
-              style={
-                on
-                  ? { borderColor: `${SCALE_C}88`, background: `${SCALE_C}22`, color: SCALE_C_GLOW }
-                  : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.3)" }
-              }
-            >
-              {lab}
-            </button>
-          );
-        })}
+        ] as const).map(([k, lab]) => (
+          <FcChip
+            key={k}
+            on={!!followers[k]}
+            tone={followTone}
+            character={SCALE_CHAR}
+            onClick={() => setParam("scaleFollowers", { ...followers, [k]: !followers[k] })}
+          >
+            {lab}
+          </FcChip>
+        ))}
       </div>
     </div>
   );

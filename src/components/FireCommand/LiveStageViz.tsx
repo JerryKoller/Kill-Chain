@@ -1,15 +1,41 @@
 /**
  * Live — Stage Pulse visualizer.
+ *
+ * IDIOM: voice slots. The polyphony allocator laid out as a row of cells across
+ * the letterbox — one cell per slot up to the cap, each lighting as a voice
+ * sounds and falling away as it releases. When the count reaches the cap the
+ * wall at the end of the row lights and the slot the allocator is about to take
+ * is flagged, so the steal policy is visible rather than merely configured.
+ * Reads as system telemetry, which is what this panel is.
+ *
  * Octave · mono/poly · voices · FX route · master (Signal Path Mix · FC.performance).
  * Click radar: Mono/Poly · keys: voice cap · right: FX · rail: Master · sides: Octave.
  * Double-click: Cease Fire flash.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
+import type { VoiceStealPolicy } from "@/audio/dsp/mixClarity";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  roundRect,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_TITLE,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 168;
 const C = FC.performance;
@@ -22,15 +48,19 @@ const C_FX = bandShade(FC_BAND.mix, 0.82);
 const C_VOICE = bandShade(FC_BAND.mix, 0.48);
 
 const VOICE_CAPS = [6, 8, 12, 16, 24, 32, 48] as const;
+const CAP_MAX = 48;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Zone boundaries — these mirror `hitTest` so the hit zones are legible. */
+const Z_OCT = 0.08;
+const Z_MONO = 0.22;
+const Z_FX = 0.9;
+
+const STEAL_LABEL: Record<VoiceStealPolicy, string> = {
+  oldest: "STEAL OLDEST",
+  newest: "STEAL NEWEST",
+  lowest: "STEAL LOWEST",
+  highest: "STEAL HIGHEST",
+};
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
@@ -49,36 +79,314 @@ function nearestCap(n: number): number {
   return best;
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** Slots fill left to right, so the policy resolves to an end of the row. */
+function stealSlot(policy: VoiceStealPolicy, cells: number): number {
+  return policy === "newest" || policy === "highest" ? cells - 1 : 0;
 }
 
 type HitZone = "mono" | "octave+" | "octave-" | "voices" | "fx" | "master" | null;
+
+export type LiveVizState = {
+  mono: boolean;
+  harmony: string | undefined;
+  maxVoices: number;
+  fxOn: boolean;
+  octave: number;
+  masterGain: number;
+  steal: VoiceStealPolicy;
+  /** Live voice count from the engine. */
+  voices: number;
+  /** Per-slot brightness, index = slot. Carries the release tails. */
+  levels: Float32Array;
+  /** Decaying Cease-Fire flash, 0..1. */
+  panic: number;
+};
+
+/**
+ * Paint the voice rail. Exported and pure — the engine poll and the slot
+ * envelopes live in the component and arrive on `p`.
+ */
+export function paintLive(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: LiveVizState,
+  now: number,
+  flash: number,
+): void {
+  const cells = clamp(Math.round(p.maxVoices), 1, CAP_MAX);
+  const use = clamp(p.voices, 0, cells) / cells;
+  const atCap = p.voices >= cells;
+  const energy = 0.07 + use * 0.36 + p.panic * 0.3 + flash * 0.16;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.56 });
+
+  const xOct = W * Z_OCT;
+  const xMono = W * Z_MONO;
+  const xFx = W * Z_FX;
+  const artTop = 22;
+  const barY = 26;
+  const barH = 7;
+  const slotTop = 38;
+  const slotH = 66;
+  const slotBot = slotTop + slotH;
+  const railY = Hh - 28;
+
+  // Zone seams — the panel's controls are invisible otherwise.
+  for (const x of [xOct, xMono, xFx]) {
+    ctx.fillStyle = hexA(C_MID, 0.1);
+    ctx.fillRect(x, artTop, 1, railY - 12 - artTop);
+  }
+
+  if (p.panic > 0.05) {
+    ctx.fillStyle = hexA(C_HOT, p.panic * 0.3);
+    ctx.fillRect(0, 0, W, Hh);
+  }
+
+  // ── octave gutter ──
+  const rungW = Math.min(Math.max(10, xOct - 14), 40);
+  const rungX = 7;
+  const ladderTop = slotTop - 6;
+  const ladderH = slotH + 12;
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MID, 0.5);
+  ctx.fillText("OCT", rungX, artTop + 6);
+  for (let i = 0; i <= 8; i++) {
+    const oy = ladderTop + (8 - i) * (ladderH / 9);
+    const on = p.octave === i;
+    ctx.fillStyle = hexA(on ? C_GLOW : C, on ? 0.92 : 0.16);
+    ctx.fillRect(rungX, oy, rungW, on ? 3 : 2);
+    if (on) lit(ctx, () => drawGlow(ctx, rungX + rungW * 0.5, oy + 1, 12 + flash * 5, C_GLOW, 0.55));
+  }
+  // Halves: click above centre steps up, below steps down.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  ctx.fillStyle = hexA(C_MID, 0.45);
+  ctx.fillText("+", rungX + rungW * 0.5, ladderTop - 4);
+  ctx.fillText("−", rungX + rungW * 0.5, ladderTop + ladderH + 10);
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.fillStyle = hexA(C_GLOW, 0.85);
+  ctx.fillText(String(p.octave), rungX + rungW * 0.5, slotBot + 22);
+
+  // ── voice mode plate ──
+  const mpX = xOct + 8;
+  const mpW = Math.max(28, xMono - xOct - 16);
+  const mpY = slotTop;
+  const mpH = slotH;
+  const modeCol = p.mono ? C_HOT : C_POLY;
+  ctx.fillStyle = hexA(C_DEEP, 0.6);
+  roundRect(ctx, mpX, mpY, mpW, mpH, 3);
+  ctx.fill();
+  ctx.strokeStyle = hexA(modeCol, 0.5 + flash * 0.3);
+  ctx.lineWidth = 1;
+  roundRect(ctx, mpX + 0.5, mpY + 0.5, mpW - 1, mpH - 1, 3);
+  ctx.stroke();
+  // One thick bar for mono, a stack for poly — the glyph is the state.
+  const glyphW = Math.min(mpW - 12, 34);
+  const glyphX = mpX + (mpW - glyphW) * 0.5;
+  if (p.mono) {
+    ctx.fillStyle = hexA(C_HOT, 0.85);
+    ctx.fillRect(glyphX, mpY + mpH * 0.42, glyphW, 6);
+  } else {
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = hexA(C_POLY, 0.5 + i * 0.16);
+      ctx.fillRect(glyphX + i * 2, mpY + mpH * 0.3 + i * 8, glyphW - i * 4, 3);
+    }
+  }
+  ctx.font = VIZ_FONT_TITLE;
+  ctx.textAlign = "center";
+  ctx.fillStyle = hexA(modeCol, 0.9);
+  ctx.fillText(p.mono ? "MONO" : "POLY", mpX + mpW * 0.5, mpY + mpH - 8);
+
+  // ── voice field ──
+  const fieldX = xMono + 8;
+  const fieldW = Math.max(40, xFx - xMono - 16);
+  const cellW = fieldW / cells;
+  const gap = Math.min(3, cellW * 0.16);
+  const cw = Math.max(1, cellW - gap);
+  const stealIdx = stealSlot(p.steal, cells);
+  const lvls = p.levels;
+
+  // Utilisation across the field, with the cap as a hard right edge.
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.fillRect(fieldX, barY, fieldW, barH);
+  const uFill = cachedGrad(ctx, `use|${barY}|${barH}`, (c) => {
+    const g = c.createLinearGradient(0, barY, 0, barY + barH);
+    g.addColorStop(0, hexA(C_GLOW, 0.7));
+    g.addColorStop(1, hexA(C_VOICE, 0.4));
+    return g;
+  });
+  ctx.fillStyle = uFill;
+  ctx.fillRect(fieldX, barY, fieldW * use, barH);
+  ctx.strokeStyle = hexA(atCap ? C_HOT : C_MID, atCap ? 0.85 : 0.22);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(fieldX + 0.5, barY + 0.5, fieldW - 1, barH - 1);
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MID, 0.5);
+  ctx.fillText("VOICES", fieldX, barY - 3);
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(atCap ? C_HOT : C_GLOW, 0.85);
+  ctx.fillText(`${p.voices} / ${cells}`, fieldX + fieldW, barY - 3);
+
+  const cellFill = cachedGrad(ctx, `cell|${slotTop}|${slotH}`, (c) => {
+    const g = c.createLinearGradient(0, slotTop, 0, slotBot);
+    g.addColorStop(0, hexA(C_GLOW, 0.9));
+    g.addColorStop(0.45, hexA(C_HOT, 0.6));
+    g.addColorStop(1, hexA(C_VOICE, 0.3));
+    return g;
+  });
+
+  for (let i = 0; i < cells; i++) {
+    const x = fieldX + i * cellW;
+    const lvl = clamp(lvls[i] ?? 0, 0, 1);
+    const sounding = i < p.voices;
+
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    roundRect(ctx, x, slotTop, cw, slotH, 2);
+    ctx.fill();
+
+    if (lvl > 0.004) {
+      // A voice's own little level cell — full while held, sinking on release.
+      const flicker = sounding ? 0.9 + 0.1 * Math.sin(now * 0.006 + i * 0.7) : 1;
+      const h = slotH * lvl * flicker;
+      ctx.save();
+      roundRect(ctx, x, slotTop, cw, slotH, 2);
+      ctx.clip();
+      ctx.fillStyle = cellFill;
+      ctx.globalAlpha = 0.35 + lvl * 0.65;
+      ctx.fillRect(x, slotBot - h, cw, h);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      ctx.fillStyle = hexA(C_GLOW, 0.55 + lvl * 0.4);
+      ctx.fillRect(x, slotBot - h - 1, cw, 2);
+      lit(ctx, () => drawGlow(ctx, x + cw * 0.5, slotBot - h, 8 + cw * 0.4, C_GLOW, lvl * 0.7));
+    }
+
+    ctx.strokeStyle = hexA(lvl > 0.02 ? C_GLOW : C, lvl > 0.02 ? 0.45 + lvl * 0.35 : 0.14);
+    ctx.lineWidth = 1;
+    roundRect(ctx, x + 0.5, slotTop + 0.5, cw - 1, slotH - 1, 2);
+    ctx.stroke();
+
+    // The slot the allocator will take next when the cap is hit.
+    if (atCap && i === stealIdx) {
+      ctx.strokeStyle = hexA(C_HOT, 0.85 + flash * 0.15);
+      ctx.lineWidth = 2;
+      roundRect(ctx, x - 1.5, slotTop - 1.5, cw + 3, slotH + 3, 3);
+      ctx.stroke();
+      lit(ctx, () => drawGlow(ctx, x + cw * 0.5, slotTop + slotH * 0.5, 16, C_HOT, 0.5));
+    }
+
+    // Slot numbers where there is room for them.
+    if (cw > 15 && (i % 4 === 0 || i === cells - 1)) {
+      ctx.font = VIZ_FONT_LABEL;
+      ctx.textAlign = "center";
+      ctx.fillStyle = hexA(C_MID, 0.4);
+      ctx.fillText(String(i + 1), x + cw * 0.5, slotBot + 10);
+    }
+  }
+
+  // Cap wall — where polyphony runs out.
+  const wallX = fieldX + fieldW;
+  ctx.fillStyle = hexA(atCap ? C_HOT : C_MID, atCap ? 0.9 : 0.3);
+  ctx.fillRect(wallX + 1, slotTop - 4, 2, slotH + 8);
+  if (atCap) {
+    lit(ctx, () => drawGlow(ctx, wallX + 2, slotTop + slotH * 0.5, 20 + flash * 8, C_HOT, 0.7));
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "right";
+    ctx.fillStyle = hexA(C_HOT, 0.95);
+    ctx.fillText("CAP · STEAL", wallX - 4, slotTop - 6);
+  }
+
+  // ── cap ruler: the drag positions the voice zone actually resolves to ──
+  const rulerY = slotBot + 20;
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  for (let i = 0; i < VOICE_CAPS.length; i++) {
+    const cap = VOICE_CAPS[i]!;
+    const cx = (i / (VOICE_CAPS.length - 1)) * W;
+    const reachable = cx >= xMono && cx <= xFx;
+    const on = cells === cap;
+    ctx.fillStyle = hexA(on ? C_GLOW : C_MID, on ? 0.6 : reachable ? 0.2 : 0.1);
+    ctx.fillRect(clamp(cx, 2, W - 3) - 0.5, rulerY - 12, 1, on ? 8 : 5);
+    ctx.fillStyle = hexA(on ? C_GLOW : C_MID, on ? 0.9 : reachable ? 0.45 : 0.22);
+    ctx.fillText(String(cap), clamp(cx, 10, W - 10), rulerY);
+  }
+
+  // ── FX route column ──
+  const fxX = xFx + 6;
+  const fxW = Math.max(24, W - xFx - 12);
+  if (p.fxOn) {
+    const pulse = 0.55 + 0.45 * Math.sin(now / 300);
+    const tint = cachedGrad(ctx, `fx|${W}`, (c) => {
+      const g = c.createLinearGradient(xFx - 24, 0, W, 0);
+      g.addColorStop(0, hexA(C_FX, 0));
+      g.addColorStop(1, hexA(C_FX, 0.22));
+      return g;
+    });
+    ctx.fillStyle = tint;
+    ctx.fillRect(xFx - 24, slotTop - 4, W - xFx + 24, slotH + 8);
+    ctx.fillStyle = hexA(C_FX, 0.4 + pulse * 0.4);
+    ctx.fillRect(fxX, slotTop, 3, slotH);
+    lit(ctx, () => drawGlow(ctx, fxX + 1.5, slotTop + slotH * 0.5, 18, C_FX, 0.5 + pulse * 0.3));
+  } else {
+    ctx.strokeStyle = hexA(C, 0.25);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(fxX + 1, slotTop);
+    ctx.lineTo(fxX + 1, slotTop + slotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.font = VIZ_FONT_TITLE;
+  ctx.textAlign = "center";
+  ctx.fillStyle = hexA(p.fxOn ? C_FX : C_MID, 0.85);
+  ctx.fillText(p.fxOn ? "→ FX" : "DRY", fxX + fxW * 0.5, slotTop + slotH * 0.5 + 3);
+
+  pill(
+    ctx,
+    W * 0.5,
+    2,
+    atCap ? `CAP ${cells} · ${STEAL_LABEL[p.steal]}` : STEAL_LABEL[p.steal],
+    atCap ? C_HOT : C_GLOW,
+    { glow: flash + p.panic, height: 12 },
+  );
+
+  // ── master rail ──
+  const railPad = 14;
+  const railW = W - railPad * 2;
+  const mg = clamp(p.masterGain / 1.2, 0, 1);
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(railPad, railY, railW, 6);
+  ctx.fillStyle = hexA(C_HOT, 0.55 + flash * 0.25);
+  ctx.fillRect(railPad, railY + 1, Math.max(2, railW * mg), 4);
+  for (const notch of [0, 0.25, 0.5, 0.75, 1] as const) {
+    const nx = railPad + notch * railW;
+    ctx.fillStyle = hexA(C_MID, 0.28);
+    ctx.fillRect(nx - 1, railY - 2, 2, 10);
+  }
+  lit(ctx, () => drawGlow(ctx, railPad + railW * mg, railY + 3, 8 + flash * 5, C_GLOW, 0.85));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MID, 0.55);
+  ctx.fillText("MASTER", railPad, railY - 5);
+
+  grain(ctx, W, Hh, 0.028);
+  bezel(ctx, W, Hh, C);
+  const harm = p.harmony && p.harmony !== "off" ? ` · ${String(p.harmony).toUpperCase()}` : "";
+  footer(
+    ctx,
+    W,
+    Hh,
+    "STAGE PULSE",
+    `${p.voices}/${cells} · OCT ${p.octave}${harm} · MST ${Math.round(p.masterGain * 100)}%`,
+    C_GLOW,
+    p.voices > 0 ? C_HOT : C_MID,
+  );
+}
 
 export function LiveStageViz() {
   const mono = useFireCommandStore((s) => s.patch.mono);
@@ -87,37 +395,48 @@ export function LiveStageViz() {
   const fxOn = useFireCommandStore((s) => s.routeThroughFx);
   const octave = useFireCommandStore((s) => s.octave);
   const masterGain = useFireCommandStore((s) => s.patch.masterGain) ?? 0.72;
+  const steal = (useFireCommandStore((s) => s.patch.voiceSteal) ?? "oldest") as VoiceStealPolicy;
   const setParam = useFireCommandStore((s) => s.setParam);
   const setMaxVoices = useFireCommandStore((s) => s.setMaxVoices);
   const setRouteThroughFx = useFireCommandStore((s) => s.setRouteThroughFx);
   const shiftOctave = useFireCommandStore((s) => s.shiftOctave);
   const panic = useFireCommandStore((s) => s.panic);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 520, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const panicFlash = useRef(0);
   const dragRef = useRef<HitZone>(null);
-  const prevKey = useRef("");
-  const st = useRef({
-    mono, harmony, maxVoices, fxOn, octave, masterGain, voices: 0,
+  const prevKey = useRef(0);
+  // Slot envelopes persist across renders; the store folds in around them.
+  const st = useRef<LiveVizState>({
+    mono: !!mono,
+    harmony,
+    maxVoices,
+    fxOn,
+    octave,
+    masterGain,
+    steal,
+    voices: 0,
+    levels: new Float32Array(CAP_MAX),
+    panic: 0,
   });
-  st.current = {
-    mono, harmony, maxVoices, fxOn, octave, masterGain, voices: st.current.voices,
-  };
+  st.current.mono = !!mono;
+  st.current.harmony = harmony;
+  st.current.maxVoices = maxVoices;
+  st.current.fxOn = fxOn;
+  st.current.octave = octave;
+  st.current.masterGain = masterGain;
+  st.current.steal = steal;
 
   const live = st.current.voices > 0 || masterGain > 0.05;
 
   useEffect(() => {
-    const key = `${mono}|${maxVoices}|${fxOn}|${octave}|${masterGain.toFixed(3)}|${harmony}`;
+    const key = motionHash(mono, maxVoices, fxOn, octave, masterGain, harmony ? 1 : 0);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [mono, maxVoices, fxOn, octave, masterGain, harmony]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [mono, maxVoices, fxOn, octave, masterGain, harmony, steal]);
 
   const hitTest = useCallback((clientX: number, clientY: number): HitZone => {
     const wrap = wrapRef.current;
@@ -126,11 +445,11 @@ export function LiveStageViz() {
     const x = (clientX - rect.left) / Math.max(1, rect.width);
     const y = (clientY - rect.top) / Math.max(1, rect.height);
     if (y > 0.82) return "master";
-    if (x < 0.08) return y < 0.5 ? "octave+" : "octave-";
-    if (x > 0.9) return "fx";
-    if (x < 0.22) return "mono";
+    if (x < Z_OCT) return y < 0.5 ? "octave+" : "octave-";
+    if (x > Z_FX) return "fx";
+    if (x < Z_MONO) return "mono";
     return "voices";
-  }, []);
+  }, [wrapRef]);
 
   const applyAt = useCallback(
     (clientX: number, clientY: number, zone: HitZone) => {
@@ -147,7 +466,7 @@ export function LiveStageViz() {
         setMaxVoices(VOICE_CAPS[clamp(idx, 0, VOICE_CAPS.length - 1)]!);
       }
     },
-    [setMaxVoices, setParam],
+    [setMaxVoices, setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -195,11 +514,9 @@ export function LiveStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const stopLoop = startStageVizLoop(
-      (t) => {
-      flashRef.current *= 0.9;
-      panicFlash.current *= 0.92;
 
+    /** Engine poll — cheap enough to run from the idle probe as well as the frame. */
+    const pollVoices = () => {
       let n = 0;
       try {
         n = activeFireEngine().getActiveVoiceCount();
@@ -207,223 +524,61 @@ export function LiveStageViz() {
         n = 0;
       }
       st.current.voices = n;
+      return n;
+    };
 
-      const { w: W, h: Hcss } = sizeRef.current;
-      if (W < 2) return;
-      const p = st.current;
-      const flash = flashRef.current;
-      const panicA = panicFlash.current;
-      const voiceActivity = Math.min(1, p.voices / Math.max(1, p.maxVoices));
-      const breath = 0.5 + 0.5 * Math.sin(t * 0.002);
-
-      ctx.clearRect(0, 0, W, Hcss);
-
-      // Stage plate
-      const bg = ctx.createLinearGradient(0, 0, W, Hcss);
-      bg.addColorStop(0, hexAlpha(C_DEEP, 0.6 + flash * 0.2 + panicA * 0.25));
-      bg.addColorStop(0.5, "rgba(8,4,2,0.94)");
-      bg.addColorStop(1, hexAlpha(p.fxOn ? C_FX : C_MID, 0.25 + voiceActivity * 0.2));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      if (panicA > 0.05) {
-        ctx.fillStyle = hexAlpha(C_HOT, panicA * 0.35);
-        ctx.fillRect(0, 0, W, Hcss);
+    /** Slot envelopes: snap up when a slot is taken, sink on release. */
+    const tickSlots = () => {
+      const s = st.current;
+      const cells = clamp(Math.round(s.maxVoices), 1, CAP_MAX);
+      const lv = s.levels;
+      let tail = 0;
+      for (let i = 0; i < lv.length; i++) {
+        const target = i < s.voices && i < cells ? 1 : 0;
+        const v = lv[i]!;
+        lv[i] = v + (target - v) * (target > v ? 0.55 : 0.07);
+        if (lv[i]! > tail) tail = lv[i]!;
       }
+      return tail;
+    };
 
-      // Octave ladder (left) — octave 0..8
-      for (let i = 0; i <= 8; i++) {
-        const oy = Hcss * 0.1 + (8 - i) * ((Hcss * 0.58) / 8);
-        const rungOn = p.octave === i;
-        ctx.fillStyle = hexAlpha(rungOn ? C_GLOW : C, rungOn ? 0.9 : 0.18);
-        ctx.fillRect(4, oy, 10, 2.5);
-      }
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.7);
-      ctx.textAlign = "center";
-      ctx.fillText(String(p.octave), 9, Hcss * 0.78);
-
-      // Radar (mono/poly)
-      const radarCx = W * 0.14;
-      const radarCy = Hcss * 0.4;
-      const radarR = 26 + voiceActivity * 6;
-      for (let i = 1; i <= 3; i++) {
-        ctx.strokeStyle = hexAlpha(C, 0.08 + voiceActivity * 0.1 + flash * 0.08);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(radarCx, radarCy, radarR * (i / 3), 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      const sweepAngle = (t / 1600) % (Math.PI * 2);
-      ctx.strokeStyle = hexAlpha(p.mono ? C_HOT : C_POLY, 0.4 + voiceActivity * 0.45);
-      ctx.lineWidth = 2.2;
-      ctx.shadowBlur = 8 + voiceActivity * 14 + flash * 8;
-      ctx.shadowColor = p.mono ? C_HOT : C_POLY;
-      ctx.beginPath();
-      ctx.moveTo(radarCx, radarCy);
-      ctx.lineTo(
-        radarCx + Math.cos(sweepAngle) * radarR,
-        radarCy + Math.sin(sweepAngle) * radarR,
-      );
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Voice blips on radar
-      for (let v = 0; v < Math.min(8, p.voices); v++) {
-        const a = sweepAngle + (v / Math.max(1, p.voices)) * Math.PI * 1.4 - Math.PI * 0.7;
-        const rr = radarR * (0.35 + (v / Math.max(1, p.voices)) * 0.55);
-        const bx = radarCx + Math.cos(a) * rr;
-        const by = radarCy + Math.sin(a) * rr;
-        const bg2 = ctx.createRadialGradient(bx, by, 0, bx, by, 4);
-        bg2.addColorStop(0, hexAlpha(C_GLOW, 0.9));
-        bg2.addColorStop(1, hexAlpha(C_VOICE, 0));
-        ctx.fillStyle = bg2;
-        ctx.beginPath();
-        ctx.arc(bx, by, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(p.mono ? C_HOT : C_POLY, 0.85);
-      ctx.textAlign = "center";
-      ctx.fillText(p.mono ? "MONO" : "POLY", radarCx, radarCy + radarR + 14);
-
-      // Piano keys
-      const keyCount = Math.min(32, p.maxVoices);
-      const keyPadL = W * 0.26;
-      const keyPadR = W * 0.1;
-      const keyW = (W - keyPadL - keyPadR) / keyCount;
-      const keyH = 36;
-      const keyY = Hcss * 0.32;
-
-      for (let i = 0; i < keyCount; i++) {
-        const active = i < p.voices;
-        const x = keyPadL + i * keyW;
-        const col = p.mono ? C_HOT : C_POLY;
-        ctx.fillStyle = active
-          ? hexAlpha(col, 0.55 + Math.sin(t / 260 + i * 0.45) * 0.2 + flash * 0.15)
-          : "rgba(255,255,255,0.05)";
-        ctx.fillRect(x + 0.4, keyY, Math.max(1, keyW - 1.2), keyH);
-        ctx.strokeStyle = active ? hexAlpha(col, 0.5) : "rgba(255,255,255,0.07)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.4, keyY, Math.max(1, keyW - 1.2), keyH);
-        if (active) {
-          ctx.shadowBlur = 6;
-          ctx.shadowColor = col;
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-          ctx.fillRect(x + 0.4, keyY, Math.max(1, keyW - 1.2), 3);
-          ctx.shadowBlur = 0;
-        }
-      }
-
-      // Cap markers under keys
-      ctx.font = "600 7px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      for (const cap of VOICE_CAPS) {
-        if (cap > keyCount && cap !== p.maxVoices) continue;
-        const u = (cap - 1) / Math.max(1, keyCount - 1);
-        const mx = keyPadL + u * (W - keyPadL - keyPadR);
-        const on = p.maxVoices === cap;
-        ctx.fillStyle = hexAlpha(on ? C_GLOW : C, on ? 0.8 : 0.3);
-        ctx.fillText(String(cap), mx, keyY + keyH + 12);
-      }
-
-      // FX route column (right)
-      const fxX = W - 18;
-      if (p.fxOn) {
-        const pulse = 0.55 + 0.45 * Math.sin(t / 300);
-        ctx.strokeStyle = hexAlpha(C_FX, 0.4 + pulse * 0.4);
-        ctx.lineWidth = 3;
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = C_FX;
-        ctx.beginPath();
-        ctx.moveTo(fxX, keyY);
-        ctx.lineTo(fxX, keyY + keyH);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        const tint = ctx.createLinearGradient(W - 48, 0, W, 0);
-        tint.addColorStop(0, "rgba(0,0,0,0)");
-        tint.addColorStop(1, hexAlpha(C_FX, 0.18 + pulse * 0.12));
-        ctx.fillStyle = tint;
-        ctx.fillRect(W - 48, keyY - 4, 48, keyH + 8);
-      } else {
-        ctx.strokeStyle = hexAlpha(C, 0.2);
-        ctx.lineWidth = 2;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(fxX, keyY);
-        ctx.lineTo(fxX, keyY + keyH);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(p.fxOn ? C_FX : C, 0.75);
-      ctx.textAlign = "center";
-      ctx.save();
-      ctx.translate(fxX - 2, keyY + keyH / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillText(p.fxOn ? "→ FX" : "DRY", 0, 0);
-      ctx.restore();
-
-      // Pulse rings when voices active
-      if (p.voices > 0) {
-        const pr = 20 + voiceActivity * 40 + breath * 8;
-        ctx.strokeStyle = hexAlpha(C_GLOW, 0.08 + voiceActivity * 0.15);
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(W * 0.55, keyY + keyH / 2, pr, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Master rail
-      const railY = Hcss - 12;
-      const railPad = 14;
-      ctx.strokeStyle = hexAlpha(C, 0.25);
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(W - railPad, railY);
-      ctx.stroke();
-      const thumbX = railPad + clamp(p.masterGain / 1.2, 0, 1) * (W - railPad * 2);
-      ctx.strokeStyle = hexAlpha(C_HOT, 0.75 + flash * 0.2);
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(thumbX, railY);
-      ctx.stroke();
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.shadowBlur = 8 + flash * 8;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.65);
-      ctx.beginPath();
-      ctx.arc(thumbX, railY, 5 + flash * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Labels
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flash * 0.35);
-      ctx.textAlign = "left";
-      ctx.fillText("STAGE PULSE", 10, Hcss - 8);
-      ctx.textAlign = "right";
-      const harm = p.harmony && p.harmony !== "off" ? ` · ${String(p.harmony).toUpperCase()}` : "";
-      ctx.fillStyle = hexAlpha(C, 0.7);
-      ctx.fillText(
-        `${p.voices}/${p.maxVoices} · OCT ${p.octave}${harm} · MST ${Math.round(p.masterGain * 100)}%`,
-        W - 10,
-        Hcss - 8,
-      );
+    const stopLoop = startStageVizLoop(
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.9;
+        panicFlash.current *= 0.92;
+        pollVoices();
+        tickSlots();
+        st.current.panic = panicFlash.current;
+        paintLive(ctx, W, Hh, st.current, now, flashRef.current);
       },
-      () => ({
-        flash: flashRef.current,
-        active: false,
-        dragging: !!dragRef.current,
-        particles: 0,
-        motionKey: JSON.stringify(st.current),
-      }),
+      () => {
+        // Polling here (not just in the frame) is what lets a paused panel wake
+        // on the first note — the voice count is not a store subscription.
+        const v = pollVoices();
+        let tail = 0;
+        const lv = st.current.levels;
+        for (let i = 0; i < lv.length; i++) if (lv[i]! > tail) tail = lv[i]!;
+        return {
+          flash: flashRef.current,
+          active: v > 0 || tail > 0.004 || panicFlash.current > 0.02,
+          dragging: !!dragRef.current,
+          particles: 0,
+          visible: visibleRef.current,
+          motionKey: motionHash(
+            st.current.mono,
+            st.current.maxVoices,
+            st.current.fxOn,
+            st.current.octave,
+            st.current.masterGain,
+            v,
+          ),
+        };
+      },
       { minIntervalMs: 28 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div

@@ -11,6 +11,7 @@
  */
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import { FcChipMark, fcChipCharacterFor, fcChipCharacterStyle, fcChipClass, useFcChipFocusRing } from "./fcChip";
 
 export const SLEEP_ACTION = "Sleep";
 export const WAKE_ACTION = "Wake";
@@ -89,13 +90,19 @@ export function ModuleEnableToggle({
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.[moduleId] !== false);
   const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
   const label = name ?? moduleId;
+  // Sleep/Wake is the one control every module owns, so it is the clearest
+  // place to read a band's chip character.
+  const character = fcChipCharacterFor(moduleId);
+  const focus = useFcChipFocusRing();
   return (
     <button
       type="button"
       onClick={() => setModuleEnable(moduleId, !enabled)}
-      className="fc-focus rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.06em] transition"
-      style={
-        enabled
+      onFocus={focus.onFocus}
+      onBlur={focus.onBlur}
+      className={fcChipClass({ character })}
+      style={{
+        ...(enabled
           ? {
               borderColor: `${color}66`,
               color: onTextColor ?? `${color}cc`,
@@ -106,12 +113,17 @@ export function ModuleEnableToggle({
               borderColor: "rgba(255,255,255,0.18)",
               color: "rgba(255,255,255,0.42)",
               background: "rgba(0,0,0,0.45)",
-            }
-      }
+            }),
+        ...fcChipCharacterStyle(character, enabled, color, {
+          baseShadow: enabled ? `0 0 8px ${color}28` : undefined,
+          unclip: focus.ring,
+        }),
+      }}
       title={enabled ? (titleOn ?? moduleEnableTitle(true, label)) : (titleOff ?? moduleEnableTitle(false, label))}
       aria-pressed={enabled}
       aria-label={moduleEnableAria(enabled, label)}
     >
+      <FcChipMark character={character} on={enabled} color={color} />
       {enabled ? onLabel : offLabel}
     </button>
   );

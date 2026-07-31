@@ -5,8 +5,12 @@
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
 import { GATE_PRESETS } from "./GateStageViz";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Performance band — faceted gem chips. */
+const GATE_CHAR = fcChipCharacterFor("gate");
 
 export const GATE_C = FC.gate;
 export const GATE_C_GLOW = bandShade(FC_BAND.perf, 0.92);
@@ -92,36 +96,26 @@ export function GateCharacterStrip() {
   const setParam = useFireCommandStore((s) => s.setParam);
   const n = Math.max(2, Math.min(16, Math.round(steps)));
   const c = GATE_C;
+  const tone = { color: c, onText: GATE_C_GLOW, glow: 10 };
 
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Chop
       </span>
-      {GATE_PRESETS.map((p) => {
-        const on = patternMatch(pattern, p.steps, n);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => setParam("gatePattern", [...p.steps])}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: GATE_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={p.name}
-          >
-            {p.name}
-          </button>
-        );
-      })}
+      {GATE_PRESETS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={patternMatch(pattern, p.steps, n)}
+          tone={tone}
+          character={GATE_CHAR}
+          caseMode="normal"
+          onClick={() => setParam("gatePattern", [...p.steps])}
+          title={p.name}
+        >
+          {p.name}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -129,35 +123,26 @@ export function GateCharacterStrip() {
 export function GateRateStrip() {
   const rate = useFireCommandStore((s) => s.patch.gateRate) ?? 8;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: GATE_C_RATE, onText: GATE_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GATE_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${GATE_C}66` }}>
         Rate
       </span>
-      {GATE_RATE_SNAPS.map((p) => {
-        const on = near(rate, p.v, 0.35);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("gateRate", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${GATE_C_RATE}99`,
-                    background: `${GATE_C_RATE}28`,
-                    color: GATE_C_GLOW,
-                    boxShadow: `0 0 8px ${GATE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.v} Hz`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {GATE_RATE_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(rate, p.v, 0.35)}
+          tone={tone}
+          character={GATE_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setParam("gateRate", p.v)}
+          title={`${p.v} Hz`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -165,35 +150,26 @@ export function GateRateStrip() {
 export function GateDepthStrip() {
   const depth = useFireCommandStore((s) => s.patch.gateDepth) ?? 1;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: GATE_C_DEPTH, onText: GATE_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GATE_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${GATE_C}66` }}>
         Depth
       </span>
-      {GATE_DEPTH_SNAPS.map((p) => {
-        const on = near(depth, p.v, 0.04);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("gateDepth", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${GATE_C_DEPTH}99`,
-                    background: `${GATE_C_DEPTH}28`,
-                    color: GATE_C_GLOW,
-                    boxShadow: `0 0 8px ${GATE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${Math.round(p.v * 100)}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {GATE_DEPTH_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(depth, p.v, 0.04)}
+          tone={tone}
+          character={GATE_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setParam("gateDepth", p.v)}
+          title={`${Math.round(p.v * 100)}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -201,34 +177,25 @@ export function GateDepthStrip() {
 export function GateStepsStrip() {
   const steps = useFireCommandStore((s) => s.patch.gateSteps) ?? 16;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: GATE_C_STEPS, onText: GATE_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${GATE_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${GATE_C}66` }}>
         Steps
       </span>
-      {GATE_STEP_SNAPS.map((p) => {
-        const on = Math.round(steps) === p.v;
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("gateSteps", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${GATE_C_STEPS}99`,
-                    background: `${GATE_C_STEPS}28`,
-                    color: GATE_C_GLOW,
-                    boxShadow: `0 0 8px ${GATE_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {GATE_STEP_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={Math.round(steps) === p.v}
+          tone={tone}
+          character={GATE_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setParam("gateSteps", p.v)}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }

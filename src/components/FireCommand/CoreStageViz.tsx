@@ -1,56 +1,71 @@
 /**
- * Core Fire Command stage visualizations (v2.5.6) — display-only
- * personalities for Unison, Filter, Envelopes, LFOs, FM·Ring, Pitch·Glide,
- * Oscillators, and Performance. Audio engines untouched.
+ * Core Fire Command stage visualizations — display-only personalities for the
+ * oscillator bus and the LFOs, plus the barrel of stage exports the rest of the
+ * signal path pulls from. Audio engines untouched.
+ *
+ * IDIOM (oscillator panels): the voice bus stack. Rather than each oscillator
+ * showing a lone waveform in isolation, every panel draws the *whole* summed
+ * voice — A / B / C / sub / noise as horizontal bands whose thickness is that
+ * layer's level, stacked off a common floor, with the running total riding a
+ * dashed headroom line. The panel's own layer is the lit one and carries its
+ * live wavetable frame rippling through the band, so you still read the table
+ * morph, but you read it in the context of the mix it is competing in. Bands
+ * stacked along a wide short slot survive the letterbox where a lone waveform
+ * just gets stretched.
+ *
+ * IDIOM (LFO panels): the aurora. Two cycles of the shape across the width, a
+ * depth ribbon under it, and a comet tracer running the engine's own clock.
  */
 
-import { useEffect, useRef, type ReactNode, type RefObject, type MutableRefObject } from "react";
+import { useEffect, useRef, type ReactNode, type RefObject } from "react";
 import { useFireCommandStore, activeFireEngine } from "@/state/fireCommandStore";
 import { getEngine } from "@/audio/AudioEngine";
 import type { LfoWave, LfoDest } from "@/audio/dsp/FireCommandSynth";
 import { FRAME_COUNT, frameSamples } from "@/audio/dsp/wavetables";
+import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
-
-const FIRE = "#ff6a3d";
-const ICE = "#62b6ff";
-const GRN = "#7cf6b0";
-const GOLD = "#ffcf5c";
-const AMB = "#ffb35c";
-const LIME = "#9be564";
-const TEAL = "#5ce0a0";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  plate,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const ENV_H = 88;
 const LFO_H = 96;
 const OSC_H = 88;
 const PERF_H = 76;
 
-function useHiDpiCanvas(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** Mod-band shades for the LFO panels; sources-band shades for the voice bus. */
+const LFO_COLORS = [FC.lfo, FC.lfo2] as const;
+const MOD_MID = bandShade(FC.mod, 0.45);
+const MOD_HOT = bandShade(FC.mod, 0.66);
+const MOD_GLOW = bandShade(FC.mod, 0.9);
+const SRC_MID = bandShade(FC.sources, 0.45);
+const SRC_GLOW = bandShade(FC.sources, 0.9);
+
+/** The voice bus, bottom of the stack first. */
+const BUS_LAYERS = [
+  { key: "a", label: "A", col: FC.oscA },
+  { key: "b", label: "B", col: FC.oscB },
+  { key: "c", label: "C", col: FC.oscC },
+  { key: "sub", label: "SUB", col: FC.sub },
+  { key: "nz", label: "NZ", col: FC.noise },
+] as const;
+
+/** Bus scale headroom: the stack can run 40% past unity before it runs out. */
+const BUS_FULL = 1.4;
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 type StageChrome = "corners" | "rails" | "notch" | "plate" | "bloom" | "scope" | "keys";
@@ -132,27 +147,9 @@ function StageFrame({
   );
 }
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
-  const n = parseInt(full, 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  return `rgba(${r},${g},${b},${a})`;
-}
-
-function drawVignette(ctx: CanvasRenderingContext2D, W: number, H: number, strength = 0.55) {
-  const vg = ctx.createRadialGradient(W * 0.5, H * 0.45, Math.min(W, H) * 0.15, W * 0.5, H * 0.5, Math.max(W, H) * 0.72);
-  vg.addColorStop(0, "rgba(0,0,0,0)");
-  vg.addColorStop(1, `rgba(0,0,0,${strength})`);
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, W, H);
-}
-
 export { UnisonStageViz } from "./UnisonStageViz";
 
-/** Filter — liquid cutoff waterfall + resonance bloom rings; react to filter type. */
+/** Filter — a true log-Hz response trace with resonance, slope and carve. */
 export { FilterStageViz } from "./FilterStageViz";
 
 export { AmpEnvStageViz } from "./AmpEnvStageViz";
@@ -161,190 +158,218 @@ export { ModEnvStageViz } from "./ModEnvStageViz";
 
 export { FiltEnvStageViz } from "./FiltEnvStageViz";
 
+// ── LFO aurora ───────────────────────────────────────────────────────────
+
+/** Shape sample at a phase — pure, so the tracer and the trail agree. */
+function lfoShape(w: LfoWave, ph: number): number {
+  const p = ph - Math.floor(ph);
+  switch (w) {
+    case "sine": return Math.sin(p * Math.PI * 2);
+    case "triangle": return 1 - 4 * Math.abs(p - 0.5);
+    case "sawtooth": return 1 - 2 * p;
+    case "square": return p < 0.5 ? 1 : -1;
+    case "sample-hold": {
+      const step = Math.floor(ph * 8);
+      const h = Math.sin(step * 127.1) * 43758.5453;
+      return (h - Math.floor(h)) * 2 - 1;
+    }
+    default: return 0;
+  }
+}
+
+export type CoreLfoVizState = {
+  idx: 1 | 2;
+  wave: LfoWave;
+  rate: number;
+  depth: number;
+  dest: LfoDest;
+  /** Engine clock, sampled outside the paint so the paint stays pure. */
+  engT: number;
+};
+
+/**
+ * Paint one LFO aurora. Exported and pure so any wave / rate / depth can be
+ * rendered headlessly without mounting the component.
+ */
+export function paintCoreLfo(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: CoreLfoVizState,
+  now: number,
+  flash: number,
+): void {
+  const C = LFO_COLORS[p.idx === 2 ? 1 : 0]!;
+  const depth = clamp01(p.depth);
+  const destActive = p.dest !== "off";
+  const energy = 0.12 + depth * 0.4 + (destActive ? 0.12 : 0) + flash * 0.2;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.5 });
+
+  const mid = Hh * 0.44;
+  const amp = Hh * 0.32 * Math.max(0.14, depth);
+  const xL = 10;
+  const xR = W - 10;
+  const span = Math.max(20, xR - xL);
+
+  // Zero axis.
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(xL, mid);
+  ctx.lineTo(xR, mid);
+  ctx.stroke();
+
+  // Depth aurora — the band the modulation can actually reach.
+  const aurora = cachedGrad(ctx, `aurora|${Hh}|${(depth * 12) | 0}|${p.idx}`, (c) => {
+    const g = c.createLinearGradient(0, mid - amp, 0, mid + amp);
+    g.addColorStop(0, hexA(C, depth * 0.2));
+    g.addColorStop(0.5, hexA(MOD_HOT, depth * 0.09));
+    g.addColorStop(1, hexA(C, depth * 0.05));
+    return g;
+  });
+  ctx.fillStyle = aurora;
+  ctx.fillRect(xL, mid - amp, span, amp * 2);
+
+  // Ghost layers behind the front wave — phase-offset copies for depth.
+  for (let ghost = 2; ghost >= 0; ghost--) {
+    ctx.beginPath();
+    for (let x = xL; x <= xR; x += 2) {
+      const ph = ((x - xL) / span) * 2 + ghost * 0.3;
+      const y = mid - lfoShape(p.wave, ph) * amp * (0.5 + ghost * 0.15);
+      if (x === xL) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = hexA(MOD_HOT, (0.2 - ghost * 0.055) * depth);
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  }
+
+  // Depth ribbon under the front wave.
+  ctx.beginPath();
+  ctx.moveTo(xL, mid);
+  for (let x = xL; x <= xR; x++) {
+    ctx.lineTo(x, mid - lfoShape(p.wave, ((x - xL) / span) * 2) * amp);
+  }
+  ctx.lineTo(xR, mid);
+  ctx.closePath();
+  const ribbon = cachedGrad(ctx, `ribbon|${Hh}|${(depth * 12) | 0}|${p.idx}`, (c) => {
+    const g = c.createLinearGradient(0, mid - amp, 0, mid + amp);
+    g.addColorStop(0, hexA(C, 0.34 + depth * 0.2));
+    g.addColorStop(0.5, hexA(C, 0.14));
+    g.addColorStop(1, hexA(C, 0.02));
+    return g;
+  });
+  ctx.fillStyle = ribbon;
+  ctx.fill();
+
+  // Front wave.
+  const breathe = 0.85 + 0.15 * Math.sin(now / 650);
+  glowStroke(
+    ctx,
+    () => {
+      for (let x = xL; x <= xR; x++) {
+        const y = mid - lfoShape(p.wave, ((x - xL) / span) * 2) * amp;
+        if (x === xL) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+    },
+    C,
+    { width: 2.4, glow: 0.9 + depth * 0.8 + breathe * 0.2 + flash * 0.5, alpha: 0.95 },
+  );
+
+  // Phase tracer, running the engine's clock, with a comet trail behind it.
+  const ph = (p.engT * p.rate) % 2;
+  const px = xL + (ph / 2) * span;
+  const py = mid - lfoShape(p.wave, ph) * amp;
+  lit(ctx, () => {
+    for (let hist = 20; hist > 0; hist--) {
+      const hp = ((ph - hist * 0.05) % 2 + 2) % 2;
+      const hx = xL + (hp / 2) * span;
+      const hy = mid - lfoShape(p.wave, hp) * amp;
+      const a = (20 - hist) / 20;
+      drawGlow(ctx, hx, hy, 2 + a * 4, MOD_HOT, a * 0.35 * depth);
+    }
+    drawGlow(ctx, px, py, 14 + depth * 12, C, 0.7 + depth * 0.25);
+  });
+  ctx.fillStyle = hexA(MOD_GLOW, 0.98);
+  ctx.beginPath();
+  ctx.arc(px, py, 3.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Destination glow — the right edge lights when the LFO is patched.
+  if (destActive) {
+    const destGrad = cachedGrad(ctx, `dest|${W}|${Hh}|${(depth * 10) | 0}`, (c) => {
+      const g = c.createLinearGradient(W - 60, 0, W, 0);
+      g.addColorStop(0, hexA(MOD_HOT, 0));
+      g.addColorStop(1, hexA(MOD_HOT, 0.12 + depth * 0.15));
+      return g;
+    });
+    ctx.fillStyle = destGrad;
+    ctx.fillRect(W - 60, 0, 60, Hh);
+  }
+
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(MOD_MID, 0.6);
+  ctx.fillText(`${p.rate.toFixed(2)}Hz · D${Math.round(depth * 100)}`, 10, 14);
+
+  grain(ctx, W, Hh, 0.024);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    `LFO ${p.idx} AURORA · ${String(p.wave).toUpperCase()}`,
+    destActive ? `→ ${String(p.dest).toUpperCase()}` : "IDLE",
+    C,
+    destActive ? MOD_HOT : MOD_MID,
+  );
+}
+
 /** LFO stage — living waveform with depth aurora, phase tracer, and destination readout. */
 export function LfoStageViz({ idx }: { idx: 1 | 2 }) {
   const wave = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Wave : s.patch.lfo2Wave));
   const rate = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Rate : s.patch.lfo2Rate));
   const depth = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Depth : s.patch.lfo2Depth));
   const dest = useFireCommandStore((s) => (idx === 1 ? s.patch.lfo1Dest : s.patch.lfo2Dest));
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 280, h: LFO_H });
-  const st = useRef({ wave, rate, depth, dest });
-  st.current = { wave, rate, depth, dest };
-  useHiDpiCanvas(wrapRef, canvasRef, LFO_H, sizeRef);
+
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(LFO_H);
+  const st = useRef<CoreLfoVizState>({ idx, wave, rate, depth, dest, engT: 0 });
+  st.current = { idx, wave, rate, depth, dest, engT: st.current.engT };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const shape = (w: LfoWave, ph: number): number => {
-      const p = ph - Math.floor(ph);
-      switch (w) {
-        case "sine": return Math.sin(p * Math.PI * 2);
-        case "triangle": return 1 - 4 * Math.abs(p - 0.5);
-        case "sawtooth": return 1 - 2 * p;
-        case "square": return p < 0.5 ? 1 : -1;
-        case "sample-hold": {
-          const step = Math.floor(ph * 8);
-          const h = Math.sin(step * 127.1) * 43758.5453;
-          return (h - Math.floor(h)) * 2 - 1;
-        }
-        default: return 0;
-      }
-    };
+
     const stopLoop = startStageVizLoop(
-      (nowMs) => {
-      const { w: W, h: H } = sizeRef.current;
-      const p = st.current;
-      ctx.clearRect(0, 0, W, H);
-      const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, "rgba(98,182,255,0.16)");
-      bg.addColorStop(0.5, "rgba(4,8,14,0.6)");
-      bg.addColorStop(1, "rgba(98,182,255,0.08)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, H);
-
-      const mid = H * 0.44;
-      const amp = (H * 0.32) * Math.max(0.14, p.depth);
-      const xL = 10;
-      const xR = W - 10;
-      const span = xR - xL;
-
-      ctx.strokeStyle = "rgba(255,255,255,0.08)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(xL, mid);
-      ctx.lineTo(xR, mid);
-      ctx.stroke();
-
-      // Depth aurora (glowing gradient field below waveform)
-      const auroraGrad = ctx.createLinearGradient(0, mid - amp, 0, mid + amp);
-      auroraGrad.addColorStop(0, hexAlpha(ICE, p.depth * 0.18));
-      auroraGrad.addColorStop(0.5, hexAlpha(GRN, p.depth * 0.08));
-      auroraGrad.addColorStop(1, hexAlpha(ICE, p.depth * 0.05));
-      ctx.fillStyle = auroraGrad;
-      ctx.fillRect(xL, mid - amp, span, amp * 2);
-
-      // Ghost layer waveforms (phase offset)
-      for (let ghost = 2; ghost >= 0; ghost--) {
-        ctx.beginPath();
-        for (let x = xL; x <= xR; x += 1.5) {
-          const ph = ((x - xL) / span) * 2 + (ghost * 0.3);
-          const y = mid - shape(p.wave, ph) * amp * (0.5 + ghost * 0.15);
-          if (x === xL) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = hexAlpha(GRN, (0.22 - ghost * 0.06) * p.depth);
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-
-      // Depth ribbon fill
-      ctx.beginPath();
-      ctx.moveTo(xL, mid);
-      for (let x = xL; x <= xR; x++) {
-        const y = mid - shape(p.wave, ((x - xL) / span) * 2) * amp;
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(xR, mid);
-      ctx.closePath();
-      const ribbon = ctx.createLinearGradient(0, mid - amp, 0, mid + amp);
-      ribbon.addColorStop(0, hexAlpha(ICE, 0.35 + p.depth * 0.2));
-      ribbon.addColorStop(0.5, hexAlpha(ICE, 0.15));
-      ribbon.addColorStop(1, hexAlpha(ICE, 0.02));
-      ctx.fillStyle = ribbon;
-      ctx.fill();
-
-      // Front waveform (ice phosphor with breathing glow)
-      const breathe = 0.85 + 0.15 * Math.sin(nowMs / 650);
-      ctx.beginPath();
-      for (let x = xL; x <= xR; x++) {
-        const y = mid - shape(p.wave, ((x - xL) / span) * 2) * amp;
-        if (x === xL) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = ICE;
-      ctx.lineWidth = 2.6;
-      ctx.shadowBlur = 12 + p.depth * 8 + breathe * 4;
-      ctx.shadowColor = ICE;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      let engT = nowMs / 1000;
-      try { engT = getEngine().ctx.currentTime; } catch { /* */ }
-      const ph = (engT * p.rate) % 2;
-      const px = xL + (ph / 2) * span;
-      const py = mid - shape(p.wave, ph) * amp;
-
-      // Phase tracer history trail (comet particles)
-      const historySteps = 20;
-      for (let hist = historySteps; hist > 0; hist--) {
-        const histPh = (ph - hist * 0.05) % 2;
-        const hx = xL + (histPh / 2) * span;
-        const hy = mid - shape(p.wave, histPh) * amp;
-        const histAlpha = (historySteps - hist) / historySteps;
-        ctx.fillStyle = hexAlpha(GRN, histAlpha * 0.35 * p.depth);
-        ctx.shadowBlur = 2 + histAlpha * 4;
-        ctx.shadowColor = GRN;
-        ctx.beginPath();
-        ctx.arc(hx, hy, 1 + histAlpha * 1.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.shadowBlur = 0;
-
-      // Tracer bloom halo
-      const bloom = ctx.createRadialGradient(px, py, 0, px, py, 16 + p.depth * 14);
-      bloom.addColorStop(0, hexAlpha(ICE, 0.6 + p.depth * 0.25));
-      bloom.addColorStop(0.5, hexAlpha(GRN, 0.2));
-      bloom.addColorStop(1, hexAlpha(ICE, 0));
-      ctx.fillStyle = bloom;
-      ctx.fillRect(px - 30, py - 30, 60, 60);
-
-      // Tracer core
-      ctx.fillStyle = "#fff";
-      ctx.shadowBlur = 20;
-      ctx.shadowColor = ICE;
-      ctx.beginPath();
-      ctx.arc(px, py, 4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Destination indicator glow
-      const destActive = (p.dest as LfoDest) !== "off";
-      if (destActive) {
-        const destGlow = ctx.createLinearGradient(W - 60, 0, W, 0);
-        destGlow.addColorStop(0, hexAlpha(GRN, 0));
-        destGlow.addColorStop(1, hexAlpha(GRN, 0.12 + p.depth * 0.15));
-        ctx.fillStyle = destGlow;
-        ctx.fillRect(W - 60, 0, 60, H);
-      }
-
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = "rgba(98,182,255,0.75)";
-      ctx.textAlign = "left";
-      ctx.fillText(`LFO ${idx} AURORA · ${String(p.wave).toUpperCase()}`, 10, H - 8);
-      ctx.textAlign = "right";
-      const destLabel = (p.dest as LfoDest) === "off" ? "IDLE" : `→ ${(p.dest as string).toUpperCase()}`;
-      ctx.fillStyle = destActive ? "rgba(124,246,176,0.85)" : "rgba(98,182,255,0.4)";
-      ctx.fillText(destLabel, W - 10, H - 8);
-    
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        paintCoreLfo(ctx, W, Hh, st.current, now, 0);
       },
-      () => ({
-        flash: 0,
-        active: (st.current.dest as LfoDest) !== "off" && st.current.depth > 0.02,
-        dragging: false,
-        particles: 0,
-        motionKey: `${st.current.wave}|${st.current.rate.toFixed(2)}|${st.current.depth.toFixed(2)}`,
-      }),
+      () => {
+        // Engine clock is sampled here so the frame callback stays one paint call.
+        let engT = performance.now() / 1000;
+        try { engT = getEngine().ctx.currentTime; } catch { /* */ }
+        st.current.engT = engT;
+        return {
+          flash: 0,
+          active: st.current.dest !== "off" && st.current.depth > 0.02,
+          dragging: false,
+          visible: visibleRef.current,
+          motionKey: motionHash(st.current.rate, st.current.depth, st.current.wave.length, st.current.wave.charCodeAt(0)),
+        };
+      },
       { minIntervalMs: 28 },
     );
     return stopLoop;
-  }, [idx]);
+  }, [idx, canvasRef, sizeRef, visibleRef]);
 
   return (
-    <StageFrame wrapRef={wrapRef} border="rgba(98,182,255,0.28)" height={LFO_H} chrome="scope">
+    <StageFrame wrapRef={wrapRef} border={hexA(LFO_COLORS[idx === 2 ? 1 : 0]!, 0.28)} height={LFO_H} chrome="scope">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );
@@ -355,7 +380,194 @@ export { FmStageViz as FmRingStageViz } from "./FmStageViz";
 
 export { PitchStageViz as PitchGlideStageViz } from "./PitchStageViz";
 
-/** Oscillator — morphing waveform DNA helix with ghost frames, glow fill, and live morph tracer. */
+// ── voice bus stack ──────────────────────────────────────────────────────
+
+export type CoreVizState = {
+  group: "a" | "b" | "c";
+  /** The caller's accent for this oscillator — honoured for the lit band. */
+  color: string;
+  table: string;
+  level: number;
+  livePos: number;
+  levelA: number;
+  levelB: number;
+  levelC: number;
+  levelSub: number;
+  levelNoise: number;
+  /** Interpolated wavetable frame for this group; null in headless renders. */
+  wave: Float32Array | null;
+};
+
+/**
+ * Paint the voice bus. Exported and pure so any mix can be rendered headlessly
+ * without mounting the component or reaching into the engine.
+ */
+export function paintCore(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: CoreVizState,
+  now: number,
+  flash: number,
+): void {
+  const levels = [
+    clamp01(p.levelA),
+    clamp01(p.levelB),
+    clamp01(p.levelC),
+    clamp01(p.levelSub),
+    clamp01(p.levelNoise),
+  ];
+  const focusIdx = p.group === "a" ? 0 : p.group === "b" ? 1 : 2;
+  let total = 0;
+  for (let i = 0; i < levels.length; i++) total += levels[i]!;
+  const energy = 0.12 + Math.min(1, total) * 0.34 + flash * 0.2;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, p.color, { energy, horizon: 0.66 });
+
+  const padL = 26;
+  const padR = 36;
+  const busW = Math.max(40, W - padL - padR);
+  const top = 12;
+  const floorY = Hh - 30;
+  const busH = floorY - top;
+  const scale = busH / BUS_FULL;
+  const headroomY = floorY - scale;
+
+  // Gain ladder behind the stack.
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 5; i++) {
+    const y = Math.round(floorY - (i / 4) * scale * 0.8) + 0.5;
+    if (y < top) break;
+    ctx.strokeStyle = hexA(SRC_MID, 0.06);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + busW, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.fillStyle = hexA(SRC_MID, 0.2);
+  ctx.fillRect(padL, Math.round(floorY) + 0.5, busW, 1);
+
+  // ── the stack ──
+  let y = floorY;
+  for (let i = 0; i < BUS_LAYERS.length; i++) {
+    const layer = BUS_LAYERS[i]!;
+    const lv = levels[i]!;
+    const h = lv * scale;
+    const focused = i === focusIdx;
+    if (h < 0.4) {
+      // A silent layer still gets a hairline so the stack shows every slot.
+      ctx.fillStyle = hexA(layer.col, focused ? 0.35 : 0.14);
+      ctx.fillRect(padL, y - 1, busW, 1);
+    } else {
+      const bandTop = y - h;
+      ctx.fillStyle = hexA(layer.col, focused ? 0.3 : 0.14);
+      ctx.fillRect(padL, bandTop, busW, h);
+      ctx.fillStyle = hexA(focused ? p.color : layer.col, focused ? 0.95 : 0.5);
+      ctx.fillRect(padL, bandTop, busW, focused ? 1.6 : 1);
+      if (focused) {
+        lit(ctx, () => drawGlow(ctx, padL + busW * 0.5, bandTop, Math.min(60, h + 20), p.color, 0.3 + flash * 0.2));
+        // The lit band carries this group's live wavetable frame.
+        const wave = p.wave;
+        if (wave && wave.length > 1) {
+          const waveAmp = Math.min(h * 0.42, 14);
+          const cy = bandTop + h * 0.5;
+          const scroll = (now / 2600) % 1;
+          ctx.beginPath();
+          const steps = Math.max(48, Math.min(320, (busW / 4) | 0));
+          for (let s = 0; s <= steps; s++) {
+            const u = s / steps;
+            const wi = ((u * 2 + scroll) * wave.length) | 0;
+            const v = wave[wi % wave.length]!;
+            const wx = padL + u * busW;
+            const wy = cy - v * waveAmp;
+            if (s === 0) ctx.moveTo(wx, wy);
+            else ctx.lineTo(wx, wy);
+          }
+          ctx.strokeStyle = hexA(SRC_GLOW, 0.75);
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+        }
+      }
+      // Name inside the band, level in the right gutter.
+      if (h >= 9) {
+        ctx.font = VIZ_FONT_LABEL;
+        ctx.textAlign = "right";
+        ctx.fillStyle = hexA(layer.col, focused ? 0.95 : 0.6);
+        ctx.fillText(layer.label, padL - 4, y - h * 0.5 + 3);
+      }
+    }
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(layer.col, focused ? 0.9 : lv > 0.01 ? 0.5 : 0.24);
+    ctx.fillText(`${Math.round(lv * 100)}`, padL + busW + 4, Math.max(top + 6, y - Math.max(h * 0.5, 1) + 3));
+    y -= Math.max(h, 1.5);
+  }
+
+  // ── headroom line + the running total riding it ──
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = hexA(total > 1 ? FC.fire : SRC_MID, total > 1 ? 0.7 : 0.3);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, Math.round(headroomY) + 0.5);
+  ctx.lineTo(padL + busW, Math.round(headroomY) + 0.5);
+  ctx.stroke();
+  ctx.restore();
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(total > 1 ? FC.fire : SRC_MID, total > 1 ? 0.85 : 0.45);
+  ctx.fillText(total > 1 ? `OVER ${Math.round((total - 1) * 100)}` : "HEADROOM", padL + 3, headroomY - 3);
+
+  const totalY = Math.max(top, floorY - Math.min(total, BUS_FULL) * scale);
+  glowStroke(
+    ctx,
+    () => {
+      ctx.moveTo(padL, totalY);
+      ctx.lineTo(padL + busW, totalY);
+    },
+    total > 1 ? FC.fire : SRC_GLOW,
+    { width: 1.4, glow: 0.6 + flash * 0.5, alpha: 0.7 },
+  );
+
+  // ── morph rail for this group ──
+  const railY = Hh - 24;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(padL, railY, busW, 3);
+  const morphFill = busW * clamp01(p.livePos);
+  const morphGrad = cachedGrad(ctx, `morph|${W}|${p.color}`, (c) => {
+    const g = c.createLinearGradient(padL, 0, padL + busW, 0);
+    g.addColorStop(0, hexA(p.color, 0.4));
+    g.addColorStop(1, hexA(p.color, 0.9));
+    return g;
+  });
+  ctx.fillStyle = morphGrad;
+  ctx.fillRect(padL, railY, morphFill, 3);
+  const mx = padL + morphFill;
+  lit(ctx, () => drawGlow(ctx, mx, railY + 1.5, 7, p.color, 0.85));
+  ctx.fillStyle = hexA(p.color, 0.95);
+  ctx.fillRect(mx - 1.5, railY - 2, 3, 7);
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(SRC_MID, 0.5);
+  ctx.fillText("MORPH", padL - 4, railY + 4);
+
+  grain(ctx, W, Hh, 0.024);
+  bezel(ctx, W, Hh, p.color);
+  footer(
+    ctx,
+    W,
+    Hh,
+    `OSC ${p.group.toUpperCase()} HELIX · ${p.table.toUpperCase()}`,
+    p.level < 0.01 ? "SILENT" : `${Math.round(p.level * 100)}%`,
+    p.color,
+    total > 1 ? FC.fire : p.color,
+  );
+}
+
+/** Oscillator — the voice bus stack with this group's band lit and morphing. */
 export function OscStageViz({ group, color }: { group: "a" | "b" | "c"; color: string }) {
   const table = useFireCommandStore((s) =>
     group === "a" ? s.patch.oscATable : group === "b" ? s.patch.oscBTable : s.patch.oscCTable);
@@ -363,183 +575,89 @@ export function OscStageViz({ group, color }: { group: "a" | "b" | "c"; color: s
     group === "a" ? s.patch.oscALevel : group === "b" ? s.patch.oscBLevel : s.patch.oscCLevel);
   const pos = useFireCommandStore((s) =>
     group === "a" ? s.patch.oscAPos : group === "b" ? s.patch.oscBPos : s.patch.oscCPos);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 280, h: OSC_H });
-  const st = useRef({ table, level, pos });
-  st.current = { table, level, pos };
-  useHiDpiCanvas(wrapRef, canvasRef, OSC_H, sizeRef);
+  const levelA = useFireCommandStore((s) => s.patch.oscALevel) ?? 0;
+  const levelB = useFireCommandStore((s) => s.patch.oscBLevel) ?? 0;
+  const levelC = useFireCommandStore((s) => s.patch.oscCLevel) ?? 0;
+  const levelSub = useFireCommandStore((s) => s.patch.subLevel) ?? 0;
+  const levelNoise = useFireCommandStore((s) => s.patch.noiseLevel) ?? 0;
+
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(OSC_H);
+  const st = useRef<CoreVizState>({
+    group, color, table, level, livePos: pos, levelA, levelB, levelC, levelSub, levelNoise, wave: null,
+  });
+  st.current = {
+    group, color, table, level,
+    livePos: st.current.livePos || pos,
+    levelA, levelB, levelC, levelSub, levelNoise,
+    wave: st.current.wave,
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const cache: Float32Array[] = [];
-    let cacheTable = "";
+
+    // Frame bank is expensive to build (64 partials × 64 samples × 8 frames),
+    // so it is cached per table and only the cheap crossfade runs per frame.
     const N = 64;
+    const cache: Float32Array[] = [];
+    const scratch = new Float32Array(N);
+    let cacheTable = "";
     const ensure = (id: string) => {
       if (cacheTable === id && cache.length) return;
       cache.length = 0;
       for (let i = 0; i < FRAME_COUNT; i++) cache.push(frameSamples(id, i / (FRAME_COUNT - 1), N));
       cacheTable = id;
     };
-    const sampleAt = (frameIdx: number, i: number) => cache[Math.max(0, Math.min(FRAME_COUNT - 1, frameIdx))][i];
+
     const stopLoop = startStageVizLoop(
-      (t) => {
-      const { w: W, h: H } = sizeRef.current;
-      const p = st.current;
-      let livePos = p.pos;
-      try { livePos = activeFireEngine().getMorphPositions()[group]; } catch { /* */ }
-      ensure(p.table);
-      ctx.clearRect(0, 0, W, H);
-      const bg = ctx.createLinearGradient(0, 0, W, H);
-      bg.addColorStop(0, hexAlpha(color, 0.14 + p.level * 0.18));
-      bg.addColorStop(1, "rgba(4,4,6,0.6)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, H);
-
-      const cur = livePos * (FRAME_COUNT - 1);
-      const lo = Math.floor(cur);
-      const hi = Math.min(lo + 1, FRAME_COUNT - 1);
-      const frac = cur - lo;
-      const mid = H * 0.46;
-      const amp = (H * 0.32) * (0.3 + p.level * 0.7);
-      const xL = 10;
-      const xR = W - 10;
-      const breathe = 0.92 + 0.08 * Math.sin(t / 700);
-
-      // Ghost frames DNA helix (perspective stack with rotation)
-      const ghosts = [-3, -2, -1, 1, 2, 3];
-      for (const offset of ghosts) {
-        const fIdx = Math.max(0, Math.min(FRAME_COUNT - 1, lo + offset));
-        const depth = 1 - Math.abs(offset) * 0.18;
-        const helixAngle = (offset * Math.PI * 0.15) + (t / 3000);
-        const yShift = Math.sin(helixAngle) * 5 + offset * 2.5;
-        const xInset = Math.abs(offset) * 3 + Math.abs(Math.cos(helixAngle)) * 2;
-        ctx.beginPath();
-        for (let i = 0; i < N; i++) {
-          const v = sampleAt(fIdx, i);
-          const x = xL + xInset + (i / (N - 1)) * (xR - xL - xInset * 2);
-          const y = mid + yShift - v * amp * depth * 0.7 * breathe;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = hexAlpha(color, (0.12 * depth) * breathe);
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-      }
-
-      // Enhanced glow fill under front wave
-      ctx.beginPath();
-      for (let i = 0; i < N; i++) {
-        const v = cache[lo][i] * (1 - frac) + cache[hi][i] * frac;
-        const x = xL + (i / (N - 1)) * (xR - xL);
-        const y = mid - v * amp * breathe;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.lineTo(xR, mid + amp * 0.35);
-      ctx.lineTo(xL, mid + amp * 0.35);
-      ctx.closePath();
-      const glow = ctx.createLinearGradient(0, mid - amp, 0, mid + amp);
-      glow.addColorStop(0, hexAlpha(color, (0.35 + p.level * 0.3) * breathe));
-      glow.addColorStop(0.5, hexAlpha(color, (0.15 + p.level * 0.1)));
-      glow.addColorStop(1, hexAlpha(color, 0.02));
-      ctx.fillStyle = glow;
-      ctx.fill();
-
-      // Chromatic edge shimmer
-      for (let i = 0; i < N; i += 4) {
-        const v = cache[lo][i] * (1 - frac) + cache[hi][i] * frac;
-        const x = xL + (i / (N - 1)) * (xR - xL);
-        const y = mid - v * amp * breathe;
-        const shimmer = ctx.createRadialGradient(x, y, 0, x, y, 4 + p.level * 4);
-        shimmer.addColorStop(0, hexAlpha(color, (0.4 + Math.sin(t / 300 + i) * 0.2) * p.level));
-        shimmer.addColorStop(1, hexAlpha(color, 0));
-        ctx.fillStyle = shimmer;
-        ctx.fillRect(x - 5, y - 5, 10, 10);
-      }
-
-      // Front wave with enhanced glow
-      ctx.beginPath();
-      for (let i = 0; i < N; i++) {
-        const v = cache[lo][i] * (1 - frac) + cache[hi][i] * frac;
-        const x = xL + (i / (N - 1)) * (xR - xL);
-        const y = mid - v * amp * breathe;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2.8;
-      ctx.shadowBlur = 12 + p.level * 12 + breathe * 4;
-      ctx.shadowColor = color;
-      ctx.globalAlpha = 0.5 + p.level * 0.5;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.shadowBlur = 0;
-
-      // Morph position rail (bottom indicator with glow)
-      const morphBarY = H - 20;
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(xL, morphBarY, xR - xL, 3);
-      const morphFill = (xR - xL) * livePos;
-      const morphGrad = ctx.createLinearGradient(xL, morphBarY, xL + morphFill, morphBarY);
-      morphGrad.addColorStop(0, hexAlpha(color, 0.4));
-      morphGrad.addColorStop(1, hexAlpha(color, 0.9));
-      ctx.fillStyle = morphGrad;
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = color;
-      ctx.fillRect(xL, morphBarY, morphFill, 3);
-      ctx.shadowBlur = 0;
-
-      // Morph position tick with beam
-      const mx = xL + livePos * (xR - xL);
-      const beamGrad = ctx.createLinearGradient(mx, H - 20, mx, mid + amp * 0.35);
-      beamGrad.addColorStop(0, hexAlpha(color, 0.6));
-      beamGrad.addColorStop(1, hexAlpha(color, 0.1));
-      ctx.strokeStyle = beamGrad;
-      ctx.lineWidth = 2;
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = color;
-      ctx.beginPath();
-      ctx.moveTo(mx, H - 20);
-      ctx.lineTo(mx, mid + amp * 0.35);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Morph tick gem
-      ctx.fillStyle = hexAlpha(color, 0.95);
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = color;
-      ctx.fillRect(mx - 2, H - 20, 4, 12);
-      ctx.shadowBlur = 0;
-
-      ctx.font = "600 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(color, 0.75);
-      ctx.textAlign = "left";
-      ctx.fillText(`OSC ${group.toUpperCase()} HELIX · ${p.table.toUpperCase()}`, 10, H - 7);
-      ctx.textAlign = "right";
-      ctx.fillText(p.level < 0.01 ? "SILENT" : `${Math.round(p.level * 100)}%`, W - 10, H - 7);
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        paintCore(ctx, W, Hh, st.current, now, 0);
       },
       () => {
-        let livePos = st.current.pos;
+        // Live morph position and the crossfaded frame are resolved here so the
+        // frame callback stays one paint call and the paint stays pure.
+        let livePos = st.current.livePos;
         try { livePos = activeFireEngine().getMorphPositions()[group]; } catch { /* */ }
+        st.current.livePos = livePos;
+        ensure(st.current.table);
+        if (cache.length === FRAME_COUNT) {
+          const cur = clamp01(livePos) * (FRAME_COUNT - 1);
+          const lo = Math.floor(cur);
+          const hi = Math.min(lo + 1, FRAME_COUNT - 1);
+          const frac = cur - lo;
+          const A = cache[lo]!;
+          const B = cache[hi]!;
+          for (let i = 0; i < N; i++) scratch[i] = A[i]! * (1 - frac) + B[i]! * frac;
+          st.current.wave = scratch;
+        }
         return {
           flash: 0,
           active: st.current.level > 0.01,
           dragging: false,
-          particles: 0,
-          motionKey: `${st.current.table}|${livePos.toFixed(3)}|${st.current.level.toFixed(2)}`,
+          visible: visibleRef.current,
+          motionKey: motionHash(
+            livePos,
+            st.current.level,
+            st.current.levelA,
+            st.current.levelB,
+            st.current.levelC,
+            st.current.levelSub,
+            st.current.levelNoise,
+            st.current.table.length,
+            st.current.table.charCodeAt(0),
+          ),
         };
       },
       { minIntervalMs: 33 },
     );
     return stopLoop;
-  }, [group, color]);
+  }, [group, color, canvasRef, sizeRef, visibleRef]);
 
   return (
-    <StageFrame wrapRef={wrapRef} border={hexAlpha(color, 0.28)} height={OSC_H} chrome="corners">
+    <StageFrame wrapRef={wrapRef} border={hexA(color, 0.28)} height={OSC_H} chrome="corners">
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" aria-hidden />
     </StageFrame>
   );

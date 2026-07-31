@@ -1,13 +1,39 @@
 /**
  * Width — Side Horizon stage visualizer.
- * Mid/side stereo span (Signal Path Mix · FC.width).
+ *
+ * IDIOM: the mid/side field. The letterbox runs left→right as frequency, which
+ * is the axis that makes this module legible: mid energy is a solid centre band
+ * and side energy spreads above and below it, so `stereoWidth` literally opens
+ * the field. `monoBelow` is then visible as a place rather than a number — left
+ * of the corner the wings close and the centre band swells as the sides fold
+ * back in. The mechanism is a texture on the side bands, not a label: clean
+ * (M/S), skewed + combed (microdelay), or scattered (decorrelate).
+ *
+ * Stereo width · Mono-below · Mechanism (Signal Path Mix · FC.width).
  * Drag ↔: Stereo width. Double-click: cycle Mono → Unity → Wide → Hyper.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import type { WidthMechanism } from "@/audio/dsp/mixClarity";
 import { FC, FC_BAND, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 168;
 const W_MAX = 1.4;
@@ -19,17 +45,41 @@ const C_GLOW = bandShade(FC_BAND.mix, 0.92);
 const C_SIDE = bandShade(FC_BAND.mix, 0.72);
 const C_L = bandShade(FC_BAND.mix, 0.42);
 const C_R = bandShade(FC_BAND.mix, 0.78);
+/** Correlation warning shade — still a band shade, never an ad-hoc red. */
+const C_WARN = bandShade(FC_BAND.mix, 0.99);
 
 const WIDTH_CYCLE = [0, 0.5, 1, 1.2, 1.4] as const;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Log frequency axis: 20 Hz → 20 kHz across the panel. */
+const F_LO = 20;
+const F_HI = 20000;
+const F_SPAN = Math.log(F_HI / F_LO);
+/** One octave in normalized axis units — the mono-below crossover width. */
+const OCTAVE_U = Math.log(2) / F_SPAN;
+
+const RULER: { hz: number; label: string; major: boolean }[] = [
+  { hz: 20, label: "20", major: true },
+  { hz: 50, label: "50", major: false },
+  { hz: 100, label: "100", major: true },
+  { hz: 200, label: "200", major: false },
+  { hz: 500, label: "500", major: false },
+  { hz: 1000, label: "1k", major: true },
+  { hz: 2000, label: "2k", major: false },
+  { hz: 5000, label: "5k", major: false },
+  { hz: 10000, label: "10k", major: true },
+  { hz: 20000, label: "20k", major: false },
+];
+
+const STEPS = 128;
+/** Scratch envelopes — filled from scratch every paint, so never stale. */
+const ENV_UP = new Float32Array(STEPS + 1);
+const ENV_DN = new Float32Array(STEPS + 1);
+
+const MECH_LABEL: Record<WidthMechanism, string> = {
+  ms: "M/S MATRIX",
+  microdelay: "MICRODELAY",
+  decorrelate: "DECORRELATE",
+};
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
@@ -52,61 +102,324 @@ function midSide(w: number): { mid: number; side: number; corr: number } {
   return { mid, side, corr };
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** Deterministic scatter — a fixed field, so a still panel stays still. */
+function hash01(n: number): number {
+  const x = Math.sin(n * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function freqU(hz: number): number {
+  return clamp(Math.log(hz / F_LO) / F_SPAN, 0, 1);
+}
+
+export type WidthVizState = {
+  width: number;
+  enabled: boolean;
+  monoBelow: number;
+  mech: WidthMechanism;
+};
+
+/**
+ * Paint the mid/side field. Exported and pure so the field can be rendered
+ * headlessly — no store reads, no analyser, no `Math.random`.
+ */
+export function paintWidth(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: WidthVizState,
+  now: number,
+  flash: number,
+): void {
+  const on = p.enabled;
+  const w = on ? clamp(p.width, 0, W_MAX) : 1;
+  const { mid, side, corr } = midSide(w);
+  const n = clamp(w / W_MAX, 0, 1);
+  const mech = p.mech;
+  const monoHz = on ? clamp(p.monoBelow, 0, 400) : 0;
+  const monoOn = monoHz >= 20;
+  const monoU = monoOn ? freqU(monoHz) : 0;
+  const energy = 0.08 + n * 0.34 + flash * 0.2;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.5 });
+
+  // Geometry: frequency across, side energy mirrored around the mid axis.
+  const padL = 26;
+  const padR = 26;
+  const span = Math.max(60, W - padL - padR);
+  const axisY = Math.round(Hh * 0.46);
+  const reach = Hh * 0.27;
+  const rulerY = Hh - 40;
+
+  // ── frequency ruler ──
+  const labelAll = span > 520;
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  for (const r of RULER) {
+    const x = padL + freqU(r.hz) * span;
+    ctx.fillStyle = hexA(C_MID, r.major ? 0.16 : 0.08);
+    ctx.fillRect(x, axisY - reach, 1, reach * 2);
+    if (labelAll || r.major) {
+      ctx.fillStyle = hexA(C_MID, 0.44);
+      ctx.fillText(r.label, x, rulerY + 8);
+    }
+  }
+
+  // ── mono-below: the region where the sides have been folded to centre ──
+  if (monoOn) {
+    const mx = Math.round(padL + monoU * span);
+    if (mx - padL > 1) {
+      const wash = cachedGrad(ctx, `mono|${padL}|${mx}`, (c) => {
+        const g = c.createLinearGradient(padL, 0, mx, 0);
+        g.addColorStop(0, hexA(C_DEEP, 0.34));
+        g.addColorStop(1, hexA(C_DEEP, 0.05));
+        return g;
+      });
+      ctx.fillStyle = wash;
+      ctx.fillRect(padL, axisY - reach, mx - padL, reach * 2);
+    }
+    ctx.strokeStyle = hexA(C_HOT, 0.42 + flash * 0.2);
+    ctx.setLineDash([3, 3]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(mx, axisY - reach);
+    ctx.lineTo(mx, axisY + reach);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_HOT, 0.72);
+    ctx.fillText(`MONO < ${Math.round(monoHz)}Hz`, Math.min(W - 92, mx + 4), axisY - reach + 9);
+  }
+
+  // ── build the side envelope across frequency ──
+  // Below the mono corner the wings close; the programme profile puts the bulk
+  // of the side energy in the upper mids where real records carry it.
+  const combN = 3 + n * 9;
+  const skew = mech === "microdelay" ? 3 + n * 9 : 0;
+  const scatterPhase = mech === "decorrelate" ? Math.floor(now / 80) : 0;
+  for (let i = 0; i <= STEPS; i++) {
+    const u = i / STEPS;
+    const gate = monoOn ? clamp((u - monoU) / OCTAVE_U, 0, 1) : 1;
+    const prof = 0.34 + 0.66 * Math.exp(-Math.pow((u - 0.62) / 0.42, 2));
+    const ripple = 0.86 + hash01(i * 1.37) * 0.28;
+    let base = reach * side * gate * prof * ripple;
+    if (mech === "microdelay") {
+      // A short delay combs the side channel — visible notches across frequency.
+      base *= 0.52 + 0.48 * Math.abs(Math.cos(u * combN * Math.PI));
+    }
+    if (mech === "decorrelate") {
+      base *= 0.6 + hash01(i * 3.11 + scatterPhase) * 0.6;
+    }
+    ENV_UP[i] = base * (1 + hash01(i * 0.71) * 0.1);
+    ENV_DN[i] = base * (0.9 + hash01(i * 0.93 + 51) * 0.16);
+  }
+
+  // ── side bands ──
+  const sideFill = cachedGrad(ctx, `side|${axisY}|${(reach * 10) | 0}|${(n * 20) | 0}`, (c) => {
+    const g = c.createLinearGradient(0, axisY - reach, 0, axisY + reach);
+    g.addColorStop(0, hexA(C_L, 0.05 + n * 0.1));
+    g.addColorStop(0.34, hexA(C_L, 0.24 + n * 0.3));
+    g.addColorStop(0.5, hexA(C_GLOW, 0.16 + n * 0.16));
+    g.addColorStop(0.66, hexA(C_R, 0.24 + n * 0.3));
+    g.addColorStop(1, hexA(C_R, 0.05 + n * 0.1));
+    return g;
+  });
+
+  const traceSide = (dir: -1 | 1, dx: number) => {
+    const env = dir < 0 ? ENV_UP : ENV_DN;
+    for (let i = 0; i <= STEPS; i++) {
+      const x = padL + (i / STEPS) * span + dx;
+      const y = axisY + dir * env[i]!;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  };
+
+  if (mech === "decorrelate") {
+    // Scattered: the side field is a cloud of uncorrelated grains, not a shape.
+    ctx.save();
+    for (let i = 0; i <= STEPS; i++) {
+      const x = padL + (i / STEPS) * span;
+      const cw = span / STEPS;
+      for (const dir of [-1, 1] as const) {
+        const h = dir < 0 ? ENV_UP[i]! : ENV_DN[i]!;
+        if (h < 1) continue;
+        const grains = 3;
+        for (let k = 0; k < grains; k++) {
+          const seed = i * 17.3 + k * 5.1 + (dir < 0 ? 0 : 91) + scatterPhase * 0.37;
+          const gy = axisY + dir * h * (0.15 + hash01(seed) * 0.85);
+          const ga = (0.16 + hash01(seed + 3) * 0.4) * (0.4 + n * 0.6);
+          ctx.fillStyle = hexA(dir < 0 ? C_L : C_R, ga);
+          ctx.fillRect(x + hash01(seed + 7) * cw, gy, Math.max(1, cw * 0.6), 1.4);
+        }
+      }
+    }
+    ctx.restore();
+    // A faint hull keeps the cloud readable as an envelope.
+    ctx.beginPath();
+    traceSide(-1, 0);
+    ctx.lineTo(padL + span, axisY);
+    ctx.lineTo(padL, axisY);
+    ctx.closePath();
+    ctx.fillStyle = hexA(C_L, 0.07 + n * 0.08);
+    ctx.fill();
+    ctx.beginPath();
+    traceSide(1, 0);
+    ctx.lineTo(padL + span, axisY);
+    ctx.lineTo(padL, axisY);
+    ctx.closePath();
+    ctx.fillStyle = hexA(C_R, 0.07 + n * 0.08);
+    ctx.fill();
+  } else {
+    // Clean (M/S) or skewed (microdelay): a solid mirrored envelope. The skew
+    // offsets the two halves against each other — the delay made visible.
+    ctx.beginPath();
+    traceSide(-1, -skew);
+    for (let i = STEPS; i >= 0; i--) {
+      const x = padL + (i / STEPS) * span + skew;
+      ctx.lineTo(x, axisY + ENV_DN[i]!);
+    }
+    ctx.closePath();
+    ctx.fillStyle = sideFill;
+    ctx.fill();
+    glowStroke(ctx, () => traceSide(-1, -skew), C_L, { width: 1.2, glow: 0.8, alpha: 0.5 + n * 0.4 });
+    glowStroke(ctx, () => traceSide(1, skew), C_R, { width: 1.2, glow: 0.8, alpha: 0.5 + n * 0.4 });
+  }
+
+  // ── mid band: the correlated centre, fattened where the sides folded in ──
+  const midBase = Hh * 0.055;
+  ctx.beginPath();
+  for (let i = 0; i <= STEPS; i++) {
+    const u = i / STEPS;
+    const gate = monoOn ? clamp((u - monoU) / OCTAVE_U, 0, 1) : 1;
+    const fold = 1 + (1 - gate) * 0.85;
+    const h = midBase * (0.55 + mid * 0.65) * fold;
+    const x = padL + u * span;
+    if (i === 0) ctx.moveTo(x, axisY - h);
+    else ctx.lineTo(x, axisY - h);
+  }
+  for (let i = STEPS; i >= 0; i--) {
+    const u = i / STEPS;
+    const gate = monoOn ? clamp((u - monoU) / OCTAVE_U, 0, 1) : 1;
+    const fold = 1 + (1 - gate) * 0.85;
+    const h = midBase * (0.55 + mid * 0.65) * fold;
+    ctx.lineTo(padL + u * span, axisY + h);
+  }
+  ctx.closePath();
+  const midFill = cachedGrad(ctx, `midb|${axisY}|${(midBase * 10) | 0}|${(mid * 20) | 0}`, (c) => {
+    const g = c.createLinearGradient(0, axisY - midBase * 1.6, 0, axisY + midBase * 1.6);
+    g.addColorStop(0, hexA(C_HOT, 0.3));
+    g.addColorStop(0.5, hexA(C_GLOW, 0.72));
+    g.addColorStop(1, hexA(C_HOT, 0.3));
+    return g;
+  });
+  ctx.fillStyle = midFill;
+  ctx.fill();
+
+  // Centre axis + its bloom.
+  ctx.fillStyle = hexA(C_GLOW, 0.5);
+  ctx.fillRect(padL, axisY - 0.5, span, 1);
+  lit(ctx, () => {
+    const marks = 7;
+    for (let i = 0; i < marks; i++) {
+      const x = padL + ((i + 0.5) / marks) * span;
+      drawGlow(ctx, x, axisY, 14 + n * 16, C_GLOW, 0.08 + mid * 0.12 + flash * 0.1);
+    }
+  });
+
+  // Channel identity where the field is widest.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_L, 0.6 + n * 0.3);
+  ctx.fillText("+S · L", padL + span - 4, axisY - reach * 0.62);
+  ctx.fillStyle = hexA(C_R, 0.6 + n * 0.3);
+  ctx.fillText("−S · R", padL + span - 4, axisY + reach * 0.62 + 6);
+
+  // ── correlation meter ──
+  const corrW = 62;
+  const corrX = W - corrW - 12;
+  const corrY = 14;
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_SIDE, 0.8);
+  ctx.fillText(`CORR ${corr.toFixed(2)}`, W - 12, corrY - 4);
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(corrX, corrY, corrW, 5);
+  ctx.fillStyle = hexA(corr < 0.25 ? C_WARN : C_SIDE, 0.8);
+  ctx.fillRect(corrX, corrY, corrW * corr, 5);
+
+  // ── telemetry row ──
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_GLOW, 0.7);
+  ctx.fillText(`MID ${Math.round(mid * 100)}`, padL, 18);
+  ctx.fillStyle = hexA(C_SIDE, 0.68);
+  ctx.fillText(`SIDE ${Math.round(side * 100)}`, padL + 60, 18);
+  ctx.fillStyle = hexA(C_HOT, 0.62);
+  ctx.fillText(monoOn ? `MONO ${Math.round(monoHz)}Hz` : "MONO OFF", padL + 128, 18);
+
+  pill(ctx, W * 0.5, 2, on ? MECH_LABEL[mech] : "BYPASS", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
+
+  // ── width rail: the drag affordance, notched at the double-click cycle ──
+  const railY = Hh - 26;
+  const railPad = 14;
+  const railW = W - railPad * 2;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(railPad, railY, railW, 6);
+  ctx.fillStyle = hexA(C_HOT, 0.55 + flash * 0.25);
+  ctx.fillRect(railPad, railY + 1, Math.max(2, railW * (w / W_MAX)), 4);
+  for (const notch of WIDTH_CYCLE) {
+    const nx = railPad + (notch / W_MAX) * railW;
+    const active = Math.abs(w - notch) < 0.05;
+    ctx.fillStyle = hexA(active ? C_GLOW : C_MID, active ? 0.9 : 0.32);
+    ctx.fillRect(nx - 1, railY - 2, 2, 10);
+  }
+  const thumbX = railPad + (w / W_MAX) * railW;
+  lit(ctx, () => drawGlow(ctx, thumbX, railY + 3, 8 + flash * 5, C_GLOW, 0.85));
+
+  if (!on) {
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, W, Hh);
+  }
+
+  grain(ctx, W, Hh, 0.026);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    on ? "SIDE HORIZON" : "SIDE HORIZON · BYPASS",
+    `${widthLabel(w)} · ${Math.round(w * 100)}%`,
+    C_GLOW,
+    on ? C_HOT : C_MID,
+  );
 }
 
 export function WidthStageViz() {
   const width = useFireCommandStore((s) => s.patch.stereoWidth) ?? 1;
+  const monoBelow = useFireCommandStore((s) => s.patch.monoBelow) ?? 0;
+  const mech = (useFireCommandStore((s) => s.patch.widthMechanism) ?? "ms") as WidthMechanism;
   const enabled = useFireCommandStore((s) => s.patch.moduleEnable?.["width"] !== false);
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef(false);
-  const prevKey = useRef("");
-  const particles = useRef<{ x: number; y: number; vx: number; life: number; side: number }[]>([]);
-  const st = useRef({ width, enabled });
-  st.current = { width, enabled };
+  const prevKey = useRef(0);
+  const st = useRef<WidthVizState>({ width, enabled, monoBelow, mech });
+  st.current = { width, enabled, monoBelow, mech };
 
   const live = enabled && Math.abs(width - 1) > 0.03;
 
   useEffect(() => {
-    const key = `${width.toFixed(3)}|${enabled ? 1 : 0}`;
+    const key = motionHash(width, enabled, monoBelow, mech === "ms" ? 0 : mech === "microdelay" ? 1 : 2);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [width, enabled]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [width, enabled, monoBelow, mech]);
 
   const applyWidth = useCallback(
     (clientX: number) => {
@@ -116,7 +429,7 @@ export function WidthStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       setParam("stereoWidth", Math.round(x * W_MAX * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -163,291 +476,30 @@ export function WidthStageViz() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const stopLoop = startStageVizLoop(
-      (t) => {
-      flashRef.current *= 0.9;
-
-      const { w: W, h: Hcss } = sizeRef.current;
-      if (W < 2) return;
-      const { width: wVal, enabled: on } = st.current;
-      const w = on ? wVal : 1;
-      const flash = flashRef.current;
-      const { mid, side, corr } = midSide(w);
-      const breath = 0.5 + 0.5 * Math.sin(t * 0.0018);
-      const cx = W * 0.5;
-      const cy = Hcss * 0.46;
-      const n = clamp(w / W_MAX, 0, 1);
-
-      ctx.clearRect(0, 0, W, Hcss);
-
-      // Chamber plate
-      const bg = ctx.createLinearGradient(0, 0, W, Hcss);
-      bg.addColorStop(0, hexAlpha(C_DEEP, 0.55 + flash * 0.2));
-      bg.addColorStop(0.5, "rgba(6,3,1,0.96)");
-      bg.addColorStop(1, hexAlpha(C_MID, 0.35 + flash * 0.15));
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Horizon glow band — widens with stereo
-      const horizonY = cy + Hcss * 0.08;
-      const hzW = W * (0.12 + n * 0.42 + flash * 0.06);
-      const hz = ctx.createRadialGradient(cx, horizonY, 2, cx, horizonY, hzW);
-      hz.addColorStop(0, hexAlpha(C_GLOW, (0.18 + n * 0.35 + flash * 0.25) * (on ? 1 : 0.35)));
-      hz.addColorStop(0.55, hexAlpha(C_HOT, 0.1 + n * 0.12));
-      hz.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = hz;
-      ctx.fillRect(0, 0, W, Hcss);
-
-      // Mid corridor (narrows as sides grow)
-      const midHalf = W * (0.08 + mid * 0.1) * (1 - n * 0.25);
-      const midG = ctx.createLinearGradient(cx - midHalf, 0, cx + midHalf, 0);
-      midG.addColorStop(0, "rgba(0,0,0,0)");
-      midG.addColorStop(0.35, hexAlpha(C, 0.12 + mid * 0.18));
-      midG.addColorStop(0.5, hexAlpha(C_GLOW, 0.22 + mid * 0.2 + flash * 0.15));
-      midG.addColorStop(0.65, hexAlpha(C, 0.12 + mid * 0.18));
-      midG.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = midG;
-      ctx.fillRect(cx - midHalf * 1.4, 8, midHalf * 2.8, Hcss - 28);
-
-      // Side wings
-      const wingReach = W * (0.08 + n * 0.38);
-      for (const dir of [-1, 1] as const) {
-        const col = dir < 0 ? C_L : C_R;
-        const wx = cx + dir * (midHalf * 0.6 + wingReach * 0.35);
-        const wg = ctx.createRadialGradient(wx, cy, 0, wx, cy, wingReach);
-        wg.addColorStop(0, hexAlpha(col, (0.12 + side * 0.45 + flash * 0.2) * (on ? 1 : 0.25)));
-        wg.addColorStop(0.55, hexAlpha(col, 0.08 + side * 0.15));
-        wg.addColorStop(1, "rgba(0,0,0,0)");
-        ctx.fillStyle = wg;
-        ctx.beginPath();
-        ctx.ellipse(wx, cy, wingReach * 0.95, Hcss * (0.22 + side * 0.18), 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // L / R speaker lobes
-      const lobeY = cy;
-      const lobeSep = W * (0.12 + n * 0.28);
-      for (const dir of [-1, 1] as const) {
-        const col = dir < 0 ? C_L : C_R;
-        const lx = cx + dir * lobeSep;
-        const r = 10 + n * 14 + breath * 2;
-        const lg = ctx.createRadialGradient(lx - dir * 3, lobeY - 2, 1, lx, lobeY, r * 1.6);
-        lg.addColorStop(0, hexAlpha(C_GLOW, 0.55 + n * 0.3));
-        lg.addColorStop(0.4, hexAlpha(col, 0.45 + n * 0.35));
-        lg.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = lg;
-        ctx.beginPath();
-        ctx.arc(lx, lobeY, r * 1.4, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Cone chevrons pointing outward
-        ctx.strokeStyle = hexAlpha(col, 0.35 + n * 0.45);
-        ctx.lineWidth = 1.4;
-        for (let k = 1; k <= 3; k++) {
-          const ox = lx + dir * (8 + k * (6 + n * 8));
-          const oh = 4 + k * (3 + n * 4);
-          ctx.beginPath();
-          ctx.moveTo(lx + dir * 6, lobeY);
-          ctx.lineTo(ox, lobeY - oh);
-          ctx.moveTo(lx + dir * 6, lobeY);
-          ctx.lineTo(ox, lobeY + oh);
-          ctx.stroke();
-        }
-
-        ctx.font = "800 9px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(col, 0.75 + n * 0.2);
-        ctx.textAlign = "center";
-        ctx.fillText(dir < 0 ? "L" : "R", lx, lobeY + 3.5);
-      }
-
-      // Link arc between L and R (tight when mono, arched when wide)
-      ctx.beginPath();
-      const arcLift = 8 + n * 28 + breath * 4;
-      ctx.moveTo(cx - lobeSep, lobeY);
-      ctx.quadraticCurveTo(cx, lobeY - arcLift, cx + lobeSep, lobeY);
-      ctx.strokeStyle = hexAlpha(C_SIDE, 0.25 + n * 0.45 + flash * 0.2);
-      ctx.lineWidth = 1.5 + n * 2;
-      ctx.stroke();
-
-      // Lissajous M/S figure
-      const points = 100;
-      const phase = t * 0.0022;
-      ctx.beginPath();
-      for (let i = 0; i <= points; i++) {
-        const u = (i / points) * Math.PI * 2;
-        const m = Math.sin(u + phase) * mid;
-        const s = Math.sin(u * 2 + phase + w * Math.PI * 0.4) * side * (0.55 + n * 0.45);
-        const x = cx + m * W * 0.22;
-        const y = cy + 4 - s * Hcss * 0.28;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-      ctx.strokeStyle = hexAlpha(C, 0.35 + n * 0.4 + flash * 0.25);
-      ctx.lineWidth = 1.6 + n * 1.2;
-      ctx.shadowBlur = 6 + n * 14 + flash * 10;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.55);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = hexAlpha(C, 0.04 + n * 0.08);
-      ctx.fill();
-
-      // Fan beams from center
-      const beams = 6;
-      const spread = 18 + n * 70;
-      for (let i = -beams; i <= beams; i++) {
-        const norm = i / beams;
-        const a = norm * (0.15 + n * 0.7) * (0.85 + breath * 0.15);
-        const alpha = (1 - Math.abs(norm)) * (0.12 + n * 0.4) * (on ? 1 : 0.3);
-        if (alpha < 0.02) continue;
-        const ex = cx + Math.sin(a) * spread;
-        const ey = cy - Math.cos(a) * (Hcss * 0.32);
-        ctx.strokeStyle = hexAlpha(i === 0 ? C_GLOW : C_SIDE, alpha);
-        ctx.lineWidth = i === 0 ? 2 : 1.1;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(ex, ey);
-        ctx.stroke();
-        const eg = ctx.createRadialGradient(ex, ey, 0, ex, ey, 5 + n * 3);
-        eg.addColorStop(0, hexAlpha(C_GLOW, alpha * 0.9));
-        eg.addColorStop(1, hexAlpha(C, 0));
-        ctx.fillStyle = eg;
-        ctx.beginPath();
-        ctx.arc(ex, ey, 5 + n * 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Emit side particles when wide / dragging
-      if (on && (n > 0.08 || dragRef.current || flash > 0.2)) {
-        if (Math.random() < 0.35 + n * 0.45 + (dragRef.current ? 0.3 : 0)) {
-          const sideDir = Math.random() < 0.5 ? -1 : 1;
-          particles.current.push({
-            x: cx,
-            y: cy + (Math.random() - 0.5) * 16,
-            vx: sideDir * (0.6 + n * 2.8 + Math.random()),
-            life: 1,
-            side: sideDir,
-          });
-          if (particles.current.length > 48) particles.current.shift();
-        }
-      }
-      for (let i = particles.current.length - 1; i >= 0; i--) {
-        const p = particles.current[i]!;
-        p.x += p.vx;
-        p.y += Math.sin(t * 0.01 + p.x * 0.05) * 0.4;
-        p.life -= 0.022 + (1 - n) * 0.01;
-        if (p.life <= 0) {
-          particles.current.splice(i, 1);
-          continue;
-        }
-        const col = p.side < 0 ? C_L : C_R;
-        const pr = 1.5 + p.life * 2.5;
-        const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, pr * 2.5);
-        pg.addColorStop(0, hexAlpha(C_GLOW, p.life * 0.85));
-        pg.addColorStop(0.5, hexAlpha(col, p.life * 0.5));
-        pg.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = pg;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, pr * 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Center mono/wide jewel
-      const jr = 3.5 + n * 3 + flash * 2;
-      const jg = ctx.createRadialGradient(cx, cy, 0, cx, cy, jr * 2.2);
-      jg.addColorStop(0, hexAlpha(C_GLOW, 0.9));
-      jg.addColorStop(0.5, hexAlpha(C_HOT, 0.55));
-      jg.addColorStop(1, hexAlpha(C, 0));
-      ctx.fillStyle = jg;
-      ctx.beginPath();
-      ctx.arc(cx, cy, jr * 2.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(cx, cy, jr * 0.55, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Bottom scrub rail with notches
-      const railY = Hcss - 14;
-      const railPad = 14;
-      ctx.strokeStyle = hexAlpha(C, 0.25);
-      ctx.lineWidth = 3;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(W - railPad, railY);
-      ctx.stroke();
-
-      // Fill to width
-      const thumbX = railPad + (w / W_MAX) * (W - railPad * 2);
-      ctx.strokeStyle = hexAlpha(C_HOT, 0.7 + flash * 0.25);
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(railPad, railY);
-      ctx.lineTo(thumbX, railY);
-      ctx.stroke();
-
-      for (const notch of WIDTH_CYCLE) {
-        const nx = railPad + (notch / W_MAX) * (W - railPad * 2);
-        const active = Math.abs(w - notch) < 0.05;
-        ctx.fillStyle = hexAlpha(active ? C_GLOW : C, active ? 0.95 : 0.35);
-        ctx.beginPath();
-        ctx.arc(nx, railY, active ? 3.2 : 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Thumb
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.shadowBlur = 8 + flash * 10;
-      ctx.shadowColor = hexAlpha(C_HOT, 0.7);
-      ctx.beginPath();
-      ctx.arc(thumbX, railY, 5 + flash * 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Correlation stub meter (top-right)
-      const corrW = 52;
-      const corrH = 5;
-      const corrX = W - corrW - 10;
-      const corrY = 10;
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(corrX, corrY, corrW, corrH);
-      ctx.fillStyle = hexAlpha(C_SIDE, 0.75);
-      ctx.fillRect(corrX, corrY, corrW * corr, corrH);
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C, 0.55);
-      ctx.textAlign = "right";
-      ctx.fillText("CORR", corrX - 4, corrY + 5);
-
-      // Labels
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.55 + flash * 0.35);
-      ctx.textAlign = "left";
-      ctx.fillText(on ? "SIDE HORIZON" : "SIDE HORIZON · BYPASS", 10, Hcss - 8);
-      ctx.textAlign = "right";
-      ctx.fillStyle = hexAlpha(C, 0.7 + flash * 0.25);
-      ctx.fillText(
-        `${widthLabel(w)} · ${Math.round(w * 100)}%`,
-        W - 10,
-        Hcss - 8,
-      );
-
-      // Bypass veil
-      if (!on) {
-        ctx.fillStyle = "rgba(0,0,0,0.35)";
-        ctx.fillRect(0, 0, W, Hcss);
-      }
+      (now) => {
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.9;
+        paintWidth(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
-        active: !!st.current.enabled,
+        // Only the decorrelate texture is time-varying; M/S and microdelay are
+        // static readouts and should cost nothing while nothing is changing.
+        active: st.current.enabled && st.current.mech === "decorrelate",
         dragging: !!dragRef.current,
-        particles: particles.current.length,
-        motionKey: JSON.stringify(st.current),
+        particles: 0,
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.width,
+          st.current.enabled,
+          st.current.monoBelow,
+          st.current.mech === "ms" ? 0 : st.current.mech === "microdelay" ? 1 : 2,
+        ),
       }),
       { minIntervalMs: 22 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div

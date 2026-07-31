@@ -1,15 +1,45 @@
 /**
  * MOD — Morph Weaver MSEG visualizer.
- * Multi-segment envelope (up to 8 points) · Env→WT A/B/C (Signal Path Tone · FC.envMod).
+ *
+ * IDIOM: the breakpoint path. This one is deliberately an *editor*, not a
+ * contour — graph paper, a time ruler in seconds, square node handles you can
+ * grab, a control dot per segment showing where its curve bows, and a sustain
+ * flag with loop brackets. Nothing about it reads like the smooth ADSR panels.
+ *
+ * Two traces, because an MSEG has two truths:
+ *   · dashed / dim — the path as authored, every segment node to node.
+ *   · solid / bright — what a held note actually does: rise to the sustain node
+ *     then hold, or, with loop armed, cycle the loop span over and over. That
+ *     continuation is what fills the letterbox: the breakpoints cluster at the
+ *     left and the hold (or the repeats) stretch out across the rest.
+ *
+ * Points · Sustain · Loop · Env→WT A/B/C (Signal Path Tone · FC.envMod).
  * Drag nodes (time/level), mid-segment to cycle curve. Bottom rail: morph depth per osc. Double-click: defaults.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
+import { type ModEnvPoint, type EnvCurve, normalizeModEnvPoints, applyEnvCurve } from "@/audio/dsp/toneDifferentiation";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
-import { type ModEnvPoint, type EnvCurve, normalizeModEnvPoints, applyEnvCurve } from "@/audio/dsp/toneDifferentiation";
+import { useStageCanvas } from "./useStageCanvas";
 import { useToneTelemetry } from "./useToneTelemetry";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lattice,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  roundRect,
+  VIZ_FONT_LABEL,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.envMod;
@@ -22,66 +52,404 @@ const C_OA = FC.oscA;
 const C_OB = FC.oscB;
 const C_OC = FC.oscC;
 
-const T_MIN = 0.001;
 const T_MAX = 4;
 const CURVE_CYCLE: EnvCurve[] = ["lin", "exp", "log", "s", "step", "overshoot", "spring"];
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Editor geometry. Frozen: the node hit-tests and the drag math share it. */
+const PAD = 14;
+const TOP = 24;
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function logLerp(t: number, lo: number, hi: number) {
-  return lo * Math.pow(hi / lo, clamp(t, 0, 1));
+function timeToX(t: number, maxT: number, pad: number, usableW: number): number {
+  return pad + (t / Math.max(0.001, maxT)) * usableW;
 }
 
-function logNorm(v: number, lo: number, hi: number) {
-  return Math.log(clamp(v, lo, hi) / lo) / Math.log(hi / lo);
+function xToTime(x: number, maxT: number, pad: number, usableW: number): number {
+  return clamp((x - pad) / Math.max(1, usableW), 0, 1) * maxT;
 }
 
-function timeToX(t: number, maxT: number, PAD: number, usableW: number): number {
-  return PAD + (t / Math.max(0.001, maxT)) * usableW;
+/**
+ * Allocation-free digest of the point list, for the RAF pump's motion key.
+ * `JSON.stringify` here would mint a string every frame for every visualizer.
+ */
+function pointsDigest(pts: ModEnvPoint[]): number {
+  let h = 2166136261;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]!;
+    h ^= ((p.t * 1000) | 0) + 0x9e3779b9 + (h << 6) + (h >>> 2);
+    h |= 0;
+    h ^= ((p.level * 1000) | 0) + 0x85ebca6b + (h << 6) + (h >>> 2);
+    h |= 0;
+    h ^= (p.curve.length << 5) ^ (p.curve.charCodeAt(0) | 0);
+    h |= 0;
+  }
+  return h;
 }
 
-function xToTime(x: number, maxT: number, PAD: number, usableW: number): number {
-  return clamp((x - PAD) / Math.max(1, usableW), 0, 1) * maxT;
+/**
+ * What a held note actually outputs at `t` — the engine's `evalModEnvHeld`
+ * shape, minus the re-normalize, so the bright trace matches what you hear.
+ */
+function heldLevel(pts: ModEnvPoint[], susIdx: number, loop: boolean, t: number): number {
+  const lastT = pts[pts.length - 1]!.t || 0.001;
+  const susT = pts[susIdx]!.t;
+  let x = Math.max(0, t);
+  if (loop && x > lastT && lastT > 0.001) {
+    const loopStart = pts[Math.min(1, susIdx)]!.t;
+    const span = Math.max(0.001, lastT - loopStart);
+    x = loopStart + ((x - loopStart) % span);
+  }
+  if (x <= 0) return pts[0]!.level;
+  if (x >= susT) return pts[susIdx]!.level;
+  for (let i = 1; i < pts.length; i++) {
+    if (x <= pts[i]!.t || i === pts.length - 1) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      const dur = Math.max(0.0001, b.t - a.t);
+      return a.level + (b.level - a.level) * applyEnvCurve((x - a.t) / dur, b.curve);
+    }
+  }
+  return pts[pts.length - 1]!.level;
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+export type ModEnvVizState = {
+  points: ModEnvPoint[];
+  sustainIndex: number;
+  loop: boolean;
+  envA: number;
+  envB: number;
+  envC: number;
+  /** Which osc the bottom rail is editing — the drag zone's third. */
+  focus: "a" | "b" | "c";
+  /** Live telemetry — passed in so the paint stays pure. */
+  telPhase: number;
+  telLevel: number;
+  telReleasing: boolean;
+  voices: number;
+};
+
+/**
+ * Paint the breakpoint editor. Exported and pure so any point list can be
+ * rendered headlessly without mounting the component.
+ */
+export function paintModEnv(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: ModEnvVizState,
+  now: number,
+  flash: number,
+): void {
+  const pts = p.points;
+  const n = pts.length;
+  const usableW = Math.max(60, W - PAD * 2);
+  const usableH = Hh - 48;
+  const floorY = TOP + usableH;
+  const lastT = pts[n - 1]!.t || 1;
+  const maxT = Math.max(lastT, T_MAX);
+  const susIdx = clamp(Math.round(p.sustainIndex), 0, n - 1);
+  const susT = pts[susIdx]!.t;
+  const loopStart = pts[Math.min(1, susIdx)]!.t;
+
+  const xOf = (t: number) => timeToX(t, maxT, PAD, usableW);
+  const yOf = (lv: number) => TOP + (1 - clamp(lv, 0, 1)) * usableH;
+
+  const morphMag = Math.max(Math.abs(p.envA), Math.abs(p.envB), Math.abs(p.envC));
+  const susLevel = pts[susIdx]!.level;
+  const energy = 0.18 + susLevel * 0.18 + morphMag * 0.32 + flash * 0.24;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.74 });
+  lattice(ctx, W, Hh, C_MID, 14, 0.06);
+
+  // ── graph paper: level rows, half-second columns ──
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = Math.round(yOf(i / 4)) + 0.5;
+    ctx.strokeStyle = hexA(C_MID, i === 0 || i === 4 ? 0.2 : 0.08);
+    ctx.beginPath();
+    ctx.moveTo(PAD, y);
+    ctx.lineTo(PAD + usableW, y);
+    ctx.stroke();
+  }
+  const steps = Math.max(4, Math.min(32, Math.round(maxT / 0.5)));
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * maxT;
+    const x = Math.round(xOf(t)) + 0.5;
+    const major = i % 2 === 0;
+    ctx.strokeStyle = hexA(C_MID, major ? 0.14 : 0.06);
+    ctx.beginPath();
+    ctx.moveTo(x, TOP);
+    ctx.lineTo(x, floorY);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Time ruler — whole seconds only, so the row stays readable.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  for (let s = 1; s <= Math.floor(maxT); s++) {
+    ctx.fillStyle = hexA(C_MID, 0.42);
+    ctx.fillText(`${s}s`, xOf(s), floorY - 5);
+  }
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_MID, 0.45);
+  ctx.fillText("1.0", PAD - 2, yOf(1) + 3);
+  ctx.fillStyle = hexA(C_MID, 0.34);
+  ctx.fillText("0", PAD - 2, yOf(0) + 3);
+
+  // ── the region a held note sits in: the hold shelf, or the loop span ──
+  const holdX = xOf(p.loop ? loopStart : susT);
+  if (holdX < PAD + usableW - 8) {
+    ctx.fillStyle = hexA(C_MORPH, p.loop ? 0.06 : 0.04);
+    ctx.fillRect(holdX, TOP, PAD + usableW - holdX, usableH);
+  }
+
+  // ── authored path: every segment, node to node, dashed ──
+  const authored = () => {
+    ctx.moveTo(xOf(pts[0]!.t), yOf(pts[0]!.level));
+    for (let i = 1; i < n; i++) {
+      const a = pts[i - 1]!;
+      const b = pts[i]!;
+      const x1 = xOf(a.t);
+      const x2 = xOf(b.t);
+      const y1 = yOf(a.level);
+      const y2 = yOf(b.level);
+      const segs = Math.max(8, Math.min(48, Math.ceil((x2 - x1) / 4)));
+      for (let s = 1; s <= segs; s++) {
+        const u = s / segs;
+        ctx.lineTo(x1 + (x2 - x1) * u, y1 + (y2 - y1) * applyEnvCurve(u, b.curve));
+      }
+    }
+  };
+  ctx.save();
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = hexA(C_MID, 0.4);
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  authored();
+  ctx.stroke();
+  ctx.restore();
+
+  // ── played path: rise, then hold or loop, all the way across ──
+  const N = Math.max(80, Math.min(420, (usableW / 4) | 0));
+  const played = () => {
+    for (let i = 0; i <= N; i++) {
+      const t = (i / N) * maxT;
+      const x = PAD + (i / N) * usableW;
+      const y = yOf(heldLevel(pts, susIdx, p.loop, t));
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  };
+  ctx.beginPath();
+  played();
+  ctx.lineTo(PAD + usableW, floorY);
+  ctx.lineTo(PAD, floorY);
+  ctx.closePath();
+  const fill = cachedGrad(ctx, `msegfill|${Hh}|${(susLevel * 10) | 0}|${(morphMag * 10) | 0}`, (c) => {
+    const g = c.createLinearGradient(0, TOP, 0, floorY);
+    g.addColorStop(0, hexA(C_GLOW, 0.22 + morphMag * 0.14));
+    g.addColorStop(0.55, hexA(C_HOT, 0.1));
+    g.addColorStop(1, hexA(C_DEEP, 0.03));
+    return g;
+  });
+  ctx.fillStyle = fill;
+  ctx.fill();
+  glowStroke(ctx, played, C_GLOW, { width: 2.1, glow: 0.7 + morphMag * 0.7 + flash * 0.6, alpha: 0.9 });
+
+  // ── per-segment curve tag + a control dot where the curve bows ──
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  for (let i = 1; i < n; i++) {
+    const a = pts[i - 1]!;
+    const b = pts[i]!;
+    const x1 = xOf(a.t);
+    const x2 = xOf(b.t);
+    if (x2 - x1 < 14) continue;
+    const mx = (x1 + x2) * 0.5;
+    const my = yOf(a.level + (b.level - a.level) * applyEnvCurve(0.5, b.curve));
+    ctx.fillStyle = hexA(C_HOT, 0.5);
+    ctx.beginPath();
+    ctx.arc(mx, my, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = hexA(C_HOT, 0.62);
+    ctx.fillText(String(b.curve).slice(0, 3).toUpperCase(), mx, my - 7);
+  }
+
+  // ── node handles: square, editor-style, with the index beside them ──
+  for (let i = 0; i < n; i++) {
+    const px = xOf(pts[i]!.t);
+    const py = yOf(pts[i]!.level);
+    const isSus = i === susIdx;
+    const col = isSus ? C_MORPH : C_HOT;
+    const s = isSus ? 5 : 4;
+    lit(ctx, () => drawGlow(ctx, px, py, 9 + flash * 4, col, isSus ? 0.6 : 0.4));
+    ctx.fillStyle = "rgba(4,4,8,0.85)";
+    ctx.strokeStyle = hexA(col, 0.95);
+    ctx.lineWidth = 1.4;
+    if (isSus) {
+      ctx.beginPath();
+      ctx.moveTo(px, py - s - 1);
+      ctx.lineTo(px + s + 1, py);
+      ctx.lineTo(px, py + s + 1);
+      ctx.lineTo(px - s - 1, py);
+      ctx.closePath();
+    } else {
+      roundRect(ctx, px - s, py - s, s * 2, s * 2, 1.5);
+    }
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = hexA(col, 0.95);
+    ctx.beginPath();
+    ctx.arc(px, py, 1.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(col, 0.62);
+    ctx.fillText(`${i}`, px + s + 3, py - 4);
+  }
+
+  // Sustain flag — a stem up to the top rail with an S on it.
+  const susX = xOf(susT);
+  ctx.save();
+  ctx.setLineDash([2, 3]);
+  ctx.strokeStyle = hexA(C_MORPH, 0.5);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(susX, TOP);
+  ctx.lineTo(susX, yOf(susLevel));
+  ctx.stroke();
+  ctx.restore();
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  ctx.fillStyle = hexA(C_MORPH, 0.85);
+  ctx.fillText("S", susX, TOP + 8);
+
+  // Loop brackets — the span that repeats while the note is held.
+  if (p.loop && lastT > 0.001) {
+    const lx = xOf(loopStart);
+    const rx = xOf(lastT);
+    const ly = TOP + 5;
+    ctx.strokeStyle = hexA(C_GLOW, 0.55);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(lx, ly + 5);
+    ctx.lineTo(lx, ly);
+    ctx.lineTo(rx, ly);
+    ctx.lineTo(rx, ly + 5);
+    ctx.stroke();
+    ctx.fillStyle = hexA(C_GLOW, 0.8);
+    ctx.beginPath();
+    ctx.moveTo(rx, ly);
+    ctx.lineTo(rx - 5, ly - 3);
+    ctx.lineTo(rx - 5, ly + 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_GLOW, 0.75);
+    ctx.fillText(`LOOP ${((maxT - loopStart) / Math.max(0.001, lastT - loopStart)).toFixed(1)}×`, (lx + rx) * 0.5, ly - 4);
+  } else {
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "left";
+    ctx.fillStyle = hexA(C_MORPH, 0.55);
+    ctx.fillText(
+      susIdx < n - 1 ? "SUS HOLD — later nodes play on release" : "SUS HOLD",
+      susX + 8,
+      yOf(susLevel) - 10,
+    );
+  }
+
+  // ── live playhead ──
+  if (p.voices > 0) {
+    const cx = PAD + clamp(p.telPhase, 0, 1) * usableW;
+    const cy = yOf(clamp(p.telLevel, 0, 1));
+    const col = p.telReleasing ? C_MORPH : C_GLOW;
+    ctx.strokeStyle = hexA(col, 0.55);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(cx, TOP);
+    ctx.lineTo(cx, floorY);
+    ctx.stroke();
+    lit(ctx, () => drawGlow(ctx, cx, cy, 16 + flash * 8, col, 0.85));
+    ctx.fillStyle = hexA(C_GLOW, 0.98);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ── Env→WT destination meters, laid out along the top strip ──
+  if (W >= 460) {
+    const dests: Array<{ v: number; col: string; label: string; key: "a" | "b" | "c" }> = [
+      { v: p.envA, col: C_OA, label: "A", key: "a" },
+      { v: p.envB, col: C_OB, label: "B", key: "b" },
+      { v: p.envC, col: C_OC, label: "C", key: "c" },
+    ];
+    ctx.font = VIZ_FONT_LABEL;
+    for (let i = 0; i < dests.length; i++) {
+      const m = dests[i]!;
+      const bx = 136 + i * 100;
+      const bw = 54;
+      const by = 9;
+      const focused = p.focus === m.key;
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(bx, by, bw, 7);
+      const mid = bx + bw * 0.5;
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(mid - 0.5, by, 1, 7);
+      const mag = Math.abs(m.v);
+      if (mag > 0.02) {
+        const w = bw * 0.5 * mag;
+        ctx.fillStyle = hexA(m.col, focused ? 0.9 : 0.6);
+        ctx.fillRect(m.v >= 0 ? mid : mid - w, by + 1, Math.max(1, w), 5);
+      }
+      ctx.textAlign = "left";
+      ctx.fillStyle = hexA(m.col, focused ? 0.95 : 0.5);
+      ctx.fillText(`→WT ${m.label}`, bx + bw + 4, by + 6);
+    }
+  }
+
+  pill(ctx, W * 0.5, 3, p.loop ? "MSEG LOOP" : "MSEG", C_GLOW, { glow: flash });
+
+  // ── bipolar morph rail for the focused osc, clear of the footer band ──
+  const focusVal = p.focus === "a" ? p.envA : p.focus === "b" ? p.envB : p.envC;
+  const focusCol = p.focus === "a" ? C_OA : p.focus === "b" ? C_OB : C_OC;
+  const railY = Hh - 23;
+  const railW = W - 24;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(12, railY, railW, 5);
+  const midX = 12 + railW * 0.5;
+  ctx.fillStyle = "rgba(255,255,255,0.2)";
+  ctx.fillRect(midX - 0.5, railY, 1, 5);
+  const signedX = midX + focusVal * railW * 0.5;
+  if (Math.abs(focusVal) > 0.02) {
+    ctx.fillStyle = hexA(focusCol, 0.7);
+    const left = Math.min(midX, signedX);
+    ctx.fillRect(left, railY + 1, Math.max(1, Math.abs(signedX - midX)), 3);
+  }
+  lit(ctx, () => drawGlow(ctx, signedX, railY + 2.5, 7 + flash * 4, focusCol, 0.8));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MORPH, 0.7);
+  ctx.fillText(`→WT ${p.focus.toUpperCase()}`, PAD + 2, floorY - 5);
+
+  grain(ctx, W, Hh, 0.028);
+  bezel(ctx, W, Hh, C);
+  const atkT = n > 1 ? pts[1]!.t : 0.02;
+  footer(
+    ctx,
+    W,
+    Hh,
+    "MOD · MORPH WEAVER",
+    `A${atkT < 1 ? `${Math.round(atkT * 1000)}ms` : `${atkT.toFixed(2)}s`} · S${Math.round(susLevel * 100)} · →${Math.round(morphMag * 100)} · ${n}pts`,
+    C_GLOW,
+    C_HOT,
+  );
 }
 
 type DragMode = "node" | "segment" | "morph" | null;
@@ -90,36 +458,39 @@ type MorphFocus = "a" | "b" | "c";
 export function ModEnvStageViz() {
   const points = useFireCommandStore((s) => normalizeModEnvPoints(s.patch.modEnvPoints));
   const sustainIndex = useFireCommandStore((s) => s.patch.modEnvSustainIndex ?? points.length - 1);
+  const loop = useFireCommandStore((s) => s.patch.modEnvLoop) ?? false;
   const envA = useFireCommandStore((s) => s.patch.oscAEnv) ?? 0;
   const envB = useFireCommandStore((s) => s.patch.oscBEnv) ?? 0;
   const envC = useFireCommandStore((s) => s.patch.oscCEnv) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
   const tel = useToneTelemetry();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const dragNodeIdxRef = useRef(-1);
   const dragSegmentIdxRef = useRef(-1);
   const focusRef = useRef<MorphFocus>("a");
-  const prevKey = useRef("");
-  const st = useRef({ points, sustainIndex, envA, envB, envC, tel });
-  st.current = { points, sustainIndex, envA, envB, envC, tel };
+  const prevKey = useRef(0);
+  const st = useRef<ModEnvVizState>({
+    points, sustainIndex, loop, envA, envB, envC, focus: focusRef.current,
+    telPhase: tel.mod.phase, telLevel: tel.mod.level, telReleasing: tel.mod.releasing, voices: tel.voiceCount,
+  });
+  st.current = {
+    points, sustainIndex, loop, envA, envB, envC, focus: focusRef.current,
+    telPhase: tel.mod.phase, telLevel: tel.mod.level, telReleasing: tel.mod.releasing, voices: tel.voiceCount,
+  };
 
   const morphAmt = Math.max(Math.abs(envA), Math.abs(envB), Math.abs(envC));
   const weaving = morphAmt > 0.04 || points.length > 3;
 
   useEffect(() => {
-    const key = JSON.stringify({ points, sustainIndex, envA, envB, envC });
+    const key = motionHash(pointsDigest(points), sustainIndex, loop, envA, envB, envC);
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [points, sustainIndex, envA, envB, envC]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [points, sustainIndex, loop, envA, envB, envC]);
 
   const syncLegacyADSR = useCallback(
     (pts: ModEnvPoint[], susIdx: number) => {
@@ -140,17 +511,15 @@ export function ModEnvStageViz() {
       if (!wrap || !mode) return;
       const rect = wrap.getBoundingClientRect();
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-      const y = clamp((clientY - rect.top) / Math.max(1, rect.height), 0, 1);
       if (mode === "morph") {
         const signed = clamp(x * 2 - 1, -1, 1);
         const key = focusRef.current === "a" ? "oscAEnv" : focusRef.current === "b" ? "oscBEnv" : "oscCEnv";
         setParam(key, Math.round(signed * 1000) / 1000);
         return;
       }
-      const PAD = 14;
       const usableH = H - 48;
       const usableW = rect.width - PAD * 2;
-      const level = 1 - clamp((clientY - rect.top - 24) / usableH, 0, 1);
+      const level = 1 - clamp((clientY - rect.top - TOP) / usableH, 0, 1);
       if (mode === "node") {
         const idx = dragNodeIdxRef.current;
         if (idx < 0 || idx >= points.length) return;
@@ -165,7 +534,7 @@ export function ModEnvStageViz() {
         syncLegacyADSR(newPts, sustainIndex);
       }
     },
-    [setParam, points, sustainIndex, syncLegacyADSR],
+    [setParam, points, sustainIndex, syncLegacyADSR, wrapRef],
   );
 
   const hitZone = useCallback(
@@ -178,15 +547,16 @@ export function ModEnvStageViz() {
       if (ly > H * 0.78) {
         const t = lx / Math.max(1, rect.width);
         focusRef.current = t < 0.33 ? "a" : t < 0.66 ? "b" : "c";
+        // Mirror it into the paint state so the rail retargets on this frame
+        // rather than waiting for the store round-trip to re-render.
+        st.current.focus = focusRef.current;
         return "morph";
       }
-      const PAD = 14;
-      const top = 24;
       const usableH = H - 48;
       const usableW = rect.width - PAD * 2;
       const lastT = points[points.length - 1]?.t || 1;
       const maxT = Math.max(lastT, T_MAX);
-      const yLv = (lv: number) => top + (1 - clamp(lv, 0, 1)) * usableH;
+      const yLv = (lv: number) => TOP + (1 - clamp(lv, 0, 1)) * usableH;
       for (let i = 0; i < points.length; i++) {
         const px = timeToX(points[i].t, maxT, PAD, usableW);
         const py = yLv(points[i].level);
@@ -200,14 +570,14 @@ export function ModEnvStageViz() {
         const x1 = timeToX(points[i - 1].t, maxT, PAD, usableW);
         const x2 = timeToX(points[i].t, maxT, PAD, usableW);
         const midX = (x1 + x2) / 2;
-        if (Math.abs(lx - midX) < 16 && ly >= top && ly <= top + usableH) {
+        if (Math.abs(lx - midX) < 16 && ly >= TOP && ly <= TOP + usableH) {
           dragSegmentIdxRef.current = i;
           return "segment";
         }
       }
       return null;
     },
-    [points],
+    [points, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -231,7 +601,7 @@ export function ModEnvStageViz() {
       wrap.setPointerCapture(e.pointerId);
       applyDrag(e.clientX, e.clientY, mode);
     },
-    [hitZone, applyDrag, points, setParam],
+    [hitZone, applyDrag, points, setParam, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -248,7 +618,7 @@ export function ModEnvStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     const defaultPts: ModEnvPoint[] = [
@@ -272,303 +642,43 @@ export function ModEnvStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const shards: Array<{ x: number; y: number; life: number; vx: number; phase: number }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
         const { w: W, h: Hh } = sizeRef.current;
-        const p = st.current;
         flashRef.current *= 0.86;
-
-        const PAD = 14;
-        const top = 24;
-        const usableH = Hh - 48;
-        const usableW = W - PAD * 2;
-        const pts = p.points;
-        const susIdx = p.sustainIndex;
-        const lastT = pts[pts.length - 1]?.t || 1;
-        const maxT = Math.max(lastT, T_MAX);
-
-        const yLv = (lv: number) => top + (1 - clamp(lv, 0, 1)) * usableH;
-        const morphMag = Math.max(Math.abs(p.envA), Math.abs(p.envB), Math.abs(p.envC));
-        const susLevel = pts[susIdx]?.level ?? 0.3;
-        const energy = 0.22 + susLevel * 0.2 + morphMag * 0.35 + flashRef.current * 0.25;
-        const pulse = 0.5 + 0.5 * Math.sin(now / 260);
-        const breathe = 0.94 + 0.06 * Math.sin(now / 680);
-        const focus = focusRef.current;
-
-        ctx.clearRect(0, 0, W, Hh);
-
-        // Tone-gold morph chamber
-        const cx = W * 0.35;
-        const bg = ctx.createRadialGradient(cx, Hh * 0.36, 4, W * 0.5, Hh * 0.48, W * 0.78);
-        bg.addColorStop(0, hexAlpha(C_HOT, 0.1 + energy * 0.32 + flashRef.current * 0.25));
-        bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.58));
-        bg.addColorStop(1, "rgba(6,5,1,0.98)");
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, W, Hh);
-
-        // Wavetable scan field — density from morph + sustain
-        const scans = 5 + Math.round(morphMag * 6);
-        for (let scan = 0; scan < scans; scan++) {
-          const sy = top + 6 + scan * ((usableH - 12) / Math.max(1, scans - 1));
-          ctx.strokeStyle = hexAlpha(C_MID, (0.08 + pulse * 0.07 + morphMag * 0.12) * breathe);
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          for (let xi = 0; xi <= usableW; xi += 2.5) {
-            const t = (xi / usableW) * maxT;
-            let envH = 0;
-            for (let i = 1; i < pts.length; i++) {
-              if (t <= pts[i].t || i === pts.length - 1) {
-                const a = pts[i - 1];
-                const b = pts[i];
-                const dur = Math.max(0.0001, b.t - a.t);
-                const u = applyEnvCurve((t - a.t) / dur, b.curve);
-                envH = a.level + (b.level - a.level) * u;
-                break;
-              }
-            }
-            const x = PAD + xi;
-            const wob =
-              Math.sin((xi / usableW) * Math.PI * (5 + morphMag * 8) + now / 180 + scan * 0.7) *
-              (3 + morphMag * 8 + susLevel * 4) *
-              breathe;
-            const yy = sy + wob * envH;
-            if (xi === 0) ctx.moveTo(x, yy);
-            else ctx.lineTo(x, yy);
-          }
-          ctx.stroke();
-        }
-
-        const morphPath = () => {
-          ctx.beginPath();
-          ctx.moveTo(timeToX(pts[0].t, maxT, PAD, usableW), yLv(pts[0].level));
-          for (let i = 1; i < pts.length; i++) {
-            const a = pts[i - 1];
-            const b = pts[i];
-            const x1 = timeToX(a.t, maxT, PAD, usableW);
-            const y1 = yLv(a.level);
-            const x2 = timeToX(b.t, maxT, PAD, usableW);
-            const y2 = yLv(b.level);
-            const steps = Math.max(16, Math.ceil((x2 - x1) / 3));
-            for (let step = 1; step <= steps; step++) {
-              const u = applyEnvCurve(step / steps, b.curve);
-              const x = x1 + (x2 - x1) * (step / steps);
-              const y = y1 + (y2 - y1) * u;
-              ctx.lineTo(x, y);
-            }
-          }
-        };
-
-        // Layered weaver fill
-        for (let layer = 3; layer >= 0; layer--) {
-          morphPath();
-          const x0 = PAD;
-          const xEnd = timeToX(pts[pts.length - 1].t, maxT, PAD, usableW);
-          ctx.lineTo(xEnd, top + usableH);
-          ctx.lineTo(x0, top + usableH);
-          ctx.closePath();
-          const fill = ctx.createLinearGradient(x0, 0, xEnd, 0);
-          fill.addColorStop(0, hexAlpha(C_HOT, (0.1 - layer * 0.02) * breathe));
-          fill.addColorStop(0.35, hexAlpha(C_HOT, (0.28 + pulse * 0.1 - layer * 0.05) * breathe));
-          fill.addColorStop(0.7, hexAlpha(C_MORPH, 0.16 - layer * 0.03));
-          fill.addColorStop(1, hexAlpha(C_DEEP, 0.04));
-          ctx.fillStyle = fill;
-          ctx.fill();
-        }
-
-        // Dashed morph contour
-        morphPath();
-        ctx.strokeStyle = hexAlpha(C_GLOW, 0.85 + flashRef.current * 0.15);
-        ctx.lineWidth = 2.4;
-        ctx.setLineDash([6, 4]);
-        ctx.shadowBlur = 12 + energy * 10 + flashRef.current * 14;
-        ctx.shadowColor = C;
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.shadowBlur = 0;
-
-        // Node handles
-        for (let i = 0; i < pts.length; i++) {
-          const px = timeToX(pts[i].t, maxT, PAD, usableW);
-          const py = yLv(pts[i].level);
-          const isSus = i === susIdx;
-          const col = isSus ? C_MORPH : C_HOT;
-          ctx.fillStyle = hexAlpha(col, 0.92);
-          ctx.shadowBlur = isSus ? 12 : 8;
-          ctx.shadowColor = col;
-          ctx.beginPath();
-          ctx.arc(px, py, (isSus ? 5 : 4) + flashRef.current * 1.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-          ctx.fillStyle = hexAlpha(col, 0.7);
-          ctx.textAlign = "center";
-          ctx.fillText(`${i}`, px, top - 4);
-        }
-
-        // Live cursor from telemetry (bright dot at phase×width, height by level)
-        const tel = p.tel;
-        const voiceActive = tel.voiceCount > 0;
-        if (voiceActive) {
-          const cursorX = PAD + tel.mod.phase * usableW;
-          const cursorY = yLv(tel.mod.level);
-          const cursorCol = tel.mod.releasing ? C_MORPH : C_GLOW;
-          const orbGlow = ctx.createRadialGradient(cursorX, cursorY, 0, cursorX, cursorY, 18 + pulse * 10);
-          orbGlow.addColorStop(0, hexAlpha(C_GLOW, 0.85 + pulse * 0.15));
-          orbGlow.addColorStop(0.4, hexAlpha(cursorCol, 0.45));
-          orbGlow.addColorStop(1, hexAlpha(C, 0));
-          ctx.fillStyle = orbGlow;
-          ctx.beginPath();
-          ctx.arc(cursorX, cursorY, 20, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = hexAlpha("#fff", 0.95);
-          ctx.shadowBlur = 16;
-          ctx.shadowColor = cursorCol;
-          ctx.beginPath();
-          ctx.arc(cursorX, cursorY, 4.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.shadowBlur = 0;
-        }
-
-        // Frame scrub ticks (wavetable frames) — amount follows morph
-        const frames = 8 + Math.round(morphMag * 10);
-        for (let i = 0; i < frames; i++) {
-          const fx = PAD + ((i + ((now / 400) % 1)) / frames) * usableW;
-          const fh = 4 + morphMag * 10 * Math.abs(Math.sin(i + now / 300));
-          ctx.fillStyle = hexAlpha(C_MORPH, 0.15 + morphMag * 0.35);
-          ctx.fillRect(fx, top + usableH - fh, 1.5, fh);
-        }
-
-        // Morph shards
-        if (morphMag > 0.05 && Math.random() < 0.12 + morphMag * 0.3) {
-          shards.push({
-            x: PAD + Math.random() * usableW,
-            y: top + Math.random() * usableH,
-            life: 1,
-            vx: (Math.random() - 0.5) * 2,
-            phase: Math.random() * Math.PI * 2,
-          });
-        }
-        for (let i = shards.length - 1; i >= 0; i--) {
-          const s = shards[i]!;
-          s.life -= 0.025;
-          if (s.life <= 0) {
-            shards.splice(i, 1);
-            continue;
-          }
-          s.x += s.vx;
-          s.y += Math.sin(now / 200 + s.phase) * 0.4;
-          ctx.fillStyle = hexAlpha(C_HOT, s.life * 0.65);
-          ctx.fillRect(s.x, s.y, 2 + morphMag * 2, 2);
-        }
-
-        // Destination meters (left stack) — Env→WT A/B/C
-        const dests: Array<{ v: number; col: string; label: string }> = [
-          { v: p.envA, col: C_OA, label: "A" },
-          { v: p.envB, col: C_OB, label: "B" },
-          { v: p.envC, col: C_OC, label: "C" },
-        ];
-        dests.forEach((m, i) => {
-          const my = top + 4 + i * 22;
-          const bw = 28;
-          ctx.fillStyle = "rgba(0,0,0,0.4)";
-          ctx.fillRect(PAD, my, bw, 8);
-          const mid = PAD + bw / 2;
-          const mag = Math.abs(m.v);
-          if (mag > 0.02) {
-            const w = (bw / 2) * mag;
-            ctx.fillStyle = hexAlpha(m.col, 0.75);
-            ctx.shadowBlur = 6;
-            ctx.shadowColor = m.col;
-            if (m.v >= 0) ctx.fillRect(mid, my, w, 8);
-            else ctx.fillRect(mid - w, my, w, 8);
-            ctx.shadowBlur = 0;
-          }
-          ctx.fillStyle = hexAlpha(m.col, focus === (i === 0 ? "a" : i === 1 ? "b" : "c") ? 0.95 : 0.5);
-          ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-          ctx.textAlign = "left";
-          ctx.fillText(m.label, PAD + bw + 4, my + 7);
-        });
-
-      // Morph rail (bipolar for focused osc)
-      const railY = Hh - 16;
-      const focusVal = focus === "a" ? p.envA : focus === "b" ? p.envB : p.envC;
-      const focusCol = focus === "a" ? C_OA : focus === "b" ? C_OB : C_OC;
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(12, railY, W - 24, 7);
-      ctx.strokeStyle = hexAlpha(C_MORPH, 0.25);
-      ctx.strokeRect(12.5, railY + 0.5, W - 25, 6);
-      // center zero
-      const midX = 12 + (W - 24) / 2;
-      ctx.fillStyle = "rgba(255,255,255,0.2)";
-      ctx.fillRect(midX - 0.5, railY, 1, 7);
-      const signedX = midX + focusVal * ((W - 24) / 2);
-      ctx.fillStyle = hexAlpha(focusCol, 0.85);
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = focusCol;
-      ctx.beginPath();
-      ctx.arc(signedX, railY + 3.5, 3.5 + flashRef.current * 1.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      // fill from center to knob
-      if (Math.abs(focusVal) > 0.02) {
-        const left = Math.min(midX, signedX);
-        const right = Math.max(midX, signedX);
-        const rg = ctx.createLinearGradient(left, railY, right, railY);
-        rg.addColorStop(0, hexAlpha(focusCol, 0.25));
-        rg.addColorStop(1, hexAlpha(C_GLOW, 0.7));
-        ctx.fillStyle = rg;
-        ctx.fillRect(left, railY + 1, right - left, 5);
-      }
-      ctx.fillStyle = hexAlpha(C_MORPH, 0.75);
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(`→WT ${focus.toUpperCase()}`, 14, railY - 3);
-
-      // Segment curve labels under nodes
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      for (let i = 1; i < pts.length; i++) {
-        const x1 = timeToX(pts[i - 1].t, maxT, PAD, usableW);
-        const x2 = timeToX(pts[i].t, maxT, PAD, usableW);
-        ctx.fillStyle = hexAlpha(C_HOT, 0.45);
-        ctx.fillText(String(pts[i].curve).slice(0, 3).toUpperCase(), (x1 + x2) / 2, top + usableH + 11);
-      }
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      ctx.fillText("MOD · MORPH WEAVER", 12, Hh - 2);
-      ctx.textAlign = "right";
-      const fmt = (v: number) => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`);
-      const atkT = pts.length > 1 ? pts[1].t : 0.02;
-      const susLvl = pts[Math.min(susIdx, pts.length - 1)]?.level ?? 0.3;
-      ctx.fillStyle = hexAlpha(C_HOT, 0.88);
-      ctx.fillText(`A${fmt(atkT)} · S${Math.round(susLvl * 100)} · →${Math.round(morphMag * 100)} · ${pts.length}pts`, W - 12, Hh - 2);
-    
+        paintModEnv(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
-        active: tel.voiceCount > 0,
+        active: st.current.voices > 0,
         dragging: !!dragRef.current,
-        particles: shards.length,
-        motionKey: JSON.stringify({ ...st.current, vc: tel.voiceCount, stg: tel.mod.stage, lv: tel.mod.level }),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          pointsDigest(st.current.points),
+          st.current.sustainIndex,
+          st.current.loop,
+          st.current.envA,
+          st.current.envB,
+          st.current.envC,
+          st.current.telLevel,
+          st.current.voices,
+        ),
       }),
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, weaving ? 0.55 : 0.32),
+        borderColor: hexA(C, weaving ? 0.55 : 0.32),
         height: H,
         cursor: "crosshair",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexAlpha(C, weaving ? 0.26 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexA(C, weaving ? 0.26 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -580,19 +690,19 @@ export function ModEnvStageViz() {
       aria-label="Mod envelope morph weaver"
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Morph Weaver
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
-        style={{ color: hexAlpha(C_HOT, 0.75) }}
+        style={{ color: hexA(C_HOT, 0.75) }}
       >
         →WT
       </div>

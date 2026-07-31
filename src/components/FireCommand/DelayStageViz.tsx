@@ -1,15 +1,43 @@
 /**
  * Delay — Ping Cascade stage visualizer.
- * Time · Feedback · Mix (Signal Path FX · FC.delay).
+ *
+ * IDIOM: discrete taps. Stages are a ~10:1 letterbox, so the width is a real
+ * time ruler and the repeats are what they actually are — separate impulses
+ * struck at the delay interval, each one a fixed fraction of the last. This is
+ * deliberately *not* a smooth decay envelope; that shape belongs to Reverb.
+ * Here you count the spikes, read the gap between them, and watch a ping travel
+ * the line at the delay rate.
+ *
+ * Ping-pong puts alternate taps below the centre line. The cascade mode changes
+ * the window, the spacing law and the pattern: `slap` is two tight taps, `dub`
+ * darkens and drags each repeat, `bounce` alternates hard, `long` stretches the
+ * ruler out, `infinite` stops decaying and fills the width.
+ *
+ * Time · Feedback · Mix · Cascade (Signal Path FX · FC.delay).
  * Drag: Time ↔ / Feedback ↕. Bottom: Mix. Double-click: cycle mix 0→50→100.
  * R delay line runs 1.5× L (matches DSP ping-pong).
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { DelayCascadeMode } from "@/audio/dsp/FireCommandSynth";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  drawGlow,
+  footer,
+  grain,
+  hexA,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  VIZ_FONT_LABEL,
+  VIZ_TOP_LABEL_X,
+  VIZ_TOP_LABEL_Y,
+} from "./stageVizKit";
 
 const H = 176;
 const C = FC.delay;
@@ -27,15 +55,7 @@ const TIME_MIN = 0.01;
 const TIME_MAX = 1.5;
 const FBK_MAX = 0.92;
 const MIX_CYCLE = [0, 0.5, 1] as const;
-
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+const MODE_ORDER: DelayCascadeMode[] = ["slap", "echo", "dub", "bounce", "long", "infinite"];
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
@@ -53,36 +73,234 @@ function fmtTime(v: number) {
   return v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`;
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
+/** Seconds the ruler spans — the mode decides how far out you can see. */
+function windowFor(mode: DelayCascadeMode): number {
+  if (mode === "slap") return 0.45;
+  if (mode === "long" || mode === "infinite") return 5;
+  if (mode === "dub") return 3;
+  return 2.2;
 }
 
 type DragMode = "xy" | "mix" | null;
+
+export type DelayVizState = {
+  time: number;
+  fbk: number;
+  mix: number;
+  cascade: DelayCascadeMode;
+};
+
+/** Paint the cascade. Exported and pure — no React, no store. */
+export function paintDelay(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: DelayVizState,
+  now: number,
+  flash: number,
+): void {
+  const timeN = logNorm(p.time, TIME_MIN, TIME_MAX);
+  const fbkN = p.fbk / FBK_MAX;
+  const isLive = p.mix > 0.02;
+  const mode = p.cascade ?? "echo";
+  const infinite = mode === "infinite";
+  const energy = 0.1 + p.mix * 0.4 + fbkN * 0.22 + flash * 0.22;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.5 });
+
+  // ── geometry: the width is time ──
+  const padL = 26;
+  const padR = 20;
+  const spanW = Math.max(120, W - padL - padR);
+  const top = 30;
+  const bot = 116;
+  const midY = (top + bot) * 0.5;
+  const spike = (bot - top) * 0.5 - 4;
+  const rulerY = 124;
+
+  const win = windowFor(mode);
+  const pxPerSec = spanW / win;
+  const gap = clamp(p.time * pxPerSec, 20, spanW * 0.46);
+  // Dub drags each repeat a little further out than the last.
+  const drag = mode === "dub" ? 0.05 : 0;
+  const rRatio = 1.5;
+
+  const maxTaps = mode === "slap" ? 2 : Math.min(48, Math.floor(spanW / Math.max(12, gap)) + 1);
+  const decay = infinite ? 0.985 : clamp(p.fbk, 0.02, FBK_MAX);
+  // Ping-pong lanes: bounce alternates hard, echo/dub run a second R line at
+  // 1.5×, slap and long stay on the top lane.
+  const pingPong = mode === "bounce" || infinite;
+  const twoLine = mode === "echo" || mode === "dub";
+
+  // ── centre line + time ruler ──
+  ctx.fillStyle = hexA(C_MID, 0.22);
+  ctx.fillRect(padL, midY, spanW, 1);
+  ctx.fillStyle = hexA(C_MID, 0.16);
+  ctx.fillRect(padL, rulerY, spanW, 1);
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  {
+    // A tick every 100 ms up to 1 s, then every 500 ms.
+    const step = win <= 0.6 ? 0.05 : win <= 2.5 ? 0.25 : 0.5;
+    for (let t = 0; t <= win + 1e-6; t += step) {
+      const x = padL + t * pxPerSec;
+      if (x > padL + spanW) break;
+      ctx.fillStyle = hexA(C_MID, 0.18);
+      ctx.fillRect(x, rulerY, 1, 4);
+      ctx.fillStyle = hexA(C_MID, 0.4);
+      ctx.fillText(t === 0 ? "0" : fmtTime(t), x, rulerY + 12);
+    }
+  }
+
+  // ── feedback ladder: the decay law, stated rather than drawn as a curve ──
+  // One mark per tap level, so you can read what each repeat is worth without
+  // an envelope being drawn through the spikes.
+  ctx.textAlign = "right";
+  for (let k = 0; k < 4; k++) {
+    const a = Math.pow(decay, k);
+    if (a < 0.04) break;
+    const y = midY - spike * a;
+    ctx.fillStyle = hexA(C_FBK, 0.14);
+    ctx.fillRect(padL - 8, y, 6, 1);
+    ctx.fillStyle = hexA(C_FBK, 0.4);
+    ctx.fillText(`${Math.round(a * 100)}`, padL - 10, y + 3);
+  }
+
+  // ── the taps ──
+  // A ping departs the source and advances one gap per delay period; whichever
+  // tap it is passing flares. That is the only motion here — the taps themselves
+  // are fixed marks on a time ruler.
+  const travel = isLive ? ((now / 1000) / Math.max(0.02, p.time)) * gap : 0;
+  const lineLen = gap * Math.max(1, maxTaps);
+  const pingX = padL + (travel % lineLen);
+
+  const drawTap = (x: number, up: boolean, amp: number, color: string, k: number) => {
+    if (x > padL + spanW || amp < 0.02) return;
+    const flare = isLive ? Math.exp(-(((x - pingX) / 26) ** 2)) : 0;
+    const h = spike * amp * (0.3 + p.mix * 0.7);
+    const y = up ? midY - h : midY + h;
+    const a = (0.35 + p.mix * 0.55) * (0.45 + amp * 0.55) + flare * 0.4;
+
+    // Stem: a single hard impulse, not a filled area.
+    ctx.fillStyle = hexA(color, a);
+    ctx.fillRect(x - 0.9, Math.min(midY, y), 1.8, Math.abs(h));
+    // Cap.
+    ctx.fillStyle = hexA(C_GLOW, Math.min(1, a + 0.2 + flare * 0.5));
+    ctx.fillRect(x - 2.4, y - (up ? 2 : 0), 4.8, 2);
+    if (amp > 0.05) {
+      lit(ctx, () => drawGlow(ctx, x, y, 6 + amp * 12 + flare * 14, C_GLOW, (0.14 + p.mix * 0.32) * amp + flare * 0.45));
+    }
+    // Drop a guide down to the shared ruler so each repeat can be read off the
+    // absolute time axis without a label stack over the spikes.
+    if (k > 0) {
+      ctx.fillStyle = hexA(color, 0.14 + amp * 0.2);
+      ctx.fillRect(x, bot + 2, 1, rulerY - bot - 2);
+      ctx.fillStyle = hexA(color, 0.4 + amp * 0.35);
+      ctx.fillRect(x - 1, rulerY - 3, 3, 3);
+    }
+  };
+
+  // Source: the dry hit everything is measured from.
+  ctx.fillStyle = hexA(C_GLOW, 0.9);
+  ctx.fillRect(padL - 1, midY - spike, 2, spike * 2);
+  lit(ctx, () => drawGlow(ctx, padL, midY, 14 + p.mix * 10 + flash * 8, C_GLOW, 0.35 + p.mix * 0.4));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_GLOW, 0.6);
+  ctx.fillText("IN", padL + 4, midY - spike - 3);
+
+  for (let k = 1; k <= maxTaps; k++) {
+    // The first repeat always lands at full level; feedback only governs what
+    // survives after it, so tap k is worth fbk^(k−1).
+    const amp = Math.pow(decay, k - 1);
+    if (amp < 0.025) break;
+    const x = padL + gap * k * (1 + drag * (k - 1));
+    const up = pingPong ? k % 2 === 1 : true;
+    drawTap(x, up, amp, up ? C_L : C_R, k);
+    if (twoLine) {
+      const xr = padL + gap * rRatio * k * (1 + drag * (k - 1));
+      drawTap(xr, false, amp * 0.82, C_R, k);
+    }
+  }
+
+  // The ping itself, riding the line.
+  if (isLive) {
+    lit(ctx, () => drawGlow(ctx, pingX, midY, 10 + p.mix * 10, C_HOT, 0.3 + p.mix * 0.4));
+  }
+
+  // Lane labels.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_L, 0.6);
+  ctx.fillText("L", 6, midY - 6);
+  ctx.fillStyle = hexA(C_R, 0.6);
+  ctx.fillText("R", 6, midY + 12);
+
+  // ── telemetry row ──
+  // Packed left-to-right from the reserved top strip and stopped short of the
+  // centred mode pill, so it can't collide at any panel width.
+  let telX = VIZ_TOP_LABEL_X;
+  const telRight = W * 0.5 - 52;
+  const tel = (text: string, color: string, alpha: number) => {
+    const w = ctx.measureText(text).width;
+    if (telX + w > telRight) return;
+    ctx.fillStyle = hexA(color, alpha);
+    ctx.fillText(text, telX, VIZ_TOP_LABEL_Y);
+    telX += w + 14;
+  };
+  tel(mode.toUpperCase(), C_TIME, 0.72);
+  tel(`TIME ${fmtTime(p.time)}`, C_TIME, 0.66);
+  tel(infinite ? "FB HOLD" : `FB ${Math.round(p.fbk * 100)}`, C_FBK, 0.66);
+  tel(twoLine ? `R ${fmtTime(p.time * rRatio)}` : pingPong ? "PING-PONG" : "MONO TAPS", C_R, 0.62);
+  tel(`WIN ${fmtTime(win)}`, C_DEEP, 0.7);
+
+  // Time / Feedback crosshair (the drag target).
+  const hx = timeN * W;
+  const hy = (1 - fbkN) * (Hh * 0.68);
+  ctx.strokeStyle = hexA(C_GLOW, 0.3 + flash * 0.3);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(hx - 7, hy);
+  ctx.lineTo(hx + 7, hy);
+  ctx.moveTo(hx, hy - 7);
+  ctx.lineTo(hx, hy + 7);
+  ctx.stroke();
+
+  pill(
+    ctx,
+    W * 0.5,
+    3,
+    !isLive ? "IDLE" : infinite ? "INFINITE" : mode.toUpperCase(),
+    C_GLOW,
+    { glow: flash },
+  );
+
+  // Mix rail, clear of the footer band.
+  const railY = Hh - 26;
+  const railW = W - 24;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(12, railY, railW, 6);
+  ctx.fillStyle = hexA(C_MIX, 0.55);
+  ctx.fillRect(12, railY + 1, Math.max(2, railW * p.mix), 4);
+  lit(ctx, () => drawGlow(ctx, 12 + railW * p.mix, railY + 3, 7 + flash * 4, C_GLOW, 0.8));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_MIX, 0.85);
+  ctx.fillText(`MIX ${Math.round(p.mix * 100)}%`, 14, railY - 3);
+
+  grain(ctx, W, Hh, 0.026);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    "DLY · PING CASCADE",
+    !isLive ? "IDLE" : `${fmtTime(p.time)} · FB${Math.round(p.fbk * 100)} · ${mode}`,
+    C_GLOW,
+    isLive ? C_HOT : C_MID,
+  );
+}
 
 export function DelayStageViz() {
   const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
@@ -91,26 +309,22 @@ export function DelayStageViz() {
   const cascade = (useFireCommandStore((s) => s.patch.delayCascadeMode) ?? "echo") as DelayCascadeMode;
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
-  const prevKey = useRef("");
-  const st = useRef({ time, fbk, mix, cascade });
+  const prevKey = useRef(0);
+  const st = useRef<DelayVizState>({ time, fbk, mix, cascade });
   st.current = { time, fbk, mix, cascade };
 
   const live = mix > 0.02;
 
   useEffect(() => {
-    const key = `${time.toFixed(3)}|${fbk.toFixed(3)}|${mix.toFixed(3)}|${cascade}`;
+    const key = motionHash(time, fbk, mix, MODE_ORDER.indexOf(cascade));
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
   }, [time, fbk, mix, cascade]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
 
   const applyXy = useCallback(
     (clientX: number, clientY: number) => {
@@ -122,7 +336,7 @@ export function DelayStageViz() {
       setParam("delayTime", Math.round(logLerp(x, TIME_MIN, TIME_MAX) * 1000) / 1000);
       setParam("delayFeedback", Math.round((1 - y) * FBK_MAX * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const applyMix = useCallback(
@@ -133,7 +347,7 @@ export function DelayStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       setParam("delayMix", Math.round(x * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -152,7 +366,7 @@ export function DelayStageViz() {
       wrap.setPointerCapture(e.pointerId);
       applyXy(e.clientX, e.clientY);
     },
-    [applyXy, applyMix],
+    [applyXy, applyMix, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -169,7 +383,7 @@ export function DelayStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     const m = st.current.mix;
@@ -190,266 +404,39 @@ export function DelayStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const trails: Array<{ x: number; y: number; life: number; isL: boolean }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.86;
-
-      const timeN = logNorm(p.time, TIME_MIN, TIME_MAX);
-      const fbkN = p.fbk / FBK_MAX;
-      const isLive = p.mix > 0.02;
-      const energy = 0.1 + p.mix * 0.42 + fbkN * 0.22 + flashRef.current * 0.25;
-      const PAD = 14;
-      const usable = W - PAD * 2;
-      const stageH = Hh * 0.72;
-      const mode = p.cascade ?? "echo";
-      const rRatio = mode === "bounce" ? 1.5 : mode === "dub" ? 1.35 : 1.5;
-      const timeR = p.time * rRatio;
-      // Cascade layout: slap = tight lanes, bounce = crossed, long/infinite = wide spacing
-      const laneSpread = mode === "slap" ? 0.18 : mode === "long" || mode === "infinite" ? 0.28 : 0.22;
-      const laneL = stageH * (0.5 - laneSpread);
-      const laneR = stageH * (0.5 + laneSpread);
-      const echoes = mode === "infinite" ? 10 : mode === "slap" ? 2 : 1 + Math.round(p.fbk * 8);
-      const spacing = mode === "slap" ? 0.05 : mode === "long" || mode === "infinite" ? 0.1 + timeN * 0.2 : 0.06 + timeN * 0.16;
-      const phase = (now / (480 + p.time * 1100)) % 1;
-
-      // Tap node positions (time on X, level/brightness from feedback)
-      const tapLX = PAD + timeN * usable * 0.72;
-      const tapRX = PAD + logNorm(clamp(timeR, TIME_MIN, TIME_MAX * 1.5), TIME_MIN, TIME_MAX * 1.5) * usable * 0.72;
-      const tapBright = 0.35 + fbkN * 0.65;
-
-      ctx.clearRect(0, 0, W, Hh);
-
-      // Violet cascade chamber
-      const bg = ctx.createRadialGradient(W * (0.2 + timeN * 0.4), Hh * 0.4, 4, W * 0.5, Hh * 0.45, W * 0.8);
-      bg.addColorStop(0, hexAlpha(C_HOT, 0.08 + energy * 0.38 + flashRef.current * 0.2));
-      bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.58));
-      bg.addColorStop(1, "rgba(5,2,14,0.98)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Mode chip early
-      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_TIME, 0.7);
-      ctx.textAlign = "left";
-      ctx.fillText(mode.toUpperCase(), PAD, 20);
-
-      // Time grid ghosts
-      const gridDivs = Math.max(3, Math.round(3 + (1 - timeN) * 8));
-      for (let g = 1; g < gridDivs; g++) {
-        const gx = PAD + (g / gridDivs) * usable;
-        ctx.strokeStyle = hexAlpha(C_MID, 0.05 + p.mix * 0.08);
-        ctx.lineWidth = 1;
-        ctx.setLineDash([2, 5]);
-        ctx.beginPath();
-        ctx.moveTo(gx, 8);
-        ctx.lineTo(gx, stageH - 4);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-
-      // L/R lanes
-      ctx.strokeStyle = hexAlpha(C_L, 0.2 + p.mix * 0.2);
-      ctx.lineWidth = 1.4;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(PAD, laneL);
-      ctx.lineTo(W - PAD, laneL);
-      ctx.stroke();
-      ctx.strokeStyle = hexAlpha(C_R, 0.2 + p.mix * 0.2);
-      ctx.beginPath();
-      ctx.moveTo(PAD, laneR);
-      ctx.lineTo(W - PAD, laneR);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_L, 0.7);
-      ctx.fillText("L", 4, laneL + 3);
-      ctx.fillStyle = hexAlpha(C_R, 0.7);
-      ctx.fillText("R", 4, laneR + 3);
-
-      // Bounce / dub bridges
-      if (isLive && p.fbk > 0.08 && (mode === "bounce" || mode === "dub" || mode === "echo")) {
-        for (let i = 0; i < Math.min(echoes, 6); i++) {
-          const u = (phase + i * spacing) % 1;
-          const x = PAD + u * usable;
-          const nextU = (u + spacing * 0.5) % 1;
-          const x2 = PAD + nextU * usable;
-          const fromL = i % 2 === 0;
-          ctx.strokeStyle = hexAlpha(C_HOT, (0.08 + p.mix * 0.2) * Math.pow(p.fbk, i * 0.35));
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(x, fromL ? laneL : laneR);
-          const midX = (x + x2) * 0.5;
-          const midY = (laneL + laneR) * 0.5 + Math.sin(now * 0.003 + i) * 4;
-          ctx.quadraticCurveTo(midX, midY, x2, fromL ? laneR : laneL);
-          ctx.stroke();
-        }
-      }
-
-      // Echo blips along cascade
-      for (let i = 0; i < echoes; i++) {
-        const life = Math.pow(Math.max(0.15, mode === "infinite" ? 0.95 : p.fbk), i * 0.55) * (0.3 + p.mix * 0.7);
-        const u = (phase + i * spacing) % 1;
-        const isL = mode === "bounce" ? i % 2 === 0 : i % 2 === 0;
-        const y = isL ? laneL : laneR;
-        const x = PAD + u * usable;
-        const r = 2.2 + life * 6 + flashRef.current * 2;
-        const col = isL ? C_L : C_R;
-
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.2);
-        g.addColorStop(0, hexAlpha(C_GLOW, 0.85 * life * tapBright));
-        g.addColorStop(0.35, hexAlpha(col, 0.55 * life));
-        g.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(x, y, r * 2.2, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (isLive && Math.random() < 0.12 * life) {
-          trails.push({ x: x - Math.random() * 10, y: y + (Math.random() - 0.5) * 5, life: life * 0.85, isL });
-        }
-      }
-
-      // L/R tap nodes (time X, feedback brightness) — primary interactive markers
-      const drawTap = (x: number, y: number, col: string, label: string, tLabel: string) => {
-        const r = 7 + fbkN * 4 + flashRef.current * 2;
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.4);
-        g.addColorStop(0, hexAlpha(C_GLOW, 0.9 * tapBright));
-        g.addColorStop(0.4, hexAlpha(col, 0.55 * tapBright));
-        g.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(x, y, r * 2.2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = hexAlpha(C_GLOW, 0.7 + flashRef.current * 0.3);
-        ctx.lineWidth = 1.8;
-        ctx.shadowBlur = 10 + fbkN * 12;
-        ctx.shadowColor = C;
-        ctx.beginPath();
-        ctx.arc(x, y, r * 0.45, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(col, 0.9);
-        ctx.textAlign = "center";
-        ctx.fillText(label, x, y - r - 4);
-        ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = hexAlpha(col, 0.7);
-        ctx.fillText(tLabel, x, y + r + 10);
-      };
-      drawTap(tapLX, laneL, C_L, "L", fmtTime(p.time));
-      drawTap(tapRX, laneR, C_R, "R", fmtTime(timeR));
-
-      // Inject pulse
-      const pulse = 0.55 + 0.45 * Math.sin(now / 180);
-      ctx.fillStyle = hexAlpha(C_GLOW, pulse * (0.35 + p.mix * 0.55));
-      ctx.shadowBlur = 10 * pulse;
-      ctx.shadowColor = C;
-      ctx.beginPath();
-      ctx.arc(PAD + 2, laneL, 2.8, 0, Math.PI * 2);
-      ctx.arc(PAD + 2, laneR, 2.8, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      // Trails
-      for (let i = trails.length - 1; i >= 0; i--) {
-        const tr = trails[i]!;
-        tr.life -= 0.022;
-        tr.x -= 0.9;
-        if (tr.life <= 0) {
-          trails.splice(i, 1);
-          continue;
-        }
-        ctx.fillStyle = hexAlpha(tr.isL ? C_L : C_R, tr.life * 0.65);
-        ctx.beginPath();
-        ctx.arc(tr.x, tr.y, 1.5 + tr.life, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Crosshair Time / Fbk (drag target)
-      const hx = timeN * W;
-      const hy = (1 - fbkN) * (Hh * 0.68);
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.35 + flashRef.current * 0.3);
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(hx - 8, hy);
-      ctx.lineTo(hx + 8, hy);
-      ctx.moveTo(hx, hy - 8);
-      ctx.lineTo(hx, hy + 8);
-      ctx.stroke();
-
-      // Chip
-      const chip = !isLive ? "IDLE" : mode === "infinite" ? "INFINITE" : mode === "slap" ? "SLAP" : mode.toUpperCase();
-      ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-      const chipW = ctx.measureText(chip).width + 12;
-      const chipX = W * 0.5 - chipW * 0.5;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(chipX, 6, chipW, 13);
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.5 + flashRef.current * 0.3);
-      ctx.strokeRect(chipX, 6, chipW, 13);
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.textAlign = "center";
-      ctx.fillText(chip, W * 0.5, 16);
-
-      // Mix rail
-      const railY = Hh - 16;
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(12, railY, W - 24, 7);
-      ctx.strokeStyle = hexAlpha(C_MIX, 0.25 + p.mix * 0.4);
-      ctx.strokeRect(12.5, railY + 0.5, W - 25, 6);
-      const fill = ctx.createLinearGradient(12, railY, 12 + (W - 24) * p.mix, railY);
-      fill.addColorStop(0, hexAlpha(C_MIX, 0.3));
-      fill.addColorStop(1, hexAlpha(C_GLOW, 0.85));
-      ctx.fillStyle = fill;
-      ctx.fillRect(12, railY + 1, Math.max(2, (W - 24) * p.mix), 5);
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(12 + (W - 24) * p.mix, railY + 3.5, 3.2 + flashRef.current, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = hexAlpha(C_MIX, 0.85);
-      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(`MIX ${Math.round(p.mix * 100)}%`, 14, railY - 3);
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      ctx.fillText("DLY · PING CASCADE", 12, Hh - 2);
-      ctx.textAlign = "right";
-      const status = !isLive
-        ? "IDLE"
-        : `${fmtTime(p.time)} · FB${Math.round(p.fbk * 100)} · ${mode}`;
-      ctx.fillStyle = hexAlpha(isLive ? C_HOT : C_MID, 0.88);
-      ctx.fillText(status, W - 12, Hh - 2);
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintDelay(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
         active: (st.current.mix ?? 0) > 0.01,
         dragging: !!dragRef.current,
-        particles: 0,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.time,
+          st.current.fbk,
+          st.current.mix,
+          MODE_ORDER.indexOf(st.current.cascade),
+        ),
       }),
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, live ? 0.55 : 0.3),
+        borderColor: hexA(C, live ? 0.55 : 0.3),
         height: H,
         cursor: "crosshair",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexAlpha(C, live ? 0.28 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexA(C, live ? 0.28 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -461,19 +448,19 @@ export function DelayStageViz() {
       aria-label="Delay ping cascade"
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Ping Cascade
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
-        style={{ color: hexAlpha(live ? C_HOT : C_MID, 0.78) }}
+        style={{ color: hexA(live ? C_HOT : C_MID, 0.78) }}
       >
         {live ? fmtTime(time) : "IDLE"}
       </div>

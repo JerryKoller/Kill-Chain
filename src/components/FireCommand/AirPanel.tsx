@@ -5,7 +5,11 @@
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Mix band — console chips with an LED underline. */
+const AIR_CHAR = fcChipCharacterFor("air");
 
 export const AIR_C = FC.air;
 export const AIR_C_GLOW = bandShade(FC_BAND.mix, 0.92);
@@ -103,41 +107,32 @@ export function AirCharacterStrip() {
   const amt = useFireCommandStore((s) => s.patch.airAmount) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = AIR_C;
+  const tone = { color: c, onText: AIR_C_GLOW, glow: 10 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Sky
       </span>
-      {AIR_CHARS.map((p) => {
-        const on =
-          (p.id === "flat" && amt < 0.04) ||
-          (p.id !== "flat" && near(low, p.low) && near(high, p.high) && near(amt, p.amt, 0.1));
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => {
-              setParam("airLow", p.low);
-              setParam("airHigh", p.high);
-              setParam("airAmount", p.amt);
-            }}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: AIR_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={p.label}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {AIR_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={
+            (p.id === "flat" && amt < 0.04) ||
+            (p.id !== "flat" && near(low, p.low) && near(high, p.high) && near(amt, p.amt, 0.1))
+          }
+          tone={tone}
+          character={AIR_CHAR}
+          caseMode="normal"
+          onClick={() => {
+            setParam("airLow", p.low);
+            setParam("airHigh", p.high);
+            setParam("airAmount", p.amt);
+          }}
+          title={p.label}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -145,35 +140,26 @@ export function AirCharacterStrip() {
 export function AirAmountStrip() {
   const amt = useFireCommandStore((s) => s.patch.airAmount) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: AIR_C_AMT, onText: AIR_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${AIR_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${AIR_C}66` }}>
         Amt
       </span>
-      {AIR_AMT_SNAPS.map((p) => {
-        const on = near(amt, p.v, 0.04);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("airAmount", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${AIR_C_AMT}99`,
-                    background: `${AIR_C_AMT}28`,
-                    color: AIR_C_GLOW,
-                    boxShadow: `0 0 8px ${AIR_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`Amount ${p.label}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {AIR_AMT_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(amt, p.v, 0.04)}
+          tone={tone}
+          character={AIR_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setParam("airAmount", p.v)}
+          title={`Amount ${p.label}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }

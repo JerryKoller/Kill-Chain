@@ -1,15 +1,47 @@
 /**
  * FM Rack · Vector — Vector Lattice stage visualizer.
- * 4-op algorithm graph · operator levels/ratios · feedback · vector morph (Signal Path Mod · FC.fmRack).
- * Drag pad: fmVector X/Y (corner morph). Drag orbs: Level ↕ / Ratio ↔ (Op2–4). Bottom: Feedback. Double-click: next alg.
+ *
+ * IDIOM: the operator graph. Every other stage here is a curve; this one is a
+ * *diagram*, and that is its identity. The four operators are laid out by their
+ * position in the algorithm — modulators upstream on the left, the carrier last
+ * on the right, feeding an output bus — which turns the 10:1 letterbox into
+ * exactly the right frame for a signal-flow chart. Edges run left→right, so the
+ * whole width is used to say who modulates whom.
+ *
+ * Node brightness and size read operator level, edge thickness reads how hard
+ * that operator drives its target, the carrier carries the feedback loop, and
+ * operators the current algorithm doesn't patch are drawn dashed and off to the
+ * side — so switching algorithm visibly rewires the picture. The vector pad
+ * sits on the output side, drawn at exactly the geometry the pointer maps to.
+ *
+ * Drag pad: fmVector X/Y (corner morph). Drag nodes: Level ↕ / Ratio ↔ (Op2–4).
+ * Bottom: Feedback. Double-click: next alg.
  */
 
-import { useCallback, useEffect, useRef, type MutableRefObject, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import type { FmEngineMode } from "@/audio/dsp/FireCommandSynth";
-import { getEngine } from "@/audio/AudioEngine";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
+import { useStageCanvas } from "./useStageCanvas";
+import {
+  bezel,
+  cachedGrad,
+  drawGlow,
+  footer,
+  glowStroke,
+  grain,
+  hexA,
+  lattice,
+  lit,
+  motionHash,
+  pill,
+  plate,
+  roundRect,
+  VIZ_FONT_LABEL,
+  VIZ_FONT_TITLE,
+  VIZ_FONT_VALUE,
+} from "./stageVizKit";
 
 const H = 188;
 const C = FC.fmRack;
@@ -52,14 +84,12 @@ const ALG_NAMES = [
   "Par·All→C",
 ] as const;
 
-function hexAlpha(hex: string, a: number): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((ch) => ch + ch).join("") : h;
-  const r = parseInt(full.slice(0, 2), 16);
-  const g = parseInt(full.slice(2, 4), 16);
-  const b = parseInt(full.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a))})`;
-}
+/** Scratch node geometry for the paint pass — never allocated per frame. */
+const NODE_SCRATCH: number[] = [];
+/** Column depth per operator, reused across passes. */
+const DEPTH = new Int8Array(4);
+const COL_COUNT = new Int8Array(6);
+const COL_SEEN = new Int8Array(6);
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
@@ -73,35 +103,6 @@ function logNorm(v: number, lo: number, hi: number) {
   return Math.log(clamp(v, lo, hi) / lo) / Math.log(hi / lo);
 }
 
-function useHiDpi(
-  wrapRef: RefObject<HTMLDivElement | null>,
-  canvasRef: RefObject<HTMLCanvasElement | null>,
-  cssH: number,
-  sizeRef: MutableRefObject<{ w: number; h: number }>,
-) {
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    const canvas = canvasRef.current;
-    if (!wrap || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-      const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
-      sizeRef.current = { w: cssW, h: cssH };
-      canvas.width = Math.floor(cssW * dpr);
-      canvas.height = Math.floor(cssH * dpr);
-      canvas.style.width = "100%";
-      canvas.style.height = `${cssH}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(wrap);
-    return () => ro.disconnect();
-  }, [wrapRef, canvasRef, cssH, sizeRef]);
-}
-
 type DragMode = "vec" | "fb" | "op" | null;
 
 type OpKey = "fmOp1Level" | "fmOp2Level" | "fmOp3Level" | "fmOp4Level";
@@ -109,6 +110,417 @@ type RatioKey = "fmOp2Ratio" | "fmOp3Ratio" | "fmOp4Ratio";
 
 const OP_LEVEL_KEYS: OpKey[] = ["fmOp1Level", "fmOp2Level", "fmOp3Level", "fmOp4Level"];
 const OP_RATIO_KEYS: (RatioKey | null)[] = [null, "fmOp2Ratio", "fmOp3Ratio", "fmOp4Ratio"];
+
+export type FmRackVizState = {
+  engine: FmEngineMode;
+  alg: number;
+  feedback: number;
+  op1: number;
+  op2: number;
+  op3: number;
+  op4: number;
+  r2: number;
+  r3: number;
+  r4: number;
+  vecRate: number;
+  vecDepth: number;
+  fmVecX: number;
+  fmVecY: number;
+  /** Which node the pointer last grabbed — pointer state, not patch state. */
+  focus: number;
+};
+
+/**
+ * Node geometry as [x, y, r] × 4, written into `out`.
+ *
+ * Exported and pure so the pointer hit-test resolves against exactly the same
+ * layout the paint drew, without either side owning the other's state.
+ */
+export function layoutFmOps(W: number, Hh: number, p: FmRackVizState, out: number[]): void {
+  const algI = Math.round(clamp(p.alg, 0, 7));
+  const routes = ALG_ROUTES[algI] ?? ALG_ROUTES[0]!;
+
+  // Column = distance from the carrier along the modulation chain.
+  DEPTH[0] = 0;
+  DEPTH[1] = -1;
+  DEPTH[2] = -1;
+  DEPTH[3] = -1;
+  for (let pass = 0; pass < 4; pass++) {
+    for (let i = 0; i < routes.length; i++) {
+      const r = routes[i]!;
+      if (DEPTH[r[1]]! >= 0) DEPTH[r[0]] = Math.max(DEPTH[r[0]]!, DEPTH[r[1]]! + 1);
+    }
+  }
+  let maxD = 0;
+  for (let i = 0; i < 4; i++) if (DEPTH[i]! > maxD) maxD = DEPTH[i]!;
+  // Operators this algorithm never patches park one column further upstream.
+  const idleCol = maxD + 1;
+  let anyIdle = false;
+  for (let i = 0; i < 4; i++) {
+    if (DEPTH[i]! < 0) {
+      DEPTH[i] = idleCol;
+      anyIdle = true;
+    }
+  }
+  const cols = anyIdle ? idleCol : maxD;
+
+  COL_COUNT.fill(0);
+  COL_SEEN.fill(0);
+  for (let i = 0; i < 4; i++) COL_COUNT[DEPTH[i]!] = COL_COUNT[DEPTH[i]!]! + 1;
+
+  const xCar = Math.min(W * 0.6, Math.max(200, W - 210));
+  const xUp = 116;
+  const colGap = cols > 0 ? (xCar - xUp) / cols : 0;
+  const cy = Hh * 0.44;
+  const laneH = Hh * 0.52;
+
+  const levels = [p.op1, p.op2, p.op3, p.op4];
+  for (let i = 0; i < 4; i++) {
+    const d = DEPTH[i]!;
+    const m = COL_COUNT[d]!;
+    const seen = COL_SEEN[d]!;
+    COL_SEEN[d] = seen + 1;
+    const rowGap = Math.min(40, laneH / Math.max(1, m));
+    out[i * 3] = xCar - d * colGap;
+    out[i * 3 + 1] = cy + (seen - (m - 1) * 0.5) * rowGap;
+    out[i * 3 + 2] = 8 + clamp(levels[i]!, 0, 1) * 8;
+  }
+}
+
+/** Cubic bezier point along an edge, for the flow packets. */
+function bez(a: number, b: number, c: number, d: number, u: number): number {
+  const m = 1 - u;
+  return m * m * m * a + 3 * m * m * u * b + 3 * m * u * u * c + u * u * u * d;
+}
+
+/**
+ * Paint the operator graph. Exported and pure so it renders headlessly without
+ * mounting the component.
+ */
+export function paintFmRack(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  Hh: number,
+  p: FmRackVizState,
+  now: number,
+  flash: number,
+): void {
+  const t = now / 1000;
+  const ops4 = p.engine === "ops4";
+  const dim = ops4 ? 1 : 0.42;
+  const algI = Math.round(clamp(p.alg, 0, 7));
+  const routes = ALG_ROUTES[algI] ?? ALG_ROUTES[0]!;
+  const levels = [clamp(p.op1, 0, 1), clamp(p.op2, 0, 1), clamp(p.op3, 0, 1), clamp(p.op4, 0, 1)];
+  const ratios = [1, p.r2, p.r3, p.r4];
+  const fb = clamp(p.feedback, 0, 1);
+  const vecDepth = clamp(p.vecDepth, 0, 1);
+  const energy =
+    0.12 + (ops4 ? 0.18 : 0) + fb * 0.22 + vecDepth * 0.26 +
+    (levels[1]! + levels[2]! + levels[3]!) * 0.07 + flash * 0.24;
+
+  ctx.clearRect(0, 0, W, Hh);
+  plate(ctx, W, Hh, C, { energy, horizon: 0.48 });
+  lattice(ctx, W, Hh, C_MID, 16, 0.05 + vecDepth * 0.05);
+
+  layoutFmOps(W, Hh, p, NODE_SCRATCH);
+
+  // ── output bus: the carrier's path off the right of the rack ──
+  // Doglegs below the vector pad so the two never sit on top of each other.
+  const cx0 = NODE_SCRATCH[0]!;
+  const cy0 = NODE_SCRATCH[1]!;
+  const cr0 = NODE_SCRATCH[2]!;
+  const outX = W - 16;
+  const busY = Hh * 0.68;
+  const busKnee = Math.min(cx0 + cr0 + 46, outX - 30);
+  ctx.strokeStyle = hexA(C_GLOW, (0.2 + levels[0]! * 0.4) * dim);
+  ctx.lineWidth = 1 + levels[0]! * 2;
+  ctx.beginPath();
+  ctx.moveTo(cx0 + cr0, cy0);
+  ctx.quadraticCurveTo(busKnee, cy0, busKnee, busY);
+  ctx.lineTo(outX - 6, busY);
+  ctx.stroke();
+  ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
+  ctx.beginPath();
+  ctx.moveTo(outX - 6, busY - 4);
+  ctx.lineTo(outX, busY);
+  ctx.lineTo(outX - 6, busY + 4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_GLOW, 0.6 * dim);
+  ctx.fillText("OUT", outX, busY - 8);
+
+  // ── edges: who modulates whom ──
+  for (let i = 0; i < routes.length; i++) {
+    const r = routes[i]!;
+    const from = r[0]!;
+    const to = r[1]!;
+    const fx = NODE_SCRATCH[from * 3]!;
+    const fy = NODE_SCRATCH[from * 3 + 1]!;
+    const fr = NODE_SCRATCH[from * 3 + 2]!;
+    const tx = NODE_SCRATCH[to * 3]!;
+    const ty = NODE_SCRATCH[to * 3 + 1]!;
+    const tr = NODE_SCRATCH[to * 3 + 2]!;
+    const drive = levels[from]!;
+    const col = C_OP[from] ?? C_MID;
+    const x0 = fx + fr;
+    const x1 = tx - tr;
+    const c0 = x0 + (x1 - x0) * 0.45;
+    const c1 = x1 - (x1 - x0) * 0.45;
+    const path = () => {
+      ctx.moveTo(x0, fy);
+      ctx.bezierCurveTo(c0, fy, c1, ty, x1, ty);
+    };
+    // Thickness is the modulation index this edge carries.
+    lit(ctx, () => {
+      glowStroke(ctx, path, col, {
+        width: (1.1 + drive * 3.4) * (ops4 ? 1 : 0.6),
+        glow: (0.4 + drive) * dim,
+        alpha: (0.35 + drive * 0.55) * dim,
+      });
+    });
+    // Arrowhead at the midpoint — direction of modulation.
+    const mx = bez(x0, c0, c1, x1, 0.55);
+    const my = bez(fy, fy, ty, ty, 0.55);
+    const mx2 = bez(x0, c0, c1, x1, 0.62);
+    const my2 = bez(fy, fy, ty, ty, 0.62);
+    const ang = Math.atan2(my2 - my, mx2 - mx);
+    ctx.save();
+    ctx.translate(mx, my);
+    ctx.rotate(ang);
+    ctx.fillStyle = hexA(col, (0.5 + drive * 0.4) * dim);
+    ctx.beginPath();
+    ctx.moveTo(-4, -3.4);
+    ctx.lineTo(4, 0);
+    ctx.lineTo(-4, 3.4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    // Flow packets — carrier of the animation, deterministic from `now`.
+    if (ops4 && drive > 0.03) {
+      const pk = drive > 0.55 ? 3 : 2;
+      lit(ctx, () => {
+        for (let k = 0; k < pk; k++) {
+          const u = ((t * (0.35 + p.vecRate * 1.6 + drive * 0.5) + i * 0.17 + k / pk) % 1 + 1) % 1;
+          const px = bez(x0, c0, c1, x1, u);
+          const py = bez(fy, fy, ty, ty, u);
+          drawGlow(ctx, px, py, 5 + drive * 6, C_GLOW, 0.5 + drive * 0.4);
+        }
+      });
+    }
+  }
+
+  // ── feedback: a self-loop on the carrier ──
+  if (fb > 0.02) {
+    const loopR = cr0 + 10 + fb * 14;
+    const pulse = 0.55 + 0.45 * Math.sin(t * (3 + fb * 7));
+    const loop = () => {
+      ctx.moveTo(cx0 + cr0 * 0.7, cy0 - cr0 * 0.6);
+      ctx.bezierCurveTo(cx0 + loopR, cy0 - loopR, cx0 - loopR, cy0 - loopR, cx0 - cr0 * 0.7, cy0 - cr0 * 0.6);
+    };
+    lit(ctx, () => {
+      glowStroke(ctx, loop, C_FB, { width: 1.2 + fb * 2.4, glow: 0.5 + fb * pulse, alpha: 0.4 + fb * 0.5 });
+      drawGlow(ctx, cx0, cy0 - loopR * 0.55, 10 + fb * 18, C_FB, fb * 0.4 * pulse);
+    });
+    ctx.fillStyle = hexA(C_FB, 0.7);
+    ctx.beginPath();
+    ctx.moveTo(cx0 - cr0 * 0.7 - 3.6, cy0 - cr0 * 0.6 - 3.6);
+    ctx.lineTo(cx0 - cr0 * 0.7 + 1, cy0 - cr0 * 0.6 + 1.6);
+    ctx.lineTo(cx0 - cr0 * 0.7 - 4.6, cy0 - cr0 * 0.6 + 1.8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(C_FB, 0.8);
+    ctx.fillText(`FB ${Math.round(fb * 100)}`, cx0, cy0 - loopR - 4);
+  }
+
+  // ── nodes ──
+  for (let i = 0; i < 4; i++) {
+    const x = NODE_SCRATCH[i * 3]!;
+    const y = NODE_SCRATCH[i * 3 + 1]!;
+    const r = NODE_SCRATCH[i * 3 + 2]!;
+    const lv = levels[i]!;
+    const col = C_OP[i]!;
+    const isCarrier = i === 0;
+    // Is this operator patched by the current algorithm?
+    let patched = isCarrier;
+    for (let k = 0; k < routes.length && !patched; k++) {
+      if (routes[k]![0] === i || routes[k]![1] === i) patched = true;
+    }
+    const bright = (patched ? 0.35 + lv * 0.6 : 0.14) * dim;
+
+    ctx.fillStyle = hexA(col, bright * 0.4);
+    roundRect(ctx, x - r, y - r, r * 2, r * 2, isCarrier ? r * 0.5 : r * 0.9);
+    ctx.fill();
+    ctx.save();
+    if (!patched) ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = hexA(patched ? col : C_MID, (patched ? 0.6 + lv * 0.35 : 0.3) * dim);
+    ctx.lineWidth = isCarrier ? 2 : 1.4;
+    roundRect(ctx, x - r, y - r, r * 2, r * 2, isCarrier ? r * 0.5 : r * 0.9);
+    ctx.stroke();
+    ctx.restore();
+    if (patched && lv > 0.03) {
+      lit(ctx, () => drawGlow(ctx, x, y, r * 1.9 + lv * 10, col, (0.18 + lv * 0.42) * dim));
+    }
+    if (p.focus === i) {
+      ctx.strokeStyle = hexA(C_GLOW, 0.8);
+      ctx.lineWidth = 1;
+      roundRect(ctx, x - r - 4, y - r - 4, r * 2 + 8, r * 2 + 8, 4);
+      ctx.stroke();
+    }
+
+    ctx.font = VIZ_FONT_TITLE;
+    ctx.textAlign = "center";
+    ctx.fillStyle = hexA(patched ? C_GLOW : C_MID, patched ? 0.95 : 0.5);
+    ctx.fillText(`${i + 1}`, x, y + 3);
+
+    // Level bar under the node.
+    ctx.fillStyle = "rgba(0,0,0,0.42)";
+    ctx.fillRect(x - 14, y + r + 6, 28, 3);
+    ctx.fillStyle = hexA(col, 0.85 * dim);
+    ctx.fillRect(x - 14, y + r + 6, 28 * lv, 3);
+
+    // Role + ratio.
+    ctx.font = VIZ_FONT_LABEL;
+    ctx.fillStyle = hexA(isCarrier ? C_GLOW : col, 0.7 * dim);
+    ctx.fillText(isCarrier ? "CARRIER" : patched ? "MOD" : "IDLE", x, y - r - 6);
+    if (!isCarrier) {
+      ctx.font = VIZ_FONT_VALUE;
+      ctx.fillStyle = hexA(C_HOT, 0.72 * dim);
+      ctx.fillText(`×${ratios[i]!.toFixed(2)}`, x, y + r + 20);
+      const rn = logNorm(ratios[i]!, RATIO_MIN, RATIO_MAX);
+      ctx.fillStyle = "rgba(0,0,0,0.42)";
+      ctx.fillRect(x - 14, y + r + 24, 28, 2);
+      ctx.fillStyle = hexA(C_HOT, 0.6 * dim);
+      ctx.fillRect(x - 14, y + r + 24, 28 * rn, 2);
+    } else {
+      ctx.font = VIZ_FONT_VALUE;
+      ctx.fillStyle = hexA(C_GLOW, 0.7 * dim);
+      ctx.fillText(`L${Math.round(lv * 100)}`, x, y + r + 20);
+    }
+  }
+
+  // ── vector pad — drawn at the geometry the pointer maps to ──
+  const padCx = W * 0.78;
+  const padCy = Hh * 0.4;
+  const padR = Math.min(W, Hh) * 0.09;
+  const grab = padR * 1.35;
+  ctx.save();
+  ctx.setLineDash([2, 3]);
+  ctx.strokeStyle = hexA(C_VEC, 0.16);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(padCx - grab, padCy - grab, grab * 2, grab * 2);
+  ctx.restore();
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.fillRect(padCx - padR, padCy - padR, padR * 2, padR * 2);
+  ctx.strokeStyle = hexA(C_VEC, 0.3 + Math.max(vecDepth, Math.abs(p.fmVecX - 0.5) + Math.abs(p.fmVecY - 0.5)) * 0.4);
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(padCx - padR, padCy - padR, padR * 2, padR * 2);
+  ctx.strokeStyle = hexA(C_MID, 0.18);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padCx - padR, padCy);
+  ctx.lineTo(padCx + padR, padCy);
+  ctx.moveTo(padCx, padCy - padR);
+  ctx.lineTo(padCx, padCy + padR);
+  ctx.stroke();
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.fillStyle = hexA(C_VEC, 0.45);
+  ctx.textAlign = "center";
+  ctx.fillText("A", padCx - padR + 4, padCy - padR + 8);
+  ctx.fillText("B", padCx + padR - 4, padCy - padR + 8);
+  ctx.fillText("C", padCx - padR + 4, padCy + padR - 2);
+  ctx.fillText("D", padCx + padR - 4, padCy + padR - 2);
+
+  // Slow vector orbit when rate/depth are dialled in.
+  const phase = t * (0.3 + p.vecRate * 5);
+  if (vecDepth > 0.02) {
+    for (let k = 12; k > 0; k--) {
+      const ph = phase - k * 0.15;
+      const tx = padCx + Math.sin(ph) * vecDepth * (padR - 2);
+      const ty = padCy + Math.cos(ph * 0.87) * vecDepth * (padR - 2);
+      ctx.fillStyle = hexA(C_VEC, ((12 - k) / 12) * 0.28 * vecDepth);
+      ctx.fillRect(tx - 0.8, ty - 0.8, 1.6, 1.6);
+    }
+  }
+  const vhx = padCx - padR + clamp(p.fmVecX, 0, 1) * padR * 2;
+  const vhy = padCy - padR + clamp(p.fmVecY, 0, 1) * padR * 2;
+  const vdx = vecDepth > 0.02 ? Math.sin(phase) * vecDepth * (padR - 2) * 0.15 : 0;
+  const vdy = vecDepth > 0.02 ? Math.cos(phase * 0.87) * vecDepth * (padR - 2) * 0.15 : 0;
+  ctx.strokeStyle = hexA(C_GLOW, 0.4 + flash * 0.3);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(vhx - 5, vhy);
+  ctx.lineTo(vhx + 5, vhy);
+  ctx.moveTo(vhx, vhy - 5);
+  ctx.lineTo(vhx, vhy + 5);
+  ctx.stroke();
+  lit(ctx, () => drawGlow(ctx, vhx + vdx, vhy + vdy, 10 + flash * 6, C_VEC, 0.8));
+  ctx.fillStyle = hexA(C_GLOW, 0.95);
+  ctx.beginPath();
+  ctx.arc(vhx + vdx, vhy + vdy, 2.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "center";
+  ctx.fillStyle = hexA(C_VEC, 0.8);
+  ctx.fillText("FM VEC", padCx, padCy - grab - 5);
+  ctx.font = VIZ_FONT_VALUE;
+  ctx.fillStyle = hexA(C_VEC, 0.65);
+  ctx.fillText(`${p.fmVecX.toFixed(2)},${p.fmVecY.toFixed(2)}`, padCx, padCy + grab + 10);
+
+  // Engine badge + alg chip.
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(ops4 ? C_GLOW : C_MID, 0.85);
+  ctx.fillText(ops4 ? "4-OP LIVE" : "2-OP · ARM RACK", 12, 30);
+  ctx.fillStyle = hexA(C_MID, 0.6);
+  ctx.fillText(algI <= 3 ? "SERIAL" : "PARALLEL", 12, 42);
+  pill(ctx, W * 0.5, 3, `ALG ${algI} · ${ALG_NAMES[algI]}`, C_GLOW, { glow: flash, height: 14 });
+
+  // ── feedback rail ──
+  const railY = Hh - 30;
+  const railX = 12;
+  const railW = W - 24;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(railX, railY, railW, 7);
+  ctx.strokeStyle = hexA(C_FB, 0.22 + fb * 0.4);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(railX + 0.5, railY + 0.5, railW - 1, 6);
+  if (fb > 0.02) {
+    const rg = cachedGrad(ctx, `fbrail|${railX}|${railW}`, (c) => {
+      const g = c.createLinearGradient(railX, 0, railX + railW, 0);
+      g.addColorStop(0, hexA(C_FB, 0.4));
+      g.addColorStop(1, hexA(C_GLOW, 0.8));
+      return g;
+    });
+    ctx.fillStyle = rg;
+    ctx.fillRect(railX + 1, railY + 1, Math.max(2, (railW - 2) * fb), 5);
+  }
+  lit(ctx, () => drawGlow(ctx, railX + 1 + (railW - 2) * fb, railY + 3.5, 8 + flash * 4, C_GLOW, 0.8));
+  ctx.font = VIZ_FONT_LABEL;
+  ctx.textAlign = "left";
+  ctx.fillStyle = hexA(C_FB, 0.8);
+  ctx.fillText("FEEDBACK", railX + 2, railY - 4);
+  ctx.textAlign = "right";
+  ctx.fillStyle = hexA(C_FB, 0.62);
+  ctx.fillText(`${Math.round(fb * 100)}`, railX + railW - 2, railY - 4);
+
+  grain(ctx, W, Hh, 0.03);
+  bezel(ctx, W, Hh, C);
+  footer(
+    ctx,
+    W,
+    Hh,
+    "RACK · VECTOR LATTICE",
+    !ops4
+      ? "STANDBY"
+      : `ALG${algI}${algI <= 3 ? "·S" : "·P"} · FB${Math.round(fb * 100)} · XY ${p.fmVecX.toFixed(2)},${p.fmVecY.toFixed(2)}`,
+    C_GLOW,
+    ops4 ? C_HOT : C_MID,
+  );
+}
 
 export function FmRackStageViz() {
   const engine = (useFireCommandStore((s) => s.patch.fmEngine) ?? "classic") as FmEngineMode;
@@ -127,15 +539,13 @@ export function FmRackStageViz() {
   const fmVecY = useFireCommandStore((s) => s.patch.fmVectorY) ?? 0.5;
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const sizeRef = useRef({ w: 420, h: H });
+  const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const focusOpRef = useRef(0);
-  const opPosRef = useRef<Array<{ x: number; y: number; r: number }>>([]);
-  const prevKey = useRef("");
-  const st = useRef({
+  const hitScratch = useRef<number[]>([]);
+  const prevKey = useRef(0);
+  const st = useRef<FmRackVizState>({
     engine,
     alg,
     feedback,
@@ -150,21 +560,51 @@ export function FmRackStageViz() {
     vecDepth,
     fmVecX,
     fmVecY,
+    focus: focusOpRef.current,
   });
-  st.current = { engine, alg, feedback, op1, op2, op3, op4, r2, r3, r4, vecRate, vecDepth, fmVecX, fmVecY };
+  st.current = {
+    engine,
+    alg,
+    feedback,
+    op1,
+    op2,
+    op3,
+    op4,
+    r2,
+    r3,
+    r4,
+    vecRate,
+    vecDepth,
+    fmVecX,
+    fmVecY,
+    focus: focusOpRef.current,
+  };
 
   const ops4 = engine === "ops4";
   const live = ops4 && (feedback > 0.02 || vecDepth > 0.02 || op2 > 0.05 || op3 > 0.05 || op4 > 0.05 || Math.abs(fmVecX - 0.5) > 0.02 || Math.abs(fmVecY - 0.5) > 0.02);
 
   useEffect(() => {
-    const key = `${engine}|${alg}|${feedback.toFixed(3)}|${op1.toFixed(2)}|${op2.toFixed(2)}|${op3.toFixed(2)}|${op4.toFixed(2)}|${r2.toFixed(2)}|${r3.toFixed(2)}|${r4.toFixed(2)}|${vecRate.toFixed(3)}|${vecDepth.toFixed(3)}|${fmVecX.toFixed(3)}|${fmVecY.toFixed(3)}`;
+    const key = motionHash(
+      ops4 ? 1 : 0,
+      alg,
+      feedback,
+      op1,
+      op2,
+      op3,
+      op4,
+      r2,
+      r3,
+      r4,
+      vecRate,
+      vecDepth,
+      fmVecX,
+      fmVecY,
+    );
     if (key !== prevKey.current) {
       prevKey.current = key;
       flashRef.current = 1;
     }
-  }, [engine, alg, feedback, op1, op2, op3, op4, r2, r3, r4, vecRate, vecDepth, fmVecX, fmVecY]);
-
-  useHiDpi(wrapRef, canvasRef, H, sizeRef);
+  }, [ops4, alg, feedback, op1, op2, op3, op4, r2, r3, r4, vecRate, vecDepth, fmVecX, fmVecY]);
 
   const hitOp = useCallback((clientX: number, clientY: number): number => {
     const wrap = wrapRef.current;
@@ -172,15 +612,17 @@ export function FmRackStageViz() {
     const rect = wrap.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-    const ops = opPosRef.current;
-    for (let i = 0; i < ops.length; i++) {
-      const o = ops[i]!;
-      const dx = x - o.x;
-      const dy = y - o.y;
-      if (dx * dx + dy * dy <= (o.r + 8) * (o.r + 8)) return i;
+    const { w: W, h: Hh } = sizeRef.current;
+    const pos = hitScratch.current;
+    layoutFmOps(W, Hh, st.current, pos);
+    for (let i = 0; i < 4; i++) {
+      const dx = x - pos[i * 3]!;
+      const dy = y - pos[i * 3 + 1]!;
+      const rr = pos[i * 3 + 2]! + 8;
+      if (dx * dx + dy * dy <= rr * rr) return i;
     }
     return -1;
-  }, []);
+  }, [sizeRef, wrapRef]);
 
   const applyVec = useCallback(
     (clientX: number, clientY: number) => {
@@ -206,7 +648,7 @@ export function FmRackStageViz() {
         setParam("fmVectorY", Math.round(y * 1000) / 1000);
       }
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const applyFb = useCallback(
@@ -217,7 +659,7 @@ export function FmRackStageViz() {
       const x = clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
       setParam("fmFeedback", Math.round(x * 1000) / 1000);
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const applyOp = useCallback(
@@ -235,7 +677,7 @@ export function FmRackStageViz() {
         setParam(ratioKey, Math.round(logLerp(x, RATIO_MIN, RATIO_MAX) * 100) / 100);
       }
     },
-    [setParam],
+    [setParam, wrapRef],
   );
 
   const onPointerDown = useCallback(
@@ -253,6 +695,7 @@ export function FmRackStageViz() {
       const hit = hitOp(e.clientX, e.clientY);
       if (hit >= 0) {
         focusOpRef.current = hit;
+        st.current.focus = hit;
         dragRef.current = "op";
         wrap.setPointerCapture(e.pointerId);
         applyOp(e.clientX, e.clientY);
@@ -262,7 +705,7 @@ export function FmRackStageViz() {
       wrap.setPointerCapture(e.pointerId);
       applyVec(e.clientX, e.clientY);
     },
-    [applyFb, applyOp, applyVec, hitOp],
+    [applyFb, applyOp, applyVec, hitOp, wrapRef],
   );
 
   const onPointerMove = useCallback(
@@ -281,7 +724,7 @@ export function FmRackStageViz() {
     try {
       wrapRef.current?.releasePointerCapture(e.pointerId);
     } catch { /* */ }
-  }, []);
+  }, [wrapRef]);
 
   const onDoubleClick = useCallback(() => {
     const next = (Math.round(st.current.alg) + 1) % 8;
@@ -294,325 +737,12 @@ export function FmRackStageViz() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-        const sparks: Array<{ x: number; y: number; vx: number; life: number; col: string }> = [];
 
     const stopLoop = startStageVizLoop(
       (now) => {
-      const { w: W, h: Hh } = sizeRef.current;
-      const p = st.current;
-      flashRef.current *= 0.86;
-
-      const ops4Live = p.engine === "ops4";
-      const levels = [p.op1, p.op2, p.op3, p.op4];
-      const ratios = [1, p.r2, p.r3, p.r4];
-      const algI = Math.round(clamp(p.alg, 0, 7));
-      const routes = ALG_ROUTES[algI] ?? ALG_ROUTES[0]!;
-      const energy =
-        0.12 +
-        (ops4Live ? 0.2 : 0) +
-        p.feedback * 0.25 +
-        p.vecDepth * 0.3 +
-        levels.slice(1).reduce((a, b) => a + b, 0) * 0.08 +
-        flashRef.current * 0.25;
-
-      let engT = now / 1000;
-      try {
-        engT = getEngine().ctx.currentTime;
-      } catch { /* */ }
-
-      ctx.clearRect(0, 0, W, Hh);
-
-      // Lattice chamber
-      const bg = ctx.createRadialGradient(W * 0.42, Hh * 0.4, 6, W * 0.5, Hh * 0.45, W * 0.82);
-      bg.addColorStop(0, hexAlpha(C_HOT, (ops4Live ? 0.12 : 0.04) + energy * 0.3 + flashRef.current * 0.2));
-      bg.addColorStop(0.45, hexAlpha(C_DEEP, 0.55));
-      bg.addColorStop(1, "rgba(2,7,14,0.98)");
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, Hh);
-
-      // Soft lattice grid
-      ctx.strokeStyle = hexAlpha(C_MID, 0.06 + p.vecDepth * 0.08);
-      ctx.lineWidth = 1;
-      for (let i = 0; i < 5; i++) {
-        const gx = W * (0.15 + i * 0.15);
-        ctx.beginPath();
-        ctx.moveTo(gx, 22);
-        ctx.lineTo(gx, Hh * 0.72);
-        ctx.stroke();
-      }
-
-      // Operator positions — diamond lattice
-      const cx = W * 0.38;
-      const cy = Hh * 0.42;
-      const opPositions = [
-        { x: cx, y: cy + 28 }, // Op1 carrier
-        { x: cx - 42, y: cy - 8 },
-        { x: cx + 42, y: cy - 8 },
-        { x: cx, y: cy - 40 },
-      ];
-      opPosRef.current = opPositions.map((pos, i) => ({
-        x: pos.x,
-        y: pos.y,
-        r: 9 + levels[i]! * 10,
-      }));
-
-      // Algorithm cables with flow
-      routes.forEach(([from, to]) => {
-        const fPos = opPositions[from]!;
-        const tPos = opPositions[to]!;
-        const modLevel = levels[from]!;
-        const alpha = (ops4Live ? 0.3 : 0.12) + modLevel * 0.45;
-        ctx.strokeStyle = hexAlpha(C_OP[from] ?? C_MID, alpha);
-        ctx.lineWidth = 1.6 + modLevel * 1.4;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(fPos.x, fPos.y);
-        ctx.quadraticCurveTo((fPos.x + tPos.x) / 2, (fPos.y + tPos.y) / 2 - 12, tPos.x, tPos.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        const flow = ((engT * (0.6 + p.vecRate * 2) + from * 0.25) % 1 + 1) % 1;
-        const fx = fPos.x + (tPos.x - fPos.x) * flow;
-        const fy = fPos.y + (tPos.y - fPos.y) * flow - Math.sin(flow * Math.PI) * 12;
-        ctx.fillStyle = hexAlpha(C_GLOW, modLevel * 0.7 * (ops4Live ? 1 : 0.35));
-        ctx.beginPath();
-        ctx.arc(fx, fy, 2.5 + modLevel * 2, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      // Feedback loop on carrier
-      if (p.feedback > 0.02) {
-        const c0 = opPositions[0]!;
-        const fbRad = 16 + p.feedback * 14;
-        const pulse = 0.5 + 0.5 * Math.sin(engT * (4 + p.feedback * 8));
-        ctx.strokeStyle = hexAlpha(C_FB, 0.35 + p.feedback * 0.5);
-        ctx.lineWidth = 1.8;
-        ctx.beginPath();
-        ctx.arc(c0.x, c0.y - fbRad * 0.35, fbRad * 0.55, Math.PI * 0.15, Math.PI * 0.85, false);
-        ctx.stroke();
-        const fbg = ctx.createRadialGradient(c0.x, c0.y, 0, c0.x, c0.y, fbRad * 1.4);
-        fbg.addColorStop(0, hexAlpha(C_FB, p.feedback * 0.18 * pulse));
-        fbg.addColorStop(1, hexAlpha(C_FB, 0));
-        ctx.fillStyle = fbg;
-        ctx.beginPath();
-        ctx.arc(c0.x, c0.y, fbRad * 1.4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      // Operator orbs + ratio rings
-      const focus = focusOpRef.current;
-      opPositions.forEach((pos, i) => {
-        const lv = levels[i]!;
-        const sz = 9 + lv * 10;
-        const col = C_OP[i]!;
-        const ratioN = i === 0 ? 0 : logNorm(ratios[i]!, RATIO_MIN, RATIO_MAX);
-
-        // Ratio orbit (ops 2–4)
-        if (i > 0) {
-          const rr = sz + 6 + ratioN * 14;
-          ctx.strokeStyle = hexAlpha(col, 0.2 + lv * 0.35 + (ops4Live ? 0.1 : 0));
-          ctx.lineWidth = 1.2;
-          ctx.setLineDash([2, 3]);
-          ctx.beginPath();
-          ctx.arc(pos.x, pos.y, rr, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          // Ratio tick
-          const ang = -Math.PI / 2 + ratioN * Math.PI * 1.6;
-          ctx.fillStyle = hexAlpha(C_GLOW, 0.7);
-          ctx.beginPath();
-          ctx.arc(pos.x + Math.cos(ang) * rr, pos.y + Math.sin(ang) * rr, 2.2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        const g = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, sz * 2.4);
-        g.addColorStop(0, hexAlpha(col, (0.45 + lv * 0.4) * (ops4Live ? 1 : 0.45)));
-        g.addColorStop(0.55, hexAlpha(col, 0.12));
-        g.addColorStop(1, hexAlpha(col, 0));
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, sz * 2.4, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = hexAlpha(col, 0.75 + lv * 0.2);
-        ctx.shadowBlur = 8 + lv * 12 + (focus === i ? 8 : 0);
-        ctx.shadowColor = col;
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, sz, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        if (focus === i) {
-          ctx.strokeStyle = hexAlpha(C_GLOW, 0.85);
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.arc(pos.x, pos.y, sz + 4, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-
-        ctx.font = "800 9px ui-sans-serif, system-ui, sans-serif";
-        ctx.fillStyle = "rgba(6,12,20,0.9)";
-        ctx.textAlign = "center";
-        ctx.fillText(`${i + 1}`, pos.x, pos.y + 3);
-
-        // Level micro-bar under orb
-        ctx.fillStyle = "rgba(0,0,0,0.4)";
-        ctx.fillRect(pos.x - 12, pos.y + sz + 5, 24, 3);
-        ctx.fillStyle = hexAlpha(col, 0.85);
-        ctx.fillRect(pos.x - 12, pos.y + sz + 5, 24 * lv, 3);
-      });
-
-      // Vector morph pad (right) — wired to fmVectorX/Y corner morph
-      const vx = W * 0.78;
-      const vy = Hh * 0.4;
-      const vr = 36;
-      ctx.strokeStyle = hexAlpha(C_VEC, 0.25 + Math.max(p.vecDepth, Math.abs(p.fmVecX - 0.5) + Math.abs(p.fmVecY - 0.5)) * 0.35);
-      ctx.lineWidth = 1.2;
-      ctx.strokeRect(vx - vr, vy - vr, vr * 2, vr * 2);
-      ctx.beginPath();
-      ctx.moveTo(vx - vr, vy);
-      ctx.lineTo(vx + vr, vy);
-      ctx.moveTo(vx, vy - vr);
-      ctx.lineTo(vx, vy + vr);
-      ctx.strokeStyle = hexAlpha(C_MID, 0.2);
-      ctx.stroke();
-
-      // Soft corner markers (A B / C D morph corners)
-      const corners = [
-        { x: vx - vr + 4, y: vy - vr + 4, l: "A" },
-        { x: vx + vr - 4, y: vy - vr + 4, l: "B" },
-        { x: vx - vr + 4, y: vy + vr - 4, l: "C" },
-        { x: vx + vr - 4, y: vy + vr - 4, l: "D" },
-      ];
-      ctx.font = "700 6px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_VEC, 0.45);
-      corners.forEach((c) => {
-        ctx.textAlign = "center";
-        ctx.fillText(c.l, c.x, c.y + 2);
-      });
-
-      // Optional slow orbit trail (vectorRate/Depth still animate when set)
-      const phase = engT * (0.3 + p.vecRate * 5);
-      const vdx = Math.sin(phase) * p.vecDepth * (vr - 4);
-      const vdy = Math.cos(phase * 0.87) * p.vecDepth * (vr - 4);
-      if (p.vecDepth > 0.02) {
-        for (let h = 12; h > 0; h--) {
-          const ph = phase - h * 0.15;
-          const tx = vx + Math.sin(ph) * p.vecDepth * (vr - 4);
-          const ty = vy + Math.cos(ph * 0.87) * p.vecDepth * (vr - 4);
-          ctx.fillStyle = hexAlpha(C_VEC, ((12 - h) / 12) * 0.25 * p.vecDepth);
-          ctx.beginPath();
-          ctx.arc(tx, ty, 1.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Live fmVectorX/Y thumb
-      const hx = vx - vr + clamp(p.fmVecX ?? 0.5, 0, 1) * vr * 2;
-      const hy = vy - vr + clamp(p.fmVecY ?? 0.5, 0, 1) * vr * 2;
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.45 + flashRef.current * 0.3);
-      ctx.beginPath();
-      ctx.moveTo(hx - 6, hy);
-      ctx.lineTo(hx + 6, hy);
-      ctx.moveTo(hx, hy - 6);
-      ctx.lineTo(hx, hy + 6);
-      ctx.stroke();
-
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = C_VEC;
-      ctx.beginPath();
-      ctx.arc(hx + (p.vecDepth > 0.02 ? vdx * 0.15 : 0), hy + (p.vecDepth > 0.02 ? vdy * 0.15 : 0), 3.8 + flashRef.current, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-
-      ctx.font = "700 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.fillStyle = hexAlpha(C_VEC, 0.8);
-      ctx.textAlign = "center";
-      ctx.fillText("FM VEC", vx, vy - vr - 6);
-      ctx.font = "700 6px ui-monospace, Menlo, monospace";
-      ctx.fillStyle = hexAlpha(C_VEC, 0.65);
-      ctx.fillText(`${(p.fmVecX ?? 0.5).toFixed(2)},${(p.fmVecY ?? 0.5).toFixed(2)}`, vx, vy + vr + 10);
-
-      // Sparks along cables when live
-      if (ops4Live && energy > 0.4 && Math.random() < 0.1 + p.feedback * 0.15) {
-        const r = routes[Math.floor(Math.random() * routes.length)];
-        if (r) {
-          const a = opPositions[r[0]]!;
-          const b = opPositions[r[1]]!;
-          sparks.push({
-            x: a.x + (b.x - a.x) * Math.random(),
-            y: a.y + (b.y - a.y) * Math.random(),
-            vx: (Math.random() - 0.5) * 1.5,
-            life: 1,
-            col: C_OP[r[0]] ?? C_GLOW,
-          });
-        }
-      }
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const s = sparks[i]!;
-        s.life -= 0.03;
-        s.x += s.vx;
-        if (s.life <= 0) {
-          sparks.splice(i, 1);
-          continue;
-        }
-        ctx.fillStyle = hexAlpha(s.col, s.life * 0.7);
-        ctx.fillRect(s.x, s.y, 2, 2);
-      }
-
-      // Alg chip
-      const algLabel = `ALG ${algI} · ${ALG_NAMES[algI]}`;
-      ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-      const chipW = ctx.measureText(algLabel).width + 14;
-      const chipX = W * 0.5 - chipW * 0.5;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(chipX, 6, chipW, 14);
-      ctx.strokeStyle = hexAlpha(C_GLOW, 0.5 + flashRef.current * 0.3);
-      ctx.strokeRect(chipX, 6, chipW, 14);
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.textAlign = "center";
-      ctx.fillText(algLabel, W * 0.5, 16);
-
-      // Engine badge left
-      ctx.font = "800 8px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(ops4Live ? C_GLOW : C_MID, 0.85);
-      ctx.fillText(ops4Live ? "4-OP LIVE" : "2-OP · ARM RACK", 12, 16);
-
-      // Feedback rail
-      const railY = Hh - 16;
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(12, railY, W - 24, 7);
-      ctx.strokeStyle = hexAlpha(C_FB, 0.25 + p.feedback * 0.4);
-      ctx.strokeRect(12.5, railY + 0.5, W - 25, 6);
-      if (p.feedback > 0.02) {
-        const rg = ctx.createLinearGradient(12, railY, 12 + (W - 24) * p.feedback, railY);
-        rg.addColorStop(0, hexAlpha(C_FB, 0.35));
-        rg.addColorStop(1, hexAlpha(C_GLOW, 0.8));
-        ctx.fillStyle = rg;
-        ctx.fillRect(12, railY + 1, (W - 24) * p.feedback, 5);
-      }
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.95);
-      ctx.beginPath();
-      ctx.arc(12 + (W - 24) * p.feedback, railY + 3.5, 3.2 + flashRef.current, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = hexAlpha(C_FB, 0.8);
-      ctx.font = "700 7px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText("FEEDBACK", 14, railY - 3);
-
-      ctx.font = "700 9px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillStyle = hexAlpha(C_GLOW, 0.85);
-      ctx.fillText("RACK · VECTOR LATTICE", 12, Hh - 2);
-      ctx.textAlign = "right";
-      const status = !ops4Live
-        ? "STANDBY"
-        : `ALG${algI}${algI <= 3 ? "·S" : "·P"} · FB${Math.round(p.feedback * 100)} · XY ${(p.fmVecX ?? 0.5).toFixed(2)},${(p.fmVecY ?? 0.5).toFixed(2)}`;
-      ctx.fillStyle = hexAlpha(ops4Live ? C_HOT : C_MID, 0.88);
-      ctx.fillText(status, W - 12, Hh - 2);
-    
+        const { w: W, h: Hh } = sizeRef.current;
+        flashRef.current *= 0.86;
+        paintFmRack(ctx, W, Hh, st.current, now, flashRef.current);
       },
       () => ({
         flash: flashRef.current,
@@ -624,23 +754,39 @@ export function FmRackStageViz() {
             (st.current.op3 ?? 0) > 0.05 ||
             (st.current.op4 ?? 0) > 0.05),
         dragging: !!dragRef.current,
-        particles: sparks.length,
-        motionKey: JSON.stringify(st.current),
+        visible: visibleRef.current,
+        motionKey: motionHash(
+          st.current.engine === "ops4" ? 1 : 0,
+          st.current.alg,
+          st.current.feedback,
+          st.current.op1,
+          st.current.op2,
+          st.current.op3,
+          st.current.op4,
+          st.current.r2,
+          st.current.r3,
+          st.current.r4,
+          st.current.vecRate,
+          st.current.vecDepth,
+          st.current.fmVecX,
+          st.current.fmVecY,
+          st.current.focus,
+        ),
       }),
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, []);
+  }, [canvasRef, sizeRef, visibleRef]);
 
   return (
     <div
       ref={wrapRef}
       className="relative mb-2.5 overflow-hidden rounded-2xl border-2 select-none"
       style={{
-        borderColor: hexAlpha(C, live ? 0.55 : ops4 ? 0.4 : 0.28),
+        borderColor: hexA(C, live ? 0.55 : ops4 ? 0.4 : 0.28),
         height: H,
         cursor: "crosshair",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexAlpha(C, live ? 0.26 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
+        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.06), 0 0 44px ${hexA(C, live ? 0.26 : 0.1)}, 0 10px 28px rgba(0,0,0,0.42)`,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -652,19 +798,19 @@ export function FmRackStageViz() {
       aria-label="FM Rack vector lattice"
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full pointer-events-none" aria-hidden />
-      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexAlpha(C_GLOW, 0.7) }} />
-      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
-      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexAlpha(C, 0.5) }} />
+      <span className="pointer-events-none absolute left-2 top-2 h-2.5 w-2.5 border-l-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute right-2 top-2 h-2.5 w-2.5 border-r-2 border-t-2" style={{ borderColor: hexA(C_GLOW, 0.7) }} />
+      <span className="pointer-events-none absolute bottom-2 left-2 h-2.5 w-2.5 border-b-2 border-l-2" style={{ borderColor: hexA(C, 0.5) }} />
+      <span className="pointer-events-none absolute bottom-2 right-2 h-2.5 w-2.5 border-b-2 border-r-2" style={{ borderColor: hexA(C, 0.5) }} />
       <div
         className="pointer-events-none absolute left-3 top-2 text-[8px] font-black uppercase tracking-[0.28em]"
-        style={{ color: hexAlpha(C_GLOW, 0.78) }}
+        style={{ color: hexA(C_GLOW, 0.78) }}
       >
         Vector Lattice
       </div>
       <div
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
-        style={{ color: hexAlpha(ops4 ? C_HOT : C_MID, 0.78) }}
+        style={{ color: hexA(ops4 ? C_HOT : C_MID, 0.78) }}
       >
         {ops4 ? `ALG ${Math.round(alg)}` : "2-OP"}
       </div>

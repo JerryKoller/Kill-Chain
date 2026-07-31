@@ -5,7 +5,11 @@
 
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { FC, FC_BAND, bandShade } from "./fireColors";
+import { FC_CHIP_EYEBROW, FcChip, fcChipCharacterFor } from "./fcChip";
 import { ModuleEnableToggle } from "./ModuleEnableToggle";
+
+/** Mix band — console chips with an LED underline. */
+const WIDTH_CHAR = fcChipCharacterFor("width");
 
 export const WIDTH_C = FC.width;
 export const WIDTH_C_GLOW = bandShade(FC_BAND.mix, 0.92);
@@ -89,35 +93,25 @@ export function WidthCharacterStrip() {
   const w = useFireCommandStore((s) => s.patch.stereoWidth) ?? 1;
   const setParam = useFireCommandStore((s) => s.setParam);
   const c = WIDTH_C;
+  const tone = { color: c, onText: WIDTH_C_GLOW, glow: 10 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${c}66` }}>
         Horizon
       </span>
-      {WIDTH_CHARS.map((p) => {
-        const on = near(w, p.w);
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => setParam("stereoWidth", p.w)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
-            style={
-              on
-                ? {
-                    borderColor: `${c}99`,
-                    background: `${c}33`,
-                    color: WIDTH_C_GLOW,
-                    boxShadow: `0 0 10px ${c}44`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`${p.label} · ${Math.round(p.w * 100)}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {WIDTH_CHARS.map((p) => (
+        <FcChip
+          key={p.id}
+          on={near(w, p.w)}
+          tone={tone}
+          character={WIDTH_CHAR}
+          caseMode="normal"
+          onClick={() => setParam("stereoWidth", p.w)}
+          title={`${p.label} · ${Math.round(p.w * 100)}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
@@ -125,35 +119,26 @@ export function WidthCharacterStrip() {
 export function WidthSnapStrip() {
   const w = useFireCommandStore((s) => s.patch.stereoWidth) ?? 1;
   const setParam = useFireCommandStore((s) => s.setParam);
+  const tone = { color: WIDTH_C_HOT, onText: WIDTH_C_GLOW, glow: 8 };
   return (
     <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
-      <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${WIDTH_C}66` }}>
+      <span className={FC_CHIP_EYEBROW} style={{ color: `${WIDTH_C}66` }}>
         Snap
       </span>
-      {WIDTH_SNAPS.map((p) => {
-        const on = near(w, p.v);
-        return (
-          <button
-            key={p.label}
-            type="button"
-            onClick={() => setParam("stereoWidth", p.v)}
-            className="rounded-md border px-2 py-0.5 text-[9px] font-black tabular-nums transition"
-            style={
-              on
-                ? {
-                    borderColor: `${WIDTH_C_HOT}99`,
-                    background: `${WIDTH_C_HOT}28`,
-                    color: WIDTH_C_GLOW,
-                    boxShadow: `0 0 8px ${WIDTH_C}33`,
-                  }
-                : { borderColor: "rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.45)", background: "rgba(0,0,0,0.3)" }
-            }
-            title={`Width ${p.label}%`}
-          >
-            {p.label}
-          </button>
-        );
-      })}
+      {WIDTH_SNAPS.map((p) => (
+        <FcChip
+          key={p.label}
+          on={near(w, p.v)}
+          tone={tone}
+          character={WIDTH_CHAR}
+          caseMode="normal"
+          mono
+          onClick={() => setParam("stereoWidth", p.v)}
+          title={`Width ${p.label}%`}
+        >
+          {p.label}
+        </FcChip>
+      ))}
     </div>
   );
 }
