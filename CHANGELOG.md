@@ -2,6 +2,19 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.3.0] — 2026-07-31 — Fire Command Sound Character Restored
+
+### Fixed
+- **Factory presets** — curated bank authored resonance as 0–1; remastered to musical absolute Q so Acid/Lead/Bass actually diverge again
+- **Natural Selection** — wild mode no longer stacks every extreme engine into digital hash; coherent species DNA + dedicated NS safety
+- **Sequencer / piano-roll clipping** — Fire bus headroom, softer glue limiter, sample-deck clipper, poly + chord expansion gain staging
+- **Sterilized timbre** — less aggressive loudness/performance caps, gentler resonance compensation, stronger formant carve mouths
+
+### Changed
+- Default Natural Selection pressure raised into Speciation territory
+- Genesis character-linked presets restored to the factory library
+- Module visualizer + control overhaul from the 3.2.x audit line included in this build
+
 ## [3.2.1] — 2026-07-29 — Fire Command Stability Audit
 
 ### Fixed
