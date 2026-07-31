@@ -427,7 +427,7 @@ export interface MixerStrip {
   trim: number;
 }
 
-const defaultStrip = (): MixerStrip => ({ level: 1, pan: 0, mute: false, solo: false, trim: 1 });
+const defaultStrip = (): MixerStrip => ({ level: 0.85, pan: 0, mute: false, solo: false, trim: 1 });
 
 function defaultMixer(): Record<MixerStripId, MixerStrip> {
   return {

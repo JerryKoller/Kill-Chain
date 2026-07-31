@@ -39,7 +39,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  * the synth+drums SUM room under the limiter threshold. The user-facing
  * drumLevel range (0..1.2) is unchanged; it just scales inside this budget.
  */
-const DRUM_TRIM = 0.72;
+const DRUM_TRIM = 0.62;
 
 /**
  * Knee-style safety clip transfer, shared by the drum kit's output and the
@@ -70,6 +70,8 @@ export class FireDrumKit {
   readonly sampleOutput: GainNode;
   private readonly clipPad: GainNode;
   private readonly clip: WaveShaperNode;
+  private readonly sampleClipPad: GainNode;
+  private readonly sampleClip: WaveShaperNode;
   private readonly ctx: AudioContext;
   private noiseBuf: AudioBuffer | null = null;
   /** Live one-shot sources — stopped on transport silence. */
@@ -103,12 +105,16 @@ export class FireDrumKit {
     this.clip.curve = makeSafetyClipCurve();
     this.clip.oversample = "2x";
     this.output.connect(this.clipPad).connect(this.clip).connect(dest);
-    // Sample deck: same trim, its own destination (falls back to the drum
-    // bus when the engine doesn't split them). The shared kit clipper is
-    // skipped — the Fire master limiter + bus clipper downstream cover it.
+    // Sample deck: same trim + own knee clipper (was unclipped into fireBus —
+    // sample one-shots piled with drums/synths were a major seq clipping source).
     this.sampleOutput = ctx.createGain();
     this.sampleOutput.gain.value = 0.9 * DRUM_TRIM;
-    this.sampleOutput.connect(sampleDest ?? dest);
+    this.sampleClipPad = ctx.createGain();
+    this.sampleClipPad.gain.value = 1 / SAFETY_CLIP_RANGE;
+    this.sampleClip = ctx.createWaveShaper();
+    this.sampleClip.curve = makeSafetyClipCurve();
+    this.sampleClip.oversample = "2x";
+    this.sampleOutput.connect(this.sampleClipPad).connect(this.sampleClip).connect(sampleDest ?? dest);
   }
 
   setLevel(v: number): void {

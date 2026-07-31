@@ -666,7 +666,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 const midiToFreq = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 const MAX_UNISON = 16;
 /** Hard ceiling on live filter Q — power-user bite path (was 3.5). */
-const FILTER_Q_CEIL = 14;
+const FILTER_Q_CEIL = 18;
 
 /**
  * Soft unison ceiling for live voices. Extreme user presets (unison 16 +
@@ -736,7 +736,8 @@ export function morphFrameGains(frac: number): { g0: number; g1: number } {
 /** Pre-filter trim as Q rises so bite stays audible without resonant blowups. */
 export function filterResoCompGain(q: number): number {
   const excess = Math.max(0, q - 0.707);
-  return 1 / (1 + excess * 0.1);
+  // Was 0.1 — too aggressive; scream-Q patches lost the character users dialed.
+  return 1 / (1 + excess * 0.065);
 }
 
 /**
@@ -813,7 +814,7 @@ function clampFmDev(hz: number, sampleRate: number): number {
  * into broadband hash regardless of the per-direction Nyquist clamp. Cap the
  * round-trip index while keeping the balance the patch asked for.
  */
-export const CROSS_FM_LOOP_MAX = 6;
+export const CROSS_FM_LOOP_MAX = 9;
 export function boundCrossFm(devBtoA: number, devAtoB: number, f0: number): [number, number] {
   if (devBtoA <= 0 || devAtoB <= 0) return [devBtoA, devAtoB];
   const base = Math.max(1, f0);
@@ -2112,17 +2113,17 @@ class Voice {
       this.carveFilt2.gain.setTargetAtTime(0, t, 0.03);
     } else if (carve === "formant") {
       // Movable F1/F2 pair — cutoff slides the vowel, carve amount opens the mouths.
-      // Gains kept studio-safe (was up to +16/+13 dB — guaranteed pre-drive clips).
+      // Milder than the old +16/+13 dB blowouts, stronger than the sterile +6.5/+5.2 floor.
       const f1 = clamp(cut * (0.35 + amt * 0.2), 220, 1000);
       const f2 = clamp(cut * (0.95 + amt * 1.1), 650, 3800);
       this.carveFilt.type = "peaking";
       this.carveFilt.frequency.setTargetAtTime(f1, t, 0.03);
       this.carveFilt.Q.setTargetAtTime(2.2 + amt * 4.5, t, 0.03);
-      this.carveFilt.gain.setTargetAtTime(1.5 + amt * 5, t, 0.03);
+      this.carveFilt.gain.setTargetAtTime(2.5 + amt * 6.5, t, 0.03);
       this.carveFilt2.type = "peaking";
       this.carveFilt2.frequency.setTargetAtTime(f2, t, 0.03);
       this.carveFilt2.Q.setTargetAtTime(1.8 + amt * 3.5, t, 0.03);
-      this.carveFilt2.gain.setTargetAtTime(1.2 + amt * 4, t, 0.03);
+      this.carveFilt2.gain.setTargetAtTime(2 + amt * 5.5, t, 0.03);
     } else {
       this.carveFilt2.type = "allpass";
       this.carveFilt2.gain.setTargetAtTime(0, t, 0.03);
@@ -3895,16 +3896,15 @@ export class FireCommandSynth {
    * own before the filter (osc levels + sub + noise sum, unison normalization
    * only holds each GROUP constant), so unity here fed every later stage an
    * already-clipping signal — that pre-trim is the core of the clipping fix.
-   * The knee is 4 (was 6): with the sequencer running, chords of 3-4 one-shot
-   * voices routinely overlap their releases, so compensation has to start
-   * engaging where real material actually lives. The 60 ms time-constant
-   * keeps the gain change click-free as voices come and go.
+   * The knee is 3 (was 4): piano-roll / sequencer chords stack releases hard,
+   * so compensation engages where sequenced material actually lives. The 50 ms
+   * time-constant keeps the gain change click-free as voices come and go.
    */
   private updatePolyGain(): void {
     const n = this.voices.size;
-    const knee = 4;
+    const knee = 3;
     const g = VOICE_HEADROOM * (n <= knee ? 1 : Math.sqrt(knee / n));
-    this.voiceBus.gain.setTargetAtTime(g, this.ctx.currentTime, 0.06);
+    this.voiceBus.gain.setTargetAtTime(g, this.ctx.currentTime, 0.05);
   }
 
   private stealVoice(): void {

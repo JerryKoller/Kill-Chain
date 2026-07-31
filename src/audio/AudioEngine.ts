@@ -313,21 +313,25 @@ export class AudioEngine {
     // synth OR solo drums at normal level sit in the identity region
     // (bit-exact), and only simultaneous full-scale pile-ups get rounded.
     this.fireBus = this.ctx.createGain();
+    // Fixed headroom for A+B+drums+samples summing. Each part can already
+    // peak near 0.98 from its own soft-clipper; unity sum was ~+6 dBFS into
+    // the Fire limiter and read as constant clipping on the sequencer.
+    this.fireBus.gain.value = 0.58;
     this.fireBusPad = this.ctx.createGain();
     this.fireBusPad.gain.value = 1 / SAFETY_CLIP_RANGE;
     this.fireBusClip = this.ctx.createWaveShaper();
     this.fireBusClip.curve = makeSafetyClipCurve();
     this.fireBusClip.oversample = "2x";
     // v1.6 mixer: fireBus → master fader → master limiter → pad → clipper.
-    // The limiter (same recipe as finalLimiter, slightly deeper threshold)
-    // glues the four parts; the WaveShaper stays as the true ceiling.
+    // Softer threshold + knee: WaveShaper is the hard ceiling; the compressor
+    // only glues — a -3 dB brick-wall was pumping every chord+drums hit.
     this.fireMasterGain = this.ctx.createGain();
     this.fireLimiter = this.ctx.createDynamicsCompressor();
-    this.fireLimiter.threshold.value = -3.0;
-    this.fireLimiter.knee.value = 0;
-    this.fireLimiter.ratio.value = 20;
-    this.fireLimiter.attack.value = 0.002;
-    this.fireLimiter.release.value = 0.08;
+    this.fireLimiter.threshold.value = -1.2;
+    this.fireLimiter.knee.value = 8;
+    this.fireLimiter.ratio.value = 8;
+    this.fireLimiter.attack.value = 0.003;
+    this.fireLimiter.release.value = 0.12;
     this.fireBus.connect(this.fireMasterGain);
     this.fireMasterGain.connect(this.fireLimiter);
     this.fireLimiter.connect(this.fireBusPad);

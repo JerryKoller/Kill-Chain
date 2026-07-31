@@ -29,7 +29,8 @@ import { adsrToModEnvPoints, normalizeModEnvPoints } from "@/audio/dsp/toneDiffe
 import { upsertLfoQuickRoute, inferLfoDestFromMatrix } from "@/audio/dsp/modRouting";
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
-import { applyLoudnessSafety, applyModuleLocks, applyPerformanceSafety, lockedModuleCount } from "@/lib/fireModuleLocks";
+import { CHARACTER_LINKED_PRESETS } from "@/audio/dsp/fireCharacters";
+import { applyLoudnessSafety, applyModuleLocks, applyNsSafety, applyPerformanceSafety, lockedModuleCount } from "@/lib/fireModuleLocks";
 import { useUIStore } from "@/state/uiStore";
 
 /**
@@ -350,10 +351,11 @@ const FLAGSHIP_PRESETS: FirePreset[] = [
   },
 ];
 
-/** Factory bank: Init + curated library (no character mirrors). */
+/** Factory bank: Init + remastered curated library + Genesis character presets. */
 export const FIRE_PRESETS: FirePreset[] = [
   ...FLAGSHIP_PRESETS,
   ...GENERATED_PRESETS,
+  ...CHARACTER_LINKED_PRESETS,
 ];
 
 // Fast lookup for loadPreset — linear scans over 500 entries add up.
@@ -637,54 +639,180 @@ function randomPatch(): FirePatch {
 // ════════════════════ mutation (natural selection) ════════════════════
 
 /**
+ * Apply one coherent "species" rewrite so wild NS offspring sound intentional
+ * instead of stacking every extreme engine at once (digital hash).
+ */
+function applyMutateSpecies(p: FirePatch, a: number): void {
+  const species = pick([
+    "acid", "ops4", "warp", "chip", "dual", "sync", "noise", "age", "formant", "pluck",
+  ] as const);
+  switch (species) {
+    case "acid":
+      p.filterType = "lowpass";
+      p.filterModel = pick(["ladder", "svf"] as const);
+      p.filterCutoff = rand(180, 1400);
+      p.filterResonance = rand(8, 16);
+      p.filterEnvAmount = rand(0.65, 0.95);
+      p.filterDrive = rand(0.25, 0.7);
+      p.chipAcidMix = rand(0.45, 0.95);
+      p.oscATable = pick(["saw", "pulse", "growl"] as const);
+      p.mono = true;
+      p.glide = Math.max(p.glide ?? 0, rand(0.04, 0.14));
+      p.spectralMode = "off";
+      break;
+    case "ops4":
+      p.fmEngine = "ops4";
+      p.fmAlg = Math.floor(rand(0, 8));
+      p.fmOp2Ratio = pick([0.5, 1, 1.5, 2, 3, 5, 7]);
+      p.fmOp3Ratio = pick([0.5, 1, 2, 3, 4, 6]);
+      p.fmOp4Ratio = pick([1, 2, 3, 5, 7, 11]);
+      p.fmFeedback = rand(0.1, 0.65);
+      p.fmOp2Level = rand(0.35, 1);
+      p.fmOp3Level = rand(0.2, 0.9);
+      p.fmOp4Level = rand(0.15, 0.75);
+      p.fmAmount = Math.max(p.fmAmount ?? 0, rand(0.25, 0.7));
+      p.oscATable = pick(["bell", "harmonic", "metallic", "additive"] as const);
+      p.hardSync = false;
+      p.spectralMode = "off";
+      break;
+    case "warp":
+      p.warpMode = pick(["scramble", "subharmonic", "brickwall"] as const);
+      p.warpStretch = rand(-0.95, 0.95);
+      p.warpTilt = rand(-0.9, 0.9);
+      p.warpComb = rand(0.2, 0.9);
+      p.warpAmount = 1;
+      p.oscATable = pick(["fold", "metallic", "sync", "growl", "formant2"] as const);
+      p.filterType = pick<FireFilterType>(["lowpass", "bandpass", "notch"]);
+      p.filterResonance = rand(2, 10);
+      break;
+    case "chip":
+      p.oscATable = pick(["chip", "pulse", "basic"] as const);
+      p.hardSync = chance(0.7);
+      p.pulseDuty = rand(0.05, 0.95);
+      p.chipAcidMix = rand(0.3, 0.9);
+      p.chipNoise = pick(["white", "nes", "gb", "periodic"] as const);
+      p.filterCutoff = rand(1200, 8000);
+      p.filterResonance = rand(1, 8);
+      p.fmEngine = "classic";
+      p.spectralMode = "off";
+      break;
+    case "dual":
+      p.oscATable = pick(WAVETABLE_IDS);
+      p.oscBTable = pick(WAVETABLE_IDS);
+      p.oscBLevel = Math.max(p.oscBLevel ?? 0, rand(0.35, 0.75));
+      p.oscBInherit = pick(["morph", "mirror", "offset", "fm", "family"] as const);
+      p.oscBDetune = Math.round(rand(-22, 22));
+      p.unison = pick([3, 5, 7]);
+      p.unisonDetune = Math.round(rand(10, 28));
+      p.unisonWidth = rand(0.5, 0.95);
+      break;
+    case "sync":
+      p.hardSync = true;
+      p.pulseDuty = rand(0.08, 0.85);
+      p.oscATable = pick(["pulse", "saw", "sync"] as const);
+      p.filterModel = pick(["ladder", "svf"] as const);
+      p.filterResonance = rand(3, 12);
+      p.drive = Math.max(p.drive ?? 0, rand(0.2, 0.65));
+      p.driveMode = pick(["fold", "fuzz", "hard", "tube"] as const);
+      break;
+    case "noise":
+      p.noiseLevel = rand(0.15, 0.45);
+      p.noiseMode = pick(["burst", "storm", "bed"] as const);
+      p.noiseColor = rand(-0.8, 0.8);
+      p.filterType = pick<FireFilterType>(["bandpass", "highpass", "lowpass"]);
+      p.filterCutoff = rand(400, 6000);
+      p.filterResonance = rand(2, 11);
+      if (a > 0.8 && chance(0.35)) {
+        p.spectralMode = pick(["smear", "gate", "shift"] as const);
+        p.spectralMix = rand(0.18, 0.4);
+        p.spectralAmount = rand(0.35, 0.8);
+      }
+      break;
+    case "age":
+      p.cassetteGen = rand(0.25, 0.75);
+      p.tapeSpeed = rand(-0.4, 0.4);
+      p.wowFlutter = rand(0.1, 0.55);
+      p.vhsColor = rand(0.1, 0.5);
+      p.ageMacro = rand(0.25, 0.7);
+      p.ageEvolve = rand(0.1, 0.45);
+      p.driveMode = pick(["tube", "soft"] as const);
+      p.drive = Math.max(p.drive ?? 0, rand(0.15, 0.5));
+      p.hiss = rand(0.02, 0.12);
+      break;
+    case "formant":
+      p.oscATable = pick(["vocal", "formant2", "harmonic"] as const);
+      p.filterCarve = "formant";
+      p.filterCarveAmount = rand(0.35, 0.85);
+      p.filterType = pick<FireFilterType>(["bandpass", "lowpass"]);
+      p.filterResonance = rand(2, 9);
+      p.oscAPos = rand(0.1, 0.9);
+      p.oscAEnv = rand(-0.4, 0.7);
+      break;
+    case "pluck":
+      p.lpgOn = true;
+      p.lpgModel = pick(["classic", "fast", "bright", "aged"] as const);
+      p.lpgDecay = rand(0.12, 0.7);
+      p.lpgColor = rand(0.4, 0.95);
+      p.ampAttack = rand(0.001, 0.01);
+      p.ampDecay = rand(0.12, 0.45);
+      p.ampSustain = rand(0.02, 0.25);
+      p.filterEnvAmount = rand(0.4, 0.9);
+      break;
+  }
+}
+
+/**
  * Breed one offspring from a patch. `amount` (0..1) scales every jitter:
  * ~0 is a whisper of drift, ~0.35 is a classic nudge, and the top of the
- * dial (Natural Selection / Cambrian) rewrites tone, tables, FX, and
- * modulation so offspring actually sound like different organisms.
+ * dial (Natural Selection / Cambrian) rewrites tone via coherent species DNA
+ * so offspring sound otherworldly without becoming digital hash.
  */
 export function mutatePatch(src: FirePatch, amount: number): FirePatch {
   const a = clamp(amount, 0, 1);
   const p = structuredClone(src);
-  // Mild stays musical; Wild explodes — quadratic boost above ~0.55.
-  const g = 0.2 + a * 1.15 + Math.pow(a, 2.15) * 6.2;
+  // Mild stays musical; Wild opens up — but not so hard that every knob becomes noise.
+  const g = 0.22 + a * 0.95 + Math.pow(a, 2) * 2.6;
   const j = (v: number, amt: number, lo: number, hi: number) =>
     clamp(v + (Math.random() * 2 - 1) * amt * g, lo, hi);
   const jLog = (v: number, oct: number, lo: number, hi: number) =>
     clamp(v * Math.pow(2, (Math.random() * 2 - 1) * oct * g), lo, hi);
-  // Probability that scales with pressure (wild ≈ near-certain for some flips).
-  const pWild = (base: number) => chance(clamp(base + a * a * 0.85, 0, 0.95));
+  const pWild = (base: number) => chance(clamp(base + a * a * 0.75, 0, 0.92));
 
   const pn = p as unknown as Record<string, number>;
 
-  // ── Broad numeric coverage (was a thin allow-list) ─────────────────────
-  const uni01 = [
-    "oscAPos", "oscBPos", "oscCPos", "oscALevel", "oscBLevel", "oscCLevel",
-    "oscAContinuity", "subLevel", "subTranslate", "noiseLevel", "noiseDensity", "noiseGrain",
-    "fmAmount", "fmBtoA", "fmAtoB", "ringAmount",
+  // Timbre / motion knobs — full pressure.
+  const uniTone = [
+    "oscAPos", "oscBPos", "oscCPos", "oscAContinuity", "subTranslate",
+    "noiseDensity", "noiseGrain", "fmAmount", "fmBtoA", "fmAtoB", "ringAmount",
     "filterDrive", "filterKeyTrack", "filterCarveAmount",
     "drive", "crush", "punch",
-    "chorusMix", "chorusDepth", "chorusRate", "chorusSpread",
-    "phaserMix", "phaserDepth", "phaserRate", "phaserFeedback",
     "lfo1Depth", "lfo2Depth",
     "unisonWidth", "unisonMix", "unisonEnvSpread",
     "ampSustain", "filtSustain", "modSustain",
     "velAmount", "velAttack", "ampHold", "ampOvershoot",
     "warpAmount", "warpComb",
-    "delayMix", "delayFeedback", "delayDuck", "delayFbFilter", "delayFbDrive",
-    "reverbMix", "reverbDamp", "reverbDiffusion", "reverbEarly", "reverbLowDecay",
-    "harmonyLevel",
-    "spectralAmount", "spectralMix", "spectralLow", "spectralHigh",
     "macro1", "macro2", "macro3", "macro4",
     "drift", "driftRate", "voiceInstability", "tuneVariance", "envVariance",
     "analogWake", "analogTremor", "analogBreath",
     "ageMacro", "ageEvolve",
-    "glueMix", "lpgDecay", "lpgColor", "lpgStrike", "lpgRing", "lpgLeakage", "lpgResoCouple",
+    "lpgDecay", "lpgColor", "lpgStrike", "lpgRing", "lpgLeakage", "lpgResoCouple",
   ];
-  for (const k of uni01) {
-    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.1 : 0.16, 0, 1);
+  for (const k of uniTone) {
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.11 : 0.18, 0, 1);
   }
-  // Width lives above 1.0 — keep it out of the 0..1 bucket.
-  p.stereoWidth = j(p.stereoWidth ?? 1, 0.12 + a * 0.35, 0.25, 1.6);
+  // Levels + wet FX — gentler so wild doesn't become a hall/noise bomb.
+  const uniGentle = [
+    "oscALevel", "oscBLevel", "oscCLevel", "subLevel", "noiseLevel",
+    "chorusMix", "chorusDepth", "chorusRate", "chorusSpread",
+    "phaserMix", "phaserDepth", "phaserRate", "phaserFeedback",
+    "delayMix", "delayFeedback", "delayDuck", "delayFbFilter", "delayFbDrive",
+    "reverbMix", "reverbDamp", "reverbDiffusion", "reverbEarly", "reverbLowDecay",
+    "harmonyLevel", "spectralAmount", "spectralMix", "spectralLow", "spectralHigh", "glueMix",
+  ];
+  for (const k of uniGentle) {
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.06 : 0.1, 0, 1);
+  }
+  p.stereoWidth = j(p.stereoWidth ?? 1, 0.12 + a * 0.3, 0.25, 1.55);
   if (typeof p.chorusLowCut === "number") {
     p.chorusLowCut = j(p.chorusLowCut, 20 + a * 80, 0, 400);
   }
@@ -692,166 +820,108 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
   const bi = [
     "oscAEnv", "oscBEnv", "oscCEnv", "oscALfo", "oscBLfo", "oscCLfo",
     "noiseColor", "filterEnvAmount", "filterEnvResoAmount",
-    "warpStretch", "warpTilt", "pitchEnvAmount",
+    "warpStretch", "warpTilt",
     "driveBias", "driveSymmetry",
   ];
   for (const k of bi) {
-    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.14 : 0.28, -1, 1);
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.14 : 0.26, -1, 1);
   }
+  // Pitch env is semitones, not a bipolar 0..1 knob.
+  p.pitchEnvAmount = Math.round(j(p.pitchEnvAmount ?? 0, 3 + a * 18, -36, 36));
 
-  // Log-domain: cutoff, LFO rates, envelopes, FX times.
-  p.filterCutoff = jLog(p.filterCutoff, a < 0.55 ? 0.3 : 0.55, 40, 18000);
-  p.filterResonance = jLog(Math.max(0.2, p.filterResonance), a < 0.55 ? 0.35 : 0.7, 0.1, 24);
-  p.lfo1Rate = jLog(Math.max(0.05, p.lfo1Rate), a < 0.55 ? 0.4 : 0.85, 0.05, 24);
-  p.lfo2Rate = jLog(Math.max(0.05, p.lfo2Rate), a < 0.55 ? 0.4 : 0.85, 0.05, 24);
-  p.ampAttack = jLog(Math.max(0.002, p.ampAttack), 0.4 + a * 0.5, 0.001, 3);
-  p.ampDecay = jLog(Math.max(0.01, p.ampDecay), 0.4 + a * 0.5, 0.01, 4);
-  p.ampRelease = jLog(Math.max(0.01, p.ampRelease), 0.4 + a * 0.5, 0.01, 5);
-  p.filtAttack = jLog(Math.max(0.002, p.filtAttack), 0.4 + a * 0.5, 0.001, 3);
-  p.filtDecay = jLog(Math.max(0.01, p.filtDecay), 0.4 + a * 0.5, 0.01, 4);
-  p.filtRelease = jLog(Math.max(0.01, p.filtRelease), 0.4 + a * 0.5, 0.01, 5);
-  p.modAttack = jLog(Math.max(0.002, p.modAttack ?? 0.02), 0.4 + a * 0.45, 0.001, 3);
-  p.modDecay = jLog(Math.max(0.01, p.modDecay ?? 0.5), 0.4 + a * 0.45, 0.01, 4);
-  p.modRelease = jLog(Math.max(0.01, p.modRelease ?? 0.4), 0.4 + a * 0.45, 0.01, 5);
+  p.filterCutoff = jLog(p.filterCutoff, a < 0.55 ? 0.28 : 0.5, 40, 18000);
+  p.filterResonance = jLog(Math.max(0.2, p.filterResonance), a < 0.55 ? 0.32 : 0.55, 0.1, 20);
+  p.lfo1Rate = jLog(Math.max(0.05, p.lfo1Rate), a < 0.55 ? 0.35 : 0.7, 0.05, 24);
+  p.lfo2Rate = jLog(Math.max(0.05, p.lfo2Rate), a < 0.55 ? 0.35 : 0.7, 0.05, 24);
+  p.ampAttack = jLog(Math.max(0.002, p.ampAttack), 0.35 + a * 0.45, 0.001, 3);
+  p.ampDecay = jLog(Math.max(0.01, p.ampDecay), 0.35 + a * 0.45, 0.01, 4);
+  p.ampRelease = jLog(Math.max(0.01, p.ampRelease), 0.35 + a * 0.45, 0.01, 5);
+  p.filtAttack = jLog(Math.max(0.002, p.filtAttack), 0.35 + a * 0.45, 0.001, 3);
+  p.filtDecay = jLog(Math.max(0.01, p.filtDecay), 0.35 + a * 0.45, 0.01, 4);
+  p.filtRelease = jLog(Math.max(0.01, p.filtRelease), 0.35 + a * 0.45, 0.01, 5);
+  p.modAttack = jLog(Math.max(0.002, p.modAttack ?? 0.02), 0.35 + a * 0.4, 0.001, 3);
+  p.modDecay = jLog(Math.max(0.01, p.modDecay ?? 0.5), 0.35 + a * 0.4, 0.01, 4);
+  p.modRelease = jLog(Math.max(0.01, p.modRelease ?? 0.4), 0.35 + a * 0.4, 0.01, 5);
   p.unisonDetune = j(p.unisonDetune, 5 + a * 14, 0, 80);
   p.oscADetune = Math.round(j(p.oscADetune, 3 + a * 10, -50, 50));
   p.oscBDetune = Math.round(j(p.oscBDetune, 4 + a * 14, -50, 50));
   p.oscCDetune = Math.round(j(p.oscCDetune, 4 + a * 12, -50, 50));
   p.fmRatio = j(p.fmRatio, 0.15 + a * 0.9, 0.25, 8);
   p.ringFreq = jLog(Math.max(20, p.ringFreq), 0.35 + a * 0.6, 20, 4000);
-  p.delayTime = jLog(Math.max(0.02, p.delayTime), 0.3 + a * 0.5, 0.02, 1.5);
-  p.reverbSize = j(p.reverbSize, 0.25 + a * 0.9, 0.3, 8);
+  p.delayTime = jLog(Math.max(0.02, p.delayTime), 0.25 + a * 0.45, 0.02, 1.5);
+  p.reverbSize = j(p.reverbSize, 0.2 + a * 0.75, 0.3, 8);
   p.reverbPredelay = j(p.reverbPredelay, 0.01 + a * 0.04, 0, 0.12);
-  p.reverbHighCut = jLog(Math.max(800, p.reverbHighCut ?? 12000), 0.25 + a * 0.4, 800, 18000);
-  p.tone = jLog(Math.max(800, p.tone), 0.25 + a * 0.45, 800, 18000);
-  p.phaserCenter = jLog(Math.max(100, p.phaserCenter ?? 800), 0.3 + a * 0.5, 100, 6000);
-  p.pitchEnvTime = jLog(Math.max(0.02, p.pitchEnvTime ?? 0.2), 0.35 + a * 0.5, 0.02, 2);
+  p.reverbHighCut = jLog(Math.max(800, p.reverbHighCut ?? 12000), 0.2 + a * 0.35, 800, 18000);
+  p.tone = jLog(Math.max(800, p.tone), 0.2 + a * 0.4, 800, 18000);
+  p.phaserCenter = jLog(Math.max(100, p.phaserCenter ?? 800), 0.25 + a * 0.45, 100, 6000);
+  p.pitchEnvTime = jLog(Math.max(0.02, p.pitchEnvTime ?? 0.2), 0.3 + a * 0.45, 0.02, 2);
   p.glide = j(p.glide, 0.02 + a * 0.12, 0, 1);
   p.lfo2PhaseOffset = j(p.lfo2PhaseOffset ?? 90, 15 + a * 40, 0, 360);
   p.lfo2Ratio = j(p.lfo2Ratio ?? 1, 0.15 + a * 0.7, 0.25, 4);
 
-  // Mod-matrix depths — ignored before; critical for “movement” mutations.
   if (Array.isArray(p.modMatrix)) {
     p.modMatrix = p.modMatrix.map((r) => {
       if (!r || r.source === "none" || r.dest === "none") return r;
-      return { ...r, amount: j(r.amount, 0.12 + a * 0.35, -1, 1) };
+      return { ...r, amount: j(r.amount, 0.12 + a * 0.32, -1, 1) };
     });
   }
 
-  // ── Speciation / Cambrian: categorical DNA flips ───────────────────────
-  if (a > 0.4) {
-    if (pWild(0.25)) p.oscBTable = pick(WAVETABLE_IDS);
-    if (pWild(0.22)) p.oscCTable = pick(WAVETABLE_IDS);
-    if (pWild(0.18)) p.subWave = pick(SUB_WAVES);
-    if (pWild(0.2)) p.lfo1Wave = pick(LFO_WAVES);
-    if (pWild(0.2)) p.lfo2Wave = pick(LFO_WAVES);
+  if (a > 0.35) {
+    if (pWild(0.22)) p.oscBTable = pick(WAVETABLE_IDS);
+    if (pWild(0.18)) p.oscCTable = pick(WAVETABLE_IDS);
+    if (pWild(0.15)) p.subWave = pick(SUB_WAVES);
+    if (pWild(0.18)) p.lfo1Wave = pick(LFO_WAVES);
+    if (pWild(0.18)) p.lfo2Wave = pick(LFO_WAVES);
   }
+
+  // Coherent species rewrite — the fun/wild part without stacking every extreme.
+  if (a > 0.52 && pWild(0.72)) applyMutateSpecies(p, a);
+  else if (a > 0.7 && pWild(0.4)) applyMutateSpecies(p, a);
+
   if (a > 0.55) {
-    if (pWild(0.35)) p.oscATable = pick(WAVETABLE_IDS);
-    if (pWild(0.4)) {
-      // Less LP bias than Armory-classic — wild species prefer BP/HP/notch.
-      p.filterType = pick<FireFilterType>(["lowpass", "bandpass", "bandpass", "highpass", "notch"]);
-    }
-    if (pWild(0.28)) p.filterModel = pick(["biquad", "ladder", "svf", "ladder"] as const);
-    if (pWild(0.3)) p.driveMode = pick(DRIVE_MODES);
-    if (pWild(0.28)) p.noiseMode = pick(["bed", "burst", "storm"] as const);
-    if (pWild(0.25)) p.lfo1Dest = pick(LFO_DESTS);
-    if (pWild(0.25)) p.lfo2Dest = pick(LFO_DESTS);
-    if (pWild(0.22)) p.filterSlope = pick([1, 1, 2, 3] as const);
-    if (pWild(0.28)) {
-      p.filterCarve = pick(["off", "fundamental", "odds", "evens", "noise", "formant", "formant"] as const);
-    }
-    if (pWild(0.22)) p.warpMode = pick(["classic", "scramble", "subharmonic", "brickwall"] as const);
-    if (pWild(0.18)) p.chorusModel = pick(["single", "dual", "triple", "ensemble", "dimension", "tape"] as const);
-    if (pWild(0.18)) p.delayCascadeMode = pick(["slap", "echo", "dub", "bounce", "long"] as const);
+    if (pWild(0.28)) p.oscATable = pick(WAVETABLE_IDS);
+    if (pWild(0.22)) p.filterType = pick<FireFilterType>(["lowpass", "lowpass", "bandpass", "highpass", "notch"]);
+    if (pWild(0.25)) p.filterModel = pick(["biquad", "ladder", "svf", "ladder"] as const);
+    if (pWild(0.22)) p.driveMode = pick(DRIVE_MODES);
+    if (pWild(0.18)) p.lfo1Dest = pick(LFO_DESTS);
+    if (pWild(0.18)) p.lfo2Dest = pick(LFO_DESTS);
+    if (pWild(0.16)) p.filterSlope = pick([1, 1, 2, 3] as const);
+    if (pWild(0.2)) p.filterCarve = pick(["off", "fundamental", "odds", "evens", "noise", "formant"] as const);
+    if (pWild(0.16)) p.chorusModel = pick(["single", "dual", "triple", "ensemble", "dimension", "tape"] as const);
+    if (pWild(0.14)) p.delayCascadeMode = pick(["slap", "echo", "dub", "bounce", "long"] as const);
   }
-  if (a > 0.7) {
-    // True Natural Selection — rewrite the skeleton, not just the knobs.
-    if (pWild(0.45)) p.oscAOctave = pick([-2, -1, 0, 0, 1, 1, 2]);
-    if (pWild(0.4)) p.oscBOctave = pick([-2, -1, 0, 0, 1, 2]);
-    if (pWild(0.35)) p.oscCOctave = pick([-2, -1, 0, 1]);
-    if (pWild(0.4)) p.unison = pick([1, 1, 3, 3, 5, 7]);
-    if (pWild(0.3)) p.unisonDistribution = pick(["linear", "gaussian", "center", "edge", "alternating"] as const);
-    if (pWild(0.28)) p.unisonPhase = pick(["even", "random", "alternating", "locked"] as const);
-    if (pWild(0.3)) p.unisonTemporalSpread = rand(0, 0.028);
-    if (pWild(0.25)) p.oscBInherit = pick(["off", "morph", "mirror", "offset", "fm", "family", "lock"] as const);
-    if (pWild(0.22)) p.spectralMode = pick(["off", "freeze", "smear", "gate", "shift"] as const);
-    if (pWild(0.2)) p.fxRoutingScene = pick(["serial", "driveAgePrint", "spaceCascade", "spectralTail"] as const);
-    if (pWild(0.2)) p.ampModel = pick(["vca", "gate"] as const);
-    if (pWild(0.18)) p.lpgOn = !p.lpgOn;
-    if (pWild(0.22)) p.lpgModel = pick(["classic", "fast", "slow", "aged", "sticky", "bright"] as const);
-    if (pWild(0.15)) p.mono = !p.mono;
-    // Creative engines unused by mild nudges — flip species DNA hard.
-    if (pWild(0.4)) p.fmEngine = p.fmEngine === "ops4" ? "classic" : "ops4";
-    if (pWild(0.35)) p.fmAlg = Math.floor(rand(0, 8));
-    if (pWild(0.3)) {
-      p.fmOp2Ratio = pick([0.5, 1, 1.5, 2, 3, 5, 7]);
-      p.fmOp3Ratio = pick([0.5, 1, 2, 3, 4, 6]);
-      p.fmOp4Ratio = pick([1, 2, 3, 5, 7, 11]);
-      p.fmFeedback = rand(0, 0.65);
-      p.fmOp2Level = rand(0.2, 1);
-      p.fmOp3Level = rand(0.15, 0.9);
-      p.fmOp4Level = rand(0.1, 0.75);
-    }
-    if (pWild(0.35)) p.hardSync = !p.hardSync;
-    if (pWild(0.3)) p.pulseDuty = rand(0.05, 0.95);
-    if (pWild(0.28)) p.chipAcidMix = rand(0.15, 0.95);
-    if (pWild(0.3)) p.filterDrivePos = p.filterDrivePos === "pre" ? "post" : "pre";
-    if (pWild(0.32)) {
-      // Rewrite mod-env contour shape (species gesture).
-      p.modEnvPoints = adsrToModEnvPoints(
-        rand(0.001, 0.8),
-        rand(0.05, 1.4),
-        rand(0, 0.85),
-        rand(0.05, 1.6),
-      );
-      p.modEnvSustainIndex = Math.max(1, (p.modEnvPoints.length || 2) - 1);
-      p.modEnvLoop = chance(0.25);
-    }
-    if (pWild(0.3)) {
-      p.airAmount = rand(0.15, 0.85);
-      p.airHigh = rand(-0.8, 0.9);
-      p.airLow = rand(-0.5, 0.6);
-    }
-    if (pWild(0.35)) {
-      // Age individuals — cassette / tape / wow without wet hall.
-      p.cassetteGen = rand(0.1, 0.7);
-      p.tapeSpeed = rand(-0.45, 0.45);
-      p.wowFlutter = rand(0.05, 0.55);
-      p.vhsColor = rand(0.05, 0.5);
-      p.ageMacro = Math.max(p.ageMacro ?? 0, rand(0.15, 0.65));
-      p.ageEvolve = rand(0.05, 0.45);
-    }
+  if (a > 0.72) {
+    if (pWild(0.3)) p.oscAOctave = pick([-2, -1, 0, 0, 1, 1, 2]);
+    if (pWild(0.28)) p.oscBOctave = pick([-2, -1, 0, 0, 1, 2]);
+    if (pWild(0.22)) p.oscCOctave = pick([-2, -1, 0, 1]);
+    if (pWild(0.28)) p.unison = pick([1, 1, 3, 3, 5, 7]);
+    if (pWild(0.2)) p.unisonDistribution = pick(["linear", "gaussian", "center", "edge", "alternating"] as const);
+    if (pWild(0.18)) p.unisonPhase = pick(["even", "random", "alternating", "locked"] as const);
+    if (pWild(0.2)) p.oscBInherit = pick(["off", "morph", "mirror", "offset", "fm", "family", "lock"] as const);
+    if (pWild(0.14)) p.fxRoutingScene = pick(["serial", "driveAgePrint", "spaceCascade", "spectralTail"] as const);
+    if (pWild(0.14)) p.lpgOn = !p.lpgOn;
+    if (pWild(0.12)) p.mono = !p.mono;
     if (pWild(0.28)) {
-      p.warpStretch = rand(-0.95, 0.95);
-      p.warpTilt = rand(-0.9, 0.9);
-      p.warpComb = rand(0.1, 0.9);
-      p.warpAmount = chance(0.7) ? 1 : rand(0.45, 1);
-      p.warpMode = pick(["classic", "scramble", "subharmonic", "brickwall"] as const);
+      p.modEnvPoints = adsrToModEnvPoints(rand(0.001, 0.8), rand(0.05, 1.4), rand(0, 0.85), rand(0.05, 1.6));
+      p.modEnvSustainIndex = Math.max(1, (p.modEnvPoints.length || 2) - 1);
+      p.modEnvLoop = chance(0.22);
     }
-    // Inject a fresh matrix route so offspring actually move differently.
-    if (pWild(0.35) && Array.isArray(p.modMatrix)) {
+    if (pWild(0.32) && Array.isArray(p.modMatrix)) {
       const slot = p.modMatrix.findIndex((r) => !r || r.source === "none" || r.dest === "none");
       const route = MR(
         pick<ModSource>(["lfo1", "lfo2", "modenv", "velocity", "macro1", "macro2"]),
         pick<ModDest>(["cutoff", "resonance", "wtA", "wtB", "pitch", "pan", "fm", "reverb", "delay", "drive"]),
-        rand(-0.7, 0.7) * (0.5 + a * 0.5),
+        rand(-0.75, 0.75) * (0.55 + a * 0.45),
       );
       if (slot >= 0) p.modMatrix[slot] = route;
       else if (p.modMatrix.length < 12) p.modMatrix = [...p.modMatrix, route];
     }
   }
-  if (a > 0.85) {
-    // Full Cambrian — dry-wild by default: timbre/species, not hall floors.
-    // (Wet mixes still jitter via uni01; we do NOT auto-raise reverb/delay/chorus/phaser.)
-    if (pWild(0.4)) p.drive = Math.max(p.drive, rand(0.2, 0.7));
-    if (pWild(0.3)) p.noiseLevel = Math.max(p.noiseLevel, rand(0.08, 0.35));
-    if (pWild(0.35)) p.fmAmount = Math.max(p.fmAmount, rand(0.15, 0.65));
-    if (pWild(0.25)) p.filterCutoff = rand(120, 9000);
-    if (pWild(0.3)) p.filterResonance = rand(2, 16);
-    if (pWild(0.25)) p.filterModel = pick(["ladder", "svf", "ladder"] as const);
-    if (pWild(0.3)) p.hardSync = true;
-    if (pWild(0.28)) p.fmEngine = "ops4";
+  if (a > 0.88) {
+    // Final Cambrian accent — boost one wild trait, not everything.
+    if (pWild(0.45)) p.filterResonance = Math.max(p.filterResonance, rand(6, 16));
+    if (pWild(0.35)) p.drive = Math.max(p.drive, rand(0.25, 0.7));
+    if (pWild(0.3)) p.fmAmount = Math.max(p.fmAmount, rand(0.2, 0.7));
     if (pWild(0.25)) {
       p.warpMode = pick(["scramble", "subharmonic", "brickwall"] as const);
       p.warpAmount = 1;
@@ -1128,7 +1198,7 @@ function defaults(): PersistShape {
     kbdAttackMs: 6,
     userPresets: [],
     maxVoices: 12,
-    mutateAmount: 0.35,
+    mutateAmount: 0.62,
     mutateLineage: 0,
     mutationGenealogy: [],
     signalPathOrder: [],
@@ -1550,7 +1620,7 @@ export function expandSequencerSynthVoices(
   const s = useFireCommandStore.getState();
   const patch = ch === 1 ? s.patchB : s.patchA;
   const modOn = (id: string) => patch.moduleEnable?.[id] !== false;
-  const vel = clamp(velocity, 0.05, 1);
+  const vel = clamp(velocity * 0.88, 0.05, 1); // sequencer headroom vs live keys
   const pitch = clamp(Math.round(midi), 0, 127);
   const voices: { midi: number; vel: number }[] = [{ midi: pitch, vel }];
   const mode = patch.harmonyMode ?? "off";
@@ -1583,6 +1653,11 @@ export function expandSequencerSynthVoices(
       extras = extras.map((c) => snapMidiToScale(c, seq.scaleRoot, seq.scaleId));
     }
     for (const c of extras) voices.push({ midi: c, vel: vel * 0.85 });
+  }
+  // Equal-power trim so chord/harmony expansions don't stack into the soft-clipper.
+  if (voices.length > 1) {
+    const scale = 1 / Math.sqrt(voices.length);
+    for (const v of voices) v.vel = clamp(v.vel * scale, 0.05, 1);
   }
   return voices;
 }
@@ -1628,7 +1703,7 @@ export function scheduleSequencerSynthNote(
         seqArpTimers.delete(onId);
         const st = useFireCommandStore.getState();
         if (!(st.arp.enabled && st.patchA.moduleEnable?.["arp"] !== false)) {
-          engine.fireCommand.playNote(pitch, vel, ctx.currentTime, dur);
+          engine.fireCommand.playNote(pitch, vel * 0.88, ctx.currentTime, dur);
           return;
         }
         const freshLatch = st.arp.hold && st.heldNotes.length === 0;
@@ -1953,7 +2028,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         accordionMode: false,
         pinnedModules: [],
         maxVoices: 12,
-        mutateAmount: 0.35,
+        mutateAmount: 0.62,
         mutation: null,
         mutateLineage: 0,
         mutationGenealogy: [],
@@ -2038,8 +2113,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const b = mutatePatch(parent, s.mutateAmount);
       applyModuleLocks(a, parent, s.moduleLocks);
       applyModuleLocks(b, parent, s.moduleLocks);
-      applyLoudnessSafety(a);
-      applyLoudnessSafety(b);
+      applyNsSafety(a);
+      applyNsSafety(b);
       const next = structuredClone(a);
       const { patchA, patchB } = commitActive(next);
       set({

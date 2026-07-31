@@ -12,6 +12,7 @@ import {
 } from "./FireCommandSynth";
 import { CURATED_PRESETS } from "./fireCuratedBank";
 import { CURATED_PRESETS_V2 } from "./fireCuratedBankVol2";
+import { remasterFactoryBank } from "./firePresetRemaster";
 
 export type PresetCategory =
   | "Bass" | "Lead" | "Pluck" | "Pad" | "Keys" | "Arp" | "FX" | "Atmos"
@@ -44,5 +45,11 @@ export interface FirePreset {
 
 export const P = (over: Partial<FirePatch>): FirePatch => ({ ...DEFAULT_FIRE_PATCH, ...over });
 
-/** Curated factory bank — 40 unique presets × 11 categories = 440 total. */
-export const GENERATED_PRESETS = [...CURATED_PRESETS, ...CURATED_PRESETS_V2];
+/**
+ * Curated factory bank — 40 unique presets × 11 categories = 440 total.
+ * Remastered for current synth gain/Q ranges so patches actually diverge.
+ */
+export const GENERATED_PRESETS = remasterFactoryBank([
+  ...CURATED_PRESETS,
+  ...CURATED_PRESETS_V2,
+]);

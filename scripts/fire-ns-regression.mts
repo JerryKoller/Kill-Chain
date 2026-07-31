@@ -19,7 +19,8 @@ import {
   WT_TARGET_RMS,
   WT_PEAK_CEIL,
 } from "../src/audio/dsp/wavetables.ts";
-import { applyLoudnessSafety } from "../src/lib/fireModuleLocks.ts";
+import { applyLoudnessSafety, applyNsSafety } from "../src/lib/fireModuleLocks.ts";
+import { remasterResonance } from "../src/audio/dsp/firePresetRemaster.ts";
 
 let failed = 0;
 function assert(cond: boolean, msg: string) {
@@ -104,8 +105,8 @@ assert(
 
 // ── Filter reso compensation ──────────────────────────────────────────
 assert(filterResoCompGain(0.707) === 1, "no trim at Butterworth Q");
-assert(filterResoCompGain(14) < 0.5, "high Q gets meaningful input trim");
-assert(filterResoCompGain(14) > 0.2, "high Q trim does not mute the filter");
+assert(filterResoCompGain(14) < 0.6, "high Q gets meaningful input trim");
+assert(filterResoCompGain(14) > 0.35, "high Q trim does not mute the filter");
 
 // ── Spectrum normalization: constant loudness + true-peak ceiling ─────
 // Pure sine is not peak-limited → hits the loudness target exactly.
@@ -170,9 +171,29 @@ const hot = cloneFirePatch({
   drive: 0.9,
 });
 applyLoudnessSafety(hot);
-assert((hot.filterResonance ?? 0) <= 10, "loudness safety caps Q ≤ 10");
-assert((hot.filterDrive ?? 0) <= 0.7, "loudness safety caps filter drive");
-assert((hot.noiseLevel ?? 0) <= 0.45, "loudness safety caps noise");
+assert((hot.filterResonance ?? 0) <= 14, "loudness safety caps Q ≤ 14");
+assert((hot.filterDrive ?? 0) <= 0.8, "loudness safety caps filter drive");
+assert((hot.noiseLevel ?? 0) <= 0.5, "loudness safety caps noise");
+
+// ── NS safety allows more bite than Armory ────────────────────────────
+const nsHot = cloneFirePatch({
+  ...DEFAULT_FIRE_PATCH,
+  filterResonance: 18,
+  fmAmount: 0.95,
+  drive: 0.95,
+});
+applyNsSafety(nsHot);
+assert((nsHot.filterResonance ?? 0) <= 16, "NS safety caps Q ≤ 16");
+assert((nsHot.fmAmount ?? 0) <= 0.88, "NS safety caps FM");
+assert((nsHot.filterResonance ?? 0) > 14, "NS safety allows hotter Q than Armory loudness");
+
+// ── Preset remaster maps legacy 0..1 resonance into musical Q ─────────
+const h = { n: 123456789 };
+const acidQ = remasterResonance(0.75, "Bass", "Acid Squelch", h);
+assert(acidQ >= 6, `acid remaster Q is musical (got ${acidQ})`);
+const softQ = remasterResonance(0.3, "Pad", "Soft Silk Pad", { n: 42 });
+assert(softQ >= 0.7 && softQ <= 6, `pad remaster Q stays gentle (got ${softQ})`);
+assert(remasterResonance(8, "Lead", "Already Hot", { n: 7 }) === 8, "absolute Q left alone");
 
 if (failed > 0) {
   console.error(`\n${failed} assertion(s) failed`);

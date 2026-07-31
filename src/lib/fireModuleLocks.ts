@@ -134,6 +134,7 @@ export function patchCpuPressure(patch: FirePatch, activeVoices = 1): number {
 /**
  * Soften runaway CPU / clip settings on load / randomize.
  * Mutates `patch`. Returns true when anything was dialed back.
+ * Ceilings leave room for musical scream-Q / drive — only true bombs get cut.
  */
 export function applyPerformanceSafety(patch: FirePatch): boolean {
   let softened = false;
@@ -150,67 +151,68 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
   });
   // Soften only runaway scream Q — Studio/Fire power users may sit above 2.2.
   const pressureEarly = patchCpuPressure(patch, patch.mono ? 1 : 4);
-  const resoCeil = pressureEarly > 0.7 ? 8 : 12;
+  const resoCeil = pressureEarly > 0.75 ? 12 : 18;
   cap((patch.filterResonance ?? 0) > resoCeil, () => {
     patch.filterResonance = resoCeil;
   });
-  cap((patch.filterDrive ?? 0) > 0.75, () => {
-    patch.filterDrive = 0.75;
+  cap((patch.filterDrive ?? 0) > 0.88, () => {
+    patch.filterDrive = 0.88;
   });
-  cap((patch.drive ?? 0) > 0.7, () => {
-    patch.drive = 0.7;
+  cap((patch.drive ?? 0) > 0.85, () => {
+    patch.drive = 0.85;
   });
-  cap((patch.crush ?? 0) > 0.5, () => {
-    patch.crush = 0.5;
+  cap((patch.crush ?? 0) > 0.62, () => {
+    patch.crush = 0.62;
   });
-  cap((patch.delayFeedback ?? 0) > 0.62, () => {
-    patch.delayFeedback = 0.62;
+  cap((patch.delayFeedback ?? 0) > 0.78, () => {
+    patch.delayFeedback = 0.78;
   });
-  cap((patch.delayMix ?? 0) > 0.45, () => {
-    patch.delayMix = 0.45;
+  cap((patch.delayMix ?? 0) > 0.55, () => {
+    patch.delayMix = 0.55;
   });
-  cap((patch.reverbMix ?? 0) > 0.5, () => {
-    patch.reverbMix = 0.5;
+  cap((patch.reverbMix ?? 0) > 0.6, () => {
+    patch.reverbMix = 0.6;
   });
-  cap((patch.punch ?? 0) > 0.72, () => {
-    patch.punch = 0.72;
+  cap((patch.punch ?? 0) > 0.8, () => {
+    patch.punch = 0.8;
   });
-  cap((patch.chipAcidMix ?? 0) > 0.75, () => {
-    patch.chipAcidMix = 0.75;
+  cap((patch.chipAcidMix ?? 0) > 0.92, () => {
+    patch.chipAcidMix = 0.92;
   });
-  cap((patch.phaserStages ?? 4) > 6, () => {
-    patch.phaserStages = 6;
+  cap((patch.phaserStages ?? 4) > 8, () => {
+    patch.phaserStages = 8;
   });
-  cap((patch.fmAmount ?? 0) > 0.65, () => {
-    patch.fmAmount = 0.65;
+  cap((patch.fmAmount ?? 0) > 0.85, () => {
+    patch.fmAmount = 0.85;
   });
-  cap((patch.fmFeedback ?? 0) > 0.55, () => {
-    patch.fmFeedback = 0.55;
+  cap((patch.fmFeedback ?? 0) > 0.7, () => {
+    patch.fmFeedback = 0.7;
   });
-  cap((patch.masterGain ?? 0) > 0.78, () => {
-    patch.masterGain = 0.78;
+  cap((patch.masterGain ?? 0) > 0.85, () => {
+    patch.masterGain = 0.85;
   });
   if (spectralActive(patch)) {
-    cap((patch.spectralMix ?? 0) > 0.45, () => {
-      patch.spectralMix = 0.45;
+    cap((patch.spectralMix ?? 0) > 0.55, () => {
+      patch.spectralMix = 0.55;
     });
   }
+  // Only force eco under extreme pressure — mid pressure used to sterilize every lush patch.
   const pressure = patchCpuPressure(patch, patch.mono ? 1 : 4);
-  if (pressure > 0.55) {
-    cap(patch.fxQuality !== "eco", () => {
-      patch.fxQuality = "eco";
+  if (pressure > 0.78) {
+    cap(patch.fxQuality === "high", () => {
+      patch.fxQuality = "live";
     });
     cap(
-      patch.chorusModel === "triple" || patch.chorusModel === "ensemble",
+      patch.chorusModel === "ensemble",
       () => {
-        patch.chorusModel = "dual";
+        patch.chorusModel = "triple";
       },
     );
   }
 
   const oscSum = (patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0);
-  if (oscSum > 2.1) {
-    const s = 2.0 / oscSum;
+  if (oscSum > 2.2) {
+    const s = 2.05 / oscSum;
     patch.oscALevel *= s;
     patch.oscBLevel *= s;
     patch.oscCLevel *= s;
@@ -220,32 +222,73 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
 }
 
 /**
- * Loudness / feedback safety after randomize or mutate.
- * Split from the old hard Q≤2.2 ceiling so Natural Selection / Studio can
- * keep filter bite — only runaway feedback/wet mixes stay tightly capped.
+ * Loudness / feedback safety after randomize (Armory).
+ * Split from the old hard Q≤2.2 ceiling so Random Armory keeps filter bite —
+ * only runaway feedback/wet mixes stay tightly capped.
  */
 export function applyLoudnessSafety(patch: FirePatch): FirePatch {
-  patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.78);
-  // Mutate/randomize: keep bite (was hard-capped at 2.2) but not scream-clip Q.
-  // Manual Studio knobs may still sit higher; liveFilterQ + reso compensation handle that.
-  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 10);
-  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.7);
-  patch.drive = Math.min(patch.drive ?? 0, 0.65);
-  patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.62);
-  patch.delayMix = Math.min(patch.delayMix ?? 0, 0.42);
-  patch.reverbMix = Math.min(patch.reverbMix ?? 0, 0.5);
-  patch.fmAmount = Math.min(patch.fmAmount ?? 0, 0.65);
-  patch.fmFeedback = Math.min(patch.fmFeedback ?? 0, 0.55);
-  patch.crush = Math.min(patch.crush ?? 0, 0.45);
-  patch.noiseLevel = Math.min(patch.noiseLevel ?? 0, 0.45);
-  patch.unison = Math.min(patch.unison ?? 1, 7) as FirePatch["unison"];
-  if ((patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0) > 2.1) {
-    const s = 2.0 / ((patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0));
+  patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.8);
+  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 14);
+  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.8);
+  patch.drive = Math.min(patch.drive ?? 0, 0.78);
+  patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.72);
+  patch.delayMix = Math.min(patch.delayMix ?? 0, 0.48);
+  patch.reverbMix = Math.min(patch.reverbMix ?? 0, 0.55);
+  patch.fmAmount = Math.min(patch.fmAmount ?? 0, 0.78);
+  patch.fmFeedback = Math.min(patch.fmFeedback ?? 0, 0.65);
+  patch.crush = Math.min(patch.crush ?? 0, 0.52);
+  patch.noiseLevel = Math.min(patch.noiseLevel ?? 0, 0.5);
+  patch.unison = Math.min(patch.unison ?? 1, 8) as FirePatch["unison"];
+  if ((patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0) > 2.2) {
+    const s = 2.05 / ((patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0));
     patch.oscALevel *= s;
     patch.oscBLevel *= s;
     patch.oscCLevel *= s;
   }
   applyPerformanceSafety(patch);
+  return patch;
+}
+
+/**
+ * Natural Selection safety — wilder than Armory loudness clamps.
+ * Allows scream-Q / FM / warp character while still blocking feedback bombs
+ * and oscillator pile-ups that hard-clip the voice bus.
+ */
+export function applyNsSafety(patch: FirePatch): FirePatch {
+  patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.82);
+  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 16);
+  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.88);
+  patch.drive = Math.min(patch.drive ?? 0, 0.82);
+  patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.78);
+  patch.delayMix = Math.min(patch.delayMix ?? 0, 0.52);
+  patch.reverbMix = Math.min(patch.reverbMix ?? 0, 0.55);
+  patch.fmAmount = Math.min(patch.fmAmount ?? 0, 0.88);
+  patch.fmFeedback = Math.min(patch.fmFeedback ?? 0, 0.72);
+  patch.crush = Math.min(patch.crush ?? 0, 0.55);
+  patch.noiseLevel = Math.min(patch.noiseLevel ?? 0, 0.55);
+  patch.phaserFeedback = Math.min(patch.phaserFeedback ?? 0, 0.72);
+  patch.chipAcidMix = Math.min(patch.chipAcidMix ?? 0, 0.95);
+  const uniCap = liveUnisonCap(patch);
+  patch.unison = Math.min(patch.unison ?? 1, Math.min(8, uniCap)) as FirePatch["unison"];
+  if (spectralActive(patch)) {
+    // Spectral + hot FM/sync is the classic "digital hash" pile-up.
+    patch.spectralMix = Math.min(patch.spectralMix ?? 0, 0.5);
+    if ((patch.fmEngine ?? "classic") === "ops4" && (patch.hardSync || (patch.fmAmount ?? 0) > 0.55)) {
+      patch.spectralMix = Math.min(patch.spectralMix, 0.28);
+    }
+  }
+  const oscSum = (patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0);
+  if (oscSum > 2.25) {
+    const s = 2.05 / oscSum;
+    patch.oscALevel *= s;
+    patch.oscBLevel *= s;
+    patch.oscCLevel *= s;
+  }
+  // Unison / spectral CPU only — do NOT force eco FX (that sterilized wild offspring).
+  const pressure = patchCpuPressure(patch, patch.mono ? 1 : 4);
+  if (pressure > 0.75 && patch.fxQuality === "high") {
+    patch.fxQuality = "live";
+  }
   return patch;
 }
 
