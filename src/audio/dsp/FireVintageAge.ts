@@ -104,15 +104,15 @@ export class FireVintageAge {
   private readonly vhsPeak: BiquadFilterNode;
   private readonly vhsLpf: BiquadFilterNode;
 
-  private readonly tapeDelay: DelayNode;
+  private tapeDelay: DelayNode;
   private readonly wowLfo: OscillatorNode;
   private readonly flutterLfo: OscillatorNode;
   private readonly wowGain: GainNode;
   private readonly flutterGain: GainNode;
   private readonly speedBase: ConstantSourceNode;
 
-  private readonly bbdDelayL: DelayNode;
-  private readonly bbdDelayR: DelayNode;
+  private bbdDelayL: DelayNode;
+  private bbdDelayR: DelayNode;
   private readonly bbdLfo: OscillatorNode;
   private readonly bbdDepth: GainNode;
   private readonly bbdDry: GainNode;
@@ -122,7 +122,7 @@ export class FireVintageAge {
   private readonly bbdPanL: StereoPannerNode;
   private readonly bbdPanR: StereoPannerNode;
 
-  private readonly comp: DynamicsCompressorNode;
+  private comp: DynamicsCompressorNode;
   private readonly compMakeup: GainNode;
 
   private readonly dustGain: GainNode;
@@ -316,13 +316,56 @@ export class FireVintageAge {
     }
   }
 
+  /**
+   * Hard-reset wet-path dynamics + noise beds. DynamicsCompressor envelopes
+   * survive parameter writes — replace the node so an Age-heavy Natural
+   * Selection offspring can't keep crushing later patches.
+   */
+  flush(): void {
+    const t = this.ctx.currentTime;
+    try {
+      this.dustGain.gain.cancelScheduledValues(t);
+      this.hissGain.gain.cancelScheduledValues(t);
+      this.humGain.gain.cancelScheduledValues(t);
+      this.printGain.gain.cancelScheduledValues(t);
+      this.dustGain.gain.setValueAtTime(0, t);
+      this.hissGain.gain.setValueAtTime(0, t);
+      this.humGain.gain.setValueAtTime(0, t);
+      this.printGain.gain.setValueAtTime(0, t);
+      this.bbdWet.gain.cancelScheduledValues(t);
+      this.bbdDry.gain.cancelScheduledValues(t);
+      this.bbdWet.gain.setValueAtTime(0, t);
+      this.bbdDry.gain.setValueAtTime(1, t);
+    } catch { /* mid-teardown */ }
+    this.rebuildComp();
+  }
+
+  private rebuildComp(): void {
+    const old = this.comp;
+    try { this.bbdMerge.disconnect(old); } catch { /* ignore */ }
+    try { old.disconnect(); } catch { /* ignore */ }
+    const next = this.ctx.createDynamicsCompressor();
+    next.threshold.value = 0;
+    next.knee.value = 12;
+    next.ratio.value = 1;
+    next.attack.value = 0.01;
+    next.release.value = 0.22;
+    this.comp = next;
+    this.bbdMerge.connect(next).connect(this.compMakeup);
+  }
+
   apply(p: Partial<FireVintageAgeParams>): void {
     this.params = { ...this.params, ...p };
     const t = this.ctx.currentTime;
     const a = this.params;
     const on = isActive(a);
     this.setActive(on);
-    if (!on) return;
+    if (!on) {
+      // Still neutralize wet-path state so the next age engagement doesn't
+      // inherit a slammed compressor / hiss beds from a prior preset.
+      this.flush();
+      return;
+    }
 
     // Bit depth + resolution. Downsampling used to be a no-op unless bitDepth
     // was already crushing; it now loses real bandwidth (band limit at the

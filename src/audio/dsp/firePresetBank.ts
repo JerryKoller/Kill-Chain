@@ -6,7 +6,7 @@
  */
 
 import type { FirePatch } from "./FireCommandSynth";
-import { DEFAULT_FIRE_PATCH } from "./FireCommandSynth";
+import { cloneFirePatch } from "./FireCommandSynth";
 import { CURATED_PRESETS } from "./fireCuratedBank";
 
 export type PresetCategory =
@@ -38,7 +38,8 @@ export interface FirePreset {
   arp?: PresetArp;
 }
 
-export const P = (over: Partial<FirePatch>): FirePatch => ({ ...DEFAULT_FIRE_PATCH, ...over });
+/** Deep factory patch — never share DEFAULT nests across presets / NS. */
+export const P = (over: Partial<FirePatch>): FirePatch => cloneFirePatch(over);
 
 /**
  * Curated factory bank — 20 unique presets × 11 categories = 220 total.

@@ -164,10 +164,15 @@ export class FeedbackKiller {
       for (const n of this.notches) {
         n.gain.value = 0;
       }
-      if (!this.rafId) {
-        this.lastTickMs = performance.now();
-        this.rafId = requestAnimationFrame(this.tick);
+      // Always (re)start analysis — a prior tick throw could leave rafId
+      // non-zero while the loop is dead, which used to skip restart and leave
+      // Exterior audio unprotected (feedback builds → sudden screech).
+      if (this.rafId) {
+        cancelAnimationFrame(this.rafId);
+        this.rafId = 0;
       }
+      this.lastTickMs = performance.now();
+      this.rafId = requestAnimationFrame(this.tick);
     } else {
       // Ramp vibrato down then unwire.
       const t = this.ctx.currentTime;
@@ -194,6 +199,20 @@ export class FeedbackKiller {
       return;
     }
 
+    try {
+      this.runTickBody();
+    } catch (err) {
+      console.warn("[FeedbackKiller] analysis tick failed — will retry:", err);
+    } finally {
+      if (this.active) {
+        this.rafId = requestAnimationFrame(this.tick);
+      } else {
+        this.rafId = 0;
+      }
+    }
+  };
+
+  private runTickBody(): void {
     const now = performance.now();
     const dt = now - this.lastTickMs;
     this.lastTickMs = now;
@@ -321,8 +340,10 @@ export class FeedbackKiller {
         this.ducker.gain.cancelScheduledValues(t);
         this.ducker.gain.setValueAtTime(this.ducker.gain.value, t);
         this.ducker.gain.linearRampToValueAtTime(0.04, t + 0.015); // -28 dB in 15ms
-        this.ducker.gain.linearRampToValueAtTime(1.0, t + 1.4); // recover over 1.4s
-        this.duckUntil = now + 1300;
+        // Recover slower-hold then rise — old 1.4s ramp-to-unity let rings rebuild.
+        this.ducker.gain.linearRampToValueAtTime(0.04, t + 0.45);
+        this.ducker.gain.linearRampToValueAtTime(1.0, t + 1.1);
+        this.duckUntil = now + 1100;
         // Force-engage all notches at strong peaks to nuke the resonances.
         for (let i = 0; i < this.notches.length && i < topPeaks.length; i++) {
           const p = topPeaks[i];
@@ -335,9 +356,7 @@ export class FeedbackKiller {
         }
       }
     }
-
-    this.rafId = requestAnimationFrame(this.tick);
-  };
+  }
 
   dispose(): void {
     if (this.rafId) cancelAnimationFrame(this.rafId);

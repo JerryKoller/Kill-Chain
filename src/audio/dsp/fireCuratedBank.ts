@@ -1,5 +1,5 @@
 import {
-  DEFAULT_FIRE_PATCH,
+  cloneFirePatch,
   makeModMatrix,
   type FirePatch,
   type ModRoute,
@@ -8,7 +8,8 @@ import {
 } from "./FireCommandSynth";
 import type { FirePreset, PresetCategory, PresetArp } from "./firePresetBank";
 
-const P = (over: Partial<FirePatch>): FirePatch => ({ ...DEFAULT_FIRE_PATCH, ...over });
+/** Deep factory patch — never share DEFAULT nests across presets / NS. */
+const P = (over: Partial<FirePatch>): FirePatch => cloneFirePatch(over);
 const MR = (source: ModSource, dest: ModDest, amount: number): ModRoute => ({ source, dest, amount });
 
 function preset(

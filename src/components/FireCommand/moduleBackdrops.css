@@ -1,0 +1,339 @@
+/* Fire Command — gutter-frame art.
+   Art lives ONLY in the margin ring around `.fc-mod-content-well`.
+   Module chrome stays dark; symbol art is a quiet vibe pulse.
+   Visualizers, knobs, and buttons keep full brightness / their own glow. */
+
+[data-fire-module] {
+  --fc-gutter-x: clamp(44px, 11%, 66px);
+  --fc-gutter-top: 52px;
+  --fc-gutter-bot: 50px;
+  /* Local bloom kill — module chrome stays dark; viz/buttons set their own glow */
+  --glow: 0.08;
+  position: relative;
+  /* Let the browser skip layout/paint for off-screen expanded cards while scrolling */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}
+
+/* Near-black module glass — controls sit on a dark field.
+   Skip backdrop-filter: fill is already ~opaque, and per-module blur
+   is a major scroll tax when many cards are on screen. */
+[data-fire-module].glass,
+[data-fire-module].glass-strong {
+  background:
+    linear-gradient(180deg, rgba(5, 5, 7, 0.985), rgba(2, 2, 4, 0.995)) !important;
+  border-color: rgba(255, 255, 255, 0.045) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.02),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.55),
+    0 16px 36px -20px rgba(0, 0, 0, 0.85) !important;
+}
+
+[data-fire-module].panel-ticks::before,
+[data-fire-module].panel-ticks::after {
+  border-color: rgba(255, 255, 255, 0.08);
+  opacity: 0.4;
+}
+
+/* Intense panel top hairline — quiet it down */
+[data-fire-module].glass-strong > div[aria-hidden].absolute.top-0 {
+  opacity: 0.22 !important;
+}
+
+.fc-mod-content-well {
+  position: relative;
+  z-index: 10;
+  margin-inline: var(--fc-gutter-x);
+  margin-block: var(--fc-gutter-top) var(--fc-gutter-bot);
+}
+
+.fc-mod-backdrop {
+  --fc-art-focus: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+  color: inherit;
+  /* Idle = barely there; rack-center focus lifts art into a soft glow */
+  opacity: calc(0.12 + var(--fc-art-focus) * 0.52);
+  filter:
+    saturate(calc(0.3 + var(--fc-art-focus) * 0.45))
+    brightness(calc(0.36 + var(--fc-art-focus) * 0.52));
+  /* Opacity eases; filter snaps — continuous filter transitions thrash the compositor while scrolling */
+  transition: opacity 140ms ease-out;
+}
+
+/* Soft idle breathe — only when near/at center so off-screen cards stay cheap */
+.fc-mod-backdrop__pulse {
+  position: absolute;
+  inset: 0;
+  animation: none;
+  opacity: 0.88;
+}
+
+.fc-mod-backdrop--centered .fc-mod-backdrop__pulse {
+  animation: fc-mod-art-breathe 3.6s ease-in-out infinite;
+}
+
+.fc-mod-backdrop--dim .fc-mod-backdrop__pulse {
+  animation: none;
+  opacity: 0.82;
+}
+
+@keyframes fc-mod-art-breathe {
+  0%, 100% { opacity: 0.82; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fc-mod-backdrop {
+    transition: none;
+  }
+  .fc-mod-backdrop__pulse,
+  .fc-mod-backdrop--centered .fc-mod-backdrop__pulse {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+.fc-mod-backdrop__wash {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 44% 36% at 4% 6%, color-mix(in srgb, currentColor 8%, transparent), transparent 72%),
+    radial-gradient(ellipse 44% 36% at 96% 6%, color-mix(in srgb, currentColor 8%, transparent), transparent 72%),
+    radial-gradient(ellipse 44% 36% at 4% 94%, color-mix(in srgb, currentColor 6%, transparent), transparent 72%),
+    radial-gradient(ellipse 44% 36% at 96% 94%, color-mix(in srgb, currentColor 6%, transparent), transparent 72%),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, currentColor 5%, transparent) 0%,
+      transparent 12%,
+      transparent 88%,
+      color-mix(in srgb, currentColor 5%, transparent) 100%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, currentColor 6%, transparent) 0%,
+      transparent 16%,
+      transparent 84%,
+      color-mix(in srgb, currentColor 4%, transparent) 100%
+    );
+  -webkit-mask-image: radial-gradient(ellipse 74% 68% at 50% 50%, transparent 54%, #000 80%);
+  mask-image: radial-gradient(ellipse 74% 68% at 50% 50%, transparent 54%, #000 80%);
+}
+
+.fc-mod-backdrop__grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.045;
+  /* Static tile — feTurbulence SVG was a scroll-time cost for almost invisible grain */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  background-size: 128px 128px;
+  mix-blend-mode: soft-light;
+  -webkit-mask-image: radial-gradient(ellipse 72% 66% at 50% 50%, transparent 52%, #000 80%);
+  mask-image: radial-gradient(ellipse 72% 66% at 50% 50%, transparent 52%, #000 80%);
+  /* Paint once; don't re-filter under scroll */
+  contain: strict;
+}
+
+.fc-mod-backdrop__frame {
+  position: absolute;
+  inset: 0;
+  padding: var(--fc-gutter-top) var(--fc-gutter-x) var(--fc-gutter-bot);
+  box-sizing: border-box;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+.fc-mod-backdrop__frieze {
+  position: absolute;
+  left: calc(var(--fc-gutter-x) + 6px);
+  right: calc(var(--fc-gutter-x) + 6px);
+  height: calc(var(--fc-gutter-top) - 8px);
+  opacity: 0.55;
+}
+
+.fc-mod-backdrop__frieze svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  shape-rendering: geometricPrecision;
+}
+
+.fc-mod-backdrop__frieze--top { top: 4px; }
+.fc-mod-backdrop__frieze--bot {
+  bottom: 4px;
+  height: calc(var(--fc-gutter-bot) - 8px);
+  transform: scaleY(-1);
+}
+
+.fc-mod-backdrop__crest {
+  position: absolute;
+  left: 50%;
+  height: calc(var(--fc-gutter-top) - 10px);
+  width: calc(var(--fc-gutter-top) - 10px);
+  max-width: 48px;
+  max-height: 42px;
+  transform: translateX(-50%);
+  opacity: 0.62;
+  z-index: 2;
+}
+
+.fc-mod-backdrop__crest svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  shape-rendering: geometricPrecision;
+}
+
+.fc-mod-backdrop__crest--top { top: 5px; }
+.fc-mod-backdrop__crest--bot {
+  bottom: 5px;
+  height: calc(var(--fc-gutter-bot) - 10px);
+  width: calc(var(--fc-gutter-bot) - 10px);
+  max-height: 40px;
+  transform: translateX(-50%) scaleY(-1);
+}
+
+.fc-mod-backdrop__side {
+  position: absolute;
+  top: calc(var(--fc-gutter-top) + 6px);
+  bottom: calc(var(--fc-gutter-bot) + 6px);
+  width: calc(var(--fc-gutter-x) - 4px);
+  opacity: 0.55;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.fc-mod-backdrop__side--l { left: 2px; }
+.fc-mod-backdrop__side--r { right: 2px; transform: scaleX(-1); }
+
+.fc-mod-backdrop__side-rail {
+  flex: 1 1 auto;
+  width: 78%;
+  min-height: 0;
+}
+
+.fc-mod-backdrop__side-rail svg,
+.fc-mod-backdrop__medallion svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  shape-rendering: geometricPrecision;
+}
+
+.fc-mod-backdrop__medallion {
+  flex: 0 0 auto;
+  width: min(56px, 92%);
+  aspect-ratio: 1;
+  opacity: 0.65;
+}
+
+.fc-mod-backdrop__flourish {
+  position: absolute;
+  width: calc(var(--fc-gutter-x) - 8px);
+  height: clamp(26px, 6.5%, 38px);
+  opacity: 0.28;
+  pointer-events: none;
+}
+
+.fc-mod-backdrop__flourish--l { left: 4px; }
+.fc-mod-backdrop__flourish--r {
+  right: 4px;
+  transform: scaleX(-1);
+}
+
+.fc-mod-backdrop__flourish--hi { top: 28%; }
+.fc-mod-backdrop__flourish--lo { bottom: 26%; }
+
+.fc-mod-backdrop__flourish svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  shape-rendering: geometricPrecision;
+}
+
+.fc-mod-backdrop__corner {
+  position: absolute;
+  width: calc(var(--fc-gutter-x) - 2px);
+  height: calc(var(--fc-gutter-top) - 4px);
+  opacity: 0.55;
+}
+
+.fc-mod-backdrop__corner svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  shape-rendering: geometricPrecision;
+}
+
+.fc-mod-backdrop__corner--tl { top: 2px; left: 2px; }
+.fc-mod-backdrop__corner--tr { top: 2px; right: 2px; transform: scaleX(-1); }
+.fc-mod-backdrop__corner--bl {
+  bottom: 2px;
+  left: 2px;
+  height: calc(var(--fc-gutter-bot) - 4px);
+  transform: scaleY(-1);
+}
+.fc-mod-backdrop__corner--br {
+  bottom: 2px;
+  right: 2px;
+  height: calc(var(--fc-gutter-bot) - 4px);
+  transform: scale(-1);
+}
+
+.fc-mod-backdrop--asleep {
+  --fc-art-focus: 0 !important;
+  opacity: 0.1;
+  filter: saturate(0.28) brightness(0.32);
+}
+
+.fc-mod-backdrop--asleep .fc-mod-backdrop__pulse {
+  animation: none;
+  opacity: 0.7;
+}
+
+.fc-mod-backdrop--asleep .fc-mod-backdrop__wash { opacity: 0.2; }
+.fc-mod-backdrop--asleep .fc-mod-backdrop__grain { opacity: 0.03; }
+.fc-mod-backdrop--asleep .fc-mod-backdrop__frieze { opacity: 0.18; }
+.fc-mod-backdrop--asleep .fc-mod-backdrop__side { opacity: 0.2; }
+.fc-mod-backdrop--asleep .fc-mod-backdrop__corner { opacity: 0.18; }
+.fc-mod-backdrop--asleep .fc-mod-backdrop__crest { opacity: 0.2; }
+.fc-mod-backdrop--asleep .fc-mod-backdrop__flourish { opacity: 0.12; }
+
+/* No per-medallion spin — whole frame breathes together */
+.fc-mod-backdrop__medallion,
+.fc-mod-backdrop__crest {
+  animation: none;
+}
+
+/*
+  Restore full luminance for StageViz shells & interactive controls.
+  Visualizers keep their designed glow; buttons / knobs stay readable/hot.
+*/
+[data-fire-module] button,
+[data-fire-module] [role="button"],
+[data-fire-module] input,
+[data-fire-module] select,
+[data-fire-module] canvas,
+[data-fire-module] .fc-mod-content-well {
+  filter: none;
+}

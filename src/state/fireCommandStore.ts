@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { getEngine } from "@/audio/AudioEngine";
+import { setArpKeepAlive, setArpStepSec, setArpLoad, arpLookaheadSec, isHotArp } from "@/audio/arpKeepAlive";
 import { useAudioStore } from "@/state/audioStore";
 import {
   useFireSequencerStore,
@@ -155,6 +156,11 @@ export function buildArpSequence(order: number[], mode: ArpMode, octaves: number
 let arpTimer: ReturnType<typeof setTimeout> | null = null;
 let arpStep = 0;
 let arpWalkPos = 0; // "walk" mode: drunken index into the sequence
+/** Audio-clock time of the next arp step (lookahead scheduler). */
+let arpNextAt = 0;
+/** Throttle Zustand arpCurrent writes — keyboard glow doesn't need 40 Hz. */
+let arpDisplayLastWrite = 0;
+const ARP_DISPLAY_MIN_MS = 50;
 /** Cancels overlapping scene morph / next-bar recalls. */
 let sceneRecallTimer: ReturnType<typeof setTimeout> | null = null;
 let sceneMorphGen = 0;
@@ -238,6 +244,80 @@ function stopArpScheduler(): void {
   arpGen++;
   arpStep = 0;
   arpWalkPos = 0;
+  arpNextAt = 0;
+  setArpKeepAlive(false);
+  setArpStepSec(0.25);
+  try { getEngine().fireCommand.clearArpSchedule(); } catch { /* engine not ready */ }
+  try { getEngine().peekFireCommandB()?.clearArpSchedule(); } catch { /* ignore */ }
+}
+
+/** Swing-adjusted step length in seconds. */
+function arpStepDuration(stepSec: number, stepIndex: number, swing: number): number {
+  const sw = clamp(swing, 0, 0.33);
+  return stepSec * (stepIndex % 2 === 1 ? 1 + sw : 1 - sw);
+}
+
+/** Fire one arp step on the audio clock; returns display state for the viz. */
+function emitArpStep(
+  get: () => FireCommandState,
+  seq: number[],
+  when: number,
+  stepSec: number,
+  /** Swing-adjusted spacing for this step — keeps gate ≤ actual gap. */
+  spacingSec: number = stepSec,
+): { midi: number; idx: number } | null {
+  const s = get();
+  const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+  if (!s.arp.enabled || !arpModuleOn || seq.length === 0) return null;
+
+  let idx: number;
+  if (s.arp.mode === "random") {
+    idx = Math.floor(Math.random() * seq.length);
+  } else if (s.arp.mode === "walk") {
+    const r = Math.random();
+    arpWalkPos += r < 0.45 ? 1 : r < 0.85 ? -1 : 0;
+    arpWalkPos = clamp(arpWalkPos, 0, seq.length - 1);
+    idx = arpWalkPos;
+  } else {
+    idx = arpStep % seq.length;
+  }
+
+  let midi = seq[idx];
+  const every = Math.max(0, Math.round(s.arp.accentEvery));
+  const accented = s.arp.accent > 0 && every > 0 && arpStep % every === 0;
+  let vel = accented ? 1 : 0.9 - s.arp.accent * 0.35;
+  const modOn = (id: string) => s.patch.moduleEnable?.[id] !== false;
+  if (modOn("scale") && s.patch.scaleLock) {
+    const seqStore = useFireSequencerStore.getState();
+    midi = snapMidiToScale(midi, seqStore.scaleRoot, seqStore.scaleId);
+  }
+  if (modOn("human") && s.patch.humanizeOn) {
+    const j = (s.patch.humanizeVelocity ?? 0.2) * 0.35;
+    vel = clamp(vel * (1 + (Math.random() * 2 - 1) * j), 0.05, 1);
+  }
+
+  // Cap gate to the real (swing) spacing so odd steps can't overlap into poly pile-up.
+  const spacing = Math.max(0.01, spacingSec);
+  const durSec = Math.max(0.008, Math.min(s.arp.gate * spacing, spacing * 0.92) - 0.004);
+  const fc = getEngine().fireCommand;
+  const ctx = getEngine().ctx;
+  const t = Math.max(ctx.currentTime, when);
+  // Deferred Voice construction — scheduleArpNote queues until near `when`.
+  fc.scheduleArpNote(midi, vel, t, durSec, stepSec);
+
+  // Ratchet doubles spawn rate — skip entirely when hot (300×1/32 already ~40 Hz).
+  if (s.arp.ratchet > 0 && !isHotArp() && Math.random() < s.arp.ratchet) {
+    fc.scheduleArpNote(
+      midi,
+      Math.min(1, vel * 0.85),
+      t + spacing * 0.5,
+      Math.max(0.008, durSec * 0.4),
+      stepSec,
+    );
+  }
+
+  arpStep++;
+  return { midi, idx };
 }
 
 function startArpScheduler(
@@ -245,82 +325,91 @@ function startArpScheduler(
   set: (partial: Partial<FireCommandState>) => void,
 ): void {
   stopArpScheduler();
-  const tick = () => {
+  // Capture generation AFTER stop so mid-flight workers from a prior start no-op
+  // and cannot re-arm setTimeout after Init / panic / preset load.
+  const gen = arpGen;
+  setArpKeepAlive(true);
+  const engine = getEngine();
+  void engine.resume();
+  arpNextAt = engine.ctx.currentTime;
+  arpDisplayLastWrite = 0;
+
+  const WORKER_MS = 12;
+
+  const worker = () => {
+    if (gen !== arpGen) return;
     const s = get();
     const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
     if (!s.arp.enabled || !arpModuleOn) {
       arpTimer = null;
+      setArpKeepAlive(false);
+      try { engine.fireCommand.clearArpSchedule(); } catch { /* ignore */ }
       return;
     }
+
     const stepSec = divisionSec(s.arp.bpm, s.arp.division);
-    const seq = buildArpSequence(s.arpOrder, s.arp.mode, s.arp.octaves);
+    setArpStepSec(stepSec);
+    const latch = s.arpOrder.length > 0 ? s.arpOrder : s.heldNotes;
+    const seq = buildArpSequence(latch, s.arp.mode, s.arp.octaves);
+    // Load hint: octaves × latch × gate × ratchet pressure.
+    const ratchetMul = 1 + clamp(s.arp.ratchet, 0, 1) * 0.75;
+    setArpLoad(
+      Math.max(1, s.arp.octaves)
+      * Math.max(1, latch.length)
+      * Math.max(0.25, s.arp.gate)
+      * ratchetMul,
+    );
+
     if (seq.length === 0) {
-      // Nothing latched/held — park instead of ticking an empty pattern
-      // forever (noteOn re-arms the scheduler when the next note arrives).
       arpStep = 0;
-      arpTimer = null;
       if (s.arpCurrent !== null) set({ arpCurrent: null, arpStepIndex: -1 });
+      arpTimer = null;
+      setArpKeepAlive(false);
+      try { engine.fireCommand.clearArpSchedule(); } catch { /* ignore */ }
       return;
     }
-    const fc = getEngine().fireCommand;
-    let idx: number;
-    if (s.arp.mode === "random") {
-      idx = Math.floor(Math.random() * seq.length);
-    } else if (s.arp.mode === "walk") {
-      // Drunken walk: mostly steps ±1, occasionally holds, clamped in range.
-      const r = Math.random();
-      arpWalkPos += r < 0.45 ? 1 : r < 0.85 ? -1 : 0;
-      arpWalkPos = clamp(arpWalkPos, 0, seq.length - 1);
-      idx = arpWalkPos;
-    } else {
-      idx = arpStep % seq.length;
-    }
-    let midi = seq[idx];
-    void getEngine().resume();
-    // Accent pattern: accented steps hit full force, the rest sit back by
-    // up to 35% depending on the accent amount.
-    const every = Math.max(0, Math.round(s.arp.accentEvery));
-    const accented = s.arp.accent > 0 && every > 0 && arpStep % every === 0;
-    let vel = accented ? 1 : 0.9 - s.arp.accent * 0.35;
-    // Honor Scale Lock + Humanize on arp ticks (same rules as live noteOn).
-    const modOn = (id: string) => s.patch.moduleEnable?.[id] !== false;
-    if (modOn("scale") && s.patch.scaleLock) {
-      const seqStore = useFireSequencerStore.getState();
-      midi = snapMidiToScale(midi, seqStore.scaleRoot, seqStore.scaleId);
-    }
-    if (modOn("human") && s.patch.humanizeOn) {
-      const j = (s.patch.humanizeVelocity ?? 0.2) * 0.35;
-      vel = clamp(vel * (1 + (Math.random() * 2 - 1) * j), 0.05, 1);
-    }
-    fc.noteOn(midi, vel);
-    // arpStepIndex is display-only — surfaces the sounding step for the viz.
-    set({ arpCurrent: midi, arpStepIndex: idx });
-    const gateMs = Math.max(20, s.arp.gate * stepSec * 1000 - 8);
-    const offMidi = midi;
-    const gen = arpGen;
-    armArpVoiceTimer(() => {
+
+    void engine.resume();
+    const now = engine.ctx.currentTime;
+    if (arpNextAt < now) arpNextAt = now;
+
+    // Hot rates shrink lookahead (2.5× step, clamped) — see arpLookaheadSec().
+    const LOOKAHEAD = arpLookaheadSec();
+
+    let displayMidi = s.arpCurrent;
+    let displayIdx = s.arpStepIndex;
+    while (arpNextAt < now + LOOKAHEAD) {
       if (gen !== arpGen) return;
-      fc.noteOff(offMidi);
-    }, gateMs);
-    // Ratchet: probabilistic double-hit in the back half of the step.
-    if (s.arp.ratchet > 0 && Math.random() < s.arp.ratchet) {
-      const half = stepSec * 500;
-      armArpVoiceTimer(() => {
-        if (gen !== arpGen || !get().arp.enabled) return;
-        fc.noteOn(offMidi, Math.min(1, vel * 0.85));
-        armArpVoiceTimer(() => {
-          if (gen !== arpGen) return;
-          fc.noteOff(offMidi);
-        }, Math.max(15, gateMs * 0.4));
-      }, half);
+      // Swing uses step index BEFORE emit increments arpStep.
+      const swingIdx = arpStep;
+      const spacing = arpStepDuration(stepSec, swingIdx, s.arp.swing);
+      const hit = emitArpStep(get, seq, arpNextAt, stepSec, spacing);
+      if (hit && arpNextAt <= now + 0.02) {
+        displayMidi = hit.midi;
+        displayIdx = hit.idx;
+      }
+      arpNextAt += spacing;
     }
-    arpStep++;
-    // Swing: every other step borrows time from its neighbour.
-    const sw = clamp(s.arp.swing, 0, 0.33);
-    const durMs = stepSec * 1000 * (arpStep % 2 === 1 ? 1 + sw : 1 - sw);
-    arpTimer = setTimeout(tick, durMs);
+
+    if (gen !== arpGen) return;
+
+    // Materialize any due notes immediately (mod timer may be mid-frame).
+    try { engine.fireCommand.flushArpQueue(); } catch { /* ignore */ }
+
+    const wall = performance.now();
+    if (
+      (displayMidi !== s.arpCurrent || displayIdx !== s.arpStepIndex)
+      && wall - arpDisplayLastWrite >= ARP_DISPLAY_MIN_MS
+    ) {
+      arpDisplayLastWrite = wall;
+      set({ arpCurrent: displayMidi, arpStepIndex: displayIdx });
+    }
+
+    if (gen !== arpGen) return;
+    arpTimer = setTimeout(worker, WORKER_MS);
   };
-  arpTimer = setTimeout(tick, 0);
+
+  arpTimer = setTimeout(worker, 0);
 }
 
 // ════════════════════ presets ════════════════════
@@ -338,14 +427,13 @@ export interface SavedPreset {
   createdAt: number;
 }
 
-const P = (over: Partial<FirePatch>): FirePatch => ({ ...DEFAULT_FIRE_PATCH, ...over });
 /** Shorthand for one modulation-matrix route. */
 const MR = (source: ModSource, dest: ModDest, amount: number): ModRoute => ({ source, dest, amount });
 
 const FLAGSHIP_PRESETS: FirePreset[] = [
   {
     id: "init", name: "Init", desc: "Clean wavetable starting point", category: "Lead",
-    patch: P({}),
+    patch: cloneFirePatch({}),
   },
 ];
 
@@ -372,12 +460,12 @@ const DRIVE_MODES: DriveMode[] = ["soft", "soft", "tube", "fold", "hard", "fuzz"
 /** Generate a fresh, musical (non-screeching) random wavetable patch. */
 function randomPatch(): FirePatch {
   const mono = chance(0.5);
-  // Broader Armory priors — less 80% LP bias; occasional ops4 / hard sync / extreme warp.
-  const filterType: FireFilterType = chance(0.52)
+  // Favor lowpass body — still allows BP/HP/notch character.
+  const filterType: FireFilterType = chance(0.72)
     ? "lowpass"
-    : chance(0.4) ? "bandpass" : chance(0.5) ? "highpass" : "notch";
+    : chance(0.45) ? "bandpass" : chance(0.5) ? "highpass" : "notch";
   const morphMod = chance(0.6);
-  const lush = chance(0.45);
+  const lush = chance(0.28);
   const useC = chance(0.3);
   const wildArmory = chance(0.22);
   // A couple of musical matrix routes for instant movement.
@@ -385,15 +473,27 @@ function randomPatch(): FirePatch {
   if (chance(0.5)) routes.push(MR("macro1", "cutoff", rand(0.3, 0.8)));
   if (chance(0.35)) routes.push(MR("lfo2", pick<ModDest>(["pitch", "wtA", "pan"]), rand(-0.4, 0.4)));
   if (chance(0.25)) routes.push(MR("velocity", "cutoff", rand(0.2, 0.6)));
-  const gateOn = chance(0.18);
-  return normalizePatch({
+  const gateOn = chance(0.08);
+  const harmonyMode = chance(0.18)
+    ? pick(["third", "fifth", "octave", "triad"] as const)
+    : "off";
+  // Occasional module sleep for character (not everything always on).
+  const moduleEnable: Record<string, boolean> = {};
+  if (chance(0.2)) moduleEnable["noise"] = false;
+  if (chance(0.15)) moduleEnable["fx.vintage"] = false;
+  if (chance(0.12)) moduleEnable["fx.phaser"] = false;
+  if (chance(0.1)) moduleEnable["fx.chorus"] = false;
+  if (!useC && chance(0.55)) moduleEnable["osc.c"] = false;
+  // Favor long / clear / deep / bass-forward Armory priors (still allows short ~20%).
+  const longBody = chance(0.8);
+  const patch = normalizePatch({
     oscATable: pick(WAVETABLE_IDS),
     oscAPos: rand(0, 1),
     oscAEnv: morphMod && chance(0.6) ? rand(-0.6, 0.8) : 0,
     oscALfo: morphMod && chance(0.5) ? rand(-0.5, 0.5) : 0,
-    oscAOctave: pick([-1, 0, 0, 0, 1]),
+    oscAOctave: pick([-2, -1, -1, 0, 0, 1]),
     oscADetune: Math.round(rand(-8, 8)),
-    oscALevel: rand(0.55, 0.85),
+    oscALevel: rand(0.6, 0.88),
     oscAContinuity: rand(0.35, 0.95),
     oscBTable: pick(WAVETABLE_IDS),
     oscBPos: rand(0, 1),
@@ -401,8 +501,8 @@ function randomPatch(): FirePatch {
     oscBLfo: chance(0.3) ? rand(-0.4, 0.4) : 0,
     oscBOctave: pick([-2, -1, 0, 0, 1]),
     oscBDetune: Math.round(rand(-18, 18)),
-    oscBLevel: rand(0.2, 0.7),
-    oscBInherit: chance(0.2) ? pick(["morph", "mirror", "offset", "fm"] as const) : "off",
+    oscBLevel: rand(0.28, 0.72),
+    oscBInherit: chance(0.35) ? pick(["morph", "mirror", "offset", "fm"] as const) : "off",
     oscBPhaseLock: chance(0.12),
     fmAtoB: chance(0.18) ? rand(0.1, 0.55) : 0,
     oscCTable: pick(WAVETABLE_IDS),
@@ -412,7 +512,7 @@ function randomPatch(): FirePatch {
     oscCOctave: pick([-2, -1, 0, 1]),
     oscCDetune: Math.round(rand(-12, 12)),
     oscCLevel: useC ? rand(0.25, 0.6) : 0,
-    unison: pick([1, 1, 3, 3, 5]),
+    unison: pick([1, 3, 3, 5, 5, 7]),
     unisonDetune: Math.round(rand(8, 28)),
     unisonWidth: rand(0.3, 0.95),
     unisonMix: chance(0.7) ? 1 : rand(0.6, 1),
@@ -430,12 +530,12 @@ function randomPatch(): FirePatch {
     warpComb: wildArmory ? rand(0.2, 0.85) : (chance(0.12) ? rand(0.15, 0.6) : 0),
     warpAmount: chance(0.7) ? 1 : rand(0.4, 1),
     subWave: pick(SUB_WAVES),
-    subLevel: chance(0.6) ? rand(0.2, 0.7) : 0,
+    subLevel: chance(0.78) ? rand(0.3, 0.72) : 0,
     subPhaseAlign: chance(0.7),
     subTranslate: chance(0.35) ? rand(0.15, 0.7) : 0,
-    noiseLevel: chance(0.2) ? rand(0.05, 0.25) : 0,
+    noiseLevel: chance(0.14) ? rand(0.04, 0.16) : 0,
     noiseColor: chance(0.5) ? rand(-0.6, 0.7) : 0,
-    noiseMode: chance(0.25) ? pick(["bed", "burst", "storm"] as const) : "bed",
+    noiseMode: chance(0.2) ? pick(["bed", "burst", "bed"] as const) : "bed",
     noiseDensity: rand(0.25, 0.85),
     noiseGrain: rand(0.2, 0.7),
     fmAmount: chance(0.3) ? rand(0.1, 0.5) : 0,
@@ -455,25 +555,25 @@ function randomPatch(): FirePatch {
     filterDrive: chance(0.35) ? rand(0.1, 0.5) : 0,
     filterDrivePos: chance(0.25) ? "pre" : "post",
     filterSlope: pick([1, 1, 2, 3] as const),
-    filterCarve: chance(0.28)
-      ? pick(["fundamental", "odds", "evens", "noise", "formant", "formant"] as const)
+    filterCarve: chance(0.18)
+      ? pick(["fundamental", "odds", "evens", "noise", "formant"] as const)
       : "off",
-    filterCarveAmount: chance(0.28) ? rand(0.2, 0.7) : 0,
-    ampAttack: chance(0.3) ? rand(0.2, 1.2) : rand(0.002, 0.05),
-    ampDecay: rand(0.1, 0.6),
-    ampSustain: rand(0.3, 0.95),
-    ampRelease: rand(0.15, 1.2),
+    filterCarveAmount: chance(0.18) ? rand(0.15, 0.55) : 0,
+    ampAttack: Math.max(0.005, chance(0.35) ? rand(0.2, 1.2) : rand(0.005, 0.05)),
+    ampDecay: longBody ? rand(0.28, 1.0) : rand(0.1, 0.6),
+    ampSustain: longBody ? rand(0.55, 0.95) : rand(0.3, 0.95),
+    ampRelease: longBody ? rand(1.8, 3.6) : rand(0.15, 1.2),
     velAmount: rand(0.4, 1),
     velAttack: chance(0.3) ? rand(0.1, 0.6) : 0,
-    ampModel: chance(0.15) ? "gate" : "vca",
+    ampModel: chance(0.08) ? "gate" : "vca",
     ampCurveAttack: pick(["lin", "exp", "s"] as const),
     ampCurveDecay: pick(["exp", "log", "lin"] as const),
     ampCurveRelease: pick(["exp", "log", "s"] as const),
-    ampRetrigger: pick(["zero", "zero", "current", "legato"] as const),
+    ampRetrigger: pick(["current", "current", "legato", "zero"] as const),
     ampHold: chance(0.1) ? rand(0.02, 0.15) : 0,
     ampOvershoot: chance(0.2) ? rand(0.1, 0.45) : 0,
-    lpgOn: chance(0.12),
-    lpgDecay: rand(0.15, 1.1),
+    lpgOn: chance(0.08),
+    lpgDecay: rand(0.4, 1.2),
     lpgColor: rand(0.4, 0.95),
     lpgModel: pick(["classic", "classic", "fast", "slow", "aged", "bright"] as const),
     lpgStrike: rand(0.6, 1),
@@ -495,8 +595,8 @@ function randomPatch(): FirePatch {
     modEnvPoints: adsrToModEnvPoints(rand(0.005, 0.5), rand(0.1, 0.9), rand(0, 0.6), rand(0.1, 0.7)),
     modEnvSustainIndex: 2,
     modEnvLoop: chance(0.12),
-    harmonyMode: "off",
-    harmonyLevel: 0.6,
+    harmonyMode,
+    harmonyLevel: harmonyMode === "off" ? 0.6 : rand(0.25, 0.55),
     lfo1Wave: pick(LFO_WAVES),
     lfo1Rate: chance(0.5) ? rand(0.1, 3) : rand(3, 12),
     lfo1Depth: chance(0.6) ? rand(0.2, 0.7) : 0,
@@ -529,27 +629,27 @@ function randomPatch(): FirePatch {
     punch: chance(0.5) ? rand(0.15, 0.5) : 0,
     phaserRate: rand(0.1, 2),
     phaserDepth: rand(0.4, 0.9),
-    phaserMix: chance(0.3) ? rand(0.3, 0.6) : 0,
+    phaserMix: chance(0.18) ? rand(0.15, 0.4) : 0,
     phaserStages: pick([2, 4, 4, 6, 8]),
     phaserFeedback: rand(0.2, 0.55),
     phaserCenter: Math.round(rand(400, 1600)),
     phaserStereo: pick(["linked", "linked", "opposed", "quadrature"] as const),
     chorusRate: rand(0.2, 1.5),
     chorusDepth: rand(0.2, 0.7),
-    chorusMix: chance(0.6) ? rand(0.2, 0.5) : 0,
+    chorusMix: chance(0.48) ? rand(0.1, 0.32) : 0,
     chorusModel: pick(["single", "dual", "dual", "triple", "ensemble", "dimension", "tape"] as const),
     chorusVoices: pick([1, 2, 2, 3, 4]),
     chorusSpread: rand(0.4, 1),
     delayTime: rand(0.12, 0.5),
     delayFeedback: rand(0.2, 0.5),
-    delayMix: chance(0.5) ? rand(0.15, 0.35) : 0,
+    delayMix: chance(0.38) ? rand(0.1, 0.28) : 0,
     delayCascadeMode: pick(["slap", "echo", "echo", "dub", "bounce", "long"] as const),
     delayDuck: chance(0.2) ? rand(0.1, 0.5) : 0,
-    reverbSize: rand(1.5, 4.5),
-    reverbMix: lush ? rand(0.2, 0.45) : (chance(0.4) ? rand(0.1, 0.25) : 0),
-    reverbDamp: rand(0.25, 0.75),
-    reverbPredelay: chance(0.5) ? rand(0.01, 0.08) : 0.02,
-    reverbDiffusion: rand(0.45, 0.9),
+    reverbSize: lush ? rand(2.2, 4.2) : rand(1.0, 2.6),
+    reverbMix: lush ? rand(0.14, 0.32) : (chance(0.35) ? rand(0.06, 0.18) : 0),
+    reverbDamp: rand(0.35, 0.8),
+    reverbPredelay: chance(0.5) ? rand(0.01, 0.06) : 0.02,
+    reverbDiffusion: rand(0.35, 0.75),
     reverbEarly: rand(0.25, 0.7),
     reverbLowDecay: rand(0.35, 0.75),
     spectralMode: "off", spectralAmount: 0.6, spectralMix: 0.5,
@@ -577,8 +677,8 @@ function randomPatch(): FirePatch {
     tapeSpeed: chance(0.1) ? rand(-0.2, 0.2) : 0,
     wowFlutter: chance(0.12) ? rand(0.05, 0.3) : 0,
     vhsColor: chance(0.1) ? rand(0.1, 0.35) : 0,
-    bitDepth: "off",
-    sampleRateReduce: 0,
+    bitDepth: chance(0.12) ? pick(["12bit", "8bit"] as const) : "off",
+    sampleRateReduce: chance(0.1) ? rand(0.05, 0.3) : 0,
     bbdChorus: chance(0.15) ? rand(0.15, 0.5) : 0,
     analogComp: chance(0.2) ? rand(0.1, 0.4) : 0,
     dust: chance(0.1) ? rand(0.02, 0.12) : 0,
@@ -621,16 +721,18 @@ function randomPatch(): FirePatch {
     humanizeOn: false,
     humanizeTiming: 0.25,
     humanizeVelocity: 0.2,
-    moduleEnable: {},
+    moduleEnable,
     stereoWidth: rand(0.85, 1.3),
     gateOn,
     gateRate: pick([4, 8, 8, 12, 16]),
     gateDepth: rand(0.6, 1),
     gateSteps: pick([8, 16, 16]),
     gatePattern: Array.from({ length: 16 }, (_, i) => (i % 2 === 0 ? 1 : (chance(0.3) ? 1 : 0))),
-    gateSmooth: gateOn && chance(0.4) ? rand(0.1, 0.6) : 0,
-    masterGain: 0.72,
+    gateSmooth: gateOn ? rand(0.28, 0.65) : 0,
+    masterGain: rand(0.58, 0.74),
   });
+  applyNsBodyBias(patch);
+  return patch;
 }
 
 // ════════════════════ mutation (natural selection) ════════════════════
@@ -638,23 +740,273 @@ function randomPatch(): FirePatch {
 /**
  * Apply one coherent "species" rewrite so wild NS offspring sound intentional
  * instead of stacking every extreme engine at once (digital hash).
+ * Returns the species id so A/B can be forced onto different DNA.
  */
-function applyMutateSpecies(p: FirePatch, a: number): void {
-  const species = pick([
-    "acid", "ops4", "warp", "chip", "dual", "sync", "noise", "age", "formant", "pluck",
-  ] as const);
+export type MutateSpecies =
+  | "acid" | "ops4" | "warp" | "chip" | "dual" | "sync" | "noise" | "age"
+  | "formant" | "pluck" | "pad" | "bass" | "bell" | "drone" | "perc";
+
+const MUTATE_SPECIES: MutateSpecies[] = [
+  "acid", "ops4", "warp", "chip", "dual", "sync", "noise", "age",
+  "formant", "pluck", "pad", "bass", "bell", "drone", "perc",
+];
+
+/**
+ * Weighted toward long / clear / deep / bass-forward species —
+ * but NOT the hollow “tube in a cave” cluster (formant / bell / warp / age).
+ */
+const NS_SPECIES_WEIGHTS: Record<MutateSpecies, number> = {
+  bass: 20,
+  pad: 16,
+  dual: 14,
+  acid: 11,
+  drone: 8,
+  ops4: 7,
+  sync: 5,
+  chip: 5,
+  pluck: 4,
+  age: 3,
+  formant: 2,
+  bell: 2,
+  warp: 2,
+  noise: 2,
+  perc: 1,
+};
+
+/** Solid, non-hollow wavetables for the common NS path. */
+const NS_WARM_TABLES = [
+  "saw", "pulse", "basic", "growl", "harmonic", "additive", "chip",
+] as const;
+
+/** Tables that read as metal pipe / vocal tube when stacked with space FX. */
+const NS_TUBE_TABLES = new Set([
+  "metallic", "bell", "formant2", "vocal", "fold", "sync",
+]);
+
+function pickNsSpecies(avoid?: MutateSpecies): MutateSpecies {
+  const entries = MUTATE_SPECIES
+    .filter((s) => s !== avoid)
+    .map((s) => [s, NS_SPECIES_WEIGHTS[s]] as const);
+  const total = entries.reduce((sum, [, w]) => sum + w, 0);
+  let r = Math.random() * total;
+  for (const [s, w] of entries) {
+    r -= w;
+    if (r <= 0) return s;
+  }
+  return entries[entries.length - 1]![0];
+}
+
+/** Survives only on the live object (structuredClone drops tags). */
+const nsSpeciesByPatch = new WeakMap<object, MutateSpecies>();
+
+function stampNsSpecies(p: FirePatch, species: MutateSpecies): void {
+  nsSpeciesByPatch.set(p, species);
+}
+
+function nsSpeciesOf(p: FirePatch): MutateSpecies | undefined {
+  return nsSpeciesByPatch.get(p);
+}
+
+/**
+ * NS house style: long body (~3s+), clarity, bass weight, musical complexity.
+ * Soft bias — ~12% keep a short edge; ~15% keep a cavernous / metallic flavor.
+ * Default path avoids the “aluminum tube in a cave” majority (hollow Q + wet hall).
+ */
+function applyNsBodyBias(p: FirePatch): void {
+  const allowShort = chance(0.12);
+  const allowCave = chance(0.15); // occasional tube-in-cave character is fine
+
+  // ── Duration / anti-blip ───────────────────────────────────────────
+  if (!allowShort) {
+    if (chance(0.82)) p.gateOn = false;
+    p.ampSustain = Math.max(p.ampSustain ?? 0, rand(0.55, 0.92));
+    p.ampRelease = Math.max(p.ampRelease ?? 0.2, rand(1.85, 3.8));
+    p.ampDecay = Math.max(p.ampDecay ?? 0.15, rand(0.28, 1.0));
+    if ((p.ampSustain ?? 0) < 0.4) {
+      p.ampRelease = Math.max(p.ampRelease ?? 0, 2.8);
+    }
+    if (p.lpgOn && (p.lpgDecay ?? 1) < 0.5) {
+      p.lpgDecay = rand(0.55, 1.2);
+    }
+    if ((p.ampSustain ?? 0) < 0.2 && (p.ampRelease ?? 0) < 1.2) {
+      p.ampRelease = rand(2.0, 3.5);
+      p.ampSustain = Math.max(p.ampSustain ?? 0, rand(0.25, 0.55));
+    }
+  }
+
+  // ── Presence (anti-silence) ────────────────────────────────────────
+  p.oscALevel = Math.max(p.oscALevel ?? 0, 0.58);
+  if ((p.oscBLevel ?? 0) < 0.1 && chance(0.72)) {
+    p.oscBLevel = rand(0.3, 0.58);
+    if ((p.oscBInherit ?? "off") === "off") {
+      p.oscBInherit = pick(["morph", "mirror", "offset"] as const);
+    }
+  }
+  p.masterGain = clamp(Math.max(p.masterGain ?? 0.62, 0.62), 0, 0.72);
+  if ((p.noiseLevel ?? 0) > 0.18 && (p.oscALevel ?? 0) < 0.5) {
+    p.noiseLevel = rand(0.04, 0.12);
+    p.oscALevel = Math.max(p.oscALevel ?? 0, 0.62);
+  }
+  if (p.moduleEnable) {
+    if (p.moduleEnable["osc.a"] === false) p.moduleEnable["osc.a"] = true;
+    if (p.moduleEnable["filter"] === false) p.moduleEnable["filter"] = true;
+    if (p.moduleEnable["sub"] === false && chance(0.85)) delete p.moduleEnable["sub"];
+  }
+
+  // ── Bass weight ────────────────────────────────────────────────────
+  if (chance(0.8)) {
+    p.subLevel = Math.max(p.subLevel ?? 0, rand(0.38, 0.72));
+    p.subOctave = pick([-2, -1, -1] as const);
+  }
+  if (chance(0.74)) {
+    const oct = p.oscAOctave ?? 0;
+    if (oct > 0) p.oscAOctave = pick([-1, 0, 0] as const);
+    else if (oct === 0 && chance(0.45)) p.oscAOctave = -1;
+  }
+  if (chance(0.78)) {
+    p.filterType = "lowpass";
+    const cut = p.filterCutoff ?? 2000;
+    if (cut > 5200) p.filterCutoff = rand(700, 2800);
+    else if (cut < 100) p.filterCutoff = rand(160, 520);
+  }
+  if (chance(0.4) && (p.lowProtect ?? "off") === "off") {
+    p.lowProtect = pick(["80", "120"] as const);
+  }
+
+  // ── Clarity / fidelity ─────────────────────────────────────────────
+  if (chance(0.86)) {
+    p.crush = Math.min(p.crush ?? 0, 0.1);
+    p.bitDepth = "off";
+    p.sampleRateReduce = 0;
+    p.fxQuality = pick(["live", "high", "high"] as const);
+    p.driveMode = pick(["soft", "soft", "tube", "soft"] as const);
+    p.drive = Math.min(p.drive ?? 0, 0.38);
+    if ((p.noiseLevel ?? 0) > 0.05) {
+      p.noiseMode = pick(["bed", "bed", "burst"] as const);
+      p.noiseLevel = Math.min(p.noiseLevel ?? 0, rand(0.04, 0.14));
+    }
+    if ((p.warpComb ?? 0) > 0.35) p.warpComb = rand(0.04, 0.28);
+    if (p.warpMode === "brickwall" || p.warpMode === "subharmonic") {
+      if (chance(0.7)) p.warpMode = pick(["classic", "classic", "scramble"] as const);
+    }
+    if (p.filterType === "highpass" && chance(0.7)) p.filterType = "lowpass";
+  }
+
+  // ── Anti “aluminum tube” (hollow resonance / formant / metal tables) ─
+  if (!allowCave) {
+    // High Q + BP/notch = pipe tone
+    if ((p.filterResonance ?? 0) > 3.2) {
+      p.filterResonance = rand(0.9, 2.8);
+    }
+    if (p.filterType === "bandpass" || p.filterType === "notch") {
+      if (chance(0.85)) p.filterType = "lowpass";
+    }
+    if (p.filterCarve === "formant" || p.filterCarve === "noise") {
+      if (chance(0.8)) {
+        p.filterCarve = "off";
+        p.filterCarveAmount = 0;
+      }
+    }
+    if (NS_TUBE_TABLES.has(String(p.oscATable)) && chance(0.78)) {
+      p.oscATable = pick(NS_WARM_TABLES);
+    }
+    if (NS_TUBE_TABLES.has(String(p.oscBTable)) && chance(0.65)) {
+      p.oscBTable = pick(NS_WARM_TABLES);
+    }
+    // Ring / wild FM sidebands read metallic in a hall
+    if ((p.ringAmount ?? 0) > 0.12 && chance(0.7)) {
+      p.ringAmount = rand(0, 0.08);
+    }
+    if ((p.fmAmount ?? 0) > 0.45 && chance(0.55)) {
+      p.fmAmount = rand(0.12, 0.38);
+    }
+    // Soft air shelf is fine; big air + wet hall = cave ceiling
+    if ((p.airAmount ?? 0) > 0.28) p.airAmount = rand(0.08, 0.25);
+  } else if (chance(0.55)) {
+    p.airAmount = Math.max(p.airAmount ?? 0, rand(0.18, 0.4));
+  }
+
+  // ── Space / depth: intimate by default, cave as the exception ───────
+  if (allowCave) {
+    p.chorusMix = Math.max(p.chorusMix ?? 0, rand(0.18, 0.4));
+    p.reverbMix = Math.max(p.reverbMix ?? 0, rand(0.22, 0.42));
+    p.reverbSize = Math.max(p.reverbSize ?? 1.5, rand(2.8, 5.5));
+    p.reverbDiffusion = Math.max(p.reverbDiffusion ?? 0.4, rand(0.55, 0.9));
+  } else {
+    // Majority: dry-to-room, not cathedral
+    const roomRoll = Math.random();
+    if (roomRoll < 0.45) {
+      // Nearfield / dry
+      p.reverbMix = Math.min(p.reverbMix ?? 0, rand(0.02, 0.12));
+      p.reverbSize = Math.min(p.reverbSize ?? 2, rand(0.8, 1.8));
+      p.chorusMix = Math.min(p.chorusMix ?? 0, rand(0.05, 0.22));
+      p.delayMix = Math.min(p.delayMix ?? 0, rand(0, 0.12));
+    } else if (roomRoll < 0.8) {
+      // Small room / plate
+      p.reverbMix = clamp(rand(0.08, 0.2), 0, 0.22);
+      p.reverbSize = rand(1.0, 2.4);
+      p.reverbDamp = Math.max(p.reverbDamp ?? 0.4, rand(0.45, 0.75));
+      p.reverbDiffusion = rand(0.35, 0.65);
+      p.reverbHighCut = Math.min(p.reverbHighCut ?? 12000, rand(4500, 9000));
+      p.chorusMix = clamp(rand(0.08, 0.28), 0, 0.32);
+      if ((p.delayMix ?? 0) > 0.22) p.delayMix = rand(0.06, 0.18);
+    } else {
+      // Medium presence without hall bloom
+      p.reverbMix = clamp(rand(0.12, 0.26), 0, 0.28);
+      p.reverbSize = rand(1.4, 2.8);
+      p.reverbDamp = Math.max(p.reverbDamp ?? 0.35, rand(0.4, 0.7));
+      p.chorusMix = clamp(rand(0.1, 0.3), 0, 0.34);
+    }
+    if ((p.phaserMix ?? 0) > 0.15 && chance(0.75)) {
+      p.phaserMix = rand(0, 0.1);
+    }
+    if ((p.delayFeedback ?? 0) > 0.45) {
+      p.delayFeedback = rand(0.15, 0.4);
+    }
+  }
+
+  // ── Complexity without the cave (unison / motion / matrix) ─────────
+  if (chance(0.58) && (p.unison ?? 1) < 3) {
+    p.unison = pick([3, 5] as const);
+    p.unisonDetune = Math.max(p.unisonDetune ?? 0, Math.round(rand(6, 16)));
+    p.unisonWidth = Math.max(p.unisonWidth ?? 0, rand(0.4, 0.8));
+  }
+  if (chance(0.62) && (p.lfo1Depth ?? 0) < 0.15) {
+    p.lfo1Depth = rand(0.18, 0.42);
+    p.lfo1Rate = rand(0.07, 0.75);
+    p.lfo1Dest = pick(["filter", "pan", "pitch"] as const);
+  }
+  if (chance(0.42) && Array.isArray(p.modMatrix)) {
+    const slot = p.modMatrix.findIndex((r) => !r || r.source === "none" || r.dest === "none");
+    const route = MR(
+      pick<ModSource>(["lfo1", "lfo2", "modenv", "macro1"]),
+      pick<ModDest>(["cutoff", "wtA", "pan", "levelA", "chorusMix"]),
+      rand(0.18, 0.5),
+    );
+    if (slot >= 0) p.modMatrix[slot] = route;
+    else if (p.modMatrix.length < 12) p.modMatrix = [...p.modMatrix, route];
+  }
+}
+
+function applyMutateSpecies(
+  p: FirePatch,
+  a: number,
+  forced?: MutateSpecies,
+): MutateSpecies {
+  const species = forced ?? pickNsSpecies();
   switch (species) {
     case "acid":
       p.filterType = "lowpass";
       p.filterModel = pick(["ladder", "svf"] as const);
-      p.filterCutoff = rand(180, 1400);
-      p.filterResonance = rand(8, 16);
-      p.filterEnvAmount = rand(0.65, 0.95);
-      p.filterDrive = rand(0.25, 0.7);
-      p.chipAcidMix = rand(0.45, 0.95);
+      p.filterCutoff = rand(220, 1600);
+      p.filterResonance = rand(3.5, 6.2);
+      p.filterEnvAmount = rand(0.45, 0.78);
+      p.filterDrive = rand(0.12, 0.42);
+      p.chipAcidMix = rand(0.4, 0.85);
       p.oscATable = pick(["saw", "pulse", "growl"] as const);
       p.mono = true;
-      p.glide = Math.max(p.glide ?? 0, rand(0.04, 0.14));
+      p.glide = Math.max(p.glide ?? 0, rand(0.04, 0.12));
+      p.drive = Math.min(p.drive ?? 0, 0.35);
       p.spectralMode = "off";
       break;
     case "ops4":
@@ -663,121 +1015,248 @@ function applyMutateSpecies(p: FirePatch, a: number): void {
       p.fmOp2Ratio = pick([0.5, 1, 1.5, 2, 3, 5, 7]);
       p.fmOp3Ratio = pick([0.5, 1, 2, 3, 4, 6]);
       p.fmOp4Ratio = pick([1, 2, 3, 5, 7, 11]);
-      p.fmFeedback = rand(0.1, 0.65);
-      p.fmOp2Level = rand(0.35, 1);
-      p.fmOp3Level = rand(0.2, 0.9);
-      p.fmOp4Level = rand(0.15, 0.75);
-      p.fmAmount = Math.max(p.fmAmount ?? 0, rand(0.25, 0.7));
-      p.oscATable = pick(["bell", "harmonic", "metallic", "additive"] as const);
+      p.fmFeedback = rand(0.08, 0.48);
+      p.fmOp2Level = rand(0.3, 0.9);
+      p.fmOp3Level = rand(0.15, 0.75);
+      p.fmOp4Level = rand(0.1, 0.55);
+      p.fmAmount = Math.max(p.fmAmount ?? 0, rand(0.2, 0.55));
+      p.oscATable = pick(["harmonic", "additive", "basic", "bell", "saw"] as const);
       p.hardSync = false;
+      p.filterResonance = Math.min(p.filterResonance ?? 4, 5);
       p.spectralMode = "off";
       break;
     case "warp":
-      p.warpMode = pick(["scramble", "subharmonic", "brickwall"] as const);
-      p.warpStretch = rand(-0.95, 0.95);
-      p.warpTilt = rand(-0.9, 0.9);
-      p.warpComb = rand(0.2, 0.9);
+      p.warpMode = pick(["classic", "scramble", "subharmonic"] as const);
+      p.warpStretch = rand(-0.55, 0.55);
+      p.warpTilt = rand(-0.5, 0.5);
+      p.warpComb = rand(0.08, 0.4);
       p.warpAmount = 1;
-      p.oscATable = pick(["fold", "metallic", "sync", "growl", "formant2"] as const);
-      p.filterType = pick<FireFilterType>(["lowpass", "bandpass", "notch"]);
-      p.filterResonance = rand(2, 10);
+      p.oscATable = pick(["fold", "growl", "sync", "saw", "pulse"] as const);
+      p.filterType = pick<FireFilterType>(["lowpass", "lowpass", "bandpass"]);
+      p.filterResonance = rand(1.2, 4);
       break;
     case "chip":
       p.oscATable = pick(["chip", "pulse", "basic"] as const);
-      p.hardSync = chance(0.7);
-      p.pulseDuty = rand(0.05, 0.95);
-      p.chipAcidMix = rand(0.3, 0.9);
+      p.hardSync = chance(0.55);
+      p.pulseDuty = rand(0.12, 0.88);
+      p.chipAcidMix = rand(0.25, 0.8);
       p.chipNoise = pick(["white", "nes", "gb", "periodic"] as const);
-      p.filterCutoff = rand(1200, 8000);
-      p.filterResonance = rand(1, 8);
+      p.filterCutoff = rand(1400, 7200);
+      p.filterResonance = rand(1, 5.5);
       p.fmEngine = "classic";
       p.spectralMode = "off";
       break;
     case "dual":
-      p.oscATable = pick(WAVETABLE_IDS);
-      p.oscBTable = pick(WAVETABLE_IDS);
-      p.oscBLevel = Math.max(p.oscBLevel ?? 0, rand(0.35, 0.75));
+      p.oscATable = chance(0.75) ? pick(NS_WARM_TABLES) : pick(WAVETABLE_IDS);
+      {
+        const warmB = NS_WARM_TABLES.filter((t) => t !== p.oscATable);
+        p.oscBTable = chance(0.7) && warmB.length
+          ? pick(warmB)
+          : pick(WAVETABLE_IDS.filter((t) => t !== p.oscATable));
+      }
+      p.oscBLevel = Math.max(p.oscBLevel ?? 0, rand(0.35, 0.7));
       p.oscBInherit = pick(["morph", "mirror", "offset", "fm", "family"] as const);
       p.oscBDetune = Math.round(rand(-22, 22));
-      p.unison = pick([3, 5, 7]);
-      p.unisonDetune = Math.round(rand(10, 28));
-      p.unisonWidth = rand(0.5, 0.95);
+      p.unison = pick([3, 5, 5, 7]);
+      p.unisonDetune = Math.round(rand(8, 24));
+      p.unisonWidth = rand(0.45, 0.9);
       break;
     case "sync":
       p.hardSync = true;
-      p.pulseDuty = rand(0.08, 0.85);
+      p.pulseDuty = rand(0.12, 0.8);
       p.oscATable = pick(["pulse", "saw", "sync"] as const);
-      p.filterModel = pick(["ladder", "svf"] as const);
-      p.filterResonance = rand(3, 12);
-      p.drive = Math.max(p.drive ?? 0, rand(0.2, 0.65));
+      p.filterModel = pick(["ladder", "svf", "biquad"] as const);
+      p.filterResonance = rand(2, 5.5);
+      p.drive = Math.max(Math.min(p.drive ?? 0, 0.25), rand(0.12, 0.42));
       p.driveMode = pick(["fold", "fuzz", "hard", "tube"] as const);
       break;
     case "noise":
-      p.noiseLevel = rand(0.15, 0.45);
+      p.noiseLevel = rand(0.08, 0.28);
       p.noiseMode = pick(["burst", "storm", "bed"] as const);
-      p.noiseColor = rand(-0.8, 0.8);
+      p.noiseColor = rand(-0.7, 0.7);
       p.filterType = pick<FireFilterType>(["bandpass", "highpass", "lowpass"]);
-      p.filterCutoff = rand(400, 6000);
-      p.filterResonance = rand(2, 11);
-      if (a > 0.8 && chance(0.35)) {
-        p.spectralMode = pick(["smear", "gate", "shift"] as const);
-        p.spectralMix = rand(0.18, 0.4);
-        p.spectralAmount = rand(0.35, 0.8);
-      }
+      p.filterCutoff = rand(500, 5500);
+      p.filterResonance = rand(1.5, 6);
+      p.spectralMode = "off";
       break;
     case "age":
-      p.cassetteGen = rand(0.25, 0.75);
-      p.tapeSpeed = rand(-0.4, 0.4);
-      p.wowFlutter = rand(0.1, 0.55);
-      p.vhsColor = rand(0.1, 0.5);
-      p.ageMacro = rand(0.25, 0.7);
-      p.ageEvolve = rand(0.1, 0.45);
+      p.cassetteGen = rand(0.2, 0.65);
+      p.tapeSpeed = rand(-0.3, 0.3);
+      p.wowFlutter = rand(0.08, 0.45);
+      p.vhsColor = rand(0.08, 0.4);
+      p.ageMacro = rand(0.2, 0.6);
+      p.ageEvolve = rand(0.08, 0.35);
       p.driveMode = pick(["tube", "soft"] as const);
-      p.drive = Math.max(p.drive ?? 0, rand(0.15, 0.5));
-      p.hiss = rand(0.02, 0.12);
+      p.drive = Math.max(Math.min(p.drive ?? 0, 0.3), rand(0.1, 0.4));
+      p.hiss = rand(0.015, 0.08);
       break;
     case "formant":
-      p.oscATable = pick(["vocal", "formant2", "harmonic"] as const);
-      p.filterCarve = "formant";
-      p.filterCarveAmount = rand(0.35, 0.85);
-      p.filterType = pick<FireFilterType>(["bandpass", "lowpass"]);
-      p.filterResonance = rand(2, 9);
+      p.oscATable = pick(["vocal", "formant2", "harmonic", "basic"] as const);
+      p.filterCarve = chance(0.55) ? "formant" : pick(["odds", "evens", "off"] as const);
+      p.filterCarveAmount = p.filterCarve === "off" ? 0 : rand(0.2, 0.55);
+      p.filterType = "lowpass";
+      p.filterResonance = rand(1.2, 3.5);
       p.oscAPos = rand(0.1, 0.9);
-      p.oscAEnv = rand(-0.4, 0.7);
+      p.oscAEnv = rand(-0.35, 0.55);
+      p.reverbMix = Math.min(p.reverbMix ?? 0.2, rand(0.06, 0.2));
       break;
     case "pluck":
       p.lpgOn = true;
       p.lpgModel = pick(["classic", "fast", "bright", "aged"] as const);
-      p.lpgDecay = rand(0.12, 0.7);
-      p.lpgColor = rand(0.4, 0.95);
-      p.ampAttack = rand(0.001, 0.01);
-      p.ampDecay = rand(0.12, 0.45);
-      p.ampSustain = rand(0.02, 0.25);
-      p.filterEnvAmount = rand(0.4, 0.9);
+      // Longer LPG/amp so plucks still leave a body, not a tick.
+      p.lpgDecay = rand(0.45, 1.15);
+      p.lpgColor = rand(0.4, 0.9);
+      p.ampAttack = rand(0.005, 0.018);
+      p.ampDecay = rand(0.2, 0.7);
+      p.ampSustain = rand(0.12, 0.4);
+      p.ampRelease = rand(1.4, 3.0);
+      p.ampRetrigger = "current";
+      p.filterEnvAmount = rand(0.35, 0.75);
+      p.subLevel = Math.max(p.subLevel ?? 0, rand(0.2, 0.5));
+      break;
+    case "pad":
+      p.ampAttack = rand(0.25, 1.4);
+      p.ampDecay = rand(0.3, 1.2);
+      p.ampSustain = rand(0.6, 0.95);
+      p.ampRelease = rand(2.0, 4.0);
+      p.gateOn = false;
+      p.unison = pick([3, 5, 7]);
+      p.unisonDetune = Math.round(rand(6, 16));
+      p.unisonWidth = rand(0.45, 0.85);
+      // Intimate pad — not a wet cave
+      p.chorusMix = rand(0.08, 0.28);
+      p.reverbMix = chance(0.55) ? rand(0.06, 0.18) : rand(0.12, 0.24);
+      p.reverbSize = rand(1.1, 2.6);
+      p.reverbDamp = rand(0.45, 0.75);
+      p.filterType = "lowpass";
+      p.filterCutoff = rand(800, 4200);
+      p.filterResonance = rand(0.7, 2.8);
+      p.oscATable = pick(["saw", "basic", "harmonic", "additive", "pulse", "vocal"] as const);
+      p.subLevel = Math.max(p.subLevel ?? 0, rand(0.25, 0.55));
+      p.lfo1Depth = Math.max(p.lfo1Depth ?? 0, rand(0.12, 0.35));
+      p.lfo1Rate = rand(0.08, 0.6);
+      break;
+    case "bass":
+      p.oscAOctave = pick([-2, -1, -1]);
+      p.subLevel = Math.max(p.subLevel ?? 0, rand(0.4, 0.75));
+      p.subWave = pick(SUB_WAVES);
+      p.filterType = "lowpass";
+      p.filterCutoff = rand(120, 900);
+      p.filterResonance = rand(1.2, 4.5);
+      p.filterEnvAmount = rand(0.25, 0.65);
+      p.ampAttack = rand(0.005, 0.04);
+      p.ampDecay = rand(0.25, 0.9);
+      p.ampSustain = rand(0.5, 0.92);
+      p.ampRelease = rand(1.6, 3.4);
+      p.gateOn = false;
+      p.oscATable = pick(["saw", "pulse", "basic", "growl"] as const);
+      p.unison = pick([1, 1, 3]);
+      p.reverbMix = Math.min(p.reverbMix ?? 0.15, rand(0.02, 0.14));
+      p.chorusMix = Math.min(p.chorusMix ?? 0.15, rand(0.02, 0.18));
+      break;
+    case "bell":
+      p.fmEngine = pick(["classic", "ops4"] as const);
+      p.fmAmount = rand(0.25, 0.55);
+      p.fmRatio = pick([1.5, 2, 2.5, 3, 5, 7]);
+      p.ampAttack = rand(0.005, 0.02);
+      p.ampDecay = rand(0.6, 2.0);
+      p.ampSustain = rand(0.08, 0.35);
+      p.ampRelease = rand(1.6, 3.2);
+      p.oscATable = pick(["bell", "harmonic", "additive", "basic"] as const);
+      p.filterCutoff = rand(1200, 5500);
+      p.filterResonance = rand(0.7, 2.6);
+      p.reverbMix = rand(0.08, 0.22);
+      p.reverbSize = rand(1.2, 2.8);
+      p.subLevel = Math.max(p.subLevel ?? 0, rand(0.15, 0.4));
+      break;
+    case "drone":
+      p.ampAttack = rand(0.4, 2);
+      p.ampSustain = rand(0.7, 1);
+      p.ampRelease = rand(1, 4);
+      p.oscBLevel = Math.max(p.oscBLevel ?? 0, rand(0.3, 0.65));
+      p.oscBDetune = Math.round(rand(-8, 8));
+      p.oscBInherit = pick(["mirror", "offset", "morph"] as const);
+      p.oscATable = pick(["saw", "basic", "harmonic", "growl", "additive"] as const);
+      p.lfo1Rate = rand(0.05, 0.35);
+      p.lfo1Depth = rand(0.2, 0.55);
+      p.lfo1Dest = pick(["filter", "pan", "pitch"] as const);
+      p.filterCutoff = rand(300, 2500);
+      p.filterResonance = rand(0.8, 3);
+      p.chorusMix = rand(0.08, 0.28);
+      p.reverbMix = rand(0.06, 0.2);
+      p.reverbSize = rand(1.2, 2.8);
+      p.drift = Math.max(p.drift ?? 0, rand(0.15, 0.45));
+      break;
+    case "perc":
+      // Rare species — still give a real tail instead of a sub-200ms click.
+      p.ampAttack = rand(0.005, 0.012);
+      p.ampDecay = rand(0.18, 0.55);
+      p.ampSustain = rand(0.05, 0.22);
+      p.ampRelease = rand(0.9, 2.4);
+      p.ampRetrigger = "current";
+      p.filterEnvAmount = rand(0.45, 0.8);
+      p.filtAttack = rand(0.005, 0.02);
+      p.filtDecay = rand(0.12, 0.45);
+      p.filtSustain = rand(0, 0.15);
+      p.filterType = "lowpass";
+      p.filterCutoff = rand(400, 3500);
+      p.filterResonance = rand(2, 5.5);
+      p.noiseLevel = rand(0.04, 0.16);
+      p.noiseMode = "burst";
+      p.punch = rand(0.12, 0.35);
+      p.subLevel = Math.max(p.subLevel ?? 0, rand(0.25, 0.55));
+      p.lpgOn = chance(0.35);
+      if (p.lpgOn) p.lpgDecay = rand(0.4, 0.95);
       break;
   }
+  return species;
 }
+
+/** Compact fingerprint so we can reject near-clone A/B pairs. */
+function nsFingerprint(p: FirePatch): string {
+  const bucket = (v: number, step: number) => Math.round(v / step) * step;
+  return [
+    p.oscATable, p.oscBTable, p.filterType, p.filterModel, p.driveMode,
+    p.fmEngine, p.warpMode, p.hardSync ? 1 : 0, p.lpgOn ? 1 : 0,
+    p.mono ? 1 : 0, p.noiseMode, p.filterCarve,
+    bucket(p.filterCutoff ?? 1000, 400),
+    bucket(p.filterResonance ?? 1, 1.5),
+    bucket(p.noiseLevel ?? 0, 0.1),
+    bucket(p.fmAmount ?? 0, 0.15),
+    bucket(p.drive ?? 0, 0.15),
+    p.unison ?? 1,
+    p.oscAOctave ?? 0,
+  ].join("|");
+}
+
+export type MutatePatchOpts = {
+  /** Force a species DNA rewrite even at milder pressure. */
+  forceSpecies?: boolean;
+  /** Don't reuse this species (so A/B diverge). */
+  avoidSpecies?: MutateSpecies;
+};
 
 /**
  * Breed one offspring from a patch. `amount` (0..1) scales every jitter:
- * ~0 is a whisper of drift, ~0.35 is a classic nudge, and the top of the
- * dial (Natural Selection / Cambrian) rewrites tone via coherent species DNA
- * so offspring sound otherworldly without becoming digital hash.
+ * mild = musical drift, high = speciation. Species rewrites stay coherent and
+ * pre-clamped so applyNsSafety is a backstop, not the first line of defense.
  */
-export function mutatePatch(src: FirePatch, amount: number): FirePatch {
+export function mutatePatch(
+  src: FirePatch,
+  amount: number,
+  opts: MutatePatchOpts = {},
+): FirePatch {
   const a = clamp(amount, 0, 1);
   const p = structuredClone(src);
-  // Mild stays musical; Wild opens up — but not so hard that every knob becomes noise.
-  const g = 0.22 + a * 0.95 + Math.pow(a, 2) * 2.6;
+  const g = 0.28 + a * 1.05 + Math.pow(a, 2) * 2.2;
   const j = (v: number, amt: number, lo: number, hi: number) =>
     clamp(v + (Math.random() * 2 - 1) * amt * g, lo, hi);
   const jLog = (v: number, oct: number, lo: number, hi: number) =>
     clamp(v * Math.pow(2, (Math.random() * 2 - 1) * oct * g), lo, hi);
-  const pWild = (base: number) => chance(clamp(base + a * a * 0.75, 0, 0.92));
+  const pWild = (base: number) => chance(clamp(base + a * a * 0.8, 0, 0.94));
 
   const pn = p as unknown as Record<string, number>;
 
-  // Timbre / motion knobs — full pressure.
   const uniTone = [
     "oscAPos", "oscBPos", "oscCPos", "oscAContinuity", "subTranslate",
     "noiseDensity", "noiseGrain", "fmAmount", "fmBtoA", "fmAtoB", "ringAmount",
@@ -793,11 +1272,12 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
     "analogWake", "analogTremor", "analogBreath",
     "ageMacro", "ageEvolve",
     "lpgDecay", "lpgColor", "lpgStrike", "lpgRing", "lpgLeakage", "lpgResoCouple",
+    "pulseDuty", "fmFeedback", "fmOp2Level", "fmOp3Level", "fmOp4Level",
   ];
   for (const k of uniTone) {
-    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.11 : 0.18, 0, 1);
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.14 : 0.22, 0, 1);
   }
-  // Levels + wet FX — gentler so wild doesn't become a hall/noise bomb.
+  // Levels + wet FX — still gentler, but mid pressure now moves them enough to hear.
   const uniGentle = [
     "oscALevel", "oscBLevel", "oscCLevel", "subLevel", "noiseLevel",
     "chorusMix", "chorusDepth", "chorusRate", "chorusSpread",
@@ -805,11 +1285,12 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
     "delayMix", "delayFeedback", "delayDuck", "delayFbFilter", "delayFbDrive",
     "reverbMix", "reverbDamp", "reverbDiffusion", "reverbEarly", "reverbLowDecay",
     "harmonyLevel", "spectralAmount", "spectralMix", "spectralLow", "spectralHigh", "glueMix",
+    "airAmount",
   ];
   for (const k of uniGentle) {
-    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.06 : 0.1, 0, 1);
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.1 : 0.16, 0, 1);
   }
-  p.stereoWidth = j(p.stereoWidth ?? 1, 0.12 + a * 0.3, 0.25, 1.55);
+  p.stereoWidth = j(p.stereoWidth ?? 1, 0.14 + a * 0.35, 0.25, 1.55);
   if (typeof p.chorusLowCut === "number") {
     p.chorusLowCut = j(p.chorusLowCut, 20 + a * 80, 0, 400);
   }
@@ -821,22 +1302,21 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
     "driveBias", "driveSymmetry",
   ];
   for (const k of bi) {
-    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.14 : 0.26, -1, 1);
+    if (typeof pn[k] === "number") pn[k] = j(pn[k], a < 0.5 ? 0.16 : 0.28, -1, 1);
   }
-  // Pitch env is semitones, not a bipolar 0..1 knob.
   p.pitchEnvAmount = Math.round(j(p.pitchEnvAmount ?? 0, 3 + a * 18, -36, 36));
 
-  p.filterCutoff = jLog(p.filterCutoff, a < 0.55 ? 0.28 : 0.5, 40, 18000);
-  p.filterResonance = jLog(Math.max(0.2, p.filterResonance), a < 0.55 ? 0.32 : 0.55, 0.1, 20);
-  p.lfo1Rate = jLog(Math.max(0.05, p.lfo1Rate), a < 0.55 ? 0.35 : 0.7, 0.05, 24);
-  p.lfo2Rate = jLog(Math.max(0.05, p.lfo2Rate), a < 0.55 ? 0.35 : 0.7, 0.05, 24);
-  p.ampAttack = jLog(Math.max(0.002, p.ampAttack), 0.35 + a * 0.45, 0.001, 3);
+  p.filterCutoff = jLog(p.filterCutoff, a < 0.55 ? 0.35 : 0.6, 60, 16000);
+  p.filterResonance = jLog(Math.max(0.2, p.filterResonance), a < 0.55 ? 0.28 : 0.42, 0.1, 10);
+  p.lfo1Rate = jLog(Math.max(0.05, p.lfo1Rate), a < 0.55 ? 0.4 : 0.75, 0.05, 24);
+  p.lfo2Rate = jLog(Math.max(0.05, p.lfo2Rate), a < 0.55 ? 0.4 : 0.75, 0.05, 24);
+  p.ampAttack = jLog(Math.max(0.005, p.ampAttack), 0.35 + a * 0.45, 0.005, 3);
   p.ampDecay = jLog(Math.max(0.01, p.ampDecay), 0.35 + a * 0.45, 0.01, 4);
   p.ampRelease = jLog(Math.max(0.01, p.ampRelease), 0.35 + a * 0.45, 0.01, 5);
-  p.filtAttack = jLog(Math.max(0.002, p.filtAttack), 0.35 + a * 0.45, 0.001, 3);
+  p.filtAttack = jLog(Math.max(0.005, p.filtAttack), 0.35 + a * 0.45, 0.005, 3);
   p.filtDecay = jLog(Math.max(0.01, p.filtDecay), 0.35 + a * 0.45, 0.01, 4);
   p.filtRelease = jLog(Math.max(0.01, p.filtRelease), 0.35 + a * 0.45, 0.01, 5);
-  p.modAttack = jLog(Math.max(0.002, p.modAttack ?? 0.02), 0.35 + a * 0.4, 0.001, 3);
+  p.modAttack = jLog(Math.max(0.005, p.modAttack ?? 0.02), 0.35 + a * 0.4, 0.005, 3);
   p.modDecay = jLog(Math.max(0.01, p.modDecay ?? 0.5), 0.35 + a * 0.4, 0.01, 4);
   p.modRelease = jLog(Math.max(0.01, p.modRelease ?? 0.4), 0.35 + a * 0.4, 0.01, 5);
   p.unisonDetune = j(p.unisonDetune, 5 + a * 14, 0, 80);
@@ -859,51 +1339,86 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
   if (Array.isArray(p.modMatrix)) {
     p.modMatrix = p.modMatrix.map((r) => {
       if (!r || r.source === "none" || r.dest === "none") return r;
-      return { ...r, amount: j(r.amount, 0.12 + a * 0.32, -1, 1) };
+      return { ...r, amount: j(r.amount, 0.14 + a * 0.35, -1, 1) };
     });
   }
 
-  if (a > 0.35) {
-    if (pWild(0.22)) p.oscBTable = pick(WAVETABLE_IDS);
-    if (pWild(0.18)) p.oscCTable = pick(WAVETABLE_IDS);
-    if (pWild(0.15)) p.subWave = pick(SUB_WAVES);
-    if (pWild(0.18)) p.lfo1Wave = pick(LFO_WAVES);
-    if (pWild(0.18)) p.lfo2Wave = pick(LFO_WAVES);
+  // Always reshuffle DNA seed so analog life diverges even on mild breeds.
+  if (pWild(0.55) || a > 0.35) {
+    p.analogDnaSeed = Math.floor(Math.random() * 0xFFFFFFFF) >>> 0;
   }
 
-  // Coherent species rewrite — the fun/wild part without stacking every extreme.
-  if (a > 0.52 && pWild(0.72)) applyMutateSpecies(p, a);
-  else if (a > 0.7 && pWild(0.4)) applyMutateSpecies(p, a);
-
-  if (a > 0.55) {
-    if (pWild(0.28)) p.oscATable = pick(WAVETABLE_IDS);
-    if (pWild(0.22)) p.filterType = pick<FireFilterType>(["lowpass", "lowpass", "bandpass", "highpass", "notch"]);
-    if (pWild(0.25)) p.filterModel = pick(["biquad", "ladder", "svf", "ladder"] as const);
-    if (pWild(0.22)) p.driveMode = pick(DRIVE_MODES);
-    if (pWild(0.18)) p.lfo1Dest = pick(LFO_DESTS);
-    if (pWild(0.18)) p.lfo2Dest = pick(LFO_DESTS);
-    if (pWild(0.16)) p.filterSlope = pick([1, 1, 2, 3] as const);
-    if (pWild(0.2)) p.filterCarve = pick(["off", "fundamental", "odds", "evens", "noise", "formant"] as const);
-    if (pWild(0.16)) p.chorusModel = pick(["single", "dual", "triple", "ensemble", "dimension", "tape"] as const);
-    if (pWild(0.14)) p.delayCascadeMode = pick(["slap", "echo", "dub", "bounce", "long"] as const);
+  if (a > 0.28) {
+    if (pWild(0.28)) p.oscATable = chance(0.7) ? pick(NS_WARM_TABLES) : pick(WAVETABLE_IDS);
+    if (pWild(0.3)) p.oscBTable = chance(0.65) ? pick(NS_WARM_TABLES) : pick(WAVETABLE_IDS);
+    if (pWild(0.22)) p.oscCTable = pick(WAVETABLE_IDS);
+    if (pWild(0.18)) p.subWave = pick(SUB_WAVES);
+    if (pWild(0.22)) p.lfo1Wave = pick(LFO_WAVES);
+    if (pWild(0.22)) p.lfo2Wave = pick(LFO_WAVES);
   }
-  if (a > 0.72) {
-    if (pWild(0.3)) p.oscAOctave = pick([-2, -1, 0, 0, 1, 1, 2]);
-    if (pWild(0.28)) p.oscBOctave = pick([-2, -1, 0, 0, 1, 2]);
-    if (pWild(0.22)) p.oscCOctave = pick([-2, -1, 0, 1]);
-    if (pWild(0.28)) p.unison = pick([1, 1, 3, 3, 5, 7]);
-    if (pWild(0.2)) p.unisonDistribution = pick(["linear", "gaussian", "center", "edge", "alternating"] as const);
-    if (pWild(0.18)) p.unisonPhase = pick(["even", "random", "alternating", "locked"] as const);
-    if (pWild(0.2)) p.oscBInherit = pick(["off", "morph", "mirror", "offset", "fm", "family", "lock"] as const);
-    if (pWild(0.14)) p.fxRoutingScene = pick(["serial", "driveAgePrint", "spaceCascade", "spectralTail"] as const);
-    if (pWild(0.14)) p.lpgOn = !p.lpgOn;
-    if (pWild(0.12)) p.mono = !p.mono;
+
+  // Architecture flips that used to be frozen — these are what make A/B feel different.
+  if (a > 0.32) {
+    if (pWild(0.22)) p.hardSync = !p.hardSync;
+    if (pWild(0.2)) p.pulseDuty = rand(0.12, 0.88);
+    if (pWild(0.16)) p.fmEngine = pick(["classic", "ops4"] as const);
+    if (pWild(0.14)) p.bitDepth = pick(["off", "off", "12bit", "8bit"] as const);
+    if (pWild(0.12)) p.sampleRateReduce = p.bitDepth === "off" ? 0 : rand(0.05, 0.35);
+    if (pWild(0.14)) {
+      p.harmonyMode = pick(["off", "off", "third", "fifth", "octave", "triad"] as const);
+      p.harmonyLevel = p.harmonyMode === "off" ? 0 : rand(0.25, 0.55);
+    }
+    // Gate chops long body into blips — keep rare.
+    if (pWild(0.06)) {
+      p.gateOn = !p.gateOn;
+      if (p.gateOn) {
+        p.gateSmooth = Math.max(0.28, p.gateSmooth ?? 0.35);
+        p.gateRate = pick([4, 8, 8, 12, 16]);
+        p.gateDepth = rand(0.55, 1);
+      }
+    }
+    if (pWild(0.14)) p.warpMode = pick(["classic", "scramble", "subharmonic", "brickwall"] as const);
+  }
+
+  // Species rewrite — more reliable at mid pressure; forceable for A/B divergence.
+  let species: MutateSpecies | null = null;
+  const wantSpecies =
+    opts.forceSpecies
+    || (a > 0.4 && pWild(0.82))
+    || (a > 0.52 && pWild(0.78))
+    || (a > 0.7 && pWild(0.55));
+  if (wantSpecies) {
+    species = applyMutateSpecies(p, a, pickNsSpecies(opts.avoidSpecies));
+  }
+
+  if (a > 0.48) {
+    if (pWild(0.32)) p.filterType = pick<FireFilterType>(["lowpass", "lowpass", "bandpass", "highpass", "notch"]);
+    if (pWild(0.28)) p.filterModel = pick(["biquad", "ladder", "svf", "biquad"] as const);
+    if (pWild(0.26)) p.driveMode = pick(DRIVE_MODES);
+    if (pWild(0.2)) p.lfo1Dest = pick(LFO_DESTS);
+    if (pWild(0.2)) p.lfo2Dest = pick(LFO_DESTS);
+    if (pWild(0.18)) p.filterSlope = pick([1, 1, 2, 3] as const);
+    if (pWild(0.22)) p.filterCarve = pick(["off", "off", "fundamental", "odds", "evens", "noise", "formant"] as const);
+    if (pWild(0.18)) p.chorusModel = pick(["single", "dual", "triple", "ensemble", "dimension", "tape"] as const);
+    if (pWild(0.16)) p.delayCascadeMode = pick(["slap", "echo", "dub", "bounce", "long"] as const);
+  }
+  if (a > 0.65) {
+    if (pWild(0.32)) p.oscAOctave = pick([-2, -1, 0, 0, 1, 1, 2]);
+    if (pWild(0.3)) p.oscBOctave = pick([-2, -1, 0, 0, 1, 2]);
+    if (pWild(0.24)) p.oscCOctave = pick([-2, -1, 0, 1]);
+    if (pWild(0.3)) p.unison = pick([1, 1, 3, 3, 5, 7]);
+    if (pWild(0.22)) p.unisonDistribution = pick(["linear", "gaussian", "center", "edge", "alternating"] as const);
+    if (pWild(0.2)) p.unisonPhase = pick(["even", "random", "alternating", "locked"] as const);
+    if (pWild(0.22)) p.oscBInherit = pick(["off", "morph", "mirror", "offset", "fm", "family", "lock"] as const);
+    if (pWild(0.16)) p.fxRoutingScene = pick(["serial", "driveAgePrint", "spaceCascade", "spectralTail"] as const);
+    if (pWild(0.16)) p.lpgOn = !p.lpgOn;
+    if (pWild(0.14)) p.mono = !p.mono;
     if (pWild(0.28)) {
-      p.modEnvPoints = adsrToModEnvPoints(rand(0.001, 0.8), rand(0.05, 1.4), rand(0, 0.85), rand(0.05, 1.6));
+      p.modEnvPoints = adsrToModEnvPoints(rand(0.005, 0.8), rand(0.05, 1.4), rand(0, 0.85), rand(0.05, 1.6));
       p.modEnvSustainIndex = Math.max(1, (p.modEnvPoints.length || 2) - 1);
       p.modEnvLoop = chance(0.22);
     }
-    if (pWild(0.32) && Array.isArray(p.modMatrix)) {
+    if (pWild(0.34) && Array.isArray(p.modMatrix)) {
       const slot = p.modMatrix.findIndex((r) => !r || r.source === "none" || r.dest === "none");
       const route = MR(
         pick<ModSource>(["lfo1", "lfo2", "modenv", "velocity", "macro1", "macro2"]),
@@ -914,18 +1429,70 @@ export function mutatePatch(src: FirePatch, amount: number): FirePatch {
       else if (p.modMatrix.length < 12) p.modMatrix = [...p.modMatrix, route];
     }
   }
-  if (a > 0.88) {
-    // Final Cambrian accent — boost one wild trait, not everything.
-    if (pWild(0.45)) p.filterResonance = Math.max(p.filterResonance, rand(6, 16));
-    if (pWild(0.35)) p.drive = Math.max(p.drive, rand(0.25, 0.7));
-    if (pWild(0.3)) p.fmAmount = Math.max(p.fmAmount, rand(0.2, 0.7));
-    if (pWild(0.25)) {
+  if (a > 0.85) {
+    // Cambrian accent — one wild trait, kept inside safe pre-clamp ranges.
+    if (pWild(0.4)) p.filterResonance = Math.max(p.filterResonance, rand(4, 7));
+    if (pWild(0.32)) p.drive = Math.max(p.drive, rand(0.2, 0.5));
+    if (pWild(0.28)) p.fmAmount = Math.max(p.fmAmount, rand(0.18, 0.55));
+    if (pWild(0.22)) {
       p.warpMode = pick(["scramble", "subharmonic", "brickwall"] as const);
       p.warpAmount = 1;
     }
   }
 
+  // Declick floors before safety (safety reinforces these).
+  p.ampAttack = Math.max(0.005, p.ampAttack ?? 0.01);
+  if (p.ampCurveAttack === "step") p.ampCurveAttack = "lin";
+  if (p.gateOn && (p.gateSmooth ?? 0) < 0.25) p.gateSmooth = rand(0.28, 0.55);
+
+  scrubNonFinitePatchNumbers(p);
+
+  if (species) stampNsSpecies(p, species);
+  applyNsBodyBias(p);
   return p;
+}
+
+/**
+ * If A and B still fingerprint too alike after locks, rewrite B on unlocked axes.
+ */
+function diversifySibling(
+  a: FirePatch,
+  b: FirePatch,
+  amount: number,
+  locks: Record<string, boolean> = {},
+): FirePatch {
+  if (nsFingerprint(a) !== nsFingerprint(b)) return b;
+  const avoid = nsSpeciesOf(a);
+  const out = structuredClone(b);
+  const species = applyMutateSpecies(out, Math.max(amount, 0.55), pickNsSpecies(avoid));
+  // Nudge unlocked audible axes so locks can't fully erase divergence.
+  if (!locks["osc.a"]) {
+    out.oscATable = pick(WAVETABLE_IDS.filter((t) => t !== a.oscATable));
+  }
+  if (!locks["filter"]) {
+    out.filterCutoff = clamp(
+      (out.filterCutoff ?? 1000) * (chance(0.5) ? rand(0.55, 0.85) : rand(1.2, 1.8)),
+      80,
+      14000,
+    );
+  }
+  if (!locks["fx.drive"]) {
+    const modes = DRIVE_MODES.filter((m) => m !== a.driveMode);
+    out.driveMode = pick(modes.length ? modes : DRIVE_MODES);
+  }
+  if (!locks["noise"]) {
+    out.noiseLevel = clamp((out.noiseLevel ?? 0) + rand(-0.12, 0.12), 0, 0.32);
+  }
+  if (!locks["fm"]) {
+    out.fmAmount = clamp((out.fmAmount ?? 0) + rand(-0.2, 0.2), 0, 0.68);
+  }
+  // Always free — gives Analog Life a different seed even when everything is locked.
+  out.analogDnaSeed = Math.floor(Math.random() * 0xFFFFFFFF) >>> 0;
+  out.ampAttack = Math.max(0.005, out.ampAttack ?? 0.01);
+  scrubNonFinitePatchNumbers(out);
+  stampNsSpecies(out, species);
+  applyNsBodyBias(out);
+  return out;
 }
 
 /** A pending natural-selection round: base parent + two offspring. */
@@ -1192,7 +1759,7 @@ function defaults(): PersistShape {
     kbdVelGain: 1.45,
     kbdVelCurve: 0.72,
     kbdDelayMs: 0,
-    kbdAttackMs: 6,
+    kbdAttackMs: 8,
     userPresets: [],
     maxVoices: 12,
     mutateAmount: 0.62,
@@ -1311,7 +1878,7 @@ function load(): PersistShape {
       kbdVelGain: typeof parsed.kbdVelGain === "number" ? clamp(parsed.kbdVelGain, 0.5, 2.5) : d.kbdVelGain,
       kbdVelCurve: typeof parsed.kbdVelCurve === "number" ? clamp(parsed.kbdVelCurve, 0.35, 1.8) : d.kbdVelCurve,
       kbdDelayMs: typeof parsed.kbdDelayMs === "number" ? clamp(parsed.kbdDelayMs, 0, 50) : d.kbdDelayMs,
-      kbdAttackMs: typeof parsed.kbdAttackMs === "number" ? clamp(parsed.kbdAttackMs, 1, 80) : d.kbdAttackMs,
+      kbdAttackMs: typeof parsed.kbdAttackMs === "number" ? clamp(parsed.kbdAttackMs, 3, 80) : d.kbdAttackMs,
       userPresets: Array.isArray(parsed.userPresets)
         ? parsed.userPresets
             .filter((p): p is SavedPreset => !!p && typeof p === "object" && typeof (p as SavedPreset).id === "string")
@@ -1758,18 +2325,28 @@ export function silenceTransportAudio(): void {
   stopArpScheduler();
   clearLiveNoteMaps();
   const engine = getEngine();
-  engine.fireCommand.allNotesOff();
-  engine.peekFireCommandB()?.allNotesOff();
+  engine.fireCommand.allNotesOff({ hard: true });
+  engine.peekFireCommandB()?.allNotesOff({ hard: true });
   engine.fireCommand.killFxTails();
   engine.peekFireCommandB()?.killFxTails();
   try {
     engine.fireDrums.silence();
   } catch { /* engine mid-teardown */ }
+  // Clear freeze flags in the store so near-unity delay/reverb feedback
+  // cannot re-arm after panic (synth patch already cleared in killFxTails).
+  const cur = useFireCommandStore.getState();
+  const clearFreeze = (p: typeof cur.patch) =>
+    p.delayFreeze || p.reverbFreeze
+      ? { ...p, delayFreeze: false, reverbFreeze: false }
+      : p;
   useFireCommandStore.setState({
     heldNotes: [],
     arpOrder: [],
     arpCurrent: null,
     arpStepIndex: -1,
+    patch: clearFreeze(cur.patch),
+    patchA: clearFreeze(cur.patchA),
+    patchB: clearFreeze(cur.patchB),
   });
 }
 
@@ -1961,6 +2538,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         : patch.moduleEnable ?? {};
       const softened = applyPerformanceSafety(patch);
       const s = get();
+      // Disarm ARP before teardown so a mid-flight worker cannot re-arm after Init.
+      if (s.arp.enabled) set({ arp: { ...s.arp, enabled: false } });
       // Always silence both engines — the non-edited layer may still be sounding.
       clearLiveNoteMaps();
       silenceTransportAudio();
@@ -1975,6 +2554,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         });
         getEngine().fireCommandB.setPatch(patch);
         getEngine().fireCommandB.unsilenceFx();
+        getEngine().flushSharedDynamics();
         stampLivePatchesOntoActiveSection();
         persist();
         if (softened) toastPerfGuard();
@@ -1998,6 +2578,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const fc = getEngine().fireCommand;
       fc.setPatch(patch);
       fc.unsilenceFx();
+      getEngine().flushSharedDynamics();
       if (arp.enabled) startArpScheduler(get, set);
       else stopArpScheduler();
       stampLivePatchesOntoActiveSection();
@@ -2121,16 +2702,32 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         : s.mutateLineage > 0
           ? s.mutateLineage + 1
           : 1;
-      const a = mutatePatch(parent, s.mutateAmount);
-      const b = mutatePatch(parent, s.mutateAmount);
-      applyModuleLocks(a, parent, s.moduleLocks);
-      applyModuleLocks(b, parent, s.moduleLocks);
-      applyNsSafety(a);
-      applyNsSafety(b);
-      const next = structuredClone(a);
+      const amount = s.mutateAmount;
+      const forceSpecies = amount >= 0.38;
+      let childA = mutatePatch(parent, amount, { forceSpecies });
+      let childB = mutatePatch(parent, amount, {
+        forceSpecies,
+        avoidSpecies: nsSpeciesOf(childA),
+      });
+      // Locks first — then diversify only if A/B still collapse.
+      applyModuleLocks(childA, parent, s.moduleLocks);
+      applyModuleLocks(childB, parent, s.moduleLocks);
+      applyNsSafety(childA);
+      applyNsSafety(childB);
+      applyNsBodyBias(childA);
+      applyNsBodyBias(childB);
+      if (nsFingerprint(childA) === nsFingerprint(childB) && amount >= 0.35) {
+        childB = diversifySibling(childA, childB, Math.max(amount, 0.6), s.moduleLocks);
+        applyModuleLocks(childB, parent, s.moduleLocks);
+        applyNsSafety(childB);
+        applyNsBodyBias(childB);
+      }
+      // Silence before store/engine swap — mid-note forceStop was the NS click.
+      silenceTransportAudio();
+      const next = structuredClone(childA);
       const { patchA, patchB } = commitActive(next);
       set({
-        mutation: { base: structuredClone(parent), a, b, listening: "a", generation },
+        mutation: { base: structuredClone(parent), a: childA, b: childB, listening: "a", generation },
         patch: next,
         patchA,
         patchB,
@@ -2157,6 +2754,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const next = which === "a" ? m.a : m.b;
       const cloned = structuredClone(next);
       const { patchA, patchB } = commitActive(cloned);
+      silenceTransportAudio();
       set({
         mutation: { ...m, listening: which },
         patch: cloned,
@@ -2192,6 +2790,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       if (!m) return;
       const restored = structuredClone(m.base);
       const { patchA, patchB } = commitActive(restored);
+      silenceTransportAudio();
       set({
         mutation: null,
         mutateLineage: 0,
@@ -2444,6 +3043,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         if (!arpOrder.includes(midi)) arpOrder.push(midi);
         const heldNotes = s.heldNotes.includes(midi) ? s.heldNotes : [...s.heldNotes, midi];
         set({ arpOrder, heldNotes });
+        try { getEngine().fireCommand.unsilenceFx(); } catch { /* engine not ready */ }
         if (arpTimer === null) startArpScheduler(get, set);
         return;
       }
@@ -2506,7 +3106,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
           ? (s.patch.humanizeTiming ?? 0) * 28 * ((Math.random() * 2) - 1)
           : 0;
       const when = liveWhen(s.kbdDelayMs + timingJitterMs);
-      const attackSec = clamp(s.kbdAttackMs, 1, 80) / 1000;
+      const attackSec = clamp(Math.max(3, s.kbdAttackMs), 3, 80) / 1000;
       eng.noteOn(playMidi, playVel, when, attackSec);
 
       const mode = s.patch.harmonyMode ?? "off";
@@ -2607,13 +3207,8 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       getEngine().fireCommand.allNotesOff();
       getEngine().peekFireCommandB()?.allNotesOff();
       set({ octave: o, heldNotes: [], arpOrder: [], arpCurrent: null, arpStepIndex: -1 });
-      if (
-        get().editTarget === "a"
-        && get().arp.enabled
-        && get().patch.moduleEnable?.["arp"] !== false
-      ) {
-        startArpScheduler(get, set);
-      }
+      // Do not start an empty pattern — that parks the scheduler and reads as
+      // "arp went silent" until the next key press.
       persist();
     },
 
@@ -2632,7 +3227,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       persist();
     },
     setKbdAttackMs: (v) => {
-      set({ kbdAttackMs: clamp(v, 1, 80) });
+      set({ kbdAttackMs: clamp(v, 3, 80) });
       persist();
     },
 

@@ -164,8 +164,34 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
   cap((patch.crush ?? 0) > 0.62, () => {
     patch.crush = 0.62;
   });
+  const delayMode = patch.delayCascadeMode ?? "echo";
+  if (delayMode !== "infinite" && delayMode !== "long" && !patch.delayFreeze) {
+    cap((patch.delayFeedback ?? 0) > 0.38, () => {
+      patch.delayFeedback = 0.38;
+    });
+  }
   cap((patch.delayFeedback ?? 0) > 0.78, () => {
     patch.delayFeedback = 0.78;
+  });
+  // Freeze / infinite modes force near-unity feedback in the engine — clear
+  // freeze on load so user patches can't leave a self-sustaining delay bomb.
+  if (patch.delayFreeze) {
+    patch.delayFreeze = false;
+    softened = true;
+  }
+  if (patch.reverbFreeze) {
+    patch.reverbFreeze = false;
+    softened = true;
+  }
+  if ((patch.delayCascadeMode ?? "echo") === "infinite") {
+    patch.delayCascadeMode = "long";
+    softened = true;
+  }
+  cap((patch.glueMakeup ?? 1) > 2, () => {
+    patch.glueMakeup = 2;
+  });
+  cap((patch.glueOutGain ?? 1) > 1.5, () => {
+    patch.glueOutGain = 1.5;
   });
   cap((patch.delayMix ?? 0) > 0.55, () => {
     patch.delayMix = 0.55;
@@ -250,43 +276,68 @@ export function applyLoudnessSafety(patch: FirePatch): FirePatch {
 }
 
 /**
- * Natural Selection safety — wilder than Armory loudness clamps.
- * Allows scream-Q / FM / warp character while still blocking feedback bombs
- * and oscillator pile-ups that hard-clip the voice bus.
+ * Natural Selection safety — musical bite without ear-hash or bus poison.
+ * Caps scream-Q / stacked drive / freeze loops; floors attack & gate edges
+ * so offspring don't click on the first note.
  */
 export function applyNsSafety(patch: FirePatch): FirePatch {
-  patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.82);
-  patch.filterResonance = Math.min(patch.filterResonance ?? 0, 16);
-  patch.filterDrive = Math.min(patch.filterDrive ?? 0, 0.88);
-  patch.drive = Math.min(patch.drive ?? 0, 0.82);
-  patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.78);
-  patch.delayMix = Math.min(patch.delayMix ?? 0, 0.52);
-  patch.reverbMix = Math.min(patch.reverbMix ?? 0, 0.55);
-  patch.fmAmount = Math.min(patch.fmAmount ?? 0, 0.88);
-  patch.fmFeedback = Math.min(patch.fmFeedback ?? 0, 0.72);
-  patch.crush = Math.min(patch.crush ?? 0, 0.55);
-  patch.noiseLevel = Math.min(patch.noiseLevel ?? 0, 0.55);
-  patch.phaserFeedback = Math.min(patch.phaserFeedback ?? 0, 0.72);
-  patch.chipAcidMix = Math.min(patch.chipAcidMix ?? 0, 0.95);
-  const uniCap = liveUnisonCap(patch);
-  patch.unison = Math.min(patch.unison ?? 1, Math.min(8, uniCap)) as FirePatch["unison"];
-  if (spectralActive(patch)) {
-    // Spectral + hot FM/sync is the classic "digital hash" pile-up.
-    patch.spectralMix = Math.min(patch.spectralMix ?? 0, 0.5);
-    if ((patch.fmEngine ?? "classic") === "ops4" && (patch.hardSync || (patch.fmAmount ?? 0) > 0.55)) {
-      patch.spectralMix = Math.min(patch.spectralMix, 0.28);
-    }
+  patch.masterGain = Math.min(patch.masterGain ?? 0.72, 0.72);
+  // Biquad can take a little more Q than ladder/SVF (self-osc hash).
+  const ladderLike = patch.filterModel === "ladder" || patch.filterModel === "svf";
+  patch.filterResonance = Math.min(patch.filterResonance ?? 0, ladderLike ? 6.5 : 9);
+  patch.filterDrive = Math.min(patch.filterDrive ?? 0, ladderLike ? 0.55 : 0.62);
+  patch.drive = Math.min(patch.drive ?? 0, 0.62);
+  // High Q + high filter-env is the classic "screaming note" combo — trim env.
+  if ((patch.filterResonance ?? 0) > 5 && Math.abs(patch.filterEnvAmount ?? 0) > 0.75) {
+    patch.filterEnvAmount = Math.sign(patch.filterEnvAmount ?? 0) * 0.7;
   }
+  patch.delayFeedback = Math.min(patch.delayFeedback ?? 0, 0.62);
+  patch.delayMix = Math.min(patch.delayMix ?? 0, 0.4);
+  patch.reverbMix = Math.min(patch.reverbMix ?? 0, 0.42);
+  patch.fmAmount = Math.min(patch.fmAmount ?? 0, 0.68);
+  patch.fmFeedback = Math.min(patch.fmFeedback ?? 0, 0.55);
+  patch.fmAtoB = Math.min(patch.fmAtoB ?? 0, 0.55);
+  patch.fmBtoA = Math.min(patch.fmBtoA ?? 0, 0.55);
+  patch.ringAmount = Math.min(patch.ringAmount ?? 0, 0.45);
+  patch.crush = Math.min(patch.crush ?? 0, 0.38);
+  patch.noiseLevel = Math.min(patch.noiseLevel ?? 0, 0.32);
+  patch.phaserFeedback = Math.min(patch.phaserFeedback ?? 0, 0.48);
+  patch.phaserMix = Math.min(patch.phaserMix ?? 0, 0.5);
+  patch.chipAcidMix = Math.min(patch.chipAcidMix ?? 0, 0.85);
+  patch.punch = Math.min(patch.punch ?? 0, 0.45);
+  patch.glueMakeup = Math.min(patch.glueMakeup ?? 1, 1.45);
+  patch.glueOutGain = Math.min(patch.glueOutGain ?? 1, 1.25);
+  patch.warpComb = Math.max(-0.85, Math.min(0.85, patch.warpComb ?? 0));
+  // Near-unity freeze / infinite delay loops cooked the shared bus permanently.
+  patch.delayFreeze = false;
+  patch.reverbFreeze = false;
+  if ((patch.delayCascadeMode ?? "echo") === "infinite") {
+    patch.delayCascadeMode = "long";
+  }
+  // Spectral smear/freeze state survives setPatch — keep NS offspring clean.
+  patch.spectralMode = "off";
+  patch.spectralMix = Math.min(patch.spectralMix ?? 0, 0.28);
+  // Declick floors
+  patch.ampAttack = Math.max(0.005, patch.ampAttack ?? 0.01);
+  if (patch.ampCurveAttack === "step") patch.ampCurveAttack = "lin";
+  if (patch.gateOn) {
+    patch.gateSmooth = Math.max(patch.gateSmooth ?? 0, 0.28);
+  }
+  // Prefer soft retrigger over hard zero-snap when attack is short
+  if ((patch.ampAttack ?? 0) < 0.02 && patch.ampRetrigger === "zero") {
+    patch.ampRetrigger = "current";
+  }
+  const uniCap = liveUnisonCap(patch);
+  patch.unison = Math.min(patch.unison ?? 1, Math.min(7, uniCap)) as FirePatch["unison"];
   const oscSum = (patch.oscALevel ?? 0) + (patch.oscBLevel ?? 0) + (patch.oscCLevel ?? 0);
-  if (oscSum > 2.25) {
-    const s = 2.05 / oscSum;
+  if (oscSum > 1.95) {
+    const s = 1.85 / oscSum;
     patch.oscALevel *= s;
     patch.oscBLevel *= s;
     patch.oscCLevel *= s;
   }
-  // Unison / spectral CPU only — do NOT force eco FX (that sterilized wild offspring).
   const pressure = patchCpuPressure(patch, patch.mono ? 1 : 4);
-  if (pressure > 0.75 && patch.fxQuality === "high") {
+  if (pressure > 0.7 && patch.fxQuality === "high") {
     patch.fxQuality = "live";
   }
   return patch;

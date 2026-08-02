@@ -385,7 +385,10 @@ export async function applyLockManifest(
     applied.push("clarity");
   }
   if (sel.trim && manifest.outputTrimDb !== 0) {
-    a.setOutputGain(a.outputGainDb + manifest.outputTrimDb);
+    // Absolute set with clamp — additive trim across repeated Auto-Locks could
+    // slowly climb outputGain into distortion territory.
+    const next = Math.max(-24, Math.min(12, a.outputGainDb + manifest.outputTrimDb));
+    a.setOutputGain(next);
     applied.push("trim");
   }
 

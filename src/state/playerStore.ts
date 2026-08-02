@@ -638,7 +638,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     //   "airspace"         only the webview frame's audio is captured (our
     //                      output never enters the capture), and its local
     //                      playback is muted by Chromium for the duration.
-    if (captureMode === "loopback") {
+    // Feedback protection:
+    //   "loopback"           — same-device capture; MUST run FeedbackKiller
+    //   "loopbackWithMute"   — mute usually breaks the ring, but mute can fail
+    //                          silently — keep FeedbackKiller on as a safety net
+    //   "device" / "airspace"— virtual cable / webview frame; structurally free
+    if (captureMode === "loopback" || captureMode === "loopbackWithMute") {
       try {
         engine.setFeedbackKillerActive(true);
       } catch (err) {
@@ -648,15 +653,12 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         const audio = await import("@/state/audioStore");
         const a = audio.useAudioStore.getState();
         loopbackGainAnchor = a.outputGainDb;
-        // A modest trim (-12 dB) - the FeedbackKiller's notch + ducker
-        // handle the actual ring suppression. Going further makes the
-        // processed output inaudibly quiet next to the raw Windows audio,
-        // which is the most common "I can't hear any difference" complaint.
-        // For zero-feedback FULL gain, the user should use VB-Cable.
-        a.setOutputGain(Math.min(a.outputGainDb, -12));
+        // Modest trim for plain loopback; muted path can stay louder.
+        const floor = captureMode === "loopback" ? -12 : -6;
+        a.setOutputGain(Math.min(a.outputGainDb, floor));
       } catch { /* ignore */ }
     } else {
-      // Virtual-cable / muted-loopback paths: full quality, no gain trim,
+      // Virtual-cable / Airspace paths: full quality, no gain trim,
       // no feedback killer.
       try {
         engine.setFeedbackKillerActive(false);

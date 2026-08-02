@@ -5,6 +5,7 @@
 
 import { useEffect, useRef } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
+import { ModuleBackdrop } from "./ModuleBackdrop";
 import { DRUM_LANES } from "@/audio/dsp/FireDrumKit";
 import { getEngine } from "@/audio/AudioEngine";
 import { FIRE_LIMITER_CEILING_DB, fmtGrDb, peakToDbfs } from "@/audio/dsp/mixClarity";
@@ -860,6 +861,8 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
 
   return (
     <GlassPanel intense className="p-3" data-fire-module="mixer">
+      <ModuleBackdrop moduleId="mixer" color={C} awake />
+      <div className="fc-mod-content-well">
       <div className={`flex items-center justify-between gap-2 ${collapsed && !isFocused("mixer") ? "" : "mb-2"}`}>
         <button
           onClick={toggle}
@@ -885,7 +888,7 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
               background: live
                 ? `linear-gradient(105deg, ${C}28 0%, ${C}0c 38%, transparent 72%)`
                 : `linear-gradient(180deg, rgba(0,0,0,0.4), ${C}0c)`,
-              boxShadow: live ? `inset 0 1px 0 ${C}28, 0 0 18px ${C}18` : undefined,
+              boxShadow: live ? `inset 0 1px 0 ${C}28` : undefined,
             }}
           >
             <div className="min-w-0">
@@ -941,6 +944,7 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
           </div>
         </>
       )}
+      </div>
     </GlassPanel>
   );
 }

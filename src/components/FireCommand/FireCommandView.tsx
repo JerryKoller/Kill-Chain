@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "./fireChrome.css";
+import { ModuleBackdrop } from "./ModuleBackdrop";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { SequencerPanel } from "./SequencerPanel";
 import {
@@ -273,7 +274,7 @@ import {
 } from "./GatePanel";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { CollapseToggle } from "./CollapseToggle";
-import { FireBand, useFireBandRegister } from "./FireBand";
+import { FireBand, useFireBandRegister, useBandAnyExpanded } from "./FireBand";
 import { PresetBrowser } from "./PresetBrowser";
 import { CharacterBrowser } from "./CharacterBrowser";
 import { MixerPanel } from "./MixerPanel";
@@ -889,17 +890,17 @@ export function FireCommandView() {
       {synthBand === "band.mix" && (
       <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="A/B/Drums/Samples → Mixer → Glue → Air → Width → Limiter → Scope · Morph/Live are state" foldable={false} flush={flush}>
         <MixRackChrome />
-        <MixGroupHeader title="Routing" />
+        <MixGroupHeader title="Routing" moduleIds={["mixer"]} />
         <MixerPanel chipHosted />
-        <MixGroupHeader title="Morph" />
+        <MixGroupHeader title="Morph" moduleIds={["morph"]} />
         <FireMorphPad chipHosted />
-        <MixGroupHeader title="Mastering" />
+        <MixGroupHeader title="Mastering" moduleIds={["glue", "air", "width"]} />
         <GluePanel chipHosted />
         <AirPanel chipHosted />
         <WidthPanel chipHosted />
-        <MixGroupHeader title="Analysis" />
+        <MixGroupHeader title="Analysis" moduleIds={["output"]} />
         <ScopePanel chipHosted />
-        <MixGroupHeader title="Stage" />
+        <MixGroupHeader title="Stage" moduleIds={["performance"]} />
         <LivePanel chipHosted />
       </FireBand>
       )}
@@ -907,13 +908,13 @@ export function FireCommandView() {
       {synthBand === "band.perf" && (
       <FireBand title="Performance" color={FC_BAND.perf} bandKey="band.perf" hint="Control · Rhythm · Pitch" foldable={false} flush={flush}>
         <PerfRelationshipStrip />
-        <PerfGroupHeader title="Control" subtitle="Macros · Scenes" />
+        <PerfGroupHeader title="Control" subtitle="Macros · Scenes" moduleIds={["macros", "scenes"]} />
         <MacrosPanel chipHosted />
         <ScenesPanel chipHosted />
-        <PerfGroupHeader title="Rhythm" subtitle="Gate · Humanize" />
+        <PerfGroupHeader title="Rhythm" subtitle="Gate · Humanize" moduleIds={["gate", "human"]} />
         <GatePanel chipHosted />
         <HumanPanel chipHosted />
-        <PerfGroupHeader title="Pitch" subtitle="Scale · Chord · Harmony" />
+        <PerfGroupHeader title="Pitch" subtitle="Scale · Chord · Harmony" moduleIds={["scale", "chord", "harmony"]} />
         <ScalePanel chipHosted />
         <ChordPanel chipHosted />
         <HarmonyPanel chipHosted />
@@ -4672,7 +4673,7 @@ function AnalogLifePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) 
           background: alive
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: alive ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: alive ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -5155,7 +5156,7 @@ function FilterPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: sculpted
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: sculpted ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: sculpted ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -5750,7 +5751,7 @@ function ModEnvPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: weaving
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: weaving ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: weaving ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -6049,7 +6050,7 @@ function FiltEnvPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: sweeping
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: sweeping ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: sweeping ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -6283,7 +6284,7 @@ function PluckPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: on
             ? `linear-gradient(105deg, ${c}2a 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: on ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}1a` : undefined,
+          boxShadow: on ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -6705,7 +6706,7 @@ function Lfo1Panel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -7270,7 +7271,7 @@ function Lfo2Panel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -7630,7 +7631,7 @@ function FmPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -8048,7 +8049,7 @@ function FmRackPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -8435,7 +8436,7 @@ function PitchPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -8629,7 +8630,7 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -9307,8 +9308,10 @@ function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
 
 // ════════════════════ Mix Rack Chrome + group headers ════════════════════
 
-function MixGroupHeader({ title }: { title: string }) {
+function MixGroupHeader({ title, moduleIds }: { title: string; moduleIds: readonly string[] }) {
   const c = FC_BAND.mix;
+  const show = useBandAnyExpanded(moduleIds);
+  if (!show) return null;
   return (
     <div className="mt-2 mb-1 flex items-center gap-2 px-0.5">
       <span className="text-[9px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
@@ -9319,8 +9322,18 @@ function MixGroupHeader({ title }: { title: string }) {
   );
 }
 
-function PerfGroupHeader({ title, subtitle }: { title: string; subtitle: string }) {
+function PerfGroupHeader({
+  title,
+  subtitle,
+  moduleIds,
+}: {
+  title: string;
+  subtitle: string;
+  moduleIds: readonly string[];
+}) {
   const c = FC_BAND.perf;
+  const show = useBandAnyExpanded(moduleIds);
+  if (!show) return null;
   return (
     <div className="mt-2 mb-1 flex items-center gap-2 px-0.5">
       <span className="text-[9px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}99` }}>
@@ -9806,7 +9819,7 @@ function ReverbPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -10170,7 +10183,7 @@ function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -10551,7 +10564,7 @@ function ChorusPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -10914,7 +10927,7 @@ function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -11409,7 +11422,7 @@ function AgePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -11819,7 +11832,7 @@ function DrivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -11962,7 +11975,7 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -12143,7 +12156,7 @@ function GatePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -12544,7 +12557,7 @@ function ModMatrixPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -12938,7 +12951,7 @@ function ArpPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -13441,7 +13454,7 @@ function Keyboard({
                 <span className="uppercase tracking-wider text-white/35 font-semibold">Atk</span>
                 <input
                   type="range"
-                  min={1}
+                  min={3}
                   max={80}
                   step={1}
                   value={kbdAttackMs}
@@ -13755,7 +13768,7 @@ function HarmonyPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -13922,7 +13935,7 @@ function ScalePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -14099,7 +14112,7 @@ function ChordPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -14311,7 +14324,7 @@ function HumanPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -14477,7 +14490,7 @@ function ScenesPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -14958,7 +14971,7 @@ function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           background: live
             ? `linear-gradient(105deg, ${c}28 0%, ${c}0c 38%, transparent 72%)`
             : `linear-gradient(180deg, rgba(0,0,0,0.4), ${c}0c)`,
-          boxShadow: live ? `inset 0 1px 0 ${c}28, 0 0 18px ${c}18` : undefined,
+          boxShadow: live ? `inset 0 1px 0 ${c}28` : undefined,
         }}
       >
         <div className="min-w-0">
@@ -15285,6 +15298,8 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
       data-fire-module={collapseKey || undefined}
       data-fire-asleep={!moduleAwake ? "1" : undefined}
     >
+      <ModuleBackdrop moduleId={collapseKey} color={color} awake={moduleAwake} />
+      <div className="fc-mod-content-well">
       <div className={`flex items-center justify-between gap-2 min-w-0 ${open ? "mb-2" : ""}`}>
         {collapseKey ? (
           <button
@@ -15348,6 +15363,7 @@ function Section({ title, color = FIRE, right, children, className, collapseKey,
         </div>
       )}
       {open && children}
+      </div>
     </GlassPanel>
   );
 }

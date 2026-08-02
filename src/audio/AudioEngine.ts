@@ -18,6 +18,7 @@ import { Reconstructor, type RestoreParams } from "./dsp/Reconstructor";
 import { ClarityEngine } from "./dsp/ClarityEngine";
 import { FireCommandSynth } from "./dsp/FireCommandSynth";
 import { FireDrumKit, makeSafetyClipCurve, SAFETY_CLIP_RANGE } from "./dsp/FireDrumKit";
+import { getDistortionProbe } from "./dsp/distortionProbe";
 import type { ParametricBand, SoundParams } from "./types";
 import { NEUTRAL_PARAMS } from "./types";
 import { DEFAULT_CORRECTION_BANDS, DEFAULT_OUTPUT_GAIN_DB } from "./defaultCorrectionProfile";
@@ -119,7 +120,8 @@ export class AudioEngine {
   readonly harmonic: HarmonicEnhancer;
   readonly saturator: Saturator;
   readonly transient: TransientShaper;
-  readonly glue: DynamicsCompressorNode;
+  /** Bus glue — replaced on Fire flush (GR envelope is not resettable in-place). */
+  glue: DynamicsCompressorNode;
   readonly deEsser: DeEsser;
   readonly multiband: MultibandCompressor;
   readonly perBandWidth: PerBandWidth;
@@ -132,10 +134,12 @@ export class AudioEngine {
   readonly dimension: Spatializer3D;
   readonly balance: StereoBalance;
   readonly outputGain: GainNode;
-  readonly limiter: DynamicsCompressorNode;
+  /** FX-path brick-wall — replaced on Fire flush. */
+  limiter: DynamicsCompressorNode;
   /** Master brick-wall AFTER outputGain — the true clip ceiling for EVERY
-   *  path (bypass, FX, 3D, reference clips) and any volume boost / LUFS trim. */
-  readonly finalLimiter: DynamicsCompressorNode;
+   *  path (bypass, FX, 3D, reference clips) and any volume boost / LUFS trim.
+   *  Replaced on Fire flush: this is the reboot-only poison after NS/IceKing. */
+  finalLimiter: DynamicsCompressorNode;
   readonly destinationTap: GainNode;
   readonly lufs: LUFSMeter;
 
@@ -161,7 +165,7 @@ export class AudioEngine {
   /** Fire master fader (pre-limiter). */
   private readonly fireMasterGain: GainNode;
   /** Fire master limiter — glue/safety on the summed Fire output. */
-  private readonly fireLimiter: DynamicsCompressorNode;
+  private fireLimiter: DynamicsCompressorNode;
   private fireLimiterEnabled = true;
   /** Master listen dim (−12 dB) multiplier applied on top of master fader. */
   private fireDimOn = false;
@@ -323,15 +327,15 @@ export class AudioEngine {
     this.fireBusClip.curve = makeSafetyClipCurve();
     this.fireBusClip.oversample = "2x";
     // v1.6 mixer: fireBus → master fader → master limiter → pad → clipper.
-    // Softer threshold + knee: WaveShaper is the hard ceiling; the compressor
-    // only glues — a -3 dB brick-wall was pumping every chord+drums hit.
+    // Catch A+B+drums pileups earlier so they don't jump from clean to crunch.
+    // WaveShaper remains the hard ceiling; this just glues hot sums sooner.
     this.fireMasterGain = this.ctx.createGain();
     this.fireLimiter = this.ctx.createDynamicsCompressor();
-    this.fireLimiter.threshold.value = -1.2;
-    this.fireLimiter.knee.value = 8;
-    this.fireLimiter.ratio.value = 8;
-    this.fireLimiter.attack.value = 0.003;
-    this.fireLimiter.release.value = 0.12;
+    this.fireLimiter.threshold.value = -2.8;
+    this.fireLimiter.knee.value = 10;
+    this.fireLimiter.ratio.value = 10;
+    this.fireLimiter.attack.value = 0.002;
+    this.fireLimiter.release.value = 0.1;
     this.fireBus.connect(this.fireMasterGain);
     this.fireMasterGain.connect(this.fireLimiter);
     this.fireLimiter.connect(this.fireBusPad);
@@ -375,12 +379,31 @@ export class AudioEngine {
     this.firePart.drums.pan.connect(this.fireBus);
     this.firePart.samples.pan.connect(this.fireBus);
 
-    this.fireCommand = new FireCommandSynth(this.ctx, this.firePart.a.gain);
+    this.fireCommand = new FireCommandSynth(this.ctx, this.firePart.a.gain, {
+      onFlushContamination: () => this.flushSharedDynamics(),
+      getLimiterReduction: () => this.getFireLimiterReduction(),
+    });
     // Fire Command drum machine — lanes on the drum strip, the sample deck
     // one-shots on their own strip.
     this.fireDrums = new FireDrumKit(this.ctx, this.firePart.drums.gain, this.firePart.samples.gain);
 
     this.connectGraph();
+    this.installDistortionProbe();
+  }
+
+  /** Wire stage peak taps for the sudden-distortion hunt (DEV or localStorage flag). */
+  private installDistortionProbe(): void {
+    const probe = getDistortionProbe(this.ctx);
+    if (!probe) return;
+    probe.tap("fireBus", this.fireBus);
+    probe.tap("fireMaster", this.fireMasterGain);
+    probe.tap("firePostClip", this.fireBusClip);
+    probe.tap("inputPre", this.preTap);
+    probe.tap("postFx", this.postFxGain);
+    probe.tap("output", this.outputGain);
+    probe.tap("destination", this.destinationTap);
+    this.fireCommand.attachDistortionProbes(probe);
+    probe.start();
   }
 
   /**
@@ -390,7 +413,12 @@ export class AudioEngine {
    */
   get fireCommandB(): FireCommandSynth {
     if (!this._fireCommandB) {
-      this._fireCommandB = new FireCommandSynth(this.ctx, this.firePart.b.gain);
+      this._fireCommandB = new FireCommandSynth(this.ctx, this.firePart.b.gain, {
+        onFlushContamination: () => this.flushSharedDynamics(),
+        getLimiterReduction: () => this.getFireLimiterReduction(),
+      });
+      const probe = getDistortionProbe();
+      if (probe) this._fireCommandB.attachDistortionProbes(probe, "B");
     }
     return this._fireCommandB;
   }
@@ -448,6 +476,101 @@ export class AudioEngine {
     try { this.fireMasterGain.disconnect(); } catch { /* ignore */ }
     if (on) this.fireMasterGain.connect(this.fireLimiter);
     else this.fireMasterGain.connect(this.fireBusPad);
+  }
+
+  /**
+   * Replace every DynamicsCompressor Fire audio can pin — Fire master limiter,
+   * Kill Chain glue + FX limiter, and the always-on finalLimiter. GR envelopes
+   * cannot be cleared in-place; after Natural Selection / long IceKing sessions
+   * they stay crushed until the AudioContext is rebuilt (full app reboot).
+   * FireCommandSynth.setPatch calls this via onFlushContamination.
+   */
+  flushSharedDynamics(): void {
+    this.rebuildFireLimiter();
+    this.rebuildGlueCompressor();
+    this.rebuildFxLimiter();
+    this.rebuildFinalLimiter();
+  }
+
+  /**
+   * Replace the Fire master DynamicsCompressor.
+   */
+  rebuildFireLimiter(): void {
+    const old = this.fireLimiter;
+    try { this.fireMasterGain.disconnect(); } catch { /* ignore */ }
+    try { old.disconnect(); } catch { /* ignore */ }
+    const next = this.ctx.createDynamicsCompressor();
+    next.threshold.value = -2.8;
+    next.knee.value = 10;
+    next.ratio.value = 10;
+    next.attack.value = 0.002;
+    next.release.value = 0.1;
+    this.fireLimiter = next;
+    if (this.fireLimiterEnabled) this.fireMasterGain.connect(next);
+    else this.fireMasterGain.connect(this.fireBusPad);
+    next.connect(this.fireBusPad);
+  }
+
+  /** Replace Kill Chain bus glue (sits mid FX chain; Fire hits it when routeThroughFx). */
+  rebuildGlueCompressor(): void {
+    const old = this.glue;
+    const thr = old.threshold.value;
+    const knee = old.knee.value;
+    const ratio = old.ratio.value;
+    const atk = old.attack.value;
+    const rel = old.release.value;
+    try { this.multiband.output.disconnect(old); } catch { /* ignore */ }
+    try { old.disconnect(); } catch { /* ignore */ }
+    const next = this.ctx.createDynamicsCompressor();
+    next.threshold.value = thr;
+    next.knee.value = knee;
+    next.ratio.value = ratio;
+    next.attack.value = atk;
+    next.release.value = rel;
+    this.glue = next;
+    this.multiband.output.connect(next);
+    next.connect(this.spatial.input);
+    next.connect(this.dimTapEq);
+  }
+
+  /** Replace FX-path brick-wall limiter. */
+  rebuildFxLimiter(): void {
+    const old = this.limiter;
+    const thr = old.threshold.value;
+    const knee = old.knee.value;
+    const ratio = old.ratio.value;
+    const atk = old.attack.value;
+    const rel = old.release.value;
+    try { this.balance.output.disconnect(old); } catch { /* ignore */ }
+    try { old.disconnect(); } catch { /* ignore */ }
+    const next = this.ctx.createDynamicsCompressor();
+    next.threshold.value = thr;
+    next.knee.value = knee;
+    next.ratio.value = ratio;
+    next.attack.value = atk;
+    next.release.value = rel;
+    this.limiter = next;
+    this.balance.output.connect(next);
+    next.connect(this.postFxGain);
+  }
+
+  /**
+   * Replace the always-on master brick-wall. Every path (bypass, FX, Fire)
+   * hits this node — it is the strongest reboot-only contamination candidate.
+   */
+  rebuildFinalLimiter(): void {
+    const old = this.finalLimiter;
+    try { this.outputGain.disconnect(old); } catch { /* ignore */ }
+    try { old.disconnect(); } catch { /* ignore */ }
+    const next = this.ctx.createDynamicsCompressor();
+    next.threshold.value = -1.0;
+    next.knee.value = 0;
+    next.ratio.value = 20;
+    next.attack.value = 0.0008;
+    next.release.value = 0.06;
+    this.finalLimiter = next;
+    this.outputGain.connect(next);
+    next.connect(this.destinationTap);
   }
 
   /** Live gain reduction in dB (≤ 0). 0 when limiter bypassed. */

@@ -24,6 +24,7 @@ import {
   applyWarp,
   type WarpMode,
 } from "./wavetables";
+import { isArpKeepAlive, isHotArp, getArpStepSec } from "@/audio/arpKeepAlive";
 import { FireVintageAge } from "./FireVintageAge";
 import { punchMacroToGlue, type GlueMode, type MasterChainScene } from "./mixClarity";
 import {
@@ -741,6 +742,16 @@ export function filterResoCompGain(q: number): number {
 }
 
 /**
+ * Minimum amp attack (seconds). Sub‑2 ms linear ramps are ~44–88 samples at
+ * 44.1 kHz — perceived as a hard step / click at note onset. 4 ms (~176
+ * samples) is short enough to stay snappy and long enough to declick.
+ */
+export const MIN_AMP_ATTACK_SEC = 0.004;
+
+/** Pre-filter soft-start so PeriodicWave/filter don't see a hard edge before the VCA opens. */
+export const VOICE_DECLICK_SEC = 0.0035;
+
+/**
  * Fixed headroom trim on the voice-summing bus.
  *
  * ROOT CAUSE (clipping, part 1): a single default-patch voice already peaks
@@ -1113,7 +1124,7 @@ class Voice {
     this.midi = midi;
     this.velocity = velocity;
     this.liveAttackSec = liveAttackSec != null && Number.isFinite(liveAttackSec)
-      ? Math.max(0.001, liveAttackSec)
+      ? Math.max(MIN_AMP_ATTACK_SEC, liveAttackSec)
       : null;
     this.baseFreq = midiToFreq(midi);
     this.unisonCount = Math.round(clamp(Math.min(p.unison, liveUnisonCap(p)), 1, MAX_UNISON));
@@ -1285,6 +1296,18 @@ class Voice {
     this.setWtA(clamp(p.oscAPos, 0, 1), p.oscAContinuity ?? 0.72);
     this.setWtB(clamp(p.oscBPos, 0, 1), p.oscAContinuity ?? 0.72);
     this.setWtC(clamp(p.oscCPos, 0, 1), p.oscAContinuity ?? 0.72);
+
+    // NOTE-ONSET CLICK: filter + drive sit BEFORE the VCA, so oscillators used
+    // to slam a cold biquad/worklet at full level on the first sample — heard
+    // as a click even when amp attack was several ms. Soft-start the mix into
+    // the filter target (reso-compensated) over VOICE_DECLICK_SEC.
+    {
+      const filtOff = p.pathFilter === false || p.moduleEnable?.["filter"] === false;
+      const mixTarget = filtOff ? 1 : filterResoCompGain(liveFilterQ(p.filterResonance));
+      this.mix.gain.cancelScheduledValues(t);
+      this.mix.gain.setValueAtTime(0, t);
+      this.mix.gain.linearRampToValueAtTime(mixTarget, t + VOICE_DECLICK_SEC);
+    }
 
     const dnaSeed = (p.analogDnaSeed ?? 1) >>> 0;
     const spreadSec = p.moduleEnable?.["mixer.unison"] === false ? 0 : (p.unisonTemporalSpread ?? 0);
@@ -1688,7 +1711,7 @@ class Voice {
       const leak = clamp(p.lpgLeakage ?? 0, 0, 1);
       const color = clamp((p.lpgColor ?? 0.7) + model.colorBias, 0, 1);
       const decay = model.decay * (0.55 + ring * 0.7);
-      const strike = model.strike;
+      const strike = Math.max(MIN_AMP_ATTACK_SEC, model.strike);
       const strikePeak = peak * (0.35 + strikeAmt * 0.65);
       const from = (p.lpgChoke !== false)
         ? 0
@@ -1722,7 +1745,7 @@ class Voice {
       const lifeCouple = lifeOn ? clamp(p.drift ?? 0, 0, 1) * 0.35 : 0;
       const j = (base: number) =>
         Math.max(
-          0.001,
+          MIN_AMP_ATTACK_SEC,
           base *
             (1 + (Math.random() * 2 - 1) * jitter * 0.95) *
             (1 + (Math.random() * 2 - 1) * choirSpread * 0.8) *
@@ -1735,13 +1758,13 @@ class Voice {
       const filtEnvOn = p.moduleEnable?.["env.filt"] !== false;
       const velAtk = ampEnvOn ? clamp(p.velAttack ?? 0, 0, 1) : 0;
       let ampAtk = this.liveAttackSec != null ? this.liveAttackSec : j(p.ampAttack);
-      if (!ampEnvOn) ampAtk = 0.004;
-      ampAtk = Math.max(0.001, ampAtk * (1 - velAtk * clamp(velocity, 0, 1) * 0.85));
+      if (!ampEnvOn) ampAtk = Math.max(MIN_AMP_ATTACK_SEC, 0.004);
+      ampAtk = Math.max(MIN_AMP_ATTACK_SEC, ampAtk * (1 - velAtk * clamp(velocity, 0, 1) * 0.85));
       const ampDec = j(p.ampDecay);
       const hold = ampEnvOn ? Math.max(0, p.ampHold ?? 0) : 0;
       const filtAtk = this.liveAttackSec != null
-        ? Math.min(j(p.filtAttack), Math.max(0.002, this.liveAttackSec * 1.25))
-        : j(p.filtAttack);
+        ? Math.min(j(p.filtAttack), Math.max(MIN_AMP_ATTACK_SEC, this.liveAttackSec * 1.25))
+        : Math.max(MIN_AMP_ATTACK_SEC, j(p.filtAttack));
       const filtDec = j(p.filtDecay);
       // Curve shapes approximated via ramp vs setTarget tau.
       const atkCurve = ampEnvOn ? (p.ampCurveAttack ?? "lin") : "lin";
@@ -1762,10 +1785,13 @@ class Voice {
         // of it (exp) before decay took over — every curved attack lost its top
         // and started decaying early. Aim past the peak so the curve arrives at
         // peakPunch exactly when the attack ends, then pin it there.
-        const tau = Math.max(0.003, ampAtk / (atkCurve === "exp" ? 2.2 : 3.5));
+        const tau = Math.max(MIN_AMP_ATTACK_SEC, ampAtk / (atkCurve === "exp" ? 2.2 : 3.5));
         const k = Math.exp(-ampAtk / tau);
         const aim = Math.max(0, (peakPunch - startLvl * k) / (1 - k));
         this.ampEnv.offset.setTargetAtTime(aim, t, tau);
+        // Pin continuously: cancel then set at the scheduled end so we don't
+        // insert a discontinuous jump from an unfinished asymptotic curve.
+        this.ampEnv.offset.cancelScheduledValues(t + ampAtk);
         this.ampEnv.offset.setValueAtTime(peakPunch, t + ampAtk);
       }
       const afterAtk = t + ampAtk + hold;
@@ -1904,17 +1930,127 @@ class Voice {
     this.scheduleEnd(tail);
   }
 
+  /**
+   * ARP / sequencer one-shot release — caps the amp tail so 300 BPM × 1/32
+   * (40 notes/s) cannot stack hundreds of ms of release on the shared bus.
+   * Audio-clock oscillator stop mirrors fastRelease so background-tab timer
+   * throttle cannot leave ARP voices allocated.
+   */
+  noteOffShort(p: FirePatch, when: number, maxReleaseSec: number): void {
+    if (this.releasing || this.stopped) return;
+    this.releasing = true;
+    const now = this.ctx.currentTime;
+    const t = Math.max(now, when);
+    this.releaseAt = t;
+    this.modLevelAtRelease = this.synth.peekModEnvLevel(this, t);
+    const ampEnvOn = p.moduleEnable?.["env.amp"] !== false;
+    const rel = ampEnvOn
+      ? Math.max(0.004, Math.min(p.ampRelease, maxReleaseSec))
+      : 0.006;
+    const future = t > now + 0.001;
+    const hold = (param: AudioParam) => {
+      const p2 = param as AudioParam & { cancelAndHoldAtTime?: (at: number) => AudioParam };
+      if (future && typeof p2.cancelAndHoldAtTime === "function") {
+        p2.cancelAndHoldAtTime(t);
+      } else {
+        param.cancelScheduledValues(t);
+        param.setValueAtTime(Math.max(0, param.value), t);
+      }
+    };
+    hold(this.ampEnv.offset);
+    const relTau = rel / 3;
+    this.ampEnv.offset.setTargetAtTime(0, t, Math.max(0.003, relTau));
+    hold(this.filterEnv.offset);
+    const filtRel = p.moduleEnable?.["env.filt"] !== false
+      ? Math.max(0.004, Math.min(p.filtRelease, maxReleaseSec * 1.2))
+      : 0.008;
+    this.filterEnv.offset.setTargetAtTime(0, t, filtRel / 3);
+    // Audio-clock hard stop — don't rely solely on wall-clock scheduleEnd.
+    const hardAt = t + Math.max(0.03, rel * 1.6 + 0.02);
+    const srcs: AudioScheduledSourceNode[] = [
+      ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise,
+      this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
+    ];
+    for (const n of srcs) {
+      try { n.stop(hardAt); } catch { /* already stopped / not started */ }
+    }
+    const tail = (hardAt - now) + 0.012;
+    if (this.synth.offlineSafe) {
+      try { this.ampEnv.onended = () => this.forceStop(); } catch { /* ignore */ }
+    } else {
+      if (this.endTimer) clearTimeout(this.endTimer);
+      this.endTimer = setTimeout(() => this.forceStop(), Math.ceil(tail * 1000) + 8);
+    }
+  }
+
+  /**
+   * Soft choke at an audio-clock time (ARP same-pitch retrigger).
+   * Never mutates amp at schedule-now for a future choke.
+   */
+  chokeAt(when: number): void {
+    if (this.stopped) return;
+    this.releasing = true;
+    const now = this.ctx.currentTime;
+    const t = Math.max(now, when);
+    this.releaseAt = t;
+    const hold = this.ampEnv.offset as AudioParam & {
+      cancelAndHoldAtTime?: (at: number) => AudioParam;
+    };
+    if (typeof hold.cancelAndHoldAtTime === "function") {
+      try { hold.cancelAndHoldAtTime(t); } catch { /* ignore */ }
+    } else {
+      this.ampEnv.offset.cancelScheduledValues(t);
+      this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
+    }
+    this.ampEnv.offset.setTargetAtTime(0, t, 0.004);
+    try {
+      const mixCur = Math.max(0, this.mix.gain.value);
+      this.mix.gain.cancelScheduledValues(t);
+      this.mix.gain.setValueAtTime(mixCur, t);
+      this.mix.gain.linearRampToValueAtTime(0, t + 0.008);
+    } catch { /* ignore */ }
+    const hardAt = t + 0.04;
+    const srcs: AudioScheduledSourceNode[] = [
+      ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise,
+      this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
+    ];
+    for (const n of srcs) {
+      try { n.stop(hardAt); } catch { /* ignore */ }
+    }
+    if (this.endTimer) clearTimeout(this.endTimer);
+    this.endTimer = setTimeout(() => this.forceStop(), Math.ceil((hardAt - now) * 1000) + 10);
+  }
+
   /** Quick click-free fade then stop — used when stealing a voice. */
   fastRelease(): void {
     if (this.stopped) return;
     this.releasing = true;
     const t = this.ctx.currentTime;
-    this.ampEnv.offset.cancelScheduledValues(t);
-    this.ampEnv.offset.setValueAtTime(Math.max(0, this.ampEnv.offset.value), t);
-    this.ampEnv.offset.setTargetAtTime(0, t, 0.006);
+    // Hold current amp (avoid cancel→set snap), then fade. Hotter voices need
+    // a slightly longer τ or rapid note-switches crackle on resonant patches.
+    const cur = Math.max(0, this.ampEnv.offset.value);
+    const hold = this.ampEnv.offset as AudioParam & {
+      cancelAndHoldAtTime?: (at: number) => AudioParam;
+    };
+    if (typeof hold.cancelAndHoldAtTime === "function") {
+      hold.cancelAndHoldAtTime(t);
+    } else {
+      this.ampEnv.offset.cancelScheduledValues(t);
+      this.ampEnv.offset.setValueAtTime(cur, t);
+    }
+    const tau = cur > 0.55 ? 0.014 : 0.01;
+    this.ampEnv.offset.setTargetAtTime(0, t, tau);
+    // Also choke the pre-filter mix so a dying resonant voice can't keep
+    // injecting into the shared bus while the new note attacks.
+    try {
+      const mixCur = Math.max(0, this.mix.gain.value);
+      this.mix.gain.cancelScheduledValues(t);
+      this.mix.gain.setValueAtTime(mixCur, t);
+      this.mix.gain.linearRampToValueAtTime(0, t + Math.min(0.012, tau + 0.002));
+    } catch { /* ignore */ }
     // Audio-clock hard stop so background-tab timer throttling can't leave
     // stolen oscillators rendering for seconds as zombies.
-    const hardAt = t + 0.045;
+    const hardAt = t + Math.max(0.05, tau * 4 + 0.02);
     const srcs: AudioScheduledSourceNode[] = [
       ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise,
       this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
@@ -1928,7 +2064,7 @@ class Voice {
       try { this.ampEnv.onended = () => this.forceStop(); } catch { /* ignore */ }
     } else {
       if (this.endTimer) clearTimeout(this.endTimer);
-      this.endTimer = setTimeout(() => this.forceStop(), 50);
+      this.endTimer = setTimeout(() => this.forceStop(), Math.ceil((hardAt - t) * 1000) + 10);
     }
   }
 
@@ -2306,8 +2442,8 @@ export class FireCommandSynth {
   private readonly chorusIn: GainNode;
   private readonly chorusDry: GainNode;
   private readonly chorusWet: GainNode;
-  private readonly cDelayL: DelayNode;
-  private readonly cDelayR: DelayNode;
+  private cDelayL: DelayNode;
+  private cDelayR: DelayNode;
   private readonly cLfoL: OscillatorNode;
   private readonly cLfoR: OscillatorNode;
   private readonly cDepthL: GainNode;
@@ -2316,7 +2452,7 @@ export class FireCommandSynth {
   private readonly cPanR: StereoPannerNode;
   private readonly chorusOut: GainNode;
   private readonly phaserIn: GainNode;
-  private readonly phaserAP: BiquadFilterNode[];
+  private phaserAP: BiquadFilterNode[];
   private readonly phaserDry: GainNode;
   private readonly phaserWet: GainNode;
   private readonly phaserFb: GainNode;
@@ -2325,8 +2461,8 @@ export class FireCommandSynth {
   private readonly phaserDepth: GainNode;
   private readonly tremolo: GainNode;
   private readonly delayDry: GainNode;
-  private readonly dL: DelayNode;
-  private readonly dR: DelayNode;
+  private dL: DelayNode;
+  private dR: DelayNode;
   private readonly dFbLR: GainNode;
   private readonly dFbRL: GainNode;
   // In-loop feedback conditioning. Without these the repeats never darkened
@@ -2345,7 +2481,7 @@ export class FireCommandSynth {
   private readonly delayWet: GainNode;
   private readonly delayOut: GainNode;
   private readonly tone: BiquadFilterNode;
-  private readonly punchComp: DynamicsCompressorNode;
+  private punchComp: DynamicsCompressorNode;
   private readonly punchMakeup: GainNode;
   private readonly punchDry: GainNode;
   private readonly punchWet: GainNode;
@@ -2356,7 +2492,7 @@ export class FireCommandSynth {
   private readonly airHigh: BiquadFilterNode;
   private readonly airOut: GainNode;
   private readonly reverbIn: GainNode;
-  private readonly reverbPredelay: DelayNode;
+  private reverbPredelay: DelayNode;
   // Tail EQ lives on the WET path. reverbHighCut / reverbLowDecay used to be
   // folded into the shared post-delay tone LPF, which band-limited the DRY bus
   // to 12 kHz whenever the reverb module was merely enabled — audible as a
@@ -2473,10 +2609,47 @@ export class FireCommandSynth {
   /** Ladder/SVF AudioWorklet available for new voices. */
   filterWorkletReady = false;
 
-  constructor(ctxIn: BaseAudioContext, dest: AudioNode) {
+  /**
+   * Optional hook into AudioEngine so a preset load can also rebuild the
+   * shared Fire master limiter — DynamicsCompressor envelope state cannot be
+   * cleared in-place and is what forces a full app reboot after IceKing / NS.
+   */
+  private readonly onFlushContamination: (() => void) | null;
+  private readonly getLimiterReduction: (() => number) | null;
+
+  /** Fading voices still hit voiceBus — cap or IceKing arps pile up into clip. */
+  private static readonly DYING_CAP = 6;
+  private static readonly HOT_ARP_DYING_CAP = 2;
+  /** Materialize ARP notes this far before `when` (keeps sample-accurate starts). */
+  private static readonly ARP_MATERIALIZE_EPS = 0.008;
+  /** Extra voiceBus pad while hot ARP is cooking. */
+  private static readonly HOT_ARP_BUS_PAD = 0.72;
+  /** Bound deferred ARP jobs so a main-thread stall cannot burst-spawn voices. */
+  private static readonly ARP_QUEUE_CAP = 8;
+  private static readonly HOT_ARP_QUEUE_CAP = 5;
+
+  private limiterPinFrames = 0;
+  private delayHotFrames = 0;
+
+  /** Lightweight ARP lookahead jobs — Voice is built only near `when`. */
+  private readonly arpQueue: Array<{
+    midi: number;
+    velocity: number;
+    when: number;
+    duration: number;
+    stepSec: number;
+  }> = [];
+
+  constructor(
+    ctxIn: BaseAudioContext,
+    dest: AudioNode,
+    opts?: { onFlushContamination?: () => void; getLimiterReduction?: () => number },
+  ) {
     const ctx = ctxIn as AudioContext;
     this.ctx = ctx;
-    this.patch = { ...DEFAULT_FIRE_PATCH };
+    this.onFlushContamination = opts?.onFlushContamination ?? null;
+    this.getLimiterReduction = opts?.getLimiterReduction ?? null;
+    this.patch = cloneFirePatch({});
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
 
     // Preload filter bite worklet (non-blocking); voices fall back to biquad until ready.
@@ -3213,22 +3386,97 @@ export class FireCommandSynth {
 
   /** Frames since the last voice ended — lets the mod loop idle out. */
   private idleFrames = 0;
+  /** True after audible play this wake — idle flush clears shared limiter poison. */
+  private sessionNeedsFlush = false;
 
   // ── control-rate modulation updater (matrix + morph + gate + drift) ──
   private updateMod = (): void => {
     // Idle gate: sleep the 60 Hz timer after ~5 s with no voices (tails need
     // a few seconds). noteOn / playNote / setPatch restart it.
-    if (this.voices.size === 0) {
-      if (++this.idleFrames > 300) {
+    if (this.voices.size === 0 && this.arpQueue.length === 0) {
+      if (!isArpKeepAlive() && ++this.idleFrames > 300) {
+        // IceKing / NS leave DynamicsCompressor GR pinned on the shared master
+        // path. Preset switch already flushes; also flush when a long session
+        // goes quiet so the next note/preset isn't already crushed.
+        if (this.sessionNeedsFlush) {
+          this.sessionNeedsFlush = false;
+          try {
+            this.flushBusContamination(this.ctx.currentTime, { rebuildDelay: true });
+            this.applyBusParams(this.patch);
+          } catch { /* ignore */ }
+        }
         this.stopModTimer();
         return;
       }
     } else {
       this.idleFrames = 0;
+      this.sessionNeedsFlush = true;
     }
+
+    if (isArpKeepAlive() && this.voices.size === 0 && this.arpQueue.length === 0) {
+      this.idleFrames = 0;
+    }
+
+    // Materialize deferred ARP notes just before they sound.
+    this.flushArpQueue();
 
     const now = this.ctx.currentTime;
     const p = this.patch;
+
+    // Restore voiceBus pad after hot ARP cools (updatePolyGain otherwise only
+    // runs on voice edges and can leave the bus ducked forever).
+    if (!isHotArp() && this.voices.size === 0 && this.dying.size === 0 && this.arpQueue.length === 0) {
+      const target = VOICE_HEADROOM;
+      if (Math.abs(this.voiceBus.gain.value - target) > 0.02) {
+        this.voiceBus.gain.setTargetAtTime(target, now, 0.03);
+      }
+    }
+
+    if (this.voices.size > 0) {
+      // IceKing-class delay patches slowly fill ping-pong buffers and pin the
+      // shared Fire limiter. Rebuild dynamics before reboot-only poison sticks.
+      // Hot ARP: still allow an *emergency* dynamics rebuild (no delay rebuild)
+      // when GR is deeply pinned — previously we never flushed while hot.
+      if (this.getLimiterReduction) {
+        const gr = this.getLimiterReduction();
+        const hot = isHotArp();
+        const pinDb = hot ? -8 : -3;
+        const pinFrames = hot ? 90 : 36; // ~1.5 s hot / ~0.6 s cool at 60 Hz
+        if (gr < pinDb) {
+          this.limiterPinFrames++;
+          if (this.limiterPinFrames >= pinFrames) {
+            this.limiterPinFrames = 0;
+            try {
+              this.flushBusContamination(now, { rebuildDelay: !hot });
+              this.onFlushContamination?.();
+              if (!hot && (p.delayMix ?? 0) > 0.12) {
+                this.applyBusParams(p);
+              }
+            } catch { /* ignore */ }
+          }
+        } else {
+          this.limiterPinFrames = Math.max(0, this.limiterPinFrames - 1);
+        }
+      }
+      if ((p.delayMix ?? 0) > 0.12 && !isHotArp()) {
+        this.delayHotFrames++;
+        // ~30 s of sustained delay-heavy play: rebuild lines even if limiter
+        // hasn't pinned yet (slow IceKing breakdown while still on the preset).
+        if (this.delayHotFrames >= 1800) {
+          this.delayHotFrames = 0;
+          try {
+            this.rebuildDelayLines();
+            this.rebuildChorusDelays();
+            this.rebuildReverbPredelay();
+            this.onFlushContamination?.();
+            this.applyBusParams(p);
+          } catch { /* ignore */ }
+        }
+      } else {
+        this.delayHotFrames = 0;
+      }
+      this.pruneDying();
+    }
 
     // Stepping the S&H value with setValueAtTime was a sample-accurate jump —
     // audible as a click/zipper on pitch and cutoff. A sub-audio ramp keeps the
@@ -3301,7 +3549,12 @@ export class FireCommandSynth {
         }
       }
       if (gPan) this.autopan.pan.setTargetAtTime(clamp(accPan, -1, 1), now, 0.02);
-      if (gVol) this.master.gain.setTargetAtTime(clamp(p.masterGain * (1 + accVol), 0, 1.4), now, 0.02);
+      // Soft-saturate stacked volume routes so multiple LFO→volume paths can't
+      // crest into a sudden 1.4× slam (clean → distorted).
+      if (gVol) {
+        const softVol = Math.tanh(accVol * 0.85) * 1.05;
+        this.master.gain.setTargetAtTime(clamp(p.masterGain * (1 + softVol), 0, 1.15), now, 0.02);
+      }
       if (gRev && !this.fxSilenced) this.reverbWet.gain.setTargetAtTime(clamp(p.reverbMix + accRev, 0, 1), now, 0.03);
       if (gDly && !this.fxSilenced) this.delayWet.gain.setTargetAtTime(clamp(p.delayMix + accDly, 0, 1), now, 0.03);
       if (gCh && !this.fxSilenced) this.chorusWet.gain.setTargetAtTime(clamp(p.chorusMix + accCh, 0, 1), now, 0.03);
@@ -3314,7 +3567,7 @@ export class FireCommandSynth {
     }
     // Restore the bus base value exactly once when a global route is removed.
     if (!gPan && this.gPanWas) this.autopan.pan.setTargetAtTime(0, now, 0.05);
-    if (!gVol && this.gVolWas) this.master.gain.setTargetAtTime(clamp(p.masterGain, 0, 1.4), now, 0.05);
+    if (!gVol && this.gVolWas) this.master.gain.setTargetAtTime(clamp(p.masterGain, 0, 1.15), now, 0.05);
     if (!gRev && this.gRevWas && !this.fxSilenced) this.reverbWet.gain.setTargetAtTime(clamp(p.reverbMix, 0, 1), now, 0.05);
     if (!gDly && this.gDlyWas && !this.fxSilenced) this.delayWet.gain.setTargetAtTime(clamp(p.delayMix, 0, 1), now, 0.05);
     this.gPanWas = gPan; this.gVolWas = gVol; this.gRevWas = gRev; this.gDlyWas = gDly;
@@ -3731,10 +3984,15 @@ export class FireCommandSynth {
     const cap = this.effectiveMaxVoices(p);
     while (this.voices.size >= cap) this.stealVoice();
     // Re-trigger of the same MIDI must release the previous voice or it orphans.
+    // Move it to `dying` like stealVoice — leaving it in `voices` stacked two
+    // resonant voices on one key (IceKing rapid arps → static crackle).
     const prev = this.held.get(midi);
     if (prev && !p.mono) {
       this.held.delete(midi);
+      this.voices.delete(prev);
+      this.dying.add(prev);
       prev.fastRelease();
+      this.pruneDying();
     }
     const [bankA, bankB, bankC] = this.banksForNote(p, midi);
     const voice = new Voice(
@@ -3775,6 +4033,7 @@ export class FireCommandSynth {
   playNote(midi: number, velocity: number, when: number, duration: number): void {
     this.restoreFxIfSilenced();
     this.startModTimer();
+    this.pruneDying();
     const p = this.patch;
     const t = Math.max(this.ctx.currentTime, when);
     const releaseAt = when + Math.max(0.02, duration);
@@ -3819,7 +4078,185 @@ export class FireCommandSynth {
     }
   }
 
-  allNotesOff(): void {
+  /** Kill fading voices that exceed the cap — they still sum on voiceBus. */
+  private pruneDying(): void {
+    const hot = isHotArp();
+    const cap = hot ? FireCommandSynth.HOT_ARP_DYING_CAP : FireCommandSynth.DYING_CAP;
+    const now = this.ctx.currentTime;
+    // Hard ceiling so a steal storm cannot grow dying unboundedly while soft
+    // prune waits for fades to settle.
+    const hard = hot ? cap + 1 : cap + 2;
+    while (this.dying.size > hard) {
+      const v = this.dying.values().next().value;
+      if (!v) break;
+      this.dying.delete(v);
+      v.forceStop();
+    }
+    while (this.dying.size > cap) {
+      const v = this.dying.values().next().value;
+      if (!v) break;
+      this.dying.delete(v);
+      if (!v.releasing) {
+        v.fastRelease();
+        continue;
+      }
+      // Already fading — only hard-stop if the fade has had time to settle.
+      // Mid-sample forceStop on a hot amp is the crackle users hear as "distort".
+      // During hot ARP, prefer forceStop over leaving extras that sum forever.
+      const relAt = v.releaseAt ?? now;
+      if (now >= relAt + 0.012 || hot) {
+        v.forceStop();
+      } else {
+        this.dying.add(v);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Soft-choke already-audible same-MIDI voices at audio-clock `when`.
+   * Does NOT touch future-scheduled oscillators at schedule-now.
+   */
+  private chokeSameMidiAt(midi: number, when: number): void {
+    const t = when;
+    for (const v of [...this.voices]) {
+      if (v.midi !== midi) continue;
+      for (const [k, vv] of this.held) if (vv === v) this.held.delete(k);
+      this.voices.delete(v);
+      this.dying.add(v);
+      v.chokeAt(t);
+    }
+    // Dying same-MIDI already fading — leave them unless over cap.
+    if (this.monoVoice?.midi === midi) this.monoVoice = null;
+    this.pruneDying();
+  }
+
+  /** Drop pending ARP lookahead jobs (panic / preset / stop). */
+  clearArpSchedule(): void {
+    this.arpQueue.length = 0;
+  }
+
+  /**
+   * Queue an ARP one-shot. Voice nodes are built only near `when` so lookahead
+   * does not inflate poly / steal / polyGain with silent futures.
+   */
+  scheduleArpNote(
+    midi: number,
+    velocity: number,
+    when: number,
+    duration: number,
+    stepSec: number,
+  ): void {
+    this.restoreFxIfSilenced();
+    this.startModTimer();
+    const t = Math.max(this.ctx.currentTime, when);
+    const win = Math.max(0.008, duration);
+    // Refuse new spawns when the live graph is already at the hot ceiling —
+    // better a dropped tick than reboot-poison node thrash.
+    const hot = isHotArp();
+    if (hot && this.voices.size + this.dying.size >= 8) {
+      this.pruneDying();
+      if (this.voices.size + this.dying.size >= 8) return;
+    }
+    // Replace only pending SAME-MIDI jobs in this note's own window.
+    // Do NOT cancel earlier pending notes (e.g. primary before a ratchet) —
+    // those materialize first and get choked at the later attack time.
+    for (let i = this.arpQueue.length - 1; i >= 0; i--) {
+      const j = this.arpQueue[i]!;
+      if (j.midi === midi && j.when >= t - 0.0005 && j.when < t + win) {
+        this.arpQueue.splice(i, 1);
+      }
+    }
+    this.arpQueue.push({
+      midi,
+      velocity,
+      when: t,
+      duration: win,
+      stepSec,
+    });
+    this.arpQueue.sort((a, b) => a.when - b.when);
+    const qCap = hot ? FireCommandSynth.HOT_ARP_QUEUE_CAP : FireCommandSynth.ARP_QUEUE_CAP;
+    while (this.arpQueue.length > qCap) this.arpQueue.shift();
+    this.flushArpQueue();
+  }
+
+  /** Materialize due ARP jobs (also called from the 60 Hz mod loop). */
+  flushArpQueue(): void {
+    const now = this.ctx.currentTime;
+    const eps = FireCommandSynth.ARP_MATERIALIZE_EPS;
+    while (this.arpQueue.length > 0 && this.arpQueue[0]!.when <= now + eps) {
+      const job = this.arpQueue.shift()!;
+      this.materializeArpNote(job);
+    }
+  }
+
+  /**
+   * High-rate arpeggiator path (300 BPM × 1/32, 4 octaves…). Uses capped
+   * release tails, time-correct same-MIDI choke, and tighter dying-voice limits.
+   */
+  private materializeArpNote(job: {
+    midi: number;
+    velocity: number;
+    when: number;
+    duration: number;
+    stepSec: number;
+  }): void {
+    this.pruneDying();
+    const p = this.patch;
+    const when = Math.max(this.ctx.currentTime, job.when);
+    // Choke prior same pitch AT the new attack time — never at schedule-now.
+    this.chokeSameMidiAt(job.midi, when);
+    const dur = Math.max(0.008, job.duration);
+    const releaseAt = when + dur;
+    const hot = isHotArp();
+    const maxRel = Math.min(
+      p.ampRelease,
+      dur * 0.85,
+      job.stepSec * 0.9,
+      hot ? 0.018 : 0.06,
+    );
+    const attackSec = Math.min(
+      Math.max(0.001, p.ampAttack),
+      Math.max(0.001, job.stepSec * 0.25),
+    );
+    // Hot ARP: 4–5 voice ceiling (Init dual-morph is expensive at 40 Hz).
+    const step = getArpStepSec();
+    const hotCap = step < 0.04 ? 4 : 5;
+    const cap = hot
+      ? Math.min(this.effectiveMaxVoices(p), hotCap)
+      : this.effectiveMaxVoices(p);
+    while (this.voices.size >= cap) this.stealVoice();
+    const [bankA, bankB, bankC] = this.banksForNote(p, job.midi);
+    // Drop dual-morph continuity while hot — halves oscillator node cost on Init.
+    const voicePatch = hot && (p.oscAContinuity ?? 0) > 0.45
+      ? { ...p, oscAContinuity: 0.35 }
+      : p;
+    const voice = new Voice(
+      this, this.ctx, this.voiceBus, this.noiseBufferFor(p.chipNoise),
+      bankA, bankB, bankC,
+      voicePatch, job.midi, job.velocity, when,
+      attackSec,
+    );
+    this.voices.add(voice);
+    this.updatePolyGain();
+    voice.noteOffShort(p, releaseAt, maxRel);
+  }
+
+  /**
+   * @deprecated Prefer scheduleArpNote — kept as a thin alias for callers.
+   */
+  playArpNote(
+    midi: number,
+    velocity: number,
+    when: number,
+    duration: number,
+    stepSec: number,
+  ): void {
+    this.scheduleArpNote(midi, velocity, when, duration, stepSec);
+  }
+
+  allNotesOff(opts: { hard?: boolean } = {}): void {
+    this.clearArpSchedule();
     this.held.clear();
     this.monoVoice = null;
     // CLICK SOURCE (read as "crackle/distortion"): this used to forceStop()
@@ -3827,6 +4264,12 @@ export class FireCommandSynth {
     // sequencer stops landed with an audible pop burst. fastRelease() is a
     // 6 ms fade with the actual stop deferred 40 ms, which is inaudible.
     for (const v of [...this.voices]) v.fastRelease();
+    if (opts.hard) {
+      // Dying voices are off the poly cap but still sum on voiceBus — IceKing
+      // arps stack them until the bus clips. Only hard-kill on panic/preset load.
+      for (const v of [...this.dying]) v.forceStop();
+      this.dying.clear();
+    }
   }
 
   /** When true, FX wet/feedback stay hard-zeroed until the next note. */
@@ -3851,10 +4294,28 @@ export class FireCommandSynth {
    * (hiss, infinite delay freeze, long reverb) don't keep ringing after notes
    * are released. Wet stays zero until the next note (no timed restore —
    * that was reopening delay/reverb mid-silence).
+   * Also clears freeze flags so near-unity feedback cannot re-arm silently.
    */
   killFxTails(): void {
     this.fxSilenced = true;
+    this.clearArpSchedule();
+    // Prevent freeze from re-asserting 0.9+ feedback on the next applyBusParams.
+    this.patch.delayFreeze = false;
+    this.patch.reverbFreeze = false;
     const t = this.ctx.currentTime;
+    this.flushBusContamination(t, { rebuildDelay: true });
+  }
+
+  /**
+   * Wipe shared-bus state that survives voice kills and contaminates the next
+   * preset (IceKing → clean preset still distorted; NS → whole Fire Command
+   * stays harsh until reboot). DelayNode / DynamicsCompressor / spectral
+   * worklet state cannot be cleared in-place — rebuild or hard-reset them.
+   */
+  private flushBusContamination(
+    t = this.ctx.currentTime,
+    opts: { rebuildDelay?: boolean } = {},
+  ): void {
     try {
       this.dFbLR.gain.cancelScheduledValues(t);
       this.dFbRL.gain.cancelScheduledValues(t);
@@ -3870,7 +4331,178 @@ export class FireCommandSynth {
       this.phaserWet.gain.setValueAtTime(0, t);
       this.phaserFb.gain.cancelScheduledValues(t);
       this.phaserFb.gain.setValueAtTime(0, t);
+      this.punchMakeup.gain.cancelScheduledValues(t);
+      this.punchMakeup.gain.setValueAtTime(1, t);
+      this.master.gain.cancelScheduledValues(t);
+      this.master.gain.setValueAtTime(clamp(this.patch.masterGain ?? 0.72, 0, 1.15), t);
+      this.tremolo.gain.cancelScheduledValues(t);
+      this.tremolo.gain.setValueAtTime(1, t);
+      this.drivePre.gain.cancelScheduledValues(t);
+      this.limiterPinFrames = 0;
+      this.delayHotFrames = 0;
+      this.lastFbDriveKey = -1;
+      this.ecoHot = false;
+      this.mtxSmooth.fill(0);
+      this.macroSmooth.fill(0);
+      this.gPanWas = this.gVolWas = this.gRevWas = this.gDlyWas = false;
+      // Force spectral worklet to wipe freeze/smear accumulators even when the
+      // next patch keeps the same mode (message-key cache would skip the reset).
+      this.lastSpectralMsg = "";
+      try {
+        this.spectralNode?.port.postMessage({
+          mode: "off",
+          amount: 0,
+          mix: 0,
+          bypass: true,
+          binLow: 0,
+          binHigh: 1,
+          eco: false,
+        });
+      } catch { /* worklet may be mid-load */ }
+      try { this.vintage.flush(); } catch { /* ignore */ }
     } catch { /* node may be mid-teardown */ }
+    if (opts.rebuildDelay) {
+      try { this.rebuildDelayLines(); } catch { /* ignore */ }
+      try { this.rebuildChorusDelays(); } catch { /* ignore */ }
+      try { this.rebuildPhaserStages(); } catch { /* ignore */ }
+      try { this.rebuildPunchComp(); } catch { /* ignore */ }
+      try { this.rebuildReverbPredelay(); } catch { /* ignore */ }
+      try {
+        this.reverbConv.buffer = null;
+        this.lastIrKey = "";
+      } catch { /* ignore */ }
+    }
+    try { this.onFlushContamination?.(); } catch { /* ignore */ }
+  }
+
+  /** Swap the glue DynamicsCompressor — internal GR envelope is not resettable. */
+  private rebuildPunchComp(): void {
+    const ctx = this.ctx;
+    const old = this.punchComp;
+    try { this.punchIn.disconnect(old); } catch { /* ignore */ }
+    try { old.disconnect(); } catch { /* ignore */ }
+    const next = ctx.createDynamicsCompressor();
+    next.knee.value = 6;
+    next.attack.value = 0.004;
+    next.release.value = 0.12;
+    next.threshold.value = 0;
+    next.ratio.value = 1;
+    this.punchComp = next;
+    this.punchIn.connect(next).connect(this.punchWet);
+  }
+
+  /**
+   * Replace ping-pong DelayNodes so residual buffer content from a previous
+   * patch cannot recirculate when delay wet/feedback are re-enabled.
+   */
+  private rebuildDelayLines(): void {
+    const ctx = this.ctx;
+    const oldL = this.dL;
+    const oldR = this.dR;
+    // Tear down old graph edges — keep dPanL/R → delayWet (stable sink).
+    try { this.tremolo.disconnect(oldL); } catch { /* ignore */ }
+    try { oldL.disconnect(); } catch { /* ignore */ }
+    try { oldR.disconnect(); } catch { /* ignore */ }
+    try { this.dFbLR.disconnect(); } catch { /* ignore */ }
+    try { this.dFbRL.disconnect(); } catch { /* ignore */ }
+    try { this.dFbSatLR.disconnect(); } catch { /* ignore */ }
+    try { this.dFbSatRL.disconnect(); } catch { /* ignore */ }
+    try { this.dFbHpLR.disconnect(); } catch { /* ignore */ }
+    try { this.dFbHpRL.disconnect(); } catch { /* ignore */ }
+    try { this.dFbLpLR.disconnect(); } catch { /* ignore */ }
+    try { this.dFbLpRL.disconnect(); } catch { /* ignore */ }
+
+    this.dL = ctx.createDelay(2.0);
+    this.dR = ctx.createDelay(2.0);
+    // Preserve scheduled delay times approximately from the live patch.
+    const dTime = clamp(this.patch.delayTime ?? 0.28, 0.001, 2);
+    this.dL.delayTime.value = dTime;
+    this.dR.delayTime.value = dTime * 1.5;
+
+    this.tremolo.connect(this.dL);
+    this.dL.connect(this.dPanL);
+    this.dR.connect(this.dPanR);
+    this.dL.connect(this.dFbLR).connect(this.dFbSatLR).connect(this.dFbHpLR).connect(this.dFbLpLR).connect(this.dR);
+    this.dR.connect(this.dFbRL).connect(this.dFbSatRL).connect(this.dFbHpRL).connect(this.dFbLpRL).connect(this.dL);
+  }
+
+  /** Chorus DelayNodes hold the same kind of non-clearable buffer residue. */
+  private rebuildChorusDelays(): void {
+    const ctx = this.ctx;
+    const oldL = this.cDelayL;
+    const oldR = this.cDelayR;
+    try { this.chorusIn.disconnect(oldL); } catch { /* ignore */ }
+    try { this.chorusIn.disconnect(oldR); } catch { /* ignore */ }
+    try { this.cDepthL.disconnect(); } catch { /* ignore */ }
+    try { this.cDepthR.disconnect(); } catch { /* ignore */ }
+    try { oldL.disconnect(); } catch { /* ignore */ }
+    try { oldR.disconnect(); } catch { /* ignore */ }
+
+    this.cDelayL = ctx.createDelay(0.1);
+    this.cDelayR = ctx.createDelay(0.1);
+    const base = clamp(this.patch.chorusDelay ?? 0.012, 0.004, 0.04);
+    this.cDelayL.delayTime.value = base;
+    this.cDelayR.delayTime.value = base * 1.2;
+    // cPanL/R → chorusWet already wired from constructor — don't re-fan.
+    this.chorusIn.connect(this.cDelayL).connect(this.cPanL);
+    this.chorusIn.connect(this.cDelayR).connect(this.cPanR);
+    // LFO → depth gains stay wired; only re-aim depth at the new delayTime params.
+    this.cDepthL.connect(this.cDelayL.delayTime);
+    this.cDepthR.connect(this.cDelayR.delayTime);
+  }
+
+  /** Fresh allpass stages — kills self-resonance residue after high phaser FB. */
+  private rebuildPhaserStages(): void {
+    const ctx = this.ctx;
+    const old = this.phaserAP;
+    try { this.phaserIn.disconnect(); } catch { /* ignore */ }
+    try { this.phaserDepth.disconnect(); } catch { /* ignore */ }
+    try { this.phaserFb.disconnect(); } catch { /* ignore */ }
+    for (const ap of old) {
+      try { ap.disconnect(); } catch { /* ignore */ }
+    }
+    this.phaserAP = [];
+    for (let i = 0; i < 4; i++) {
+      const ap = ctx.createBiquadFilter();
+      ap.type = "allpass";
+      ap.frequency.value = 800;
+      ap.Q.value = 0.6;
+      this.phaserAP.push(ap);
+    }
+    // phaserDry/Wet → phaserOut already wired — only reattach from phaserIn / stages.
+    this.phaserIn.connect(this.phaserDry);
+    let apNode: AudioNode = this.phaserIn;
+    for (const ap of this.phaserAP) { apNode.connect(ap); apNode = ap; }
+    apNode.connect(this.phaserWet);
+    apNode.connect(this.phaserFb).connect(this.phaserIn);
+    for (const ap of this.phaserAP) this.phaserDepth.connect(ap.frequency);
+  }
+
+  /** Reverb predelay DelayNode holds wet-path residue like the echo lines. */
+  private rebuildReverbPredelay(): void {
+    const ctx = this.ctx;
+    const old = this.reverbPredelay;
+    try { this.reverbIn.disconnect(old); } catch { /* ignore */ }
+    try { old.disconnect(); } catch { /* ignore */ }
+    this.reverbPredelay = ctx.createDelay(0.25);
+    this.reverbPredelay.delayTime.value = clamp(this.patch.reverbPredelay ?? 0, 0, 0.2);
+    this.reverbIn.connect(this.reverbPredelay).connect(this.revHiCut);
+  }
+
+  /**
+   * Parallel taps for DistortionProbe (voice bus, glue makeup, delay wet, soft-clip out).
+   * suffix distinguishes Synth A vs B in logs.
+   */
+  attachDistortionProbes(
+    probe: { tap: (stage: string, node: AudioNode) => void },
+    suffix = "A",
+  ): void {
+    probe.tap(`fire${suffix}.voiceBus`, this.voiceBus);
+    probe.tap(`fire${suffix}.punchMakeup`, this.punchMakeup);
+    probe.tap(`fire${suffix}.delayWet`, this.delayWet);
+    probe.tap(`fire${suffix}.delayFb`, this.dFbLR);
+    probe.tap(`fire${suffix}.softClip`, this.softClip);
+    probe.tap(`fire${suffix}.out`, this.output);
   }
 
 
@@ -3901,15 +4533,27 @@ export class FireCommandSynth {
    * time-constant keeps the gain change click-free as voices come and go.
    */
   private updatePolyGain(): void {
-    const n = this.voices.size;
-    const knee = 3;
-    const g = VOICE_HEADROOM * (n <= knee ? 1 : Math.sqrt(knee / n));
-    this.voiceBus.gain.setTargetAtTime(g, this.ctx.currentTime, 0.05);
+    const now = this.ctx.currentTime;
+    // Only count voices that have started (or are due) — lookahead futures live
+    // in arpQueue and must not pull headroom / trigger steal.
+    let audible = 0;
+    for (const v of this.voices) {
+      if (v.startedAt <= now + 0.001) audible++;
+    }
+    audible += this.dying.size;
+    const hot = isHotArp();
+    const knee = hot ? 2 : isArpKeepAlive() ? 2.5 : 3;
+    const pad = hot ? FireCommandSynth.HOT_ARP_BUS_PAD : 1;
+    const g = VOICE_HEADROOM * pad * (audible <= knee ? 1 : Math.sqrt(knee / audible));
+    // Hot ARP: near-instant trim so 17 ms gates aren't clipped before gain settles.
+    const tau = hot ? 0.0015 : isArpKeepAlive() ? 0.012 : 0.05;
+    this.voiceBus.gain.setTargetAtTime(g, now, tau);
   }
 
   private stealVoice(): void {
     // Prefer voices already audibly fading out (least noticeable theft), else
-    // pick by voiceSteal policy among remaining voices.
+    // pick by voiceSteal policy among remaining voices. Prefer already-started
+    // voices over silent futures (should be rare with deferred ARP).
     const now = this.ctx.currentTime;
     const policy = this.patch.voiceSteal ?? "oldest";
     const score = (v: Voice): number => {
@@ -3927,6 +4571,12 @@ export class FireCommandSynth {
     }
     if (!pick) {
       for (const v of this.voices) {
+        if (v.startedAt > now + 0.002) continue; // don't steal silent futures
+        if (!pick || score(v) < score(pick)) pick = v;
+      }
+    }
+    if (!pick) {
+      for (const v of this.voices) {
         if (!pick || score(v) < score(pick)) pick = v;
       }
     }
@@ -3935,12 +4585,13 @@ export class FireCommandSynth {
     this.voices.delete(pick);
     this.dying.add(pick);
     pick.fastRelease();
+    this.pruneDying();
     this.updatePolyGain();
   }
 
   /** Keep delaySync (and tempo-linked FX) locked to the sequencer/host BPM. */
   setHostBpm(bpm: number): void {
-    const next = clamp(bpm, 40, 240);
+    const next = clamp(bpm, 40, 300);
     if (Math.abs(next - this.hostBpm) < 0.05) return;
     this.hostBpm = next;
     if (this.patch.delaySync) this.applyBusParams(this.patch);
@@ -3949,6 +4600,7 @@ export class FireCommandSynth {
   // ── patch ──
   setPatch(p: FirePatch): void {
     this.startModTimer();
+    this.clearArpSchedule();
     // Drop any pending warp rebuild from a prior knob scrub — otherwise an
     // 80 ms timer can rebind voices after a preset load with stale intent.
     if (this.warpTimer) {
@@ -3971,6 +4623,11 @@ export class FireCommandSynth {
     for (const v of [...this.dying]) v.forceStop();
     this.dying.clear();
     this.updatePolyGain();
+    // IceKing-class patches leave hot delay buffers + compressor state that
+    // keep crushing cleaner presets until they slowly recover. Flush now —
+    // before applying the new bus params / re-enabling FX.
+    this.flushBusContamination(this.ctx.currentTime, { rebuildDelay: true });
+    this.fxSilenced = false;
     // Deep-clone nested fields so engine state never aliases store / factory
     // / user-preset objects (moduleEnable, modMatrix, fm corners, gate…).
     this.patch = cloneFirePatch({ ...DEFAULT_FIRE_PATCH, ...p });
@@ -3979,6 +4636,9 @@ export class FireCommandSynth {
     this.lastCrushBits = -1;
     this.lastSpectralMsg = "";
     this.lastBusVoiceSyncKey = "";
+    this.lastFbDriveKey = -1;
+    this.ecoHot = false;
+    this.sessionNeedsFlush = false;
     if ((this.patch.macroResponse ?? "absolute") === "relative") {
       this.macroBaseline[0] = this.patch.macro1;
       this.macroBaseline[1] = this.patch.macro2;
@@ -4292,7 +4952,10 @@ export class FireCommandSynth {
     this.punchDry.gain.setTargetAtTime(mixDelta ? 0 : (1 - glueMix), t, 0.03);
     this.punchWet.gain.setTargetAtTime(glueMix, t, 0.03);
     const glueAg = autoG ? 1 / (1 + glueAmt * 0.25) : 1;
-    this.punchMakeup.gain.setTargetAtTime(makeupLin * gOut * glueAg, t, 0.05);
+    // Cap stacked makeup × out-gain — advanced knobs alone could hit 8× and
+    // only engage once dense material trips the compressor (sudden crunch).
+    const makeupProduct = clamp(makeupLin * gOut * glueAg, 0.5, 2.0);
+    this.punchMakeup.gain.setTargetAtTime(makeupProduct, t, 0.05);
 
     this.applyMasterChainScene(p.masterChainScene ?? "glueAirWidth");
 
@@ -4372,7 +5035,7 @@ export class FireCommandSynth {
     const mode = p.delayCascadeMode ?? "echo";
     let dTime = clamp(p.delayTime, 0.001, 2);
     if (p.delaySync) {
-      const bpm = clamp(this.hostBpm || 120, 40, 240);
+      const bpm = clamp(this.hostBpm || 120, 40, 300);
       // delayTime as beat fractions when sync (0.25 ≈ 1/4 note)
       dTime = clamp((60 / bpm) * Math.max(0.125, dTime * 4), 0.001, 2);
     }
@@ -4382,16 +5045,32 @@ export class FireCommandSynth {
     this.dL.delayTime.setTargetAtTime(dTime, t, 0.02);
     this.dR.delayTime.setTargetAtTime(dTime * rRatio, t, 0.02);
     let fb = clamp(p.delayFeedback, 0, 0.72);
-    if (mode === "infinite") fb = Math.min(0.98, Math.max(fb, 0.92));
+    // Musical echo/dub tops out below runaway — IceKing-class ~0.41 FB still
+    // cooks ping-pong buffers over minutes without an audible change in tone.
+    if (mode === "echo" || mode === "dub" || mode === "bounce" || mode === "slap") {
+      fb = Math.min(fb, 0.38);
+    }
+    // Near-unity loops fill quietly then explode — keep freeze/infinite musical
+    // but below runaway. Hard ceiling after mode overrides.
+    if (mode === "infinite") fb = Math.min(0.85, Math.max(fb, 0.78));
     if (mode === "slap") fb = Math.min(fb, 0.25);
-    if (p.delayFreeze) fb = 0.97;
+    if (p.delayFreeze) fb = Math.min(0.88, Math.max(fb, 0.82));
     // Feedback-path filter/drive: applied INSIDE the loop, so each repeat is
     // darker and grittier than the last (and hiss / low-end can't stack up).
     const fbDrive = clamp(p.delayFbDrive ?? 0, 0, 1);
     const fbFilt = clamp(p.delayFbFilter ?? 0.35, 0, 1);
-    fb = clamp(fb * (1 - fbDrive * 0.08), 0, 0.97);
-    this.dFbLR.gain.setTargetAtTime(this.fxSilenced ? 0 : fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
-    this.dFbRL.gain.setTargetAtTime(this.fxSilenced ? 0 : fb * (mode === "bounce" ? 0.85 : 1), t, 0.02);
+    fb = clamp(fb * (1 - fbDrive * 0.08), 0, 0.88);
+    const delayOn = pathFx && on("fx.delay");
+    let dMix = delayOn ? clamp(p.delayMix, 0, 1) : 0;
+    // Simple duck: reduce wet when voices loud (voice count proxy)
+    const duck = clamp(p.delayDuck ?? 0, 0, 1);
+    if (duck > 0.01 && this.voices.size > 0) dMix *= 1 - duck * Math.min(1, this.voices.size / 4) * 0.7;
+    // Gate the feedback LOOP when wet is silent — otherwise the delay keeps
+    // cooking on the tremolo feed with no audible output, then dumps hash the
+    // moment any later preset opens delay mix (IceKing linger / NS poison).
+    const delayLoop = !this.fxSilenced && dMix > 0.0005;
+    this.dFbLR.gain.setTargetAtTime(delayLoop ? fb * (mode === "bounce" ? 0.85 : 1) : 0, t, 0.02);
+    this.dFbRL.gain.setTargetAtTime(delayLoop ? fb * (mode === "bounce" ? 0.85 : 1) : 0, t, 0.02);
     // Dub-style band limiting: open at 0, ~6.5 kHz at the 0.35 default, tight at 1.
     const fbLp = clamp(18000 * Math.pow(0.06, fbFilt), 700, 18000);
     const fbHp = 40 + fbFilt * 140;
@@ -4406,11 +5085,6 @@ export class FireCommandSynth {
       this.dFbSatLR.curve = curve;
       this.dFbSatRL.curve = curve;
     }
-    const delayOn = pathFx && on("fx.delay");
-    let dMix = delayOn ? clamp(p.delayMix, 0, 1) : 0;
-    // Simple duck: reduce wet when voices loud (voice count proxy)
-    const duck = clamp(p.delayDuck ?? 0, 0, 1);
-    if (duck > 0.01 && this.voices.size > 0) dMix *= 1 - duck * Math.min(1, this.voices.size / 4) * 0.7;
     this.delayWet.gain.setTargetAtTime(this.fxSilenced ? 0 : (delta ? dMix * 1.3 : dMix), t, 0.02);
     this.delayDry.gain.setTargetAtTime(delta ? 0 : 1, t, 0.02);
     // Tone LPF: post-delay bus (or both if driveTonePos says both — pre handled as mild lowpass via protect)

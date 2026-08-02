@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
+import { ModuleBackdrop } from "./ModuleBackdrop";
 import { useFireCommandStore, FIRE_PRESETS, type SavedPreset } from "@/state/fireCommandStore";
 import { cloneFirePatch, DEFAULT_FIRE_PATCH, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { pushFireHistory } from "@/lib/fireHistory";
@@ -766,6 +767,8 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
 
   return (
     <GlassPanel className="p-3" data-fire-module="morph">
+      <ModuleBackdrop moduleId="morph" color={C} awake />
+      <div className="fc-mod-content-well">
       <style>{`
         @keyframes morph-grid-pulse {
           0%, 100% { opacity: 0.12; }
@@ -814,7 +817,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
               background: live
                 ? `linear-gradient(105deg, ${C}28 0%, ${C}0c 38%, transparent 72%)`
                 : `linear-gradient(180deg, rgba(0,0,0,0.4), ${C}0c)`,
-              boxShadow: live ? `inset 0 1px 0 ${C}28, 0 0 18px ${C}18` : undefined,
+              boxShadow: live ? `inset 0 1px 0 ${C}28` : undefined,
             }}
           >
             <div className="min-w-0">
@@ -1137,6 +1140,7 @@ export function FireMorphPad({ chipHosted = false }: { chipHosted?: boolean } = 
           </div>
         </>
       )}
+      </div>
     </GlassPanel>
   );
 }

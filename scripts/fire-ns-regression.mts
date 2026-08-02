@@ -21,6 +21,7 @@ import {
 } from "../src/audio/dsp/wavetables.ts";
 import { applyLoudnessSafety, applyNsSafety } from "../src/lib/fireModuleLocks.ts";
 import { remasterResonance } from "../src/audio/dsp/firePresetRemaster.ts";
+import { mutatePatch } from "../src/state/fireCommandStore.ts";
 
 let failed = 0;
 function assert(cond: boolean, msg: string) {
@@ -175,17 +176,105 @@ assert((hot.filterResonance ?? 0) <= 14, "loudness safety caps Q ≤ 14");
 assert((hot.filterDrive ?? 0) <= 0.8, "loudness safety caps filter drive");
 assert((hot.noiseLevel ?? 0) <= 0.5, "loudness safety caps noise");
 
-// ── NS safety allows more bite than Armory ────────────────────────────
+// ── NS safety: musical bite without ear-hash ──────────────────────────
 const nsHot = cloneFirePatch({
   ...DEFAULT_FIRE_PATCH,
   filterResonance: 18,
+  filterModel: "ladder",
+  filterEnvAmount: 0.95,
   fmAmount: 0.95,
   drive: 0.95,
+  ampAttack: 0.001,
+  gateOn: true,
+  gateSmooth: 0,
+  delayFreeze: true,
+  spectralMode: "smear",
 });
 applyNsSafety(nsHot);
-assert((nsHot.filterResonance ?? 0) <= 16, "NS safety caps Q ≤ 16");
-assert((nsHot.fmAmount ?? 0) <= 0.88, "NS safety caps FM");
-assert((nsHot.filterResonance ?? 0) > 14, "NS safety allows hotter Q than Armory loudness");
+assert((nsHot.filterResonance ?? 0) <= 6.5, "NS safety caps ladder Q ≤ 6.5");
+assert((nsHot.fmAmount ?? 0) <= 0.68, "NS safety caps FM");
+assert((nsHot.drive ?? 0) <= 0.62, "NS safety caps drive");
+assert((nsHot.ampAttack ?? 0) >= 0.005, "NS safety floors amp attack");
+assert((nsHot.gateSmooth ?? 0) >= 0.28, "NS safety floors gate smooth when gated");
+assert(nsHot.delayFreeze === false, "NS safety clears delay freeze");
+assert(nsHot.spectralMode === "off", "NS safety forces spectral off");
+assert(Math.abs(nsHot.filterEnvAmount ?? 0) <= 0.7, "NS safety trims scream env at high Q");
+
+const nsInfinite = cloneFirePatch({
+  ...DEFAULT_FIRE_PATCH,
+  delayCascadeMode: "infinite",
+  delayFeedback: 0.95,
+  delayFreeze: true,
+});
+applyNsSafety(nsInfinite);
+assert(nsInfinite.delayCascadeMode === "long", "NS safety demotes infinite delay to long");
+assert(nsInfinite.delayFreeze === false, "NS safety clears freeze on infinite demotion");
+assert((nsInfinite.delayFeedback ?? 0) <= 0.62, "NS safety caps delay feedback");
+
+const nsBiquad = cloneFirePatch({
+  ...DEFAULT_FIRE_PATCH,
+  filterModel: "biquad",
+  filterResonance: 18,
+});
+applyNsSafety(nsBiquad);
+assert((nsBiquad.filterResonance ?? 0) <= 9, "NS safety caps biquad Q ≤ 9");
+assert((nsBiquad.filterResonance ?? 0) > 6.5, "biquad may keep more Q than ladder");
+
+// ── NS mutate: offspring diverge + stay ear-safe ─────────────────────
+const nsParent = cloneFirePatch({
+  ...DEFAULT_FIRE_PATCH,
+  oscATable: "saw",
+  filterCutoff: 2000,
+  filterResonance: 4,
+});
+const childA = mutatePatch(nsParent, 0.62, { forceSpecies: true });
+const childB = mutatePatch(nsParent, 0.62, { forceSpecies: true });
+applyNsSafety(childA);
+applyNsSafety(childB);
+assert((childA.filterResonance ?? 0) <= 9, "mutated A Q stays within NS cap");
+assert((childB.filterResonance ?? 0) <= 9, "mutated B Q stays within NS cap");
+assert((childA.ampAttack ?? 0) >= 0.005, "mutated A attack floored");
+assert((childB.ampAttack ?? 0) >= 0.005, "mutated B attack floored");
+const sig = (p: typeof childA) =>
+  [p.oscATable, p.filterType, p.filterModel, p.driveMode, p.fmEngine, p.warpMode, p.hardSync, p.lpgOn].join("|");
+assert(sig(childA) !== sig(childB) || Math.abs((childA.filterCutoff ?? 0) - (childB.filterCutoff ?? 0)) > 200,
+  "forced-species siblings usually diverge in architecture or cutoff");
+
+// ── NS body bias: long / clear / present / bass-forward distribution ──
+let longBody = 0;
+let present = 0;
+let bassWeight = 0;
+let clearFx = 0;
+const N = 40;
+for (let i = 0; i < N; i++) {
+  const c = mutatePatch(nsParent, 0.7, { forceSpecies: true });
+  applyNsSafety(c);
+  // Re-apply store-order bias (mutatePatch already biases; safety then bias in store).
+  // Presence + duration should dominate even after safety.
+  const release = c.ampRelease ?? 0;
+  const sustain = c.ampSustain ?? 0;
+  if (release >= 1.5 || (sustain >= 0.5 && release >= 1.0)) longBody++;
+  if ((c.oscALevel ?? 0) >= 0.55 && (c.masterGain ?? 0) >= 0.55) present++;
+  if ((c.subLevel ?? 0) >= 0.25 || (c.oscAOctave ?? 0) <= -1) bassWeight++;
+  if ((c.crush ?? 0) <= 0.15 && (c.bitDepth ?? "off") === "off") clearFx++;
+}
+assert(longBody >= N * 0.65, `NS body bias: most offspring sustain ≥~1.5s body (${longBody}/${N})`);
+assert(present >= N * 0.8, `NS body bias: oscillators stay audible (${present}/${N})`);
+assert(bassWeight >= N * 0.55, `NS body bias: sub/low octave common (${bassWeight}/${N})`);
+assert(clearFx >= N * 0.7, `NS body bias: crush/bitDepth usually clean (${clearFx}/${N})`);
+
+// Majority should NOT be the wet hollow cave (tube tables + big hall).
+let dryish = 0;
+let notTubeQ = 0;
+for (let i = 0; i < N; i++) {
+  const c = mutatePatch(nsParent, 0.7, { forceSpecies: true });
+  applyNsSafety(c);
+  const wet = (c.reverbMix ?? 0) > 0.3 && (c.reverbSize ?? 0) > 3.2;
+  if (!wet) dryish++;
+  if ((c.filterResonance ?? 0) <= 3.5 || c.filterType === "lowpass") notTubeQ++;
+}
+assert(dryish >= N * 0.7, `NS body bias: most offspring avoid huge wet halls (${dryish}/${N})`);
+assert(notTubeQ >= N * 0.75, `NS body bias: resonance stays musical / LP-led (${notTubeQ}/${N})`);
 
 // ── Preset remaster maps legacy 0..1 resonance into musical Q ─────────
 const h = { n: 123456789 };

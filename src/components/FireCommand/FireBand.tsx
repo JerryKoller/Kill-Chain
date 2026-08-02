@@ -41,12 +41,15 @@ export type BandModuleMeta = {
   toggle: () => void;
 };
 
-type BandContextValue = {
+type BandActions = {
   register: (meta: BandModuleMeta) => void;
   unregister: (id: string) => void;
 };
 
-const BandContext = createContext<BandContextValue | null>(null);
+/** Stable actions — register effects must NOT re-fire when module map updates. */
+const BandActionsContext = createContext<BandActions | null>(null);
+/** Module map for chips / group-header visibility (updates freely). */
+const BandModsContext = createContext<Record<string, BandModuleMeta>>({});
 
 /** Sections / panels call this so the parent band can render chips. */
 export function useFireBandRegister(
@@ -59,12 +62,29 @@ export function useFireBandRegister(
   /** Character nickname; defaults to the title when a module has no separate one. */
   short?: string,
 ) {
-  const band = useContext(BandContext);
+  const band = useContext(BandActionsContext);
   useLayoutEffect(() => {
     if (!band || !id || !enabled) return;
     band.register({ id, title, short: short ?? title, color, collapsed, toggle });
     return () => band.unregister(id);
+    // Intentionally omit `band` — actions are stable; including a changing
+    // context value here caused React #185 (register ↔ setMods ↔ new ctx loop).
   }, [band, id, title, short, color, collapsed, toggle, enabled]);
+}
+
+/**
+ * Group headers (Mix Routing / Perf Control, …) use this so labels + bars
+ * only render when at least one module in the group is expanded — matching
+ * Modulation’s clean collapsed chip row.
+ */
+export function useBandAnyExpanded(ids: readonly string[]): boolean {
+  const mods = useContext(BandModsContext);
+  const { isFocused } = useFireLayout();
+  if (ids.some((id) => isFocused(id))) return true;
+  return ids.some((id) => {
+    const m = mods[id];
+    return !!m && !m.collapsed;
+  });
 }
 
 function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
@@ -196,7 +216,7 @@ export function FireBand({
     });
   }, []);
 
-  const ctx = useMemo(() => ({ register, unregister }), [register, unregister]);
+  const actions = useMemo(() => ({ register, unregister }), [register, unregister]);
 
   const list = Object.values(mods);
   const collapsedList = list.filter((m) => m.collapsed);
@@ -312,24 +332,26 @@ export function FireBand({
   );
 
   return (
-    <BandContext.Provider value={ctx}>
-      {flush ? (
-        <div
-          className="relative bg-gradient-to-b from-white/[0.025] to-transparent p-2.5"
-          data-fire-band={bandKey as FireBandId}
-          style={{ boxShadow: `inset 3px 0 0 0 ${color}55` }}
-        >
-          {inner}
-        </div>
-      ) : (
-        <GlassPanel
-          intense
-          className="p-2.5"
-          data-fire-band={bandKey as FireBandId}
-        >
-          {inner}
-        </GlassPanel>
-      )}
-    </BandContext.Provider>
+    <BandActionsContext.Provider value={actions}>
+      <BandModsContext.Provider value={mods}>
+        {flush ? (
+          <div
+            className="relative bg-gradient-to-b from-white/[0.025] to-transparent p-2.5"
+            data-fire-band={bandKey as FireBandId}
+            style={{ boxShadow: `inset 3px 0 0 0 ${color}55` }}
+          >
+            {inner}
+          </div>
+        ) : (
+          <GlassPanel
+            intense
+            className="p-2.5"
+            data-fire-band={bandKey as FireBandId}
+          >
+            {inner}
+          </GlassPanel>
+        )}
+      </BandModsContext.Provider>
+    </BandActionsContext.Provider>
   );
 }
