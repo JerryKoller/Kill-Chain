@@ -2,6 +2,24 @@
 
 All notable changes to Kill Chain are documented here.
 
+## [3.5.0] — 2026-08-31 — Fire Command Stability + Dual-Monitor Sequencer
+
+### Fixed
+- **Long-play distortion / silence** — Fire Command no longer collapses into clipping then mutes after extended play; limiter watchdog, worklet pooling, and NaN firewalls on filter/limiter/spectral processors
+- **Natural Selection leak** — throwaway audition synths skip worklet preload so OfflineAudioContext can be collected; NS module budget capped at 14
+- **Sequencer project load** — drum level, host BPM, and Synth B engage sync on `.kcproj` open; scheduler catch-up bound so a main-thread stall cannot machine-gun the backlog
+
+### Added
+- **Expand to second display** — sequencer snaps to the right monitor; synth and the rest of Kill Chain stay on the left
+- **Resizable sequencer panes** — arrangement viewport and piano roll heights drag-resize and persist
+- **Piano-roll toolbox** — quantize, humanize, chords, transpose, repeat, glue/split
+- **Arrangement** — song markers, clip copy/paste, per-clip transpose and gain
+- **Preset shelf** — favorites and recents; 200 new factory patches (420 total)
+
+### Changed
+- Workspace tabs hide Sequencer while expanded so Synth fills the left display
+- Unused factory modules stay off; filter/limiter worklets reset cleanly between voices
+
 ## [3.4.0] — 2026-07-31 — Clean Install + Fire Command Factory Rebuild
 
 ### Changed
