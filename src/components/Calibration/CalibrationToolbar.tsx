@@ -94,8 +94,11 @@ export function CalibrationToolbar() {
             </button>
             <button
               onClick={() => {
-                replaceParams(loadActiveGenre());
-                toast(`Loaded "${activeGenre}"`);
+                void import("@/lib/previewCommitBus").then(({ requestPreviewCommit }) => {
+                  requestPreviewCommit();
+                  replaceParams(loadActiveGenre());
+                  toast(`Loaded "${activeGenre}"`);
+                });
               }}
               className="rounded-md border border-white/12 px-2 py-1 hover:border-cyan/40 hover:text-cyan"
             >

@@ -77,7 +77,11 @@ export function prependId3v24(mp3: Uint8Array, meta: Id3Meta): Uint8Array {
       ((audio[7] & 0x7f) << 14) |
       ((audio[8] & 0x7f) << 7) |
       (audio[9] & 0x7f);
-    audio = audio.subarray(10 + size);
+    // Footer flag (bit 4): the tag is followed by a 10-byte footer that the
+    // declared size does NOT include — skipping only `10 + size` left 10
+    // bytes of junk before the first MPEG frame.
+    const hasFooter = (audio[5] & 0x10) !== 0;
+    audio = audio.subarray(10 + size + (hasFooter ? 10 : 0));
   }
 
   const parts: Uint8Array[] = [];

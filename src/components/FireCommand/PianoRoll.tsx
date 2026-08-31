@@ -40,6 +40,9 @@ import { ScopedPlayButton } from "./ScopedPlayButton";
 import { PatternSelect } from "./PatternSelect";
 import { ToolbarMenu } from "./ToolbarMenu";
 import { EditorToolbarGroup, EditorToolbarDivider } from "./EditorShell";
+import { NoteToolbar } from "./NoteToolbar";
+import { usePanelHeight } from "./usePanelHeight";
+import { PanelResizeHandle } from "./PanelResizeHandle";
 
 export const PIANO_GUTTER = 46;
 
@@ -48,10 +51,12 @@ const GUTTER = PIANO_GUTTER;
 const MIDI_TOP = 96; // C7
 const MIDI_BOT = 24; // C1
 const ROWS = MIDI_TOP - MIDI_BOT + 1;
-const HEIGHT_MIN = 220;
-const HEIGHT_MAX = 900;
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
+
+/** Roll clipboard — module scope so it survives pattern switches and
+ *  remounts, enabling copy in one pattern → paste into another. */
+let rollClipboard: Array<Omit<RollNote, "id">> | null = null;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -254,7 +259,10 @@ function clampLenBeforeNext(
 
 export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   const notes = useFireSequencerStore((s) => s.notes);
-  const drums = useFireSequencerStore((s) => s.drums);
+  // Only the kick lane is drawn (ghost ticks), so subscribe to that lane
+  // alone: subscribing to the whole `drums` object repainted the entire roll
+  // canvas — 73 pitch rows plus every note — on any hat/snare/clap edit.
+  const kickSteps = useFireSequencerStore((s) => s.drums?.steps?.kick);
   const playScope = useFireSequencerStore((s) => s.playScope);
   const bars = useFireSequencerStore((s) => s.bars);
   const playing = useFireSequencerStore((s) => s.playing);
@@ -318,6 +326,14 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   const selectedRef = useRef(selectedIds);
   selectedRef.current = selectedIds;
 
+  // Pattern switch invalidates the whole selection: keeping the old ids made
+  // the "N sel" chip stick, and Del / Ctrl+D silently operated on notes from
+  // the PREVIOUS pattern (ghost edits).
+  const activeSectionId = useFireSequencerStore((s) => s.activeSectionId);
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [activeSectionId]);
+
   // Selected notes define the Open Fire "Selection" loop range. Tracks note
   // drags too (notes dep), not just selection membership changes.
   useEffect(() => {
@@ -350,12 +366,16 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   const gridWRef = useRef(gridW);
   cellWRef.current = CELL_W;
   gridWRef.current = gridW;
-  const [rollH, setRollH] = useState(tall ? 640 : 360);
-  const heightDrag = useRef<{ startY: number; startH: number } | null>(null);
-
-  useEffect(() => {
-    if (tall) setRollH((h) => Math.max(h, 640));
-  }, [tall]);
+  // Persisted: the roll was draggable but reset to 360 px on every mount, so a
+  // taller layout had to be re-dragged after each pattern/workspace switch.
+  // Separate keys for embedded vs fullscreen — they want different heights.
+  const rollPanel = usePanelHeight(
+    tall ? "killchain.fire.rollH.fs" : "killchain.fire.rollH",
+    tall ? 640 : 360,
+    tall ? 320 : 160,
+    tall ? 1600 : 1200,
+  );
+  const rollH = rollPanel.height;
 
   const totalSteps = bars * STEPS_PER_BAR;
   const gridH = ROWS * ROW_H;
@@ -414,11 +434,18 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   const paintCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    // Always size from useRollFit's gridW — same number the layout uses.
+    // Cap the BACKING BUFFER area (~16 MP ≈ 64 MB RGBA): a 96-bar pattern at
+    // full DPR allocated a multi-hundred-MB canvas that could stall or crash
+    // the GPU process. When the roll outgrows the budget we drop DPR first —
+    // slightly softer pixels beat an unbounded buffer.
     const gw = gridWRef.current;
     const cw = cellWRef.current;
     const gh = gridHRef.current;
+    const MAX_BUFFER_PX = 16_000_000;
+    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (gw * gh * dpr * dpr > MAX_BUFFER_PX) {
+      dpr = Math.max(0.5, Math.sqrt(MAX_BUFFER_PX / Math.max(1, gw * gh)));
+    }
     const bufW = Math.max(1, Math.round(gw * dpr));
     const bufH = Math.max(1, Math.round(gh * dpr));
     if (canvas.width !== bufW || canvas.height !== bufH) {
@@ -586,7 +613,6 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
     }
 
     // Tiny kick ghost ticks (optional drum hint)
-    const kickSteps = drums?.steps?.kick;
     if (kickSteps && KICK_GHOST_MIDI >= MIDI_BOT && KICK_GHOST_MIDI <= MIDI_TOP) {
       const ky = (MIDI_TOP - KICK_GHOST_MIDI) * ROW_H + ROW_H - 4;
       for (let s = 0; s < totalSteps && s < kickSteps.length; s++) {
@@ -625,7 +651,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
     }
     ctx.fillStyle = "rgba(255,120,60,0.5)";
     ctx.fillRect(GUTTER - 2, 0, 2, gh);
-  }, [effectiveNotes, totalSteps, scaleRoot, scaleId, activeChannel, conformPreview, foldMode, wideKeys, drums]);
+  }, [effectiveNotes, totalSteps, scaleRoot, scaleId, activeChannel, conformPreview, foldMode, wideKeys, kickSteps]);
 
   const schedulePaint = useCallback(() => {
     if (rafPaintRef.current) return;
@@ -1020,7 +1046,13 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
     } else if (tool === "draw") {
       // FL place: ghost at click; drag same pitch → stretch; cross pitch → paint.
       const ghost = beginGhost(step, midi, lastLenRef.current);
-      if (ghost.step >= totalSteps) return;
+      if (ghost.step >= totalSteps) {
+        // Pointer capture was already taken above — release it, or the roll
+        // eats every subsequent pointer event until the next pointerup.
+        try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        dragRef.current = null;
+        return;
+      }
       previewRef.current.ghosts = [ghost];
       dragRef.current = {
         mode: "placeStretch",
@@ -1539,9 +1571,15 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       // Don't steal Del/Ctrl+A from the arrangement playlist.
       const t = e.target instanceof Element ? e.target : null;
       if (t?.closest("[data-fire-arrangement]")) return;
+      // Claim the shortcut when the roll owns the event, the pointer is over
+      // it, OR keyboard focus is inside it. Hover-only meant Delete, arrow
+      // nudge, copy/paste and the snap keys silently did nothing for anyone
+      // driving the editor from the keyboard — the pointer had to be parked
+      // on the grid for its own shortcuts to work.
       const inRoll = !!t?.closest("[data-fire-piano-roll]");
       const rollHovered = !!document.querySelector("[data-fire-piano-roll]:hover");
-      if (!inRoll && !rollHovered) return;
+      const rollFocused = !!document.activeElement?.closest?.("[data-fire-piano-roll]");
+      if (!inRoll && !rollHovered && !rollFocused) return;
 
       if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
         e.preventDefault();
@@ -1553,6 +1591,31 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         return;
       }
 
+      // Paste works with no selection — handle before the selection guard.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        if (!rollClipboard || rollClipboard.length === 0) return;
+        e.preventDefault();
+        const st = useFireSequencerStore.getState();
+        const ch = st.activeChannel;
+        const limit = st.bars * STEPS_PER_BAR;
+        const batch = rollClipboard
+          .filter((n) => n.step < limit)
+          .map((n) => ({
+            ...n,
+            ch,
+            len: Math.max(0.25, Math.min(n.len, limit - n.step)),
+          }));
+        if (batch.length === 0) {
+          useUIStore.getState().toast("Clipboard notes fall outside this pattern");
+          return;
+        }
+        const newIds = addNotes(batch);
+        setSelectedIds(new Set(newIds));
+        playUi("success");
+        useUIStore.getState().toast(`Pasted ${batch.length} note${batch.length === 1 ? "" : "s"}`);
+        return;
+      }
+
       if (selectedIds.size === 0) return;
       const ids = [...selectedIds];
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -1560,6 +1623,25 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         setSelectedIds(new Set());
       } else if (e.key === "Escape") {
         setSelectedIds(new Set());
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "x" || e.key === "X")) {
+        e.preventDefault();
+        const st = useFireSequencerStore.getState();
+        const sel = st.notes.filter((n) => selectedIds.has(n.id));
+        if (sel.length === 0) return;
+        // Absolute positions: paste lands at the same musical spot, which is
+        // the predictable behavior for cross-pattern copying.
+        rollClipboard = sel.map((n) => ({
+          midi: n.midi, step: n.step, len: n.len, vel: n.vel, ch: n.ch,
+        }));
+        const cut = e.key === "x" || e.key === "X";
+        if (cut) {
+          removeNotes(ids);
+          setSelectedIds(new Set());
+        }
+        playUi("success");
+        useUIStore.getState().toast(
+          `${cut ? "Cut" : "Copied"} ${sel.length} note${sel.length === 1 ? "" : "s"}`,
+        );
       } else if ((e.ctrlKey || e.metaKey) && (e.key === "d" || e.key === "D")) {
         e.preventDefault();
         const st = useFireSequencerStore.getState();
@@ -1600,7 +1682,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedIds, removeNotes, duplicateNotes, transposeNotes, updateNotes]);
+  }, [selectedIds, removeNotes, duplicateNotes, transposeNotes, updateNotes, addNotes]);
 
   const selectedNote = selectedIds.size >= 1
     ? notes.find((n) => n.id === [...selectedIds][0]) ?? null
@@ -1864,7 +1946,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
             </div>
             {selectedIds.size > 0 && (
               <span className="text-[10px] text-cyan/80">
-                {selectedIds.size} sel · Del · Ctrl+D · ↑↓ · ←→ · Ctrl+A
+                {selectedIds.size} sel · Del · Ctrl+C/X/V · Ctrl+D · ↑↓ · ←→ · Ctrl+A
               </span>
             )}
             {(selectedIds.size > 0 || playScope === "selection") && (
@@ -1890,6 +1972,13 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           </div>
         </ToolbarMenu>
         <span className="editor-toolbar__spacer flex-1 min-w-[8px]" />
+        {/* Editing toolbox lives in the top row (not the overflow menu) so its
+            popover isn't clipped and the ops are one click away. No group
+            label — the toolbar already wraps at narrow widths and the button
+            names itself. */}
+        <EditorToolbarGroup>
+          <NoteToolbar selectedIds={selectedIds} />
+        </EditorToolbarGroup>
         <EditorToolbarGroup label="View">
         <div className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/30 p-0.5">
           <button
@@ -1926,7 +2015,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       </div>
 
       <p className="mb-2 text-[10px] text-white/35 tracking-wide">
-        Move · Resize edges · Alt-drag erase · Shift-drag velocity · Draw paints across pitches
+        Move · Resize edges · Alt-drag erase · Shift-drag velocity · Draw paints across pitches · Tools for quantize / chords / velocity
       </p>
 
       {/* Always reserved — opening on first note used to shove the canvas mid-drag. */}
@@ -2004,7 +2093,13 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           if (v) v.scrollLeft = left;
           setRollHScroll(left);
         }}
-        className="relative rounded-2xl border border-white/12 bg-[#0a0c12] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_0_1px_rgba(255,106,61,0.06)] editor-scroll overflow-auto"
+        // Focusable so the roll's own shortcuts (Delete, arrows, Ctrl+C/V,
+        // snap keys) work after a click or Tab, not only while the mouse
+        // happens to hover the grid.
+        tabIndex={0}
+        role="application"
+        aria-label="Piano roll grid — Delete removes, arrows nudge, Ctrl+C/X/V copy, 1–6 set snap"
+        className="relative rounded-2xl border border-white/12 bg-[#0a0c12] shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_0_0_1px_rgba(255,106,61,0.06)] editor-scroll overflow-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-[#ff6a3d]/40"
         style={{ height: rollH }}
       >
         <div className="relative" style={{ width: gridW, height: gridH }}>
@@ -2130,25 +2225,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         )}
       </div>
 
-      <div
-        onPointerDown={(e) => {
-          (e.target as HTMLElement).setPointerCapture(e.pointerId);
-          heightDrag.current = { startY: e.clientY, startH: rollH };
-        }}
-        onPointerMove={(e) => {
-          const h = heightDrag.current;
-          if (!h) return;
-          setRollH(clamp(h.startH + (e.clientY - h.startY), HEIGHT_MIN, HEIGHT_MAX));
-        }}
-        onPointerUp={(e) => {
-          heightDrag.current = null;
-          try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-        }}
-        className="mt-1.5 h-3 rounded-full cursor-ns-resize flex items-center justify-center group touch-none"
-        title="Drag to resize the piano roll"
-      >
-        <div className="w-20 h-1 rounded-full bg-white/15 group-hover:bg-[#ff6a3d]/55 transition" />
-      </div>
+      {!tall && <PanelResizeHandle panel={rollPanel} label="piano roll" />}
     </div>
   );
 }

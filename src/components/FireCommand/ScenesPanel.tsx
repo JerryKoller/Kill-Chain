@@ -3,6 +3,7 @@
  * Used by ScenesPanel in FireCommandView.
  */
 
+import { useEffect, useRef, useState } from "react";
 import { useFireCommandStore, SCENE_SLOTS } from "@/state/fireCommandStore";
 import type { FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { FC, FC_BAND, bandShade } from "./fireColors";
@@ -119,7 +120,20 @@ export function ScenesQuickActions({
     captureScene(i);
   };
 
+  // Wipe clears EVERY captured scene — destructive, so it arms first and
+  // only fires on the confirming second click (2.4 s window).
+  const [confirmWipe, setConfirmWipe] = useState(false);
+  const wipeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (wipeTimer.current) clearTimeout(wipeTimer.current); }, []);
   const clearAll = () => {
+    if (!confirmWipe) {
+      setConfirmWipe(true);
+      if (wipeTimer.current) clearTimeout(wipeTimer.current);
+      wipeTimer.current = setTimeout(() => setConfirmWipe(false), 2400);
+      return;
+    }
+    if (wipeTimer.current) clearTimeout(wipeTimer.current);
+    setConfirmWipe(false);
     for (let i = 0; i < SCENE_SLOTS; i++) {
       if (scenes[i]) clearScene(i);
     }
@@ -190,10 +204,14 @@ export function ScenesQuickActions({
         onClick={clearAll}
         disabled={occ === 0}
         className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125 disabled:opacity-30"
-        style={{ borderColor: `${SCENES_C}55`, color: SCENES_C_GLOW, background: `${SCENES_C}1c` }}
-        title="Clear all scene slots"
+        style={
+          confirmWipe
+            ? { borderColor: "#f43f5e99", color: "#fecdd3", background: "#f43f5e33" }
+            : { borderColor: `${SCENES_C}55`, color: SCENES_C_GLOW, background: `${SCENES_C}1c` }
+        }
+        title={confirmWipe ? "Click again to clear ALL scene slots" : "Clear all scene slots (asks to confirm)"}
       >
-        Wipe
+        {confirmWipe ? "Sure?" : "Wipe"}
       </button>
       <ModuleEnableToggle moduleId="scenes" color={SCENES_C} name="Scenes" onTextColor={SCENES_C_GLOW} />
     </div>

@@ -532,7 +532,15 @@ export function TractorBeamView() {
         subtitle="Analyze, explain, correct, remember — one LOCK prepares the complete manifest; nothing lands until you engage it"
       />
 
-      <input ref={fileRef} type="file" accept="audio/*" className="hidden" onChange={onFile} />
+      <input
+        ref={fileRef}
+        type="file"
+        // Same containers the drop handler accepts — audio/* alone hid
+        // decodable files with odd MIME registrations on some systems.
+        accept="audio/*,.mp3,.wav,.wave,.flac,.ogg,.oga,.opus,.m4a,.m4b,.mp4,.aac,.webm,.weba,.mka"
+        className="hidden"
+        onChange={onFile}
+      />
 
       <div className="grid grid-cols-12 gap-3">
         {/* ── Mission console: acquisition ── */}

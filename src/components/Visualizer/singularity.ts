@@ -394,8 +394,20 @@ export function createSingularity(pal: ThemePalette): ModeRenderer {
   let glW = 0;
   let glH = 0;
 
+  const freeTarget = (t: Target | null): void => {
+    if (!gl || !t) return;
+    try { gl.deleteFramebuffer(t.fbo); } catch { /* ignore */ }
+    try { gl.deleteTexture(t.tex); } catch { /* ignore */ }
+  };
+
   const allocTargets = (w: number, h: number): void => {
     if (!gl) return;
+    // Free the previous generation first — every resize used to orphan four
+    // FBO+texture pairs on the GPU for the life of the context.
+    freeTarget(sceneT);
+    freeTarget(brightT);
+    freeTarget(blurA);
+    freeTarget(blurB);
     sceneT = makeTarget(gl, w, h);
     const bw = Math.max(8, w >> 2);
     const bh = Math.max(8, h >> 2);
@@ -541,6 +553,24 @@ export function createSingularity(pal: ThemePalette): ModeRenderer {
 
       // blit into the shared 2D canvas
       f.g.drawImage(canvas, 0, 0, f.W, f.H);
+    },
+
+    dispose() {
+      if (!gl) return;
+      freeTarget(sceneT);
+      freeTarget(brightT);
+      freeTarget(blurA);
+      freeTarget(blurB);
+      sceneT = brightT = blurA = blurB = null;
+      for (const p of [progScene, progBright, progBlur, progComp]) {
+        if (p) { try { gl.deleteProgram(p); } catch { /* ignore */ } }
+      }
+      progScene = progBright = progBlur = progComp = null;
+      // Hand the context back to the GPU immediately instead of waiting for
+      // GC to notice the offscreen canvas.
+      try { gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch { /* ignore */ }
+      gl = null;
+      failed = true;
     },
   };
 }

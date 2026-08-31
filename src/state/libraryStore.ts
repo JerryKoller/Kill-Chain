@@ -61,8 +61,10 @@ const STORAGE_KEY = "audio-playground.library.v1";
 /** Favorites / play counts / playlists live under their own key so they
  *  survive even when the big track list can't be persisted. */
 const META_KEY = "audio-playground.libraryMeta.v1";
-/** Above this many tracks we stop persisting the list (localStorage limit). */
-const MAX_PERSIST_TRACKS = 5000;
+/** Soft ceiling for the persisted track-list JSON (localStorage shares ~10 MB
+ *  with every other store). Above this we fall back to folders-only and rely
+ *  on the boot rescan, but we NEVER silently wipe a list that used to fit. */
+const MAX_PERSIST_JSON_BYTES = 4_000_000;
 
 /** Build the privileged-scheme URL the engine/loader understands. */
 export function audioUrlForPath(p: string): string {
@@ -357,21 +359,40 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     persistTimer = window.setTimeout(() => {
       persistTimer = null;
       const s = get();
+      const shape = (tracks: LibraryTrack[]) =>
+        JSON.stringify({
+          folders: s.folders,
+          tracks,
+          sortKey: s.sortKey,
+          sortDir: s.sortDir,
+          groupBy: s.groupBy,
+          viewMode: s.viewMode,
+        });
       try {
-        const tracks = s.tracks.length <= MAX_PERSIST_TRACKS ? s.tracks : [];
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            folders: s.folders,
-            tracks,
-            sortKey: s.sortKey,
-            sortDir: s.sortDir,
-            groupBy: s.groupBy,
-            viewMode: s.viewMode,
-          }),
+        // Try the full list first; only degrade when it genuinely can't fit.
+        const full = shape(s.tracks);
+        if (full.length <= MAX_PERSIST_JSON_BYTES) {
+          localStorage.setItem(STORAGE_KEY, full);
+          return;
+        }
+        // Oversized library: keep folders + view prefs so the boot rescan can
+        // rebuild, and tell the user why the list re-scans on next launch.
+        localStorage.setItem(STORAGE_KEY, shape([]));
+        void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+          reportStorageFailure(
+            "Library",
+            new Error(
+              `Track list too large to save (${s.tracks.length} tracks) — it will rescan on next launch`,
+            ),
+          ),
         );
       } catch (err) {
         console.warn("[library] persist failed:", err);
+        // Quota blown mid-write: retry with folders only so at least the
+        // roots survive; if even that fails, leave the last good payload.
+        try {
+          localStorage.setItem(STORAGE_KEY, shape([]));
+        } catch { /* keep previous stored value */ }
         void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
           reportStorageFailure("Library", err),
         );

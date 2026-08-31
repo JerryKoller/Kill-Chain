@@ -90,11 +90,22 @@ function persist(bands: EqBand[]): void {
 }
 
 // Dragging a band fires many updates per second; debounce the disk write so
-// we don't thrash localStorage on every pointermove.
+// we don't thrash localStorage on every pointermove. The snapshot is read at
+// WRITE time (not schedule time) so a pending timer can never clobber a newer
+// synchronous persist with stale bands.
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
-function schedulePersist(bands: EqBand[]): void {
+function schedulePersist(readBands: () => EqBand[]): void {
   if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => persist(bands), 400);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    persist(readBands());
+  }, 400);
+}
+function cancelScheduledPersist(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
 }
 
 export const clampFreq = (f: number) =>
@@ -218,6 +229,9 @@ interface EqStore {
 export const useEqStore = create<EqStore>((set, get) => {
   const commit = (bands: EqBand[], rebuild: boolean) => {
     const sorted = sortByFreq(bands);
+    // A queued debounced write (from a drag) must not fire after this newer
+    // synchronous write — that would resurrect the pre-commit band list.
+    cancelScheduledPersist();
     persist(sorted);
     set({ bands: sorted });
     // Drop a selection that points at a band that no longer exists.
@@ -307,7 +321,7 @@ export const useEqStore = create<EqStore>((set, get) => {
         commit(bands, true);
       } else {
         // Fast path — just retune the live node.
-        schedulePersist(bands);
+        schedulePersist(() => get().bands);
         set({ bands });
         const band = bands.find((b) => b.id === id);
         if (band && band.enabled) {

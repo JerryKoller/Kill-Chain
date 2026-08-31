@@ -986,9 +986,14 @@ function makeSoftClipCurve(): Float32Array<ArrayBuffer> {
   // ±CLIP_RANGE of over-range smoothly, and output can never exceed 0.98
   // (-0.18 dBFS) — the synth hands the engine a DAC-safe signal by
   // construction.
+  // Knee at 0.8 (was 0.7): with the Fire bus now guarded by a true lookahead
+  // limiter instead of a DynamicsCompressor, this stage no longer needs to
+  // start rounding so early. Program material below -1.9 dBFS passes
+  // bit-exact; the shoulder only catches genuine synth-internal pile-ups
+  // (FX-tail resonance, massive unison chords).
   const n = 8192;
   const curve = new Float32Array(n);
-  const knee = 0.7;
+  const knee = 0.8;
   const span = 0.98 - knee; // shoulder height → ceiling asymptote 0.98
   for (let i = 0; i < n; i++) {
     const x = ((i / (n - 1)) * 2 - 1) * CLIP_RANGE;
@@ -997,6 +1002,22 @@ function makeSoftClipCurve(): Float32Array<ArrayBuffer> {
   }
   return curve;
 }
+
+/**
+ * Fixed makeup on the synth's final output (post soft-clip).
+ *
+ * ROOT CAUSE (washed-out / faded sound): the synth's internal headroom
+ * budget (VOICE_HEADROOM 0.5 → master ≈0.72 → clipPre staging) is correct
+ * for clip safety but lands a default single note at ≈0.3 peak — and the
+ * engine then multiplied in part fader (0.85) × fireBus pad (0.58 → now
+ * 0.85) × master fader (0.85) × output profile (−3 dB). Every stage was
+ * "polite" in isolation; the PRODUCT was ≈ −10.6 dB of static loss, so the
+ * synth reached the DAC at −16…−25 dBFS peak. Users cranked faders/drive to
+ * compensate and slammed the (old, pumping) limiter — the reported
+ * "clipping and corruption". +2.5 dB here plus the bus restage puts default
+ * patches at a healthy level with the SAME clip ceilings.
+ */
+const SYNTH_OUTPUT_MAKEUP = 1.33;
 
 function unisonSpread(n: number, dist: UnisonDistribution = "linear"): number[] {
   return unisonPositions(n, dist);
@@ -1076,6 +1097,8 @@ class Voice {
   private instabilityCur = 0;
   private instabilityTarget = 0;
   private readonly unisonCount: number;
+  /** Osc B provably unread by this voice — its oscillators stay unstarted. */
+  private readonly bSilent: boolean;
   /** Equal-power/coherent unison normalization — see unisonLevelNorm. */
   private uNorm: number;
   /** Extra cascaded biquads for slope > 12 dB/oct. */
@@ -1085,7 +1108,8 @@ class Voice {
   /** Second carve stage for formant F2 pairs. */
   private readonly carveFilt2: BiquadFilterNode;
   /** Optional ladder/SVF worklet (null = biquad eco path). */
-  private readonly filterWorklet: AudioWorkletNode | null;
+  /** Pooled — checked out in the constructor, returned in forceStop. */
+  private filterWorklet: AudioWorkletNode | null;
   /** Persistent Analog Life personality slot (0..47). */
   voiceSlot = 0;
 
@@ -1154,9 +1178,26 @@ class Voice {
     this.xmodGainAB = ctx.createGain();
     this.xmodGainAB.gain.value = 0;
 
-    this.groupA = this.makeGroup(ctx, this.unisonCount, bankA);
-    this.groupB = this.makeGroup(ctx, this.unisonCount, bankB);
-    this.groupC = p.oscCLevel > 0.0001 ? this.makeGroup(ctx, this.unisonCount, bankC) : null;
+    // Dual-frame morph oscillators are only reachable above the setWt snap
+    // threshold — below it they are silent CPU. See makeGroup.
+    const withHi = clamp(p.oscAContinuity ?? 0.72, 0, 1) >= 0.12;
+    this.groupA = this.makeGroup(ctx, this.unisonCount, bankA, withHi);
+    this.groupB = this.makeGroup(ctx, this.unisonCount, bankB, withHi);
+    this.groupC = p.oscCLevel > 0.0001 ? this.makeGroup(ctx, this.unisonCount, bankC, withHi) : null;
+    // Osc B is ALSO a modulator source (cross-FM taps its pans pre-level), so
+    // it can't just be dropped when its level is 0 the way osc C is. But when
+    // nothing reads it at all, leaving its oscillators UNSTARTED costs
+    // nothing while keeping every node reference valid — the default Init
+    // patch (oscBLevel 0) stops paying for a full silent oscillator bank.
+    this.bSilent =
+      p.oscBLevel <= 0.0001
+      && !(p.fmBtoA && p.fmBtoA > 0.0001)
+      && !(p.fmAtoB && p.fmAtoB > 0.0001)
+      && (p.oscBInherit ?? "off") === "off"
+      && !p.oscBPhaseLock
+      && !(Array.isArray(p.modMatrix) && p.modMatrix.some(
+        (r) => r && r.source !== "none" && (r.dest === "levelB" || r.dest === "wtB"),
+      ));
     this.groupA.level.connect(this.mix);
     this.groupB.level.connect(this.mix);
     this.groupC?.level.connect(this.mix);
@@ -1222,13 +1263,9 @@ class Voice {
       (model === "ladder" || model === "svf")
       && synth.filterWorkletReady
       && (p.fxQuality ?? "live") !== "eco";
-    this.filterWorklet = wantWorklet
-      ? new AudioWorkletNode(ctx, "kc-filter", {
-          numberOfInputs: 1,
-          numberOfOutputs: 1,
-          outputChannelCount: [2],
-        })
-      : null;
+    // Pooled checkout — per-voice construction wedged the worklet thread
+    // after enough churn (see acquireFilterWorklet). Null = biquad fallback.
+    this.filterWorklet = wantWorklet ? synth.acquireFilterWorklet() : null;
 
     const drivePre = (p.filterDrivePos ?? "post") === "pre";
     let node: AudioNode = this.mix;
@@ -1279,6 +1316,12 @@ class Voice {
     this.lfoToSub = !(p.subPhaseAlign ?? true);
     for (const bank of [synth.lfo1, synth.lfo2]) {
       bank.filterDepth.connect(this.filter.frequency);
+      // Ladder/SVF patches run the worklet, not the biquad — without this
+      // connect, "LFO → filter" was silently dead on those filter models.
+      if (this.filterWorklet) {
+        const cutP = this.filterWorklet.parameters.get("cutoff");
+        if (cutP) bank.filterDepth.connect(cutP);
+      }
       for (const o of this.allOscs()) bank.pitchDepth.connect(o.detune);
       if (this.lfoToSub) bank.pitchDepth.connect(this.sub.detune);
     }
@@ -1330,12 +1373,14 @@ class Voice {
       const usePhase = !isAnchor && phaseMode !== "locked" && phaseMode !== "alternating";
       const phi = usePhase ? phases[i]! : 0;
       this.groupA.osc[i].start(st + phi / (2 * Math.PI * fA0));
-      this.groupA.oscHi[i].start(st + phi / (2 * Math.PI * fA0));
-      this.groupB.osc[i].start(st + phi / (2 * Math.PI * fB0));
-      this.groupB.oscHi[i].start(st + phi / (2 * Math.PI * fB0));
+      this.groupA.oscHi[i]?.start(st + phi / (2 * Math.PI * fA0));
+      if (!this.bSilent) {
+        this.groupB.osc[i].start(st + phi / (2 * Math.PI * fB0));
+        this.groupB.oscHi[i]?.start(st + phi / (2 * Math.PI * fB0));
+      }
       if (this.groupC) {
         this.groupC.osc[i].start(st + phi / (2 * Math.PI * fC0));
-        this.groupC.oscHi[i].start(st + phi / (2 * Math.PI * fC0));
+        this.groupC.oscHi[i]?.start(st + phi / (2 * Math.PI * fC0));
       }
     }
     this.sub.start(t);
@@ -1351,7 +1396,17 @@ class Voice {
     this.triggerEnvelopes(p, velocity, t);
   }
 
-  private makeGroup(ctx: AudioContext, count: number, bank: PeriodicWave[]): Group {
+  /**
+   * Build one oscillator group.
+   *
+   * `withHi` = false skips the adjacent-frame morph oscillators entirely.
+   * At low continuity `setWt` snaps to a SINGLE frame and holds morphHi at 0
+   * forever, so those oscillators were pure waste — and they are half of the
+   * per-voice oscillator count (3 groups × unison 7 = 21 wasted wavetable
+   * oscillators on a big patch). setWt/detune/tuning all treat an empty
+   * oscHi array as "single frame mode".
+   */
+  private makeGroup(ctx: AudioContext, count: number, bank: PeriodicWave[], withHi: boolean): Group {
     const osc: OscillatorNode[] = [];
     const oscHi: OscillatorNode[] = [];
     const morphLo: GainNode[] = [];
@@ -1361,24 +1416,26 @@ class Voice {
     const level = ctx.createGain();
     for (let i = 0; i < count; i++) {
       const o = ctx.createOscillator();
-      const oHi = ctx.createOscillator();
       const mLo = ctx.createGain();
-      const mHi = ctx.createGain();
       mLo.gain.value = 1;
-      mHi.gain.value = 0;
       const g = ctx.createGain();
       g.gain.value = 1;
       const pan = ctx.createStereoPanner();
       o.setPeriodicWave(bank[0]);
-      oHi.setPeriodicWave(bank[0]);
       // Dual-frame equal-power morph: lo/hi → polarity → pan → group level.
       o.connect(mLo).connect(g);
-      oHi.connect(mHi).connect(g);
+      if (withHi) {
+        const oHi = ctx.createOscillator();
+        const mHi = ctx.createGain();
+        mHi.gain.value = 0;
+        oHi.setPeriodicWave(bank[0]);
+        oHi.connect(mHi).connect(g);
+        oscHi.push(oHi);
+        morphHi.push(mHi);
+      }
       g.connect(pan).connect(level);
       osc.push(o);
-      oscHi.push(oHi);
       morphLo.push(mLo);
-      morphHi.push(mHi);
       gains.push(g);
       pans.push(pan);
     }
@@ -1396,7 +1453,10 @@ class Voice {
     const N = Math.max(2, group.bank.length);
     const t = this.ctx.currentTime;
     // Continuity low → coarse snapped single frame; high → dual-osc crossfade.
-    if (cont < 0.12) {
+    // No hi oscillators (built single-frame) forces the snapped path — a live
+    // continuity raise then takes effect on the NEXT note, same as the
+    // existing per-note baking of filter model / osc C presence.
+    if (cont < 0.12 || group.oscHi.length === 0) {
       const steps = Math.max(2, Math.round(4 + cont * (N - 4)));
       const snapped = Math.round(clamp(pos, 0, 1) * (steps - 1)) / (steps - 1);
       const k = Math.round(snapped * (N - 1));
@@ -1408,7 +1468,7 @@ class Voice {
       for (let i = 0; i < group.osc.length; i++) {
         group.osc[i]!.setPeriodicWave(wave);
         group.morphLo[i]!.gain.setTargetAtTime(1, t, 0.01);
-        group.morphHi[i]!.gain.setTargetAtTime(0, t, 0.01);
+        group.morphHi[i]?.gain.setTargetAtTime(0, t, 0.01);
       }
       return;
     }
@@ -1425,7 +1485,7 @@ class Voice {
       const w1 = group.bank[k1] ?? w0;
       for (let i = 0; i < group.osc.length; i++) {
         group.osc[i]!.setPeriodicWave(w0);
-        group.oscHi[i]!.setPeriodicWave(w1);
+        group.oscHi[i]?.setPeriodicWave(w1);
       }
       group.lastK = k0;
       group.lastK1 = k1;
@@ -1436,7 +1496,7 @@ class Voice {
     const { g0, g1 } = morphFrameGains(frac);
     for (let i = 0; i < group.osc.length; i++) {
       group.morphLo[i]!.gain.setTargetAtTime(g0, t, 0.006);
-      group.morphHi[i]!.gain.setTargetAtTime(g1, t, 0.006);
+      group.morphHi[i]?.gain.setTargetAtTime(g1, t, 0.006);
     }
   }
 
@@ -1491,10 +1551,16 @@ class Voice {
       this.groupB.pans[i].pan.setTargetAtTime(pan, t, 0.02);
       this.groupA.osc[i].detune.setValueAtTime(p.oscADetune + (unisonOn ? det : 0), t);
       this.groupB.osc[i].detune.setValueAtTime(p.oscBDetune + (unisonOn ? det : 0), t);
+      // The hi-frame morph oscillators must carry the SAME detune — leaving
+      // them at 0 made half the dual-morph stack un-detuned: coherent peak
+      // pile-ups (clip) and a narrower image than the patch asked for.
+      this.groupA.oscHi[i]?.detune.setValueAtTime(p.oscADetune + (unisonOn ? det : 0), t);
+      this.groupB.oscHi[i]?.detune.setValueAtTime(p.oscBDetune + (unisonOn ? det : 0), t);
       if (this.groupC) {
         this.groupC.gains[i].gain.setValueAtTime(pol, t);
         this.groupC.pans[i].pan.setTargetAtTime(pan, t, 0.02);
         this.groupC.osc[i].detune.setValueAtTime(p.oscCDetune + (unisonOn ? det : 0), t);
+        this.groupC.oscHi[i]?.detune.setValueAtTime(p.oscCDetune + (unisonOn ? det : 0), t);
       }
     }
   }
@@ -1847,10 +1913,14 @@ class Voice {
         }
       }
       if (accent > 0.04) {
-        const boosted = clamp(peak * (1 + accent * 0.4), 0, 1.25);
+        // Cap at 1.0: accents used to push the amp envelope to 1.25 — a
+        // +1.9 dB spike straight into the drive shaper on every accented
+        // arp step (audible as periodic crunch). Accent character now comes
+        // from the velocity/filter response, not from overshooting the VCA.
+        const boosted = clamp(peak * (1 + accent * 0.4), 0, 1.0);
         this.ampEnv.offset.cancelScheduledValues(t);
         this.ampEnv.offset.setValueAtTime(startLvl, t);
-        this.ampEnv.offset.linearRampToValueAtTime(boosted * (1 + overshoot * 0.25), t + ampAtk);
+        this.ampEnv.offset.linearRampToValueAtTime(clamp(boosted * (1 + overshoot * 0.25), 0, 1.05), t + ampAtk);
         this.ampEnv.offset.setTargetAtTime(boosted * (gateish ? 1 : p.ampSustain), afterAtk, decTau);
       }
     }
@@ -1872,16 +1942,23 @@ class Voice {
    * wall-clock steal could disconnect nodes mid-render.
    */
   private scheduleEnd(tailSec: number): void {
+    // Audio-clock stop for BOTH paths (small live safety margin on top).
+    // The live path used to rely on setTimeout alone: background-tab timer
+    // throttling left whole voice graphs rendering for minutes — CPU climbed,
+    // ecoHot kicked in, oversampling dropped, and the synth started aliasing
+    // ("corruption when sounds get complex"). Oscillator stop() cannot be
+    // throttled; the wall timer remains only to disconnect/GC promptly.
+    const at = this.ctx.currentTime + Math.max(0.01, tailSec) + (this.synth.offlineSafe ? 0 : 0.05);
+    const srcs: AudioScheduledSourceNode[] = [
+      ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise,
+      this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
+    ];
+    for (const n of srcs) { try { n.stop(at); } catch { /* already stopped */ } }
     if (this.synth.offlineSafe) {
-      const at = this.ctx.currentTime + Math.max(0.01, tailSec);
-      const srcs: AudioScheduledSourceNode[] = [
-        ...this.allOscs(), this.sub, this.subHarm, this.fmOsc, this.noise,
-        this.ampEnv, this.filterEnv, this.pitchEnv, this.modDetune, this.modCutoff,
-      ];
-      for (const n of srcs) { try { n.stop(at); } catch { /* already stopped */ } }
       try { this.ampEnv.onended = () => this.forceStop(); } catch { /* ignore */ }
     } else {
       this.endTimer = setTimeout(() => this.forceStop(), tailSec * 1000);
+      try { this.ampEnv.onended = () => this.forceStop(); } catch { /* ignore */ }
     }
   }
 
@@ -2083,6 +2160,12 @@ class Voice {
     }
     for (const bank of [this.synth.lfo1, this.synth.lfo2]) {
       try { bank.filterDepth.disconnect(this.filter.frequency); } catch { /* ignore */ }
+      // The worklet cutoff param edge too — the shared LFO bank must not
+      // accumulate a dead param connection per note played.
+      if (this.filterWorklet) {
+        const cutP = this.filterWorklet.parameters.get("cutoff");
+        if (cutP) { try { bank.filterDepth.disconnect(cutP); } catch { /* ignore */ } }
+      }
       for (const o of this.allOscs()) {
         try { bank.pitchDepth.disconnect(o.detune); } catch { /* ignore */ }
       }
@@ -2097,7 +2180,11 @@ class Voice {
       this.gSub, this.gSubHarm, this.gNoise, this.noiseBurst, this.noiseFilt, this.fmGain, this.xmodGain, this.xmodGainAB,
       this.mix, this.filter, ...this.filterExtra, this.carveFilt, this.carveFilt2, this.fdPad, this.fdShaper, this.vca,
     ];
-    if (this.filterWorklet) others.push(this.filterWorklet);
+    // Pooled worklet goes BACK to the synth (reset + reuse), not to GC.
+    if (this.filterWorklet) {
+      this.synth.releaseFilterWorklet(this.filterWorklet);
+      this.filterWorklet = null;
+    }
     if (this.groupC) {
       others.push(
         ...this.groupC.pans, ...this.groupC.gains, ...this.groupC.morphLo, ...this.groupC.morphHi, this.groupC.level,
@@ -2193,6 +2280,9 @@ class Voice {
       if (this.filterWorklet) {
         this.filterWorklet.parameters.get("cutoff")?.setTargetAtTime(20000, t, 0.03);
         this.filterWorklet.parameters.get("resonance")?.setTargetAtTime(0, t, 0.03);
+        // Stop the ladder/SVF kernel outright — an open cutoff still ran the
+        // full per-voice filter for a module the user switched off.
+        this.filterWorklet.parameters.get("bypass")?.setValueAtTime(1, t);
       }
       this.mix.gain.setTargetAtTime(1, t, 0.03);
       return;
@@ -2234,6 +2324,7 @@ class Voice {
       drvP?.setTargetAtTime(clamp(p.filterDrive ?? 0, 0, 1) * 0.55, t, 0.04);
       modeP?.setValueAtTime(mode, t);
       typeP?.setValueAtTime(typeHint, t);
+      this.filterWorklet.parameters.get("bypass")?.setValueAtTime(0, t);
     }
     // Harmonic carve via notch / peaking near fundamental or partials / formants.
     const carve = p.filterCarve ?? "off";
@@ -2376,6 +2467,10 @@ class Voice {
  * in the packaged Electron build (file://). Resolves false — never throws —
  * so a failed load degrades to a permanent clean bypass.
  */
+/** STFT window used by kc-spectral. Fixed: the worklet sizes its tables once
+ *  at module load, so this is engine truth, not a per-patch setting. */
+export const SPECTRAL_FFT_SIZE = 2048;
+
 const spectralModuleReady = new WeakMap<BaseAudioContext, Promise<boolean>>();
 function loadSpectralModule(ctx: AudioContext): Promise<boolean> {
   let p = spectralModuleReady.get(ctx);
@@ -2506,6 +2601,8 @@ export class FireCommandSynth {
   // ── Spectral FX (v1.7) — dry branch is unity until the worklet engages ──
   private readonly spectralDry: GainNode;
   private readonly spectralSend: GainNode;
+  /** Post-STFT trim — makes spectralOutGain real (it was a dead patch field). */
+  private readonly spectralOutTrim: GainNode;
   private spectralNode: AudioWorkletNode | null = null;
   private spectralState: "idle" | "loading" | "ready" | "failed" = "idle";
   private readonly autopan: StereoPannerNode;
@@ -2606,6 +2703,8 @@ export class FireCommandSynth {
 
   /** Skip wall-clock voice GC / mod interval — required for OfflineAudioContext bounce. */
   offlineSafe = false;
+  /** Set by dispose(); guards the mod tick against running on a dead graph. */
+  private disposed = false;
   /** Ladder/SVF AudioWorklet available for new voices. */
   filterWorkletReady = false;
 
@@ -2622,14 +2721,93 @@ export class FireCommandSynth {
   private static readonly HOT_ARP_DYING_CAP = 2;
   /** Materialize ARP notes this far before `when` (keeps sample-accurate starts). */
   private static readonly ARP_MATERIALIZE_EPS = 0.008;
-  /** Extra voiceBus pad while hot ARP is cooking. */
-  private static readonly HOT_ARP_BUS_PAD = 0.72;
+  /** Extra voiceBus pad while hot ARP is cooking. 0.72 stacked with the poly
+   *  √comp was a double penalty (−2.8 dB on top of the duck) — with the bus
+   *  limiter now doing real lookahead limiting, a light 0.9 pad suffices. */
+  private static readonly HOT_ARP_BUS_PAD = 0.9;
   /** Bound deferred ARP jobs so a main-thread stall cannot burst-spawn voices. */
   private static readonly ARP_QUEUE_CAP = 8;
   private static readonly HOT_ARP_QUEUE_CAP = 5;
 
   private limiterPinFrames = 0;
+  /**
+   * Multiplier on the limiter-pin window, doubled per flush (max 32).
+   * Without it, a loud-but-healthy patch drove an endless flush loop — see
+   * the backoff comment in updateMod.
+   */
+  private limiterFlushBackoff = 1;
+  /** Frames the limiter has been unpinned, used to re-arm the backoff. */
+  private limiterUnpinFrames = 0;
   private delayHotFrames = 0;
+  /** Dead-output self-heal: consecutive ticks with voices sounding but the
+   *  output flat-zero / non-finite. See runTickBody. */
+  private healthAnalyser: AnalyserNode | null = null;
+  private healthBuf: Float32Array<ArrayBuffer> | null = null;
+  private deadOutputFrames = 0;
+  private healSameTickGuard = -1000;
+  /** Last observed hot-arp flag — bus params reapply on flips (space duck). */
+  private lastHotArpState = false;
+  /** True while the exporter is driving updateMod by hand. See
+   *  tickModulationForRender — suppresses live-only timer/graph maintenance. */
+  private offlineTick = false;
+
+  /**
+   * Bounded pool of kc-filter worklet nodes. Constructing one AudioWorkletNode
+   * PER VOICE wedged Chromium's worklet thread after a few thousand
+   * create/destroy cycles (≈5 minutes of fast ladder arps) — new processors
+   * silently stopped instantiating and every ladder/SVF voice was born
+   * silent. Nodes here are created once, checked out per voice, and reset +
+   * returned on voice teardown. When the pool is exhausted the voice falls
+   * back to the biquad path (audible, just a different filter flavor).
+   */
+  private readonly filterWorkletPool: AudioWorkletNode[] = [];
+  private filterWorkletCount = 0;
+  private static readonly FILTER_WORKLET_CAP = 40;
+
+  acquireFilterWorklet(): AudioWorkletNode | null {
+    // FIFO, not LIFO. The state reset on release is a `postMessage`, which the
+    // audio thread only processes at its next render quantum (~2.7 ms). Popping
+    // from the end handed the JUST-released node to the next voice first, so a
+    // fast retrigger (ARP, choke-and-replace on the same pitch) could start
+    // filtering before the reset landed and inherit the previous voice's
+    // resonant ladder state — a screech on note onset, worst at high
+    // resonance. Taking the OLDEST idle node instead gives every reset the
+    // maximum possible time to be applied.
+    const pooled = this.filterWorkletPool.shift();
+    if (pooled) return pooled;
+    if (this.filterWorkletCount >= FireCommandSynth.FILTER_WORKLET_CAP) return null;
+    try {
+      const node = new AudioWorkletNode(this.ctx, "kc-filter", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      });
+      this.filterWorkletCount++;
+      return node;
+    } catch {
+      return null;
+    }
+  }
+
+  releaseFilterWorklet(node: AudioWorkletNode): void {
+    try { node.disconnect(); } catch { /* ignore */ }
+    // Zero the DSP state and park the params open/neutral so the next owner
+    // never inherits the previous voice's resonant tail or closed cutoff.
+    try { node.port.postMessage({ reset: true }); } catch { /* ignore */ }
+    try {
+      const t = this.ctx.currentTime;
+      const set = (name: string, v: number) => {
+        const p = node.parameters.get(name);
+        if (p) { p.cancelScheduledValues(t); p.setValueAtTime(v, t); }
+      };
+      set("cutoff", 18000);
+      set("resonance", 0);
+      set("drive", 0);
+      // Park pooled nodes in true bypass so an idle checkout costs nothing.
+      set("bypass", 1);
+    } catch { /* ignore */ }
+    this.filterWorkletPool.push(node);
+  }
 
   /** Lightweight ARP lookahead jobs — Voice is built only near `when`. */
   private readonly arpQueue: Array<{
@@ -2643,7 +2821,16 @@ export class FireCommandSynth {
   constructor(
     ctxIn: BaseAudioContext,
     dest: AudioNode,
-    opts?: { onFlushContamination?: () => void; getLimiterReduction?: () => number },
+    opts?: {
+      onFlushContamination?: () => void;
+      getLimiterReduction?: () => number;
+      /**
+       * Throwaway synth on a short-lived OfflineAudioContext (Natural
+       * Selection auditions). Suppresses the constructor's filter-worklet
+       * preload — see the comment at the call site.
+       */
+      transient?: boolean;
+    },
   ) {
     const ctx = ctxIn as AudioContext;
     this.ctx = ctx;
@@ -2652,8 +2839,20 @@ export class FireCommandSynth {
     this.patch = cloneFirePatch({});
     this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
 
-    // Preload filter bite worklet (non-blocking); voices fall back to biquad until ready.
-    void loadFilterModule(ctx).then((ok) => {
+    // Preload filter bite worklet (non-blocking); voices fall back to biquad
+    // until ready.
+    //
+    // SKIPPED for transient synths. Calling addModule() gives an
+    // AudioWorkletGlobalScope — a separate JS realm — to the context, and
+    // Blink then never collects that context. Natural Selection builds one
+    // OfflineAudioContext per audition, so this single unconditional line
+    // stranded the whole context, its rendered AudioBuffer and ~772 KB of
+    // channel data per audition. Measured by heap-snapshot diff: every class
+    // below grew exactly once per audition — OfflineAudioContext,
+    // AudioWorklet, AudioBuffer, AudioDestinationNode, AudioListener.
+    // Auditions measure gross silence / distortion, for which the biquad
+    // fallback is sufficient.
+    if (!opts?.transient) void loadFilterModule(ctx).then((ok) => {
       this.filterWorkletReady = ok;
       // If a ladder/SVF patch loaded before the worklet was ready, live voices
       // are stuck on biquad — rebuild once so the intended filter engages.
@@ -2669,6 +2868,21 @@ export class FireCommandSynth {
     this.warmBanks(this.patch);
 
     this.output = ctx.createGain();
+    // See SYNTH_OUTPUT_MAKEUP — static makeup so default patches reach the
+    // bus at a healthy level. The soft clip bounds the signal at 0.98 before
+    // this, so the output ceiling is 0.98 × makeup ≈ 1.30, well inside the
+    // bus limiter's control range.
+    this.output.gain.value = SYNTH_OUTPUT_MAKEUP;
+    // Dead-output watchdog tap (see runTickBody): tiny FFT, no smoothing —
+    // we only ask "is ANY signal reaching the output while voices claim to
+    // be sounding". Live contexts only; offline renders have no tick loop.
+    if (!this.offlineSafe) {
+      try {
+        this.healthAnalyser = ctx.createAnalyser();
+        this.healthAnalyser.fftSize = 256;
+        this.output.connect(this.healthAnalyser);
+      } catch { /* metering is best-effort */ }
+    }
     this.voiceBus = ctx.createGain();
     this.drivePre = ctx.createGain();
     this.driveShaper = ctx.createWaveShaper();
@@ -2802,6 +3016,7 @@ export class FireCommandSynth {
     this.spectralDry = ctx.createGain();
     this.spectralSend = ctx.createGain();
     this.spectralSend.gain.value = 0;
+    this.spectralOutTrim = ctx.createGain();
     this.autopan = ctx.createStereoPanner();
     this.gateGain = ctx.createGain();
     // widthIn pins the stream to true stereo ("speakers" up-mix) so the
@@ -3133,24 +3348,44 @@ export class FireCommandSynth {
     const size = clamp(p.reverbSize, 0.2, 6);
     const damp = clamp(p.reverbDamp ?? 0.45, 0, 1);
     const diff = clamp(p.reverbDiffusion ?? 0.7, 0, 1);
-    const len = Math.max(1, Math.floor(sr * size));
+    // THE CAVE FIX. The old IR decayed POLYNOMIALLY ((1−t)^~2.3): at half the
+    // tail it was still only −14 dB, so a size-6 preset kept audible wash
+    // 3+ seconds after every note — users heard "playing in a cave with no
+    // clarity". Real rooms decay exponentially (linear in dB). `size` now
+    // maps to an RT60 and the tail hits −60 dB exactly there.
+    const rt60 = 0.18 + size * 0.5; // 0.28 s (size .2) … 3.18 s (size 6)
+    const len = Math.max(64, Math.floor(sr * Math.min(6, rt60 * 1.05 + 0.06)));
     const ir = this.ctx.createBuffer(2, len, sr);
+    const earlyEnd = 0.014 + 0.014 * size; // 17…98 ms early-reflection window
+    const eN = Math.min(len - 1, Math.floor(earlyEnd * sr));
+    const k60 = Math.log(1000) / Math.max(1, rt60 * sr); // −60 dB at rt60
+    const tapCount = 6 + Math.round(diff * 8);
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
+      // Tail: noise through a one-pole whose damping CLOSES OVER TIME — the
+      // old builder muffled the entire IR (earlies included) with one static
+      // coefficient, which is the other half of why everything sounded like
+      // it was behind a blanket. Bright onset, progressively darker tail.
       let lp = 0;
-      const lpCoef = 0.12 + damp * 0.78;
       for (let i = 0; i < len; i++) {
-        const t = i / len;
-        const decay = Math.pow(1 - t, 1.55 + damp * 1.55);
+        const prog = Math.min(1, i / (rt60 * sr));
+        const c = Math.min(0.92, 0.05 + damp * 0.28 + (0.3 + damp * 0.5) * prog);
         const noise = Math.random() * 2 - 1;
-        lp = lp * lpCoef + noise * (1 - lpCoef);
-        // Sparse early reflections → denser body with diffusion.
-        const earlyWin = i < sr * 0.09;
-        const early = earlyWin && Math.random() < (0.015 + diff * 0.09)
-          ? (Math.random() * 2 - 1) * (1 - i / (sr * 0.09))
-          : 0;
-        const dense = lp * (0.28 + diff * 0.72);
-        d[i] = (dense + early * (1.1 - diff * 0.55)) * decay * (ch === 0 ? 1 : 0.92 + Math.random() * 0.16);
+        lp = lp * c + noise * (1 - c);
+        d[i] = lp * (0.35 + diff * 0.65) * Math.exp(-k60 * i);
+      }
+      // Fade the dense tail in across the early window so the direct sound
+      // and discrete reflections stay articulate before the wash arrives.
+      for (let i = 0; i < eN; i++) d[i] *= i / eN;
+      // Early reflections: sparse DETERMINISTIC taps (seeded per channel for
+      // stereo, stable across rebuilds) instead of the old random crackle.
+      let s = ch === 0 ? 0x9e3779b9 : 0x85ebca6b;
+      const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 0xffffffff);
+      for (let k = 0; k < tapCount; k++) {
+        const pos = Math.floor((0.004 + rnd() * Math.max(0.004, earlyEnd - 0.004)) * sr);
+        if (pos >= len) continue;
+        const amp = (1 - pos / Math.max(1, earlyEnd * sr)) * (0.5 + rnd() * 0.5);
+        d[pos] += (rnd() < 0.5 ? -1 : 1) * amp * 0.6;
       }
     }
     this.reverbConv.buffer = ir;
@@ -3267,6 +3502,16 @@ export class FireCommandSynth {
     const mode = p.warpMode ?? "classic";
     const sig = `${mode}|${stretch}|${tilt}|${comb}|${amt}`;
     if (sig !== this.warpedSig) {
+      // A warp knob mid-scrub: rebuilding a bank costs tens of ms on the MAIN
+      // thread (SUBFRAMES × createPeriodicWave). The 80 ms debounce covered
+      // re-binding live voices but not NOTE-ONS — so playing (or arpeggiating)
+      // while dragging a warp knob paid a full rebuild per note and stalled
+      // audibly. Serve the last rendered banks until the scrub settles; the
+      // debounce then rebuilds exactly once.
+      if (this.warpTimer !== null) {
+        const held = this.warpedBanks.get(WAVETABLE_ID_SET.has(id) ? id : "saw")?.[mipI];
+        if (held) return held;
+      }
       this.warpedBanks.clear();
       this.warpedGains.clear();
       this.warpedSig = sig;
@@ -3392,8 +3637,10 @@ export class FireCommandSynth {
   // ── control-rate modulation updater (matrix + morph + gate + drift) ──
   private updateMod = (): void => {
     // Idle gate: sleep the 60 Hz timer after ~5 s with no voices (tails need
-    // a few seconds). noteOn / playNote / setPatch restart it.
-    if (this.voices.size === 0 && this.arpQueue.length === 0) {
+    // a few seconds). noteOn / playNote / setPatch restart it. Skipped for
+    // offline render ticks — there is no timer to stop, and a bounce must keep
+    // shaping the gate / LFOs through the gaps between notes.
+    if (!this.offlineTick && this.voices.size === 0 && this.arpQueue.length === 0) {
       if (!isArpKeepAlive() && ++this.idleFrames > 300) {
         // IceKing / NS leave DynamicsCompressor GR pinned on the shared master
         // path. Preset switch already flushes; also flush when a long session
@@ -3423,6 +3670,17 @@ export class FireCommandSynth {
     const now = this.ctx.currentTime;
     const p = this.patch;
 
+    // Reapply bus params when the hot-arp state flips so the space duck
+    // (delay/reverb wet trims in applyBusParams) engages and releases with
+    // the arp instead of waiting for the next unrelated knob touch.
+    {
+      const hotNow = isHotArp();
+      if (hotNow !== this.lastHotArpState) {
+        this.lastHotArpState = hotNow;
+        try { this.applyBusParams(p); } catch { /* ignore */ }
+      }
+    }
+
     // Restore voiceBus pad after hot ARP cools (updatePolyGain otherwise only
     // runs on voice edges and can leave the bus ducked forever).
     if (!isHotArp() && this.voices.size === 0 && this.dying.size === 0 && this.arpQueue.length === 0) {
@@ -3444,8 +3702,23 @@ export class FireCommandSynth {
         const pinFrames = hot ? 90 : 36; // ~1.5 s hot / ~0.6 s cool at 60 Hz
         if (gr < pinDb) {
           this.limiterPinFrames++;
-          if (this.limiterPinFrames >= pinFrames) {
+          // BACKOFF. A limiter holding -3 dB of gain reduction is usually a
+          // limiter doing its job on a loud patch, not evidence of poisoned
+          // state. The old code flushed, reset the counter to 0, and left the
+          // level untouched — so a genuinely loud patch re-pinned immediately
+          // and this looped at ~1.6 Hz indefinitely, rebuilding the delay
+          // lines and all four shared compressors every time. Each rebuild
+          // cuts the FX tails and lets one burst through a zero-state
+          // compressor, which is itself audible as distortion, which keeps
+          // the limiter pinned: a self-sustaining failure needing a relaunch.
+          //
+          // A flush only helps if state is actually stuck, so retrying at a
+          // fixed fast rate can never be right. Each successive flush now
+          // waits twice as long, and the ladder only resets once the limiter
+          // has genuinely recovered (see the else branch).
+          if (this.limiterPinFrames >= pinFrames * this.limiterFlushBackoff) {
             this.limiterPinFrames = 0;
+            this.limiterFlushBackoff = Math.min(32, this.limiterFlushBackoff * 2);
             try {
               this.flushBusContamination(now, { rebuildDelay: !hot });
               this.onFlushContamination?.();
@@ -3456,9 +3729,22 @@ export class FireCommandSynth {
           }
         } else {
           this.limiterPinFrames = Math.max(0, this.limiterPinFrames - 1);
+          // Sustained recovery (~1 s of unpinned limiter) means whatever we
+          // did worked, or there was never a problem — re-arm at full speed.
+          if (this.limiterPinFrames === 0) {
+            this.limiterUnpinFrames++;
+            if (this.limiterUnpinFrames >= 60) {
+              this.limiterUnpinFrames = 0;
+              this.limiterFlushBackoff = 1;
+            }
+          }
         }
       }
-      if ((p.delayMix ?? 0) > 0.12 && !isHotArp()) {
+      // Never rebuild delay/chorus/predelay nodes mid-bounce: swapping graph
+      // nodes while an OfflineAudioContext renders would punch a hole in the
+      // export. The contamination this guards against needs a long live
+      // session to build up anyway.
+      if (!this.offlineTick && (p.delayMix ?? 0) > 0.12 && !isHotArp()) {
         this.delayHotFrames++;
         // ~30 s of sustained delay-heavy play: rebuild lines even if limiter
         // hasn't pinned yet (slow IceKing breakdown while still on the preset).
@@ -3474,6 +3760,61 @@ export class FireCommandSynth {
         }
       } else {
         this.delayHotFrames = 0;
+      }
+
+      // ── Dead-output self-heal ──
+      // Last line of defense for "played for hours, then it just stopped":
+      // if voices have been sounding for a while but the output is EXACTLY
+      // zero (or non-finite) for ~2.5 s straight, some bus stage latched a
+      // bad state. Flush and reassert the patch; escalate to a full graph
+      // rebuild if a heal repeats within 10 s. False positives are made
+      // near-impossible by requiring settled voices + audible master gain,
+      // and a spurious flush is inaudible anyway (it only clears FX tails).
+      if (this.healthAnalyser && !this.fxSilenced && (p.masterGain ?? 0.72) > 0.05) {
+        // Arm whenever any voice has been alive ≥250 ms — arp one-shots are
+        // short-lived, so requiring a long-settled non-releasing voice made
+        // the watchdog blind during exactly the workload that kills audio.
+        // The 4 s persistence window below is what prevents false alarms
+        // (slow pad attacks, quiet patches between notes).
+        const anyAudible = [...this.voices].some((v) => v.startedAt < now - 0.25);
+        if (anyAudible) {
+          if (!this.healthBuf || this.healthBuf.length !== this.healthAnalyser.fftSize) {
+            this.healthBuf = new Float32Array(this.healthAnalyser.fftSize);
+          }
+          this.healthAnalyser.getFloatTimeDomainData(this.healthBuf);
+          let peak = 0;
+          for (let i = 0; i < this.healthBuf.length; i++) {
+            const a = Math.abs(this.healthBuf[i]!);
+            if (a > peak) peak = a;
+          }
+          const dead = !(peak > 0) || !Number.isFinite(peak);
+          if (dead) {
+            this.deadOutputFrames++;
+            if (this.deadOutputFrames >= 240) {
+              this.deadOutputFrames = 0;
+              const escalate = now - this.healSameTickGuard < 12;
+              this.healSameTickGuard = now;
+              try {
+                if (escalate) {
+                  // Second heal in 12 s: flush didn't stick — rebuild the
+                  // whole voice/bus graph from the current patch.
+                  this.setPatch(this.patch);
+                } else {
+                  this.flushBusContamination(now, { rebuildDelay: true });
+                  this.applyBusParams(p);
+                  this.onFlushContamination?.();
+                }
+                console.warn(
+                  `[FireCommand] dead-output watchdog ${escalate ? "rebuilt graph" : "flushed bus"}`,
+                );
+              } catch { /* ignore */ }
+            }
+          } else {
+            // Decay instead of hard reset: intermittent single live samples
+            // must not let a mostly-dead bus evade the watchdog forever.
+            this.deadOutputFrames = Math.max(0, this.deadOutputFrames - 8);
+          }
+        }
       }
       this.pruneDying();
     }
@@ -3851,11 +4192,18 @@ export class FireCommandSynth {
   }
 
   /** Current trance-gate step for the UI playhead (-1 when the gate is off). */
-  getGateStep(): number {
+  /**
+   * Gate pattern index. `at` defaults to now (live keyboard); the sequencer
+   * passes the note's scheduled time so a gate-to-velocity note is shaped by
+   * the step it will actually land on — including offline renders, where
+   * currentTime is 0 while every note is scheduled ahead.
+   */
+  getGateStep(at?: number): number {
     const p = this.patch;
     if (!p.gateOn) return -1;
     const steps = Math.max(1, Math.min(16, Math.round(p.gateSteps)));
-    return Math.floor(this.ctx.currentTime * clamp(p.gateRate, 0.25, 24)) % steps;
+    const when = typeof at === "number" && Number.isFinite(at) ? at : this.ctx.currentTime;
+    return Math.floor(Math.max(0, when) * clamp(p.gateRate, 0.25, 24)) % steps;
   }
 
   /** Live LFO value (-1..1) for UI scopes — same math the mod loop uses. */
@@ -4036,7 +4384,10 @@ export class FireCommandSynth {
     this.pruneDying();
     const p = this.patch;
     const t = Math.max(this.ctx.currentTime, when);
-    const releaseAt = when + Math.max(0.02, duration);
+    // Anchor the release to the CLAMPED start: when a late timer delivered a
+    // past `when`, the release used to land before (or right on top of) the
+    // actual start — zero-length envelopes that clicked.
+    const releaseAt = t + Math.max(0.02, duration);
     // Sequencer must honor mono the same way live noteOn does — otherwise
     // piano-roll / arrangement stacks poly voices on acid/legato patches.
     if (p.mono) {
@@ -4063,6 +4414,10 @@ export class FireCommandSynth {
       voice.noteOff(p, releaseAt);
       return;
     }
+    // Overlapping same-pitch roll/arrangement notes: softly choke the earlier
+    // voice exactly like the arp path does. Without this, stacked identical
+    // pitches summed coherently (+6 dB per doubling) into the drive shaper.
+    this.chokeSameMidiAt(midi, t);
     const cap = this.effectiveMaxVoices(p);
     while (this.voices.size >= cap) this.stealVoice();
     {
@@ -4100,11 +4455,14 @@ export class FireCommandSynth {
         v.fastRelease();
         continue;
       }
-      // Already fading — only hard-stop if the fade has had time to settle.
-      // Mid-sample forceStop on a hot amp is the crackle users hear as "distort".
-      // During hot ARP, prefer forceStop over leaving extras that sum forever.
+      // Already fading — only hard-stop once the fade has had time to settle.
+      // Mid-sample forceStop on a hot amp is the crackle users heard as
+      // "distortion" on fast arps: the old code force-stopped ANY fading
+      // voice the moment the arp ran hot, so every steal produced a click at
+      // 40 notes/sec. Now even hot arps give the fade 12 ms to get quiet;
+      // the hard ceiling above still bounds true pile-ups.
       const relAt = v.releaseAt ?? now;
-      if (now >= relAt + 0.012 || hot) {
+      if (now >= relAt + 0.012) {
         v.forceStop();
       } else {
         this.dying.add(v);
@@ -4227,7 +4585,11 @@ export class FireCommandSynth {
       : this.effectiveMaxVoices(p);
     while (this.voices.size >= cap) this.stealVoice();
     const [bankA, bankB, bankC] = this.banksForNote(p, job.midi);
-    // Drop dual-morph continuity while hot — halves oscillator node cost on Init.
+    // Drop dual-morph continuity while hot — halves the morph work on Init.
+    // Deliberately NOT pushed below setWt's 0.12 snap threshold: going fully
+    // single-frame would save the hi oscillator bank too, but it audibly
+    // shifted arp timbre (measured ~1.5 dB and a different frame selection),
+    // and consistent sound beats the extra headroom here.
     const voicePatch = hot && (p.oscAContinuity ?? 0) > 0.45
       ? { ...p, oscAContinuity: 0.35 }
       : p;
@@ -4540,13 +4902,22 @@ export class FireCommandSynth {
     for (const v of this.voices) {
       if (v.startedAt <= now + 0.001) audible++;
     }
-    audible += this.dying.size;
+    // Dying voices are mid-fade (≤50 ms tails at a fraction of full level) —
+    // counting them at FULL weight ducked hot arps to ~0.19× (−8 dB): with
+    // 5 sounding + 2 dying at knee 2, √(2/7) crushed every accent. That WAS
+    // the "arps sound washed out / non-responsive" complaint. Half-weight,
+    // capped, keeps a little headroom credit without the crush.
+    audible += Math.min(this.dying.size * 0.5, 1.5);
     const hot = isHotArp();
-    const knee = hot ? 2 : isArpKeepAlive() ? 2.5 : 3;
+    // Hot knee raised 2 → 3: a normal up/down arp holds ~3 overlapping
+    // voices (gate tails), which used to sit permanently ABOVE the knee.
+    const knee = hot ? 3 : isArpKeepAlive() ? 3 : 3;
     const pad = hot ? FireCommandSynth.HOT_ARP_BUS_PAD : 1;
     const g = VOICE_HEADROOM * pad * (audible <= knee ? 1 : Math.sqrt(knee / audible));
-    // Hot ARP: near-instant trim so 17 ms gates aren't clipped before gain settles.
-    const tau = hot ? 0.0015 : isArpKeepAlive() ? 0.012 : 0.05;
+    // 12 ms trim: fast enough that a burst doesn't clip ahead of the bus
+    // limiter, slow enough that per-note gain changes stop reading as
+    // note-rate amplitude modulation (the old 1.5 ms pumped audibly).
+    const tau = hot ? 0.012 : isArpKeepAlive() ? 0.015 : 0.05;
     this.voiceBus.gain.setTargetAtTime(g, now, tau);
   }
 
@@ -4589,12 +4960,126 @@ export class FireCommandSynth {
     this.updatePolyGain();
   }
 
+  /**
+   * Tear the synth down and release everything it holds.
+   *
+   * Added because Natural Selection builds a THROWAWAY synth per candidate
+   * patch: `auditionFirePatch` spins up an OfflineAudioContext plus a complete
+   * FireCommandSynth (≈150 nodes, a generated reverb impulse response, and a
+   * freshly rendered set of wavetable PeriodicWaves) purely to measure whether
+   * the candidate is silent or distorted, then dropped both on the floor.
+   *
+   * Measured cost: 0.42 MB retained per audition, while a bare
+   * OfflineAudioContext render retains nothing. A mutate runs several
+   * auditions, so breeding sounds leaked ~64 MB per minute — roughly a
+   * gigabyte in a quarter hour of sound design, which never came back without
+   * an app relaunch. As the heap grows, GC pauses lengthen and start stalling
+   * the 60 Hz modulation loop and the audio render thread, which is heard as
+   * crackle and breakup rather than as "low memory".
+   *
+   * Disposal is reflective rather than a hand-written list of 150 fields:
+   * enumerating own properties and disconnecting anything node-shaped can't
+   * drift out of date as the graph changes.
+   */
+  dispose(): void {
+    this.stopModTimer();
+    this.clearArpSchedule();
+    if (this.warpTimer) {
+      clearTimeout(this.warpTimer);
+      this.warpTimer = null;
+    }
+    for (const v of [...this.voices]) { try { v.forceStop(); } catch { /* ignore */ } }
+    this.voices.clear();
+    for (const v of [...this.dying]) { try { v.forceStop(); } catch { /* ignore */ } }
+    this.dying.clear();
+    this.held.clear();
+    this.monoVoice = null;
+
+    const self = this as unknown as Record<string, unknown>;
+    const visit = (val: unknown): void => {
+      if (!val || typeof val !== "object") return;
+      const n = val as Partial<AudioNode & AudioScheduledSourceNode & { buffer: unknown }>;
+      // Sources must stop before disconnect or they keep the context alive.
+      if (typeof n.stop === "function") { try { n.stop(); } catch { /* not started */ } }
+      if (typeof n.disconnect === "function") { try { n.disconnect(); } catch { /* ignore */ } }
+      // Convolver IRs and buffer sources hold the largest single allocations.
+      if ("buffer" in n) { try { (n as { buffer: unknown }).buffer = null; } catch { /* readonly */ } }
+      if (typeof (val as { port?: { onmessage: unknown } }).port === "object") {
+        try { (val as { port: { onmessage: unknown } }).port.onmessage = null; } catch { /* ignore */ }
+      }
+    };
+    for (const key of Object.keys(self)) {
+      const val = self[key];
+      if (Array.isArray(val)) { for (const item of val) visit(item); continue; }
+      visit(val);
+    }
+    // LFO banks and the vintage submodule hold their own nested graphs.
+    for (const bank of [this.lfo1, this.lfo2]) {
+      if (!bank) continue;
+      for (const v of Object.values(bank as unknown as Record<string, unknown>)) visit(v);
+    }
+    if (this.vintage) {
+      for (const v of Object.values(this.vintage as unknown as Record<string, unknown>)) visit(v);
+    }
+
+    // Caches: PeriodicWave sets are the bulk of a throwaway synth's footprint.
+    this.banks.clear();
+    this.bankGains.clear();
+    this.warpedBanks.clear();
+    this.warpedGains.clear();
+    this.filterWorkletPool.length = 0;
+    this.filterWorkletCount = 0;
+    this.healthAnalyser = null;
+    this.spectralNode = null;
+    this.disposed = true;
+  }
+
   /** Keep delaySync (and tempo-linked FX) locked to the sequencer/host BPM. */
   setHostBpm(bpm: number): void {
     const next = clamp(bpm, 40, 300);
     if (Math.abs(next - this.hostBpm) < 0.05) return;
     this.hostBpm = next;
     if (this.patch.delaySync) this.applyBusParams(this.patch);
+  }
+
+  /**
+   * Rebuild live voices for a topology change WITHOUT touching the FX bus.
+   *
+   * filterModel / filterSlope / filterDrivePos / unison are baked into each
+   * Voice at construction, so changing one needs the voices rebuilt. They used
+   * to route through the full `setPatch()`, which additionally:
+   *   · flushed bus contamination and REBUILT the delay lines, chorus delays,
+   *     phaser allpasses, punch compressor and reverb predelay,
+   *   · called onFlushContamination() → the engine replaced all four of its
+   *     shared DynamicsCompressors (fire limiter, glue, FX limiter, final),
+   *   · dropped the wavetable caches and re-rendered every bank.
+   *
+   * None of that is implied by "use a ladder instead of a biquad". The cost
+   * was ~7 heavyweight node allocations per click plus two audible artifacts:
+   * every delay/reverb tail cut off, and a fresh zero-state compressor letting
+   * one burst through un-limited before its envelope caught up. Clicking
+   * through filter models or unison counts — normal sound design — therefore
+   * produced a click and a level spike each time, and churned the graph.
+   *
+   * This keeps the voice rebuild and drops everything else.
+   */
+  private retopologizeVoices(p: FirePatch): void {
+    this.startModTimer();
+    this.patch = cloneFirePatch({ ...DEFAULT_FIRE_PATCH, ...p });
+    // Voices carry the old topology in their node graph and cannot be
+    // retopologized in place, so they must go — but their FX tails may stay.
+    this.held.clear();
+    this.monoVoice = null;
+    for (const v of [...this.voices]) v.forceStop();
+    this.voices.clear();
+    for (const v of [...this.dying]) v.forceStop();
+    this.dying.clear();
+    this.updatePolyGain();
+    this.filterDriveCurve = makeFilterDriveCurve(this.patch.filterDrive);
+    // Re-assert bus + LFO params (cheap, no node surgery) so a topology change
+    // bundled with other edits still lands.
+    this.applyBusParams(this.patch);
+    this.applyLfoParams(this.patch);
   }
 
   // ── patch ──
@@ -4748,6 +5233,7 @@ export class FireCommandSynth {
         for (const v of this.voices) this.rebindVoiceBanks(v, p); break;
       case "spectralMode": case "spectralAmount": case "spectralMix":
       case "spectralLow": case "spectralHigh": case "spectralWetOnly":
+      case "spectralInGain": case "spectralOutGain":
         this.applySpectral(p); break;
       case "warpStretch": case "warpTilt": case "warpComb": case "warpAmount": case "warpMode":
         // Debounced: knob scrubs settle before the warped banks re-render.
@@ -4789,7 +5275,9 @@ export class FireCommandSynth {
         // Filter topology (extra poles, pre/post drive routing, ladder/SVF
         // worklet vs biquad) is baked per voice at construction — rebuild so
         // the change is audible immediately, not only on the next note.
-        this.setPatch(p); break;
+        // Voices only: see retopologizeVoices for why this must not flush the
+        // FX bus or swap the engine's shared limiters.
+        this.retopologizeVoices(p); break;
       case "filterDrive":
         this.filterDriveCurve = makeFilterDriveCurve(p.filterDrive);
         for (const v of this.voices) v.setFilterDriveCurve(this.filterDriveCurve);
@@ -4817,8 +5305,9 @@ export class FireCommandSynth {
         }
         break;
       case "unison":
-        // Unison voice count is baked into each Voice at construction — rebuild.
-        this.setPatch(p);
+        // Unison voice count is baked into each Voice at construction — rebuild
+        // the voices only, not the FX bus (see retopologizeVoices).
+        this.retopologizeVoices(p);
         break;
       case "mono":
         if (value) {
@@ -4860,8 +5349,12 @@ export class FireCommandSynth {
       this.driveShaper.oversample = qEff === "eco" ? (p.driveMode === "fold" ? "2x" : "none") : qEff === "live" ? "2x" : "4x";
       this.lastDriveKey = driveKey;
     }
-    // Soft-clip stage is always on the master bus — drop 2× OS when hot.
-    this.softClip.oversample = this.ecoHot ? "none" : "2x";
+    // The master soft clip keeps 2× oversampling ALWAYS. Dropping it under
+    // load traded CPU for aliasing at exactly the moment the signal was most
+    // likely to hit the shoulder (dense arps / big chords) — the reported
+    // "corruption when sounds get too complex". Eco mode still saves CPU on
+    // the drive/crush shapers above, which is where the real cost lives.
+    this.softClip.oversample = "2x";
     const inG = pathDrive ? clamp(p.driveInGain ?? 1, 0, 2) : 1;
     const outG = pathDrive ? clamp(p.driveOutGain ?? 1, 0, 2) : 1;
     const auto = pathDrive && (p.driveAutoGain !== false);
@@ -4937,7 +5430,16 @@ export class FireCommandSynth {
     const rel = useAdv ? clamp(p.glueRelease ?? 0.18, 0.02, 1) : macro.release;
     const knee = useAdv ? clamp(p.glueKnee ?? 6, 0, 40) : macro.knee;
     const makeupLin = useAdv ? clamp(p.glueMakeup ?? 1, 0.5, 4) : macro.makeup;
-    const glueMix = glueOn ? clamp(p.glueMix ?? 1, 0, 1) : 0;
+    // TRUE BYPASS when the glue is doing nothing: with punch = 0 (the
+    // default!) and no Age analogComp and no advanced settings, glueMix = 1
+    // still routed 100% of the program through the DynamicsCompressor —
+    // Chromium's implementation adds ~4-6 ms of lookahead latency, its own
+    // makeup-gain model and an adaptive release even at ratio 1. Every
+    // default patch paid that smear, which is a big slice of the "sounds
+    // washed out / attacks feel soft" complaint. Idle glue now takes the
+    // clean parallel dry path (bit-exact wire).
+    const glueIdle = glueAmt < 0.005 && ac < 0.005 && !useAdv;
+    const glueMix = glueOn && !glueIdle ? clamp(p.glueMix ?? 1, 0, 1) : 0;
     const gIn = glueOn ? clamp(p.glueInGain ?? 1, 0, 2) : 1;
     const gOut = glueOn ? clamp(p.glueOutGain ?? 1, 0, 2) : 1;
     const autoG = glueOn && (p.glueAutoGain !== false);
@@ -4967,7 +5469,12 @@ export class FireCommandSynth {
     this.phaserLfo.frequency.setTargetAtTime(phRate, t, 0.02);
     const center = clamp(p.phaserCenter ?? 800, 100, 8000);
     const stageScale = clamp((p.phaserStages ?? 4) / 4, 0.5, 3);
-    this.phaserDepth.gain.setTargetAtTime(center * 0.7 * phDepth * stageScale, t, 0.02);
+    // Cap the sweep: center 8 kHz × depth 1 × stageScale 3 used to modulate
+    // the allpass frequencies by ±16.8 kHz — way past Nyquist headroom,
+    // heard as harsh metallic hash. 2.4 kHz of swing is a deep, musical
+    // phase sweep; the cap also keeps center − depth safely above 0 Hz.
+    const depthHz = Math.min(center * 0.7 * phDepth * stageScale, Math.min(center * 0.85, 2400));
+    this.phaserDepth.gain.setTargetAtTime(depthHz, t, 0.02);
     for (let i = 0; i < this.phaserAP.length; i++) {
       const ap = this.phaserAP[i]!;
       ap.frequency.setTargetAtTime(center * (0.7 + i * 0.18), t, 0.05);
@@ -5065,6 +5572,12 @@ export class FireCommandSynth {
     // Simple duck: reduce wet when voices loud (voice count proxy)
     const duck = clamp(p.delayDuck ?? 0, 0, 1);
     if (duck > 0.01 && this.voices.size > 0) dMix *= 1 - duck * Math.min(1, this.voices.size / 4) * 0.7;
+    // Hot-arp space duck: ≥20 notes/s into a 35%+ wet delay integrates into a
+    // continuous wash that parks the bus limiter at −2…−3 dB ("IceKing wall").
+    // Dense input already fills the room — trim the wet, keep the dry punch.
+    // runTickBody reapplies bus params when the hot state flips, so this
+    // engages/releases cleanly with the arp.
+    if (isHotArp()) dMix *= 0.7;
     // Gate the feedback LOOP when wet is silent — otherwise the delay keeps
     // cooking on the tremolo feed with no audible output, then dumps hash the
     // moment any later preset opens delay mix (IceKing linger / NS poison).
@@ -5100,11 +5613,16 @@ export class FireCommandSynth {
     const early = clamp(p.reverbEarly ?? 0.45, 0, 1);
     // Early vs tail: more early → higher dry remainder. The trim now scales
     // with mix, so an enabled-but-silent reverb no longer costs 1.6 dB of bus.
-    const revDryTrim = 1 - revMix * (0.4 + (1 - early) * 0.3);
+    // Softened (0.4→0.25, 0.3→0.2): cutting 3+ dB of DRY on wet pads pushed
+    // the source into the back of the room — with the new tighter IR the dry
+    // can stay present without the sum overloading.
+    const revDryTrim = 1 - revMix * (0.25 + (1 - early) * 0.2);
     this.reverbDry.gain.setTargetAtTime(delta ? 0 : revDryTrim, t, 0.04);
     if (p.reverbFreeze) revMix = Math.max(revMix, 0.85);
+    // Hot-arp space duck — see the delay-side comment above.
+    const revHotTrim = isHotArp() ? 0.82 : 1;
     this.reverbWet.gain.setTargetAtTime(
-      this.fxSilenced ? 0 : revMix * revOut * (delta ? 1.25 : 1) * (0.65 + (1 - early) * 0.45),
+      this.fxSilenced ? 0 : revMix * revOut * revHotTrim * (delta ? 1.25 : 1) * (0.65 + (1 - early) * 0.45),
       t,
       0.04,
     );
@@ -5249,6 +5767,71 @@ export class FireCommandSynth {
    * worklet is latency-matched, so the mix knob never combs). When off, the
    * plain dry branch carries the signal and the worklet idles in bypass.
    */
+  /**
+   * Build + wire the spectral worklet node. Split out of applySpectral so the
+   * offline bounce can create it SYNCHRONOUSLY once the module is loaded —
+   * the async `.then` path could otherwise miss the render window entirely
+   * and export a patch with its spectral FX missing.
+   */
+  private createSpectralNode(): boolean {
+    if (this.spectralNode) return true;
+    try {
+      this.spectralNode = new AudioWorkletNode(this.ctx, "kc-spectral", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        channelCount: 2,
+        channelCountMode: "explicit",
+        channelInterpretation: "speakers",
+      });
+    } catch (err) {
+      console.warn("[FireCommand] spectral node creation failed — FX bypassed:", err);
+      this.spectralState = "failed";
+      return false;
+    }
+    this.spectralSend.connect(this.spectralNode).connect(this.spectralOutTrim);
+    this.spectralOutTrim.connect(this.autopan);
+    this.spectralState = "ready";
+    return true;
+  }
+
+  /**
+   * OFFLINE BOUNCE PRE-WARM. An OfflineAudioContext renders as fast as it can,
+   * so anything loaded asynchronously (the ladder/SVF filter worklet, the
+   * spectral STFT) can miss the render entirely — ladder patches silently
+   * exported through the biquad fallback and spectral FX went missing.
+   * Await this before scheduling notes so the offline graph matches live.
+   */
+  async prewarmWorkletsForRender(): Promise<void> {
+    this.filterWorkletReady = await loadFilterModule(this.ctx);
+    const p = this.patch;
+    const wantSpectral =
+      (p.spectralMode ?? "off") !== "off" && clamp(p.spectralMix ?? 0, 0, 1) > 0.001;
+    if (wantSpectral && this.spectralState !== "ready") {
+      const ok = await loadSpectralModule(this.ctx);
+      this.spectralState = ok && this.createSpectralNode() ? "ready" : "failed";
+      this.applySpectral(p);
+    }
+  }
+
+  /**
+   * OFFLINE BOUNCE modulation tick. The 60 Hz `updateMod` timer is wall-clock
+   * and deliberately never starts offline, which left every bounce with the
+   * trance gate wide open, sample-hold LFOs frozen and matrix routes stuck at
+   * their initial value. The exporter drives this once per 1/60 s of render
+   * time (via OfflineAudioContext.suspend) so the same code path shapes the
+   * render that shapes live playback.
+   */
+  tickModulationForRender(): void {
+    if (!this.offlineSafe) return;
+    this.offlineTick = true;
+    try {
+      this.updateMod();
+    } catch { /* never let a mod tick abort a render */ } finally {
+      this.offlineTick = false;
+    }
+  }
+
   private applySpectral(p: FirePatch): void {
     const mode = p.spectralMode ?? "off";
     // Wet-only: process when delay/reverb wet is present (SpecTail routing scene).
@@ -5261,22 +5844,7 @@ export class FireCommandSynth {
       this.spectralState = "loading";
       void loadSpectralModule(this.ctx).then((ok) => {
         if (!ok) { this.spectralState = "failed"; return; }
-        try {
-          this.spectralNode = new AudioWorkletNode(this.ctx, "kc-spectral", {
-            numberOfInputs: 1,
-            numberOfOutputs: 1,
-            outputChannelCount: [2],
-            channelCount: 2,
-            channelCountMode: "explicit",
-            channelInterpretation: "speakers",
-          });
-        } catch (err) {
-          console.warn("[FireCommand] spectral node creation failed — FX bypassed:", err);
-          this.spectralState = "failed";
-          return;
-        }
-        this.spectralSend.connect(this.spectralNode).connect(this.autopan);
-        this.spectralState = "ready";
+        if (!this.createSpectralNode()) return;
         // Re-run against the CURRENT patch — it may have changed (or turned
         // the effect back off) while addModule was in flight.
         this.applySpectral(this.patch);
@@ -5284,8 +5852,14 @@ export class FireCommandSynth {
     }
     const t = this.ctx.currentTime;
     const on = active && this.spectralState === "ready" && this.spectralNode !== null;
+    // spectralInGain / spectralOutGain were declared and defaulted but never
+    // read — drive into the STFT and post-trim now actually work, matching the
+    // in/out gain pairs the other FX modules already honor.
+    const inG = clamp(p.spectralInGain ?? 1, 0, 2);
+    const outG = clamp(p.spectralOutGain ?? 1, 0, 2);
     this.spectralDry.gain.setTargetAtTime(on ? 0 : 1, t, 0.03);
-    this.spectralSend.gain.setTargetAtTime(on ? 1 : 0, t, 0.03);
+    this.spectralSend.gain.setTargetAtTime(on ? inG : 0, t, 0.03);
+    this.spectralOutTrim.gain.setTargetAtTime(outG, t, 0.03);
     // Under CPU pressure, ask the worklet for mono STFT (copy L→R) — ~½ cost.
     const eco = on && this.getCpuPressure() > 0.55;
     const msgKey = `${mode}|${(p.spectralAmount ?? 0.6).toFixed(3)}|${mix.toFixed(3)}|${on ? 1 : 0}|${(p.spectralLow ?? 0).toFixed(2)}|${(p.spectralHigh ?? 1).toFixed(2)}|${eco ? 1 : 0}`;

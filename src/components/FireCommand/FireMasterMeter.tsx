@@ -27,8 +27,15 @@ export function FireMasterMeter() {
     let holdDecay = 0;
     let analyser: AnalyserNode | null = null;
     let buf: Float32Array<ArrayBuffer> | null = null;
-    let stereoBuf: Float32Array<ArrayBuffer> | null = null;
     let connected = false;
+    // Real L/R taps for the correlation readout. An AnalyserNode downmixes
+    // its input to MONO, so the old "interleaved" estimate was correlating
+    // the signal with itself (always ≈ +1 — a meaningless meter).
+    let split: ChannelSplitterNode | null = null;
+    let anL: AnalyserNode | null = null;
+    let anR: AnalyserNode | null = null;
+    let bufL: Float32Array<ArrayBuffer> | null = null;
+    let bufR: Float32Array<ArrayBuffer> | null = null;
 
     const ensureAnalyser = () => {
       if (analyser && connected) return analyser;
@@ -39,8 +46,20 @@ export function FireMasterMeter() {
           analyser.fftSize = 2048;
           analyser.smoothingTimeConstant = 0;
         }
+        if (!split) {
+          split = e.ctx.createChannelSplitter(2);
+          anL = e.ctx.createAnalyser();
+          anL.fftSize = 1024;
+          anL.smoothingTimeConstant = 0;
+          anR = e.ctx.createAnalyser();
+          anR.fftSize = 1024;
+          anR.smoothingTimeConstant = 0;
+          split.connect(anL, 0);
+          split.connect(anR, 1);
+        }
         if (!connected) {
           e.fireTap.connect(analyser);
+          e.fireTap.connect(split);
           connected = true;
         }
         return analyser;
@@ -81,39 +100,28 @@ export function FireMasterMeter() {
         const vb = e.peekFireCommandB()?.getActiveVoiceCount?.() ?? 0;
         const max = useFireCommandStore.getState().maxVoices;
 
-        // Correlation stub: ChannelSplitter on fireTap when stereo available.
+        // True stereo correlation from the split L/R analysers.
         let corrTxt = "—";
         try {
-          if (a.channelCount >= 2 || (e.ctx.destination.channelCount ?? 2) >= 2) {
-            // Estimate from interleaved mono tap: use successive samples as proxy
-            // when true L/R split isn't available on this analyser path.
-            if (!stereoBuf || stereoBuf.length !== a.fftSize) {
-              stereoBuf = new Float32Array(a.fftSize);
-            }
-            a.getFloatTimeDomainData(stereoBuf);
-            let sumL = 0;
-            let sumR = 0;
+          if (anL && anR) {
+            if (!bufL || bufL.length !== anL.fftSize) bufL = new Float32Array(anL.fftSize);
+            if (!bufR || bufR.length !== anR.fftSize) bufR = new Float32Array(anR.fftSize);
+            anL.getFloatTimeDomainData(bufL);
+            anR.getFloatTimeDomainData(bufR);
             let sumLR = 0;
             let sumL2 = 0;
             let sumR2 = 0;
-            const n = Math.floor(stereoBuf.length / 2);
+            const n = bufL.length;
             for (let i = 0; i < n; i++) {
-              const L = stereoBuf[i * 2] ?? stereoBuf[i]!;
-              const R = stereoBuf[i * 2 + 1] ?? stereoBuf[Math.min(stereoBuf.length - 1, i + 1)]!;
-              sumL += L;
-              sumR += R;
+              const L = bufL[i];
+              const R = bufR[i];
               sumLR += L * R;
               sumL2 += L * L;
               sumR2 += R * R;
             }
-            const meanL = sumL / n;
-            const meanR = sumR / n;
-            const cov = sumLR / n - meanL * meanR;
-            const vL = sumL2 / n - meanL * meanL;
-            const vR = sumR2 / n - meanR * meanR;
-            const den = Math.sqrt(Math.max(1e-12, vL * vR));
-            if (den > 1e-8 && (vL + vR) > 1e-8) {
-              const c = Math.max(-1, Math.min(1, cov / den));
+            const den = Math.sqrt(Math.max(1e-12, sumL2 * sumR2));
+            if (den > 1e-8 && sumL2 + sumR2 > 1e-8) {
+              const c = Math.max(-1, Math.min(1, sumLR / den));
               corrTxt = c.toFixed(2);
             }
           }
@@ -151,11 +159,14 @@ export function FireMasterMeter() {
     raf = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(raf);
-      if (analyser && connected) {
+      if (connected) {
         try {
-          getEngine().fireTap.disconnect(analyser);
+          const e = getEngine();
+          if (analyser) e.fireTap.disconnect(analyser);
+          if (split) e.fireTap.disconnect(split);
         } catch { /* */ }
       }
+      try { split?.disconnect(); } catch { /* */ }
     };
   }, []);
 

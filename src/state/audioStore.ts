@@ -6,6 +6,7 @@ import { RESTORE_OFF, restoreActive, type RestoreParams } from "@/audio/dsp/Reco
 // Deferred-use import (functions are only called inside actions) — safe
 // despite the module cycle chainSnapshot → audioStore.
 import { applyChain, captureChain, type ChainSnapshot } from "@/lib/chainSnapshot";
+import { syncAirBaselineAfterExternalWrite } from "@/lib/airspaceModes";
 import type { RoomId } from "@/audio/dsp/HRTFRooms";
 import { DEFAULT_CORRECTION_BANDS, DEFAULT_OUTPUT_GAIN_DB } from "@/audio/defaultCorrectionProfile";
 import { HEADPHONES, profileForId } from "@/audio/headphoneProfiles";
@@ -169,6 +170,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       : [...get().history, prev].slice(-HISTORY_CAP);
     set({ params: next, history, future: [] });
     getEngine().applyParams({ [key]: value } as Partial<SoundParams>);
+    syncAirBaselineAfterExternalWrite();
   },
 
   setParams: (next) => {
@@ -178,6 +180,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     const history = [...get().history, prev].slice(-HISTORY_CAP);
     set({ params: merged, history, future: [] });
     getEngine().applyParams(next);
+    syncAirBaselineAfterExternalWrite();
   },
 
   previewParams: (next) => {
@@ -185,6 +188,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     engageFxChain(get, set, merged);
     set({ params: merged });
     getEngine().applyParams(next);
+    syncAirBaselineAfterExternalWrite();
   },
 
   replaceParams: (next) => {
@@ -194,16 +198,21 @@ export const useAudioStore = create<AudioState>((set, get) => ({
     const history = [...get().history, prev].slice(-HISTORY_CAP);
     set({ params: { ...safe }, history, future: [] });
     getEngine().applyParams(safe);
+    syncAirBaselineAfterExternalWrite();
   },
 
   setBypass: (bypass) => {
     set({ bypass });
     getEngine().setBypass(bypass);
-    // Keep Fire Command "route through Kill-Chain FX" aligned with the global bypass.
+    // Keep Fire Command "route through Kill-Chain FX" aligned with the global
+    // bypass. Use the store ACTION (not a bare setState) so the change is
+    // persisted — otherwise a hotkey bypass toggle silently reverts after a
+    // restart when Fire boot re-applies its stale persisted routing.
     void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
       const fire = useFireCommandStore.getState();
       if (fire.routeThroughFx === !bypass) return;
-      useFireCommandStore.setState({ routeThroughFx: !bypass });
+      // Re-entry into setBypass is a no-op: routeThroughFx already matches.
+      fire.setRouteThroughFx(!bypass);
     });
   },
 
@@ -219,9 +228,10 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   },
 
   toggleCorrection: () => {
-    const next = !get().correctionEnabled;
-    set({ correctionEnabled: next });
-    getEngine().setCorrectionEnabled(next);
+    // Route through setCorrectionEnabled so enabling correction also leaves
+    // clean bypass — a toggled-on correction used to stay inaudible because
+    // the FX chain was never engaged.
+    get().setCorrectionEnabled(!get().correctionEnabled);
   },
 
   storeAB: () => {
@@ -265,8 +275,11 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   },
 
   setOutputGain: (db) => {
-    set({ outputGainDb: db });
-    getEngine().setOutputGainDb(db);
+    // Mirror the engine's own clamp so the stored value never drifts outside
+    // what's actually applied (LUFS normalize / MIDI can push extremes).
+    const safe = Number.isFinite(db) ? Math.max(-24, Math.min(6, db)) : 0;
+    set({ outputGainDb: safe });
+    getEngine().setOutputGainDb(safe);
   },
 
   replaceCorrectionBands: (bands) => {

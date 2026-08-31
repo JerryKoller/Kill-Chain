@@ -35,6 +35,12 @@ export function PatternBarsControls({
   };
 
   const commitDraft = () => {
+    // Empty field = cancel (Number("") is 0 → used to collapse to 1 bar,
+    // truncating the pattern).
+    if (!draft.trim()) {
+      setDraft(String(bars));
+      return;
+    }
     const n = Number(draft);
     if (!Number.isFinite(n)) {
       setDraft(String(bars));

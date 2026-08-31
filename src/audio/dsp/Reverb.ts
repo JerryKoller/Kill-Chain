@@ -52,8 +52,13 @@ export class Reverb {
     const a = Math.max(0, Math.min(1, value));
     this._amount = a;
     const wet = a * 0.7;
+    // Ease the dry down a touch as wet rises (−3.7 dB at full) so turning the
+    // reverb up doesn't simply make everything louder — "louder = better"
+    // was masquerading as "more spacious".
+    const dry = 1 - a * 0.35;
     const t = this.ctx.currentTime;
     this.wet.gain.setTargetAtTime(wet, t, 0.05);
+    this.dry.gain.setTargetAtTime(dry, t, 0.05);
   }
 
   setSize(value: number): void {

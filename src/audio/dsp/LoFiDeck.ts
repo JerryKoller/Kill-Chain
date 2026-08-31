@@ -46,7 +46,11 @@ export class LoFiDeck {
     this.hpf.Q.value = 0.5;
 
     this.delay = ctx.createDelay(0.1);
-    this.delay.delayTime.value = 0.0;
+    // Base delay must exceed the worst-case LFO swing (±5 ms at full
+    // wow+flutter). Modulating around 0 meant the negative half of every
+    // cycle clamped at 0 s — half-rectified warble with audible ticks.
+    // 6 ms of fixed latency only exists while the tone path is spliced in.
+    this.delay.delayTime.value = 0.006;
 
     this.wowLfo = ctx.createOscillator();
     this.wowLfo.type = "sine";

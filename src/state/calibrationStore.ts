@@ -9,7 +9,8 @@ import {
   type AdaptiveProbe,
   type AdaptiveState,
 } from "@/lib/adaptiveEngine";
-import { NEUTRAL_PARAMS, type SoundParams } from "@/audio/types";
+import { NEUTRAL_PARAMS, normalizeParams, type SoundParams } from "@/audio/types";
+import { useAudioStore } from "@/state/audioStore";
 
 export type CalibMode = "quick" | "standard" | "deep";
 
@@ -66,6 +67,10 @@ function loadPersist(): PersistShape {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
     const p = JSON.parse(raw) as PersistShape;
+    if (!Array.isArray(p.slots)) return fallback;
+    // Clamp persisted params to legal ranges (corrupt / hand-edited storage
+    // fed straight into the DSP otherwise).
+    p.slots = p.slots.map((s) => ({ ...s, params: normalizeParams(s.params) }));
     // Backfill any missing genres so adding new defaults doesn't break.
     const have = new Set(p.slots.map((s) => s.id));
     for (const g of DEFAULT_GENRES) {
@@ -149,6 +154,9 @@ export const useCalibrationStore = create<CalibrationState>((set, get) => ({
   start: (mode = get().mode) => {
     const steps = MODE_STEPS[mode];
     const state = createAdaptiveState(steps);
+    // Seed from the live Sculptor chain so opening Calibration (or restarting)
+    // builds on the user's current tuning instead of wiping back to NEUTRAL.
+    state.profile = { ...useAudioStore.getState().params };
     const current = nextQuestion(state);
     set({
       mode,

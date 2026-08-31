@@ -11,6 +11,7 @@ import {
 } from "@/state/fireSequencerStore";
 import type { ScaleId } from "@/state/fireSequencerStore";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
+import { pushRecent } from "@/lib/firePresetShelf";
 import {
   DEFAULT_FIRE_PATCH,
   cloneFirePatch,
@@ -31,6 +32,42 @@ import { upsertLfoQuickRoute, inferLfoDestFromMatrix } from "@/audio/dsp/modRout
 import { WAVETABLE_IDS } from "@/audio/dsp/wavetables";
 import { GENERATED_PRESETS, type FirePreset, type PresetArp } from "@/audio/dsp/firePresetBank";
 import { applyLoudnessSafety, applyModuleLocks, applyNsSafety, applyPerformanceSafety, lockedModuleCount } from "@/lib/fireModuleLocks";
+import { auditionFirePatch, type NsAudition } from "@/lib/fireNsAudition";
+import { capActiveModules, moduleOwningParam, pruneUnusedModules } from "@/lib/fireModuleUsage";
+
+/**
+ * Natural Selection module budget — at most this many modules stay awake in a
+ * generated / bred patch (the always-on core counts toward it). Everything
+ * else is slept so random patches can't cost 30+ modules of live DSP.
+ */
+export const NS_MODULE_BUDGET = 14;
+
+/**
+ * Scrub a stored scene snapshot. Scenes may be PARTIAL (scoped capture only
+ * stores some keys), so this can't run the full normalizePatch — it drops
+ * non-finite numbers and range-clamps the fields that reach an AudioParam.
+ */
+function sanitizeScenePatch(raw: Partial<FirePatch>): Partial<FirePatch> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === "number" && !Number.isFinite(v)) continue; // drop NaN/Inf
+    out[k] = v;
+  }
+  // clampFirePatchRanges only reads fields it recognizes and guards each with
+  // a typeof check, so a partial snapshot is safe to pass through it.
+  clampFirePatchRanges(out as unknown as FirePatch);
+  return out as Partial<FirePatch>;
+}
+
+/** Options for importing a patch from outside the app (project files). */
+export interface ImportPatchOpts {
+  /**
+   * The patch came from a project the USER saved, so keep intentional
+   * freeze / infinite-delay settings instead of softening them away — a saved
+   * sound has to round-trip. See applyPerformanceSafety.
+   */
+  fromUserProject?: boolean;
+}
 import { useUIStore } from "@/state/uiStore";
 
 /**
@@ -158,6 +195,8 @@ let arpStep = 0;
 let arpWalkPos = 0; // "walk" mode: drunken index into the sequence
 /** Audio-clock time of the next arp step (lookahead scheduler). */
 let arpNextAt = 0;
+/** Persistent tick counter for extreme-rate coalescing (every Nth fires). */
+let arpCoalesceTick = 0;
 /** Throttle Zustand arpCurrent writes — keyboard glow doesn't need 40 Hz. */
 let arpDisplayLastWrite = 0;
 const ARP_DISPLAY_MIN_MS = 50;
@@ -245,6 +284,7 @@ function stopArpScheduler(): void {
   arpStep = 0;
   arpWalkPos = 0;
   arpNextAt = 0;
+  arpCoalesceTick = 0;
   setArpKeepAlive(false);
   setArpStepSec(0.25);
   try { getEngine().fireCommand.clearArpSchedule(); } catch { /* engine not ready */ }
@@ -348,7 +388,17 @@ function startArpScheduler(
     }
 
     const stepSec = divisionSec(s.arp.bpm, s.arp.division);
-    setArpStepSec(stepSec);
+    // RATE COALESCING: beyond ~24 notes/s, discrete retriggers blur into a
+    // buzz while each note still costs a full voice build (~40 audio nodes).
+    // 290 BPM × 1/32 presets (old randomizer saves — "IceKing") ran at
+    // 38.7 notes/s: constant voice steal churn plus ~40 MB/min of GC garbage,
+    // which eventually stalled the main thread (heard as crackle that
+    // "fixes itself" after GC settles). Play every Nth step so the EFFECTIVE
+    // rate stays ≤ ~24/s; skipped ticks advance time but not the sequence,
+    // so the musical contour is identical, just at a sane retrigger rate.
+    const coalesce = Math.max(1, Math.round(stepSec < 0.042 ? 0.042 / stepSec : 1));
+    const effStepSec = stepSec * coalesce;
+    setArpStepSec(effStepSec);
     const latch = s.arpOrder.length > 0 ? s.arpOrder : s.heldNotes;
     const seq = buildArpSequence(latch, s.arp.mode, s.arp.octaves);
     // Load hint: octaves × latch × gate × ratchet pressure.
@@ -383,7 +433,13 @@ function startArpScheduler(
       // Swing uses step index BEFORE emit increments arpStep.
       const swingIdx = arpStep;
       const spacing = arpStepDuration(stepSec, swingIdx, s.arp.swing);
-      const hit = emitArpStep(get, seq, arpNextAt, stepSec, spacing);
+      // Coalesced tick: advance TIME but not the sequence — the next emitted
+      // step plays the next pitch in the contour, just later.
+      if (coalesce > 1 && arpCoalesceTick++ % coalesce !== 0) {
+        arpNextAt += spacing;
+        continue;
+      }
+      const hit = emitArpStep(get, seq, arpNextAt, effStepSec, spacing * coalesce);
       if (hit && arpNextAt <= now + 0.02) {
         displayMidi = hit.midi;
         displayIdx = hit.idx;
@@ -459,7 +515,9 @@ const DRIVE_MODES: DriveMode[] = ["soft", "soft", "tube", "fold", "hard", "fuzz"
 
 /** Generate a fresh, musical (non-screeching) random wavetable patch. */
 function randomPatch(): FirePatch {
-  const mono = chance(0.5);
+  // 30% mono: the old 50% base plus mono-forcing species (acid…) made most
+  // NS rounds monophonic — another sameness driver.
+  const mono = chance(0.3);
   // Favor lowpass body — still allows BP/HP/notch character.
   const filterType: FireFilterType = chance(0.72)
     ? "lowpass"
@@ -484,8 +542,11 @@ function randomPatch(): FirePatch {
   if (chance(0.12)) moduleEnable["fx.phaser"] = false;
   if (chance(0.1)) moduleEnable["fx.chorus"] = false;
   if (!useC && chance(0.55)) moduleEnable["osc.c"] = false;
-  // Favor long / clear / deep / bass-forward Armory priors (still allows short ~20%).
-  const longBody = chance(0.8);
+  // Base envelope prior — species that own their envelope (pluck, pad, bell,
+  // perc, bass…) override it; texture species (dual, warp, sync, noise, age)
+  // inherit it. 45/55 keeps a healthy split of sustained vs plucky bases
+  // (the old 80% long-body prior fed the NS sameness).
+  const longBody = chance(0.45);
   const patch = normalizePatch({
     oscATable: pick(WAVETABLE_IDS),
     oscAPos: rand(0, 1),
@@ -729,8 +790,15 @@ function randomPatch(): FirePatch {
     gateSteps: pick([8, 16, 16]),
     gatePattern: Array.from({ length: 16 }, (_, i) => (i % 2 === 0 ? 1 : (chance(0.3) ? 1 : 0))),
     gateSmooth: gateOn ? rand(0.28, 0.65) : 0,
-    masterGain: rand(0.58, 0.74),
+    masterGain: rand(0.66, 0.8),
   });
+  // Species rewrite ON TOP of the random base: the base supplies texture
+  // (tables, warp, analog life, matrix routes), the species supplies a
+  // coherent musical identity (envelope, filter range, space). Without this,
+  // random rolls all shared the same "generic sustained wavetable" contour.
+  const species = pickNsSpecies();
+  applyMutateSpecies(patch, 0.9, species);
+  stampNsSpecies(patch, species);
   applyNsBodyBias(patch);
   return patch;
 }
@@ -752,25 +820,29 @@ const MUTATE_SPECIES: MutateSpecies[] = [
 ];
 
 /**
- * Weighted toward long / clear / deep / bass-forward species —
- * but NOT the hollow “tube in a cave” cluster (formant / bell / warp / age).
+ * Near-flat weighting. The old table put 61% of all rolls on four
+ * bass/pad-adjacent species and ≤4% on everything percussive or FM —
+ * combined with the old homogenizing body-bias pass, Natural Selection
+ * audibly produced "the same type of sound" every generation. Every species
+ * block already writes a coherent, pre-clamped patch, so give them all a
+ * real seat at the table.
  */
 const NS_SPECIES_WEIGHTS: Record<MutateSpecies, number> = {
-  bass: 20,
-  pad: 16,
-  dual: 14,
-  acid: 11,
-  drone: 8,
-  ops4: 7,
-  sync: 5,
-  chip: 5,
-  pluck: 4,
-  age: 3,
-  formant: 2,
-  bell: 2,
-  warp: 2,
-  noise: 2,
-  perc: 1,
+  bass: 12,
+  pad: 11,
+  dual: 10,
+  acid: 10,
+  pluck: 10,
+  bell: 8,
+  chip: 8,
+  ops4: 8,
+  sync: 6,
+  drone: 6,
+  perc: 5,
+  warp: 5,
+  formant: 4,
+  noise: 4,
+  age: 4,
 };
 
 /** Solid, non-hollow wavetables for the common NS path. */
@@ -808,183 +880,62 @@ function nsSpeciesOf(p: FirePatch): MutateSpecies | undefined {
 }
 
 /**
- * NS house style: long body (~3s+), clarity, bass weight, musical complexity.
- * Soft bias — ~12% keep a short edge; ~15% keep a cavernous / metallic flavor.
- * Default path avoids the “aluminum tube in a cave” majority (hollow Q + wet hall).
+ * NS SAFETY net — presence, anti-blip, anti-scream. Nothing more.
+ *
+ * The previous version of this pass was a full HOUSE-STYLE rewrite: 88% of
+ * offspring were forced into 2–4 s sustained envelopes, 78% into lowpass
+ * with the cutoff squashed to 700–2800 Hz, sub bass boosted on 80%, warm
+ * tables swapped in, FM/ring tamed and the space dried to a small room.
+ * Run AFTER every species rewrite, it converted plucks, bells, chips and
+ * percs back into the same dark sustained bass-pad — the reported
+ * "Natural Selection produces the same type of sounds". Species blocks own
+ * the character now; this only guards against silent, degenerate or
+ * genuinely dangerous offspring.
  */
 function applyNsBodyBias(p: FirePatch): void {
-  const allowShort = chance(0.12);
-  const allowCave = chance(0.15); // occasional tube-in-cave character is fine
-
-  // ── Duration / anti-blip ───────────────────────────────────────────
-  if (!allowShort) {
-    if (chance(0.82)) p.gateOn = false;
-    p.ampSustain = Math.max(p.ampSustain ?? 0, rand(0.55, 0.92));
-    p.ampRelease = Math.max(p.ampRelease ?? 0.2, rand(1.85, 3.8));
-    p.ampDecay = Math.max(p.ampDecay ?? 0.15, rand(0.28, 1.0));
-    if ((p.ampSustain ?? 0) < 0.4) {
-      p.ampRelease = Math.max(p.ampRelease ?? 0, 2.8);
-    }
-    if (p.lpgOn && (p.lpgDecay ?? 1) < 0.5) {
-      p.lpgDecay = rand(0.55, 1.2);
-    }
-    if ((p.ampSustain ?? 0) < 0.2 && (p.ampRelease ?? 0) < 1.2) {
-      p.ampRelease = rand(2.0, 3.5);
-      p.ampSustain = Math.max(p.ampSustain ?? 0, rand(0.25, 0.55));
-    }
-  }
-
   // ── Presence (anti-silence) ────────────────────────────────────────
-  p.oscALevel = Math.max(p.oscALevel ?? 0, 0.58);
-  if ((p.oscBLevel ?? 0) < 0.1 && chance(0.72)) {
-    p.oscBLevel = rand(0.3, 0.58);
-    if ((p.oscBInherit ?? "off") === "off") {
-      p.oscBInherit = pick(["morph", "mirror", "offset"] as const);
-    }
-  }
-  p.masterGain = clamp(Math.max(p.masterGain ?? 0.62, 0.62), 0, 0.72);
-  if ((p.noiseLevel ?? 0) > 0.18 && (p.oscALevel ?? 0) < 0.5) {
-    p.noiseLevel = rand(0.04, 0.12);
-    p.oscALevel = Math.max(p.oscALevel ?? 0, 0.62);
-  }
+  p.oscALevel = Math.max(p.oscALevel ?? 0, 0.55);
+  p.masterGain = clamp(Math.max(p.masterGain ?? 0.66, 0.66), 0, 0.85);
   if (p.moduleEnable) {
     if (p.moduleEnable["osc.a"] === false) p.moduleEnable["osc.a"] = true;
     if (p.moduleEnable["filter"] === false) p.moduleEnable["filter"] = true;
-    if (p.moduleEnable["sub"] === false && chance(0.85)) delete p.moduleEnable["sub"];
+  }
+  // Filter closed below hearing = a preset that "does nothing".
+  if ((p.filterCutoff ?? 1000) < 90) p.filterCutoff = rand(140, 420);
+
+  // ── Anti-blip: only rescue TRULY degenerate envelopes (a sub-60 ms
+  // tick), never reshape an intentional pluck/perc body. ──────────────
+  const sus = p.ampSustain ?? 0;
+  const rel = p.ampRelease ?? 0;
+  const dec = p.ampDecay ?? 0;
+  if (sus < 0.05 && rel < 0.12 && dec < 0.08 && !p.lpgOn) {
+    p.ampDecay = rand(0.15, 0.4);
+    p.ampRelease = rand(0.3, 0.9);
   }
 
-  // ── Bass weight ────────────────────────────────────────────────────
-  if (chance(0.8)) {
-    p.subLevel = Math.max(p.subLevel ?? 0, rand(0.38, 0.72));
-    p.subOctave = pick([-2, -1, -1] as const);
-  }
-  if (chance(0.74)) {
-    const oct = p.oscAOctave ?? 0;
-    if (oct > 0) p.oscAOctave = pick([-1, 0, 0] as const);
-    else if (oct === 0 && chance(0.45)) p.oscAOctave = -1;
-  }
-  if (chance(0.78)) {
-    p.filterType = "lowpass";
-    const cut = p.filterCutoff ?? 2000;
-    if (cut > 5200) p.filterCutoff = rand(700, 2800);
-    else if (cut < 100) p.filterCutoff = rand(160, 520);
-  }
-  if (chance(0.4) && (p.lowProtect ?? "off") === "off") {
-    p.lowProtect = pick(["80", "120"] as const);
+  // ── Anti-scream / anti-bomb ceilings (engine-aligned, not stylistic) ─
+  if ((p.filterResonance ?? 0) > 8) p.filterResonance = rand(3, 7);
+  if ((p.delayFeedback ?? 0) > 0.55) p.delayFeedback = rand(0.28, 0.5);
+  if ((p.reverbMix ?? 0) > 0.45) p.reverbMix = rand(0.25, 0.4);
+  if ((p.chorusMix ?? 0) > 0.5) p.chorusMix = rand(0.25, 0.45);
+  if ((p.phaserMix ?? 0) > 0.45) p.phaserMix = rand(0.15, 0.38);
+  if ((p.crush ?? 0) > 0.4) p.crush = rand(0.12, 0.35);
+  if ((p.drive ?? 0) > 0.55) p.drive = rand(0.25, 0.5);
+  // Stacked lo-fi degraders read as "broken", not character — allow one.
+  if ((p.sampleRateReduce ?? 0) > 0.2 && p.bitDepth !== "off") p.sampleRateReduce = 0;
+  if ((p.noiseLevel ?? 0) > 0.4 && (p.oscALevel ?? 0) < 0.4) {
+    // Noise-only screamers: keep noise a texture, not the whole signal.
+    p.noiseLevel = rand(0.1, 0.3);
+    p.oscALevel = Math.max(p.oscALevel ?? 0, 0.55);
   }
 
-  // ── Clarity / fidelity ─────────────────────────────────────────────
-  if (chance(0.86)) {
-    p.crush = Math.min(p.crush ?? 0, 0.1);
-    p.bitDepth = "off";
-    p.sampleRateReduce = 0;
-    p.fxQuality = pick(["live", "high", "high"] as const);
-    p.driveMode = pick(["soft", "soft", "tube", "soft"] as const);
-    p.drive = Math.min(p.drive ?? 0, 0.38);
-    if ((p.noiseLevel ?? 0) > 0.05) {
-      p.noiseMode = pick(["bed", "bed", "burst"] as const);
-      p.noiseLevel = Math.min(p.noiseLevel ?? 0, rand(0.04, 0.14));
+  // ── Motion floor: a patch with zero movement reads as "dead preset". ─
+  if ((p.lfo1Depth ?? 0) < 0.05 && (p.lfo2Depth ?? 0) < 0.05 && chance(0.5)) {
+    p.lfo1Depth = rand(0.12, 0.35);
+    p.lfo1Rate = rand(0.08, 2.5);
+    if ((p.lfo1Dest ?? "off") === "off") {
+      p.lfo1Dest = pick(["filter", "filter", "pan", "pitch"] as const);
     }
-    if ((p.warpComb ?? 0) > 0.35) p.warpComb = rand(0.04, 0.28);
-    if (p.warpMode === "brickwall" || p.warpMode === "subharmonic") {
-      if (chance(0.7)) p.warpMode = pick(["classic", "classic", "scramble"] as const);
-    }
-    if (p.filterType === "highpass" && chance(0.7)) p.filterType = "lowpass";
-  }
-
-  // ── Anti “aluminum tube” (hollow resonance / formant / metal tables) ─
-  if (!allowCave) {
-    // High Q + BP/notch = pipe tone
-    if ((p.filterResonance ?? 0) > 3.2) {
-      p.filterResonance = rand(0.9, 2.8);
-    }
-    if (p.filterType === "bandpass" || p.filterType === "notch") {
-      if (chance(0.85)) p.filterType = "lowpass";
-    }
-    if (p.filterCarve === "formant" || p.filterCarve === "noise") {
-      if (chance(0.8)) {
-        p.filterCarve = "off";
-        p.filterCarveAmount = 0;
-      }
-    }
-    if (NS_TUBE_TABLES.has(String(p.oscATable)) && chance(0.78)) {
-      p.oscATable = pick(NS_WARM_TABLES);
-    }
-    if (NS_TUBE_TABLES.has(String(p.oscBTable)) && chance(0.65)) {
-      p.oscBTable = pick(NS_WARM_TABLES);
-    }
-    // Ring / wild FM sidebands read metallic in a hall
-    if ((p.ringAmount ?? 0) > 0.12 && chance(0.7)) {
-      p.ringAmount = rand(0, 0.08);
-    }
-    if ((p.fmAmount ?? 0) > 0.45 && chance(0.55)) {
-      p.fmAmount = rand(0.12, 0.38);
-    }
-    // Soft air shelf is fine; big air + wet hall = cave ceiling
-    if ((p.airAmount ?? 0) > 0.28) p.airAmount = rand(0.08, 0.25);
-  } else if (chance(0.55)) {
-    p.airAmount = Math.max(p.airAmount ?? 0, rand(0.18, 0.4));
-  }
-
-  // ── Space / depth: intimate by default, cave as the exception ───────
-  if (allowCave) {
-    p.chorusMix = Math.max(p.chorusMix ?? 0, rand(0.18, 0.4));
-    p.reverbMix = Math.max(p.reverbMix ?? 0, rand(0.22, 0.42));
-    p.reverbSize = Math.max(p.reverbSize ?? 1.5, rand(2.8, 5.5));
-    p.reverbDiffusion = Math.max(p.reverbDiffusion ?? 0.4, rand(0.55, 0.9));
-  } else {
-    // Majority: dry-to-room, not cathedral
-    const roomRoll = Math.random();
-    if (roomRoll < 0.45) {
-      // Nearfield / dry
-      p.reverbMix = Math.min(p.reverbMix ?? 0, rand(0.02, 0.12));
-      p.reverbSize = Math.min(p.reverbSize ?? 2, rand(0.8, 1.8));
-      p.chorusMix = Math.min(p.chorusMix ?? 0, rand(0.05, 0.22));
-      p.delayMix = Math.min(p.delayMix ?? 0, rand(0, 0.12));
-    } else if (roomRoll < 0.8) {
-      // Small room / plate
-      p.reverbMix = clamp(rand(0.08, 0.2), 0, 0.22);
-      p.reverbSize = rand(1.0, 2.4);
-      p.reverbDamp = Math.max(p.reverbDamp ?? 0.4, rand(0.45, 0.75));
-      p.reverbDiffusion = rand(0.35, 0.65);
-      p.reverbHighCut = Math.min(p.reverbHighCut ?? 12000, rand(4500, 9000));
-      p.chorusMix = clamp(rand(0.08, 0.28), 0, 0.32);
-      if ((p.delayMix ?? 0) > 0.22) p.delayMix = rand(0.06, 0.18);
-    } else {
-      // Medium presence without hall bloom
-      p.reverbMix = clamp(rand(0.12, 0.26), 0, 0.28);
-      p.reverbSize = rand(1.4, 2.8);
-      p.reverbDamp = Math.max(p.reverbDamp ?? 0.35, rand(0.4, 0.7));
-      p.chorusMix = clamp(rand(0.1, 0.3), 0, 0.34);
-    }
-    if ((p.phaserMix ?? 0) > 0.15 && chance(0.75)) {
-      p.phaserMix = rand(0, 0.1);
-    }
-    if ((p.delayFeedback ?? 0) > 0.45) {
-      p.delayFeedback = rand(0.15, 0.4);
-    }
-  }
-
-  // ── Complexity without the cave (unison / motion / matrix) ─────────
-  if (chance(0.58) && (p.unison ?? 1) < 3) {
-    p.unison = pick([3, 5] as const);
-    p.unisonDetune = Math.max(p.unisonDetune ?? 0, Math.round(rand(6, 16)));
-    p.unisonWidth = Math.max(p.unisonWidth ?? 0, rand(0.4, 0.8));
-  }
-  if (chance(0.62) && (p.lfo1Depth ?? 0) < 0.15) {
-    p.lfo1Depth = rand(0.18, 0.42);
-    p.lfo1Rate = rand(0.07, 0.75);
-    p.lfo1Dest = pick(["filter", "pan", "pitch"] as const);
-  }
-  if (chance(0.42) && Array.isArray(p.modMatrix)) {
-    const slot = p.modMatrix.findIndex((r) => !r || r.source === "none" || r.dest === "none");
-    const route = MR(
-      pick<ModSource>(["lfo1", "lfo2", "modenv", "macro1"]),
-      pick<ModDest>(["cutoff", "wtA", "pan", "levelA", "chorusMix"]),
-      rand(0.18, 0.5),
-    );
-    if (slot >= 0) p.modMatrix[slot] = route;
-    else if (p.modMatrix.length < 12) p.modMatrix = [...p.modMatrix, route];
   }
 }
 
@@ -1666,7 +1617,35 @@ function normalizePatch(raw: Partial<FirePatch> | undefined | null): FirePatch {
   if (!patch.warpMode || !["classic", "scramble", "subharmonic", "brickwall"].includes(patch.warpMode)) {
     patch.warpMode = "classic";
   }
+  clampFirePatchRanges(patch);
   return patch;
+}
+
+/**
+ * Hard range clamps aligned to the ENGINE's own ceilings (not the looser UI).
+ * normalizePatch used to scrub NaN but pass extreme finite values straight
+ * through — a hand-edited or drifted user preset could store delay feedback
+ * 0.92 (12.5× recirculation), Q 28, or master 1.4 and hand the synth a
+ * guaranteed screech. One shared clamp for every load path.
+ */
+function clampFirePatchRanges(p: FirePatch): void {
+  const c = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  if (typeof p.masterGain === "number") p.masterGain = c(p.masterGain, 0, 1.15);
+  if (typeof p.delayFeedback === "number") p.delayFeedback = c(p.delayFeedback, 0, 0.72);
+  if (typeof p.delayMix === "number") p.delayMix = c(p.delayMix, 0, 1);
+  if (typeof p.phaserFeedback === "number") p.phaserFeedback = c(p.phaserFeedback, 0, 0.72);
+  if (typeof p.filterResonance === "number") p.filterResonance = c(p.filterResonance, 0.05, 18);
+  if (typeof p.reverbSize === "number") p.reverbSize = c(p.reverbSize, 0, 6);
+  if (typeof p.reverbMix === "number") p.reverbMix = c(p.reverbMix, 0, 1);
+  if (typeof p.drive === "number") p.drive = c(p.drive, 0, 1);
+  if (typeof p.crush === "number") p.crush = c(p.crush, 0, 1);
+  if (typeof p.unison === "number") p.unison = Math.round(c(p.unison, 1, 7));
+  if (typeof p.unisonDetune === "number") p.unisonDetune = c(p.unisonDetune, 0, 100);
+  if (typeof p.oscALevel === "number") p.oscALevel = c(p.oscALevel, 0, 1);
+  if (typeof p.oscBLevel === "number") p.oscBLevel = c(p.oscBLevel, 0, 1);
+  if (typeof p.oscCLevel === "number") p.oscCLevel = c(p.oscCLevel, 0, 1);
+  if (typeof p.subLevel === "number") p.subLevel = c(p.subLevel, 0, 1);
+  if (typeof p.noiseLevel === "number") p.noiseLevel = c(p.noiseLevel, 0, 1);
 }
 
 function defaultPatchB(): FirePatch {
@@ -1843,7 +1822,7 @@ function load(): PersistShape {
       patch: structuredClone(editTarget === "b" ? patchB : patchA),
       patchA,
       patchB,
-      octave: typeof parsed.octave === "number" ? parsed.octave : d.octave,
+      octave: typeof parsed.octave === "number" ? Math.round(clamp(parsed.octave, 0, 8)) : d.octave,
       presetId: parsed.presetId ?? d.presetId,
       presetIdB: typeof parsed.presetIdB === "string" ? parsed.presetIdB : d.presetIdB,
       editTarget,
@@ -1882,13 +1861,14 @@ function load(): PersistShape {
       userPresets: Array.isArray(parsed.userPresets)
         ? parsed.userPresets
             .filter((p): p is SavedPreset => !!p && typeof p === "object" && typeof (p as SavedPreset).id === "string")
+            .slice(0, MAX_USER_PRESETS)
             .map((p) => ({
               ...p,
               patch: normalizePatch((p as SavedPreset).patch),
               arp: { ...DEFAULT_ARP, ...((p as SavedPreset).arp ?? {}) },
             }))
         : d.userPresets,
-      maxVoices: typeof parsed.maxVoices === "number" ? parsed.maxVoices : d.maxVoices,
+      maxVoices: typeof parsed.maxVoices === "number" ? Math.round(clamp(parsed.maxVoices, 4, 48)) : d.maxVoices,
       mutateAmount: typeof parsed.mutateAmount === "number" ? clamp(parsed.mutateAmount, 0, 1) : d.mutateAmount,
       mutateLineage: typeof parsed.mutateLineage === "number" ? Math.max(0, Math.floor(parsed.mutateLineage)) : d.mutateLineage,
       mutationGenealogy: Array.isArray(parsed.mutationGenealogy)
@@ -1902,8 +1882,17 @@ function load(): PersistShape {
       signalPathOrder: Array.isArray(parsed.signalPathOrder)
         ? parsed.signalPathOrder.filter((x): x is string => typeof x === "string")
         : d.signalPathOrder,
+      // Scene snapshots are scrubbed at LOAD, not only at recall. They were
+      // stored raw, so a NaN or out-of-range value from legacy/hand-edited
+      // storage survived every reload and could break recall or throw on an
+      // AudioParam write. Partial snapshots (scoped scenes) keep their shape —
+      // only the numeric fields present get clamped.
       scenes: Array.isArray(parsed.scenes)
-        ? Array.from({ length: SCENE_SLOTS }, (_, i) => (parsed.scenes?.[i] as Partial<FirePatch> | null) ?? null)
+        ? Array.from({ length: SCENE_SLOTS }, (_, i) => {
+            const raw = parsed.scenes?.[i] as Partial<FirePatch> | null | undefined;
+            if (!raw || typeof raw !== "object") return null;
+            return sanitizeScenePatch(raw);
+          })
         : d.scenes,
       sceneMeta: Array.isArray(parsed.sceneMeta)
         ? Array.from({ length: SCENE_SLOTS }, (_, i) => {
@@ -1931,8 +1920,12 @@ function load(): PersistShape {
           ? parsed.sceneTransition
           : "immediate",
       sceneMorphMs: typeof parsed.sceneMorphMs === "number" ? Math.max(50, Math.min(4000, parsed.sceneMorphMs)) : d.sceneMorphMs,
+      // Clamp: an out-of-range slot index left the UI pointing at a scene
+      // that doesn't exist.
       activeSceneSlot:
-        typeof parsed.activeSceneSlot === "number" ? parsed.activeSceneSlot : null,
+        typeof parsed.activeSceneSlot === "number" && Number.isFinite(parsed.activeSceneSlot)
+          ? Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(parsed.activeSceneSlot)))
+          : null,
     };
   } catch {
     return defaults();
@@ -2054,7 +2047,7 @@ export interface FireCommandState extends PersistShape {
    */
   resetToDefaults: () => void;
   /** Push a full patch into Synth B (factory load / project restore). */
-  importPatchB: (patch: unknown, presetId?: string) => void;
+  importPatchB: (patch: unknown, presetId?: string, opts?: ImportPatchOpts) => void;
   randomize: () => void;
   /**
    * Natural selection: breed TWO offspring of the current patch (strength =
@@ -2070,7 +2063,7 @@ export interface FireCommandState extends PersistShape {
   /** Abandon the round and restore the parent patch. */
   discardMutation: () => void;
   /** Replace patch + arp from a project file (Synth A). */
-  importPatch: (patch: unknown, arp?: unknown) => void;
+  importPatch: (patch: unknown, arp?: unknown, opts?: ImportPatchOpts) => void;
   /** Deploy a random preset from the factory bank. Returns what it picked. */
   randomPreset: () => FirePreset;
   /**
@@ -2258,12 +2251,24 @@ export function scheduleSequencerSynthNote(
   const engine = getEngine();
   const target = ch === 1 ? engine.fireCommandB : engine.fireCommand;
   const dur = Math.max(0.03, duration);
-  const vel = clamp(velocity, 0.05, 1);
+  let vel = clamp(velocity, 0.05, 1);
   const pitch = clamp(Math.round(midi), 0, 127);
 
   const s = useFireCommandStore.getState();
   const patch = ch === 1 ? s.patchB : s.patchA;
   const modOn = (id: string) => patch.moduleEnable?.[id] !== false;
+
+  // Trance gate in "velocity" mode shapes note LEVEL rather than the bus. It
+  // was applied only on the live keyboard path, so the mode looked broken for
+  // anything sequenced (piano roll, arrangement, export). Same math as the
+  // keyboard so a pattern sounds identical however it is triggered.
+  if (modOn("gate") && patch.gateOn && (patch.gateDest ?? "volume") === "velocity") {
+    try {
+      const step = target.getGateStep(when);
+      const openAmt = clamp(patch.gatePattern[step] ?? 1, 0, 1);
+      vel = clamp(vel * (1 - patch.gateDepth * (1 - openAmt)), 0.05, 1);
+    } catch { /* gate step unavailable — leave velocity alone */ }
+  }
 
   // ARP latch is Synth-A only.
   if (ch === 0) {
@@ -2278,8 +2283,13 @@ export function scheduleSequencerSynthNote(
       if (Math.abs(s.arp.bpm - seqBpm) > 0.5) {
         useFireCommandStore.setState({ arp: { ...s.arp, bpm: seqBpm } });
       }
+      const intendedAt = when;
       const onId = window.setTimeout(() => {
         seqArpTimers.delete(onId);
+        // Throttled/late timer (background tab, main-thread stall): dropping
+        // the step is better than bunching several latches at "now" — the
+        // machine-gun burst was one of the arp corruption sources.
+        if (ctx.currentTime - intendedAt > 0.08) return;
         const st = useFireCommandStore.getState();
         if (!(st.arp.enabled && st.patchA.moduleEnable?.["arp"] !== false)) {
           engine.fireCommand.playNote(pitch, vel * 0.88, ctx.currentTime, dur);
@@ -2372,6 +2382,143 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
   const activeEngine = () => engineFor(get().editTarget);
 
+  /**
+   * ── NS fitness gate ──
+   * Candidates are auditioned OFFLINE (real render, ~100 ms) after the sync
+   * UI update; silent/distorted ones are re-rolled and swapped in quietly.
+   * Heuristic clamps can't catch bad parameter INTERACTIONS — measurement
+   * can. See fireNsAudition.ts.
+   */
+  const NS_MAX_REROLLS = 3;
+
+  /** Breed + gate one replacement candidate. Returns null if none passed. */
+  const rerollCandidate = async (
+    parent: FirePatch,
+    amount: number,
+    avoid: MutateSpecies | undefined,
+    locks: FireCommandState["moduleLocks"],
+  ): Promise<FirePatch | null> => {
+    // Fallback scoring when nothing passes outright: audible beats silent,
+    // CLEAN beats loud (the loudest failure is usually the most clipped one).
+    const score = (r: NsAudition): number =>
+      r.silent ? -1 : 10 - Math.min(10, r.clipPct * 10) + Math.min(3, r.crestDb / 6);
+    let best: { patch: FirePatch; s: number } | null = null;
+    for (let i = 0; i < NS_MAX_REROLLS; i++) {
+      // Escalate pressure per retry — mild rerolls of a broken parent often
+      // reproduce the same failure.
+      const re = i === NS_MAX_REROLLS - 1
+        ? randomPatch()
+        : mutatePatch(parent, Math.min(1, amount + 0.1 * (i + 1)), { forceSpecies: true, avoidSpecies: avoid });
+      applyModuleLocks(re, parent, locks);
+      applyNsSafety(re);
+      applyNsBodyBias(re);
+      capActiveModules(re, NS_MODULE_BUDGET);
+      try {
+        const r = await auditionFirePatch(re);
+        if (r.ok) return re;
+        const s = score(r);
+        if (!best || s > best.s) best = { patch: re, s };
+      } catch {
+        return re; // audition infra failed — take the candidate as-is
+      }
+    }
+    // Nothing passed outright. Rather than shipping the "least bad" candidate
+    // (which could still be a 20%-clipping screamer), converge the best one:
+    // pull the gain/drive/resonance stack down until it measures clean.
+    if (!best) return null;
+    let cur = best.patch;
+    for (let i = 0; i < 3; i++) {
+      let res: NsAudition;
+      try {
+        res = await auditionFirePatch(cur);
+      } catch {
+        return cur;
+      }
+      if (res.ok) return cur;
+      const next = structuredClone(cur);
+      if (res.distorted) {
+        next.masterGain = clamp((next.masterGain ?? 0.72) * 0.78, 0.3, 0.85);
+        next.drive = (next.drive ?? 0) * 0.5;
+        next.crush = (next.crush ?? 0) * 0.5;
+        next.filterResonance = Math.min(next.filterResonance ?? 2, 5);
+        next.punch = (next.punch ?? 0) * 0.6;
+      } else {
+        // Too quiet: lift the source and the master together.
+        next.oscALevel = clamp((next.oscALevel ?? 0.7) * 1.25, 0, 1);
+        next.masterGain = clamp((next.masterGain ?? 0.72) * 1.15, 0, 0.85);
+      }
+      cur = next;
+    }
+    return cur;
+  };
+
+  /** Gate both children of the OPEN mutation round; swap in repaired ones. */
+  const repairMutationRound = async (generation: number): Promise<void> => {
+    for (const which of ["a", "b"] as const) {
+      const m0 = get().mutation;
+      if (!m0 || m0.generation !== generation) return; // round moved on
+      const child = which === "a" ? m0.a : m0.b;
+      let res: NsAudition;
+      try {
+        res = await auditionFirePatch(child);
+      } catch {
+        return;
+      }
+      if (res.ok) continue;
+      const sibling = which === "a" ? m0.b : m0.a;
+      const fixed = await rerollCandidate(
+        m0.base,
+        get().mutateAmount,
+        nsSpeciesOf(sibling),
+        get().moduleLocks,
+      );
+      if (!fixed) continue;
+      const m1 = get().mutation;
+      if (!m1 || m1.generation !== generation) return;
+      const nextMutation = { ...m1, [which]: fixed };
+      if (m1.listening === which) {
+        // The broken child is the one PLAYING — replace it audibly too.
+        const cloned = structuredClone(fixed);
+        const { patchA, patchB } = commitActive(cloned);
+        set({
+          mutation: nextMutation,
+          patch: cloned,
+          patchA,
+          patchB,
+        });
+        const eng = activeEngine();
+        eng.setPatch(cloned);
+        eng.unsilenceFx();
+      } else {
+        set({ mutation: nextMutation });
+      }
+      persist();
+    }
+  };
+
+  /** Gate a fresh Randomize roll; swap in a repaired patch if still current. */
+  const repairRandomRoll = async (rolled: FirePatch): Promise<void> => {
+    let res: NsAudition;
+    try {
+      res = await auditionFirePatch(rolled);
+    } catch {
+      return;
+    }
+    if (res.ok) return;
+    const fixed = await rerollCandidate(rolled, 0.8, nsSpeciesOf(rolled), get().moduleLocks);
+    if (!fixed) return;
+    // Only swap while the user is still ON this roll (same object identity).
+    if (get().patch !== rolled) return;
+    applyLoudnessSafety(fixed);
+    const { patchA, patchB } = commitActive(fixed);
+    set({ patch: fixed, patchA, patchB });
+    const eng = activeEngine();
+    eng.setPatch(fixed);
+    eng.unsilenceFx();
+    stampLivePatchesOntoActiveSection();
+    persist();
+  };
+
   return {
     ...load(),
     heldNotes: [],
@@ -2434,6 +2581,20 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       let patch = { ...s.patch, [key]: value } as FirePatch;
       let alsoMatrix = false;
       let alsoLfoDest: { lfo1?: LfoDest; lfo2?: LfoDest } | null = null;
+      // AUTO-WAKE: presets and Natural Selection now sleep the modules they
+      // don't use, so editing a sleeping module's knob would otherwise do
+      // nothing at all (a dead control). Touching any parameter wakes its
+      // owning module — the module toggle stays available for muting.
+      let wokeModule: string | null = null;
+      {
+        const owner = moduleOwningParam(key);
+        if (owner && patch.moduleEnable?.[owner] === false) {
+          const enable = { ...patch.moduleEnable };
+          delete enable[owner];
+          patch = { ...patch, moduleEnable: enable };
+          wokeModule = owner;
+        }
+      }
 
       // Phase 1B: keep LFO Quick Route ↔ Patch Loom matrix in sync.
       if (key === "lfo1Dest" || key === "lfo2Dest") {
@@ -2476,6 +2637,10 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       // Prefer incremental engine.set — full setPatch rebuilds every voice bank
       // and was a major scrub-while-playing hitch.
       const eng = activeEngine();
+      // A woken module changes module gating, which every applyBusParams /
+      // per-voice path reads — push the whole map first so the incremental
+      // set below lands on an awake module.
+      if (wokeModule) eng.set("moduleEnable", patch.moduleEnable);
       eng.set(key, value);
       if (alsoMatrix) eng.set("modMatrix", patch.modMatrix);
       if (alsoLfoDest?.lfo1 != null) eng.set("lfo1Dest", alsoLfoDest.lfo1);
@@ -2492,9 +2657,29 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     setParams: (partial) => {
       if (!partial || Object.keys(partial).length === 0) return;
       if (sceneMorphActive || padMorphActive) discardMorphBlend(get, set);
-      pushFireHistory("params");
+      // Coalesce per PARAMETER SET, not under one global "params" key: every
+      // multi-knob action shared that key, so two different character-strip
+      // picks (say Delay "Dub" then Reverb "Hall") within the coalesce window
+      // collapsed into a single undo step.
+      pushFireHistory(`params:${Object.keys(partial).sort().join(",")}`);
       const s = get();
       const patch = { ...s.patch, ...partial } as FirePatch;
+      // AUTO-WAKE, same rule as setParam. This setter drives the character
+      // strips (delay cascade, gate chop, mix decks…), so without it clicking
+      // "Dub" or a gate pattern on a preset that had slept fx.delay / gate
+      // wrote the values and produced no sound at all.
+      let woke = false;
+      {
+        const enable = { ...(patch.moduleEnable ?? {}) };
+        for (const k of Object.keys(partial) as (keyof FirePatch)[]) {
+          const owner = moduleOwningParam(k);
+          if (owner && enable[owner] === false) {
+            delete enable[owner];
+            woke = true;
+          }
+        }
+        if (woke) patch.moduleEnable = enable;
+      }
       const { patchA, patchB } = commitActive(patch);
       set({
         patch,
@@ -2506,6 +2691,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         mutateLineage: 0,
       });
       const eng = activeEngine();
+      if (woke) eng.set("moduleEnable", patch.moduleEnable);
       for (const [k, v] of Object.entries(partial)) {
         eng.set(k as keyof FirePatch, v as FirePatch[keyof FirePatch]);
       }
@@ -2530,12 +2716,20 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const user = factory ? null : get().userPresets.find((p) => p.id === id);
       const src = factory ?? user;
       if (!src) return;
+      // Record here, not in the browser UI, so header prev/next, the command
+      // palette and MIDI program changes all feed the Recent shelf too.
+      pushRecent(id);
       pushFireHistory();
       cancelSceneRecall();
       const patch = normalizePatch(src.patch);
       patch.moduleEnable = src.patch.moduleEnable
         ? { ...src.patch.moduleEnable }
         : patch.moduleEnable ?? {};
+      // Sleep every module this preset never touches: a Bass patch stops
+      // paying for reverb / spectral / vintage DSP it doesn't use. Editing any
+      // of those knobs auto-wakes the module (see setParam), so nothing
+      // becomes unreachable.
+      pruneUnusedModules(patch);
       const softened = applyPerformanceSafety(patch);
       const s = get();
       // Disarm ARP before teardown so a mid-flight worker cannot re-arm after Init.
@@ -2644,10 +2838,12 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       persist();
     },
 
-    importPatchB: (rawPatch, presetId) => {
+    importPatchB: (rawPatch, presetId, opts) => {
       pushFireHistory();
       const patch = normalizePatch(rawPatch as Partial<FirePatch>);
-      const softened = applyPerformanceSafety(patch);
+      const softened = applyPerformanceSafety(patch, {
+        preserveIntent: !!opts?.fromUserProject,
+      });
       const presetIdB = presetId ?? "custom";
       const s = get();
       clearLiveNoteMaps();
@@ -2675,6 +2871,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const patch = randomPatch();
       applyModuleLocks(patch, s.patch, s.moduleLocks);
       applyLoudnessSafety(patch);
+      capActiveModules(patch, NS_MODULE_BUDGET);
       const { patchA, patchB } = commitActive(patch);
       set({
         patch,
@@ -2690,6 +2887,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       eng.unsilenceFx();
       stampLivePatchesOntoActiveSection();
       persist();
+      // Async fitness gate: if the roll measures silent/distorted, quietly
+      // re-roll and swap it in (unless the user has already moved on).
+      void repairRandomRoll(patch);
     },
 
     mutate: () => {
@@ -2705,10 +2905,18 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       const amount = s.mutateAmount;
       const forceSpecies = amount >= 0.38;
       let childA = mutatePatch(parent, amount, { forceSpecies });
-      let childB = mutatePatch(parent, amount, {
-        forceSpecies,
-        avoidSpecies: nsSpeciesOf(childA),
-      });
+      // FRESH BLOOD: at higher pressure, one in four B-children is a brand-new
+      // archetype roll instead of a parent mutation. Breeding exclusively from
+      // one lineage converged after a few generations ("produces a lot of the
+      // same kind of sounds") — an outsider in the pair keeps rounds diverse
+      // while A stays recognizably related to the parent.
+      const freshBlood = amount >= 0.45 && Math.random() < 0.25;
+      let childB = freshBlood
+        ? randomPatch()
+        : mutatePatch(parent, amount, {
+            forceSpecies,
+            avoidSpecies: nsSpeciesOf(childA),
+          });
       // Locks first — then diversify only if A/B still collapse.
       applyModuleLocks(childA, parent, s.moduleLocks);
       applyModuleLocks(childB, parent, s.moduleLocks);
@@ -2722,6 +2930,11 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         applyNsSafety(childB);
         applyNsBodyBias(childB);
       }
+      // Module budget: offspring keep at most NS_MODULE_BUDGET modules awake
+      // (unused ones slept outright, then the lowest-priority extras) so a
+      // bred patch can't quietly cost 30 modules of DSP.
+      capActiveModules(childA, NS_MODULE_BUDGET);
+      capActiveModules(childB, NS_MODULE_BUDGET);
       // Silence before store/engine swap — mid-note forceStop was the NS click.
       silenceTransportAudio();
       const next = structuredClone(childA);
@@ -2739,6 +2952,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       eng.unsilenceFx();
       stampLivePatchesOntoActiveSection();
       persist();
+      // Async fitness gate: measure both children; re-roll silent/distorted
+      // ones and swap them in while the round is still open.
+      void repairMutationRound(generation);
     },
 
     setMutateAmount: (v) => {
@@ -2807,14 +3023,16 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       persist();
     },
 
-    importPatch: (rawPatch, rawArp) => {
+    importPatch: (rawPatch, rawArp, opts) => {
       // Always load into Synth A (+ arp). Never redirect to B — that broke
       // .kcproj open while Edit B was active (A/arp never applied).
       pushFireHistory();
       cancelSceneRecall();
       padMorphActive = false;
       const patch = normalizePatch(rawPatch as Partial<FirePatch>);
-      const softened = applyPerformanceSafety(patch);
+      const softened = applyPerformanceSafety(patch, {
+        preserveIntent: !!opts?.fromUserProject,
+      });
       const arp: ArpSettings = rawArp && typeof rawArp === "object"
         ? { ...DEFAULT_ARP, ...(rawArp as Partial<ArpSettings>) }
         : { ...DEFAULT_ARP, enabled: false };
@@ -3368,6 +3586,9 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
 
     captureScene: (slot) => {
       const i = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(slot)));
+      // Capturing OVERWRITES whatever was in the slot. Without a history entry
+      // that was unrecoverable — recallScene already pushes one.
+      pushFireHistory();
       const st = get();
       const meta = st.sceneMeta[i] ?? defaultSceneMeta()[i]!;
       const full = { ...st.patch, moduleEnable: { ...(st.patch.moduleEnable ?? {}) } };

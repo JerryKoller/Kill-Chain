@@ -1,4 +1,4 @@
-import { getEngine } from "./AudioEngine";
+import { FRIENDLY_TO_EQ, getEngine, type FriendlyKey } from "./AudioEngine";
 import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
 import type { SoundParams } from "./types";
@@ -30,8 +30,11 @@ const BAND_FREQS: { key: keyof SoundParams; freq: number }[] = [
 const ANALYSIS_SEC = 8;
 const SAMPLE_INTERVAL_MS = 100;
 
-export async function autoFlatten(): Promise<void> {
+export async function autoFlatten(signal?: AbortSignal): Promise<void> {
   const engine = getEngine();
+  // A suspended context produces silent analyser frames — the run would just
+  // end in "not enough signal" 8 seconds later.
+  await engine.resume();
   const analyser = engine.analyserPre;
   const sr = engine.ctx.sampleRate || SAMPLE_RATE_FALLBACK;
   const bins = analyser.frequencyBinCount;
@@ -42,6 +45,13 @@ export async function autoFlatten(): Promise<void> {
 
   return new Promise((resolve) => {
     const id = window.setInterval(() => {
+      // Source changed / view closed: stop sampling instead of applying a
+      // correction measured against a track that's no longer playing.
+      if (signal?.aborted) {
+        window.clearInterval(id);
+        resolve();
+        return;
+      }
       analyser.getByteFrequencyData(buf);
       // Snapshot only if signal is present (avoid biasing toward silence).
       let any = 0;
@@ -53,34 +63,34 @@ export async function autoFlatten(): Promise<void> {
       }
       if (performance.now() - start > ANALYSIS_SEC * 1000) {
         window.clearInterval(id);
-        if (samples.length < 8) {
-          useUIStore.getState().toast("Auto-flatten: not enough signal");
+        try {
+          if (samples.length < 8) {
+            useUIStore.getState().toast("Auto-flatten: not enough signal");
+            return;
+          }
+          const avg = new Float32Array(bins);
+          for (const s of samples) {
+            for (let i = 0; i < bins; i++) avg[i] += s[i];
+          }
+          for (let i = 0; i < bins; i++) avg[i] /= samples.length;
+          const tiltDb = computeTilt(avg, sr, analyser);
+          const cur = useAudioStore.getState().params;
+          const next: SoundParams = { ...cur };
+          for (const b of BAND_FREQS) {
+            // Scale the suggested correction by the band's REAL maxDb (4-6 dB
+            // varies per band) so a given dB residual lands on the right
+            // slider position for every band.
+            const maxDb = FRIENDLY_TO_EQ[b.key as FriendlyKey]?.maxDb ?? 5;
+            const delta = tiltDb[b.key] / maxDb;
+            // Clamp final position to [-0.7, 0.7] to avoid extreme suggestions.
+            const raw = (cur[b.key] || 0) + delta * 0.6;
+            next[b.key] = Math.max(-0.7, Math.min(0.7, raw));
+          }
+          useAudioStore.getState().replaceParams(next);
+          useUIStore.getState().toast("Auto-flatten applied (undo with Z)");
+        } finally {
           resolve();
-          return;
         }
-        const avg = new Float32Array(bins);
-        for (const s of samples) {
-          for (let i = 0; i < bins; i++) avg[i] += s[i];
-        }
-        for (let i = 0; i < bins; i++) avg[i] /= samples.length;
-        // avg[i] is byte-scale 0..255 = log magnitude with -100 dB floor.
-        // Convert back to dB: byte v ≈ (v / 255) * 100 - 100 (analyser
-        // maps min/max dB to byte). Good enough for relative comparison.
-        const tiltDb = computeTilt(avg, sr);
-        const cur = useAudioStore.getState().params;
-        const next: SoundParams = { ...cur };
-        for (const b of BAND_FREQS) {
-          // Scale the suggested correction by the per-band UI maxDb so that
-          // the slider ends up at roughly (target - measured) / maxDb.
-          const maxDb = 5; // friendly average
-          const delta = tiltDb[b.key] / maxDb;
-          // Clamp final position to [-0.7, 0.7] to avoid extreme suggestions.
-          const raw = (cur[b.key] || 0) + delta * 0.6;
-          next[b.key] = Math.max(-0.7, Math.min(0.7, raw));
-        }
-        useAudioStore.getState().replaceParams(next);
-        useUIStore.getState().toast("Auto-flatten applied (undo with Z)");
-        resolve();
       }
     }, SAMPLE_INTERVAL_MS);
   });
@@ -89,6 +99,7 @@ export async function autoFlatten(): Promise<void> {
 function computeTilt(
   avg: Float32Array,
   sampleRate: number,
+  analyser: AnalyserNode,
 ): Record<string, number> {
   const bins = avg.length;
   const nyquist = sampleRate / 2;
@@ -103,10 +114,12 @@ function computeTilt(
     return -3 * oct;
   };
 
-  // First compute mean over the meaningful band, then evaluate per-band
-  // residual. Byte v: 0 ≈ -100 dB, 255 ≈ 0 dB (approx; AnalyserNode default
-  // min/max). residual in dB.
-  const byteToDb = (v: number) => (v / 255) * 100 - 100;
+  // Byte → dB using the analyser's REAL mapping. The default AnalyserNode
+  // range is minDecibels −100 to maxDecibels −30, so the old "(v/255)*100−100"
+  // guess compressed every reading by ~30% and skewed the tilt.
+  const minDb = analyser.minDecibels;
+  const maxDb = analyser.maxDecibels;
+  const byteToDb = (v: number) => (v / 255) * (maxDb - minDb) + minDb;
 
   // Overall average reference (mid band region).
   let refSum = 0;

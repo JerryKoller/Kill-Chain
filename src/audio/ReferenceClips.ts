@@ -40,12 +40,15 @@ export const CLIPS: ReferenceClip[] = [
   { id: "test-tone-1k", name: "1 kHz tone", blurb: "Pure sine at 1 kHz - the universal reference pitch", durationSec: 3 },
 ];
 
-const bufferCache = new Map<ClipId, AudioBuffer>();
+// Keyed by clip AND sample rate — a buffer synthesized for one context's
+// rate plays at the wrong pitch/speed on a context running at another rate.
+const bufferCache = new Map<string, AudioBuffer>();
 
 export function getReferenceBuffer(ctx: BaseAudioContext, id: ClipId): AudioBuffer {
-  const cached = bufferCache.get(id);
-  if (cached) return cached;
   const sr = (ctx as AudioContext).sampleRate || SR_FALLBACK;
+  const cacheKey = `${id}@${sr}`;
+  const cached = bufferCache.get(cacheKey);
+  if (cached) return cached;
   const def = CLIPS.find((c) => c.id === id);
   const sec = def?.durationSec ?? 2;
   const n = Math.floor(sec * sr);
@@ -63,7 +66,7 @@ export function getReferenceBuffer(ctx: BaseAudioContext, id: ClipId): AudioBuff
     case "synth-pad": fillSynthPad(buf, sr); break;
     case "test-tone-1k": fillTone(buf, sr, 1000); break;
   }
-  bufferCache.set(id, buf);
+  bufferCache.set(cacheKey, buf);
   return buf;
 }
 
@@ -112,11 +115,12 @@ export function makeToneBuffer(
   amp = 0.5,
 ): AudioBuffer {
   const sr = (ctx as AudioContext).sampleRate || SR_FALLBACK;
-  const n = Math.floor(durationSec * sr);
+  const n = Math.max(1, Math.floor(durationSec * sr));
   const buf = ctx.createBuffer(2, n, sr);
   const omega = 2 * Math.PI * freq / sr;
-  // Fade in / out 50 ms to avoid clicks.
-  const fade = Math.floor(sr * 0.05);
+  // Fade in / out 50 ms to avoid clicks (halved for very short buffers so the
+  // in/out ramps never overlap).
+  const fade = Math.min(Math.floor(sr * 0.05), Math.floor(n / 2));
   for (let ch = 0; ch < 2; ch++) {
     const d = buf.getChannelData(ch);
     for (let i = 0; i < n; i++) {

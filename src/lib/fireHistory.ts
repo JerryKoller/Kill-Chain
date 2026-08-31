@@ -92,9 +92,31 @@ function restoreAll(snap: Snapshot): void {
  * first move of a drag stays cheap on the pointer path; non-coalesced pushes
  * still capture synchronously (needed for correctness before the mutation).
  */
+/**
+ * End the current coalescing run.
+ *
+ * Time alone couldn't tell "still dragging" from "grabbed it again": the
+ * window slid forward on every mousemove, so a second, separate grab of the
+ * same knob moments later got swallowed into the previous entry and undo
+ * skipped the intermediate value. A pointer release is the real boundary of a
+ * gesture, so one window listener closes the run for every draggable control
+ * without each of them having to remember to.
+ */
+export function endFireHistoryCoalesce(): void {
+  lastKey = null;
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pointerup", endFireHistoryCoalesce, { passive: true, capture: true });
+  window.addEventListener("pointercancel", endFireHistoryCoalesce, { passive: true, capture: true });
+}
+
 export function pushFireHistory(coalesceKey?: string): void {
   const now = performance.now();
   if (coalesceKey && coalesceKey === lastKey && now - lastTs < DRAG_COALESCE_MS) {
+    // Keep the run alive for the rest of this gesture so a continuous drag
+    // still costs ONE entry. The gesture ends on pointerup (above), not on a
+    // timer, so a fresh grab always starts a new entry.
     lastTs = now;
     return;
   }

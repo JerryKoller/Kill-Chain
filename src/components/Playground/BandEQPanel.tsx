@@ -110,6 +110,10 @@ export function BandEQPanel() {
     const engine = getEngine();
     const freqBuf = new Uint8Array(engine.analyserPre.frequencyBinCount) as Uint8Array<ArrayBuffer>;
     const MIN_INTERVAL = 40; // ~25 fps
+    // Reused across frames — rebuilding a Float32Array + resampling the axis
+    // every draw was pure garbage-collector churn (only width changes it).
+    let curveFreqs = new Float32Array(0) as Float32Array<ArrayBuffer>;
+    let curveW = -1;
 
     // Canvas colours can't resolve CSS var() — read the theme triplet once.
     const cyanTriplet = (getComputedStyle(document.documentElement)
@@ -191,8 +195,11 @@ export function BandEQPanel() {
       // frequency response, no matter which tool made it.
       const clampDb = (g: number) => Math.max(DB_MIN, Math.min(DB_MAX, g));
       const N = Math.max(160, Math.floor(w));
-      const curveFreqs = new Float32Array(N);
-      for (let i = 0; i < N; i++) curveFreqs[i] = xToFreq((i / (N - 1)) * w, w);
+      if (curveW !== w || curveFreqs.length !== N) {
+        curveFreqs = new Float32Array(N) as Float32Array<ArrayBuffer>;
+        for (let i = 0; i < N; i++) curveFreqs[i] = xToFreq((i / (N - 1)) * w, w);
+        curveW = w;
+      }
       const friendlyDb = engine.friendlyEQ.computeResponse(curveFreqs);
       const userDb = engine.computeUserEQResponseDb(curveFreqs);
       const yAt = (i: number) => dbToY(clampDb(friendlyDb[i] + userDb[i]), h);

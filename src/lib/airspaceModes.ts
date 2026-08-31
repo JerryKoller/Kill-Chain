@@ -13,6 +13,10 @@
  * turning the mode off) first restores those baselines, then applies the new
  * overlay on top of whatever the user's sliders say. The overlay only shapes
  * the DSP — routing Airspace through Kill-Chain is what makes it audible.
+ *
+ * While a mode is active, external writers (Sculptor, Tractor, Mission Log,
+ * MorphLab…) that touch overlay keys update the baseline so turning the mode
+ * off keeps their work instead of resurrecting the pre-overlay snapshot.
  */
 
 import type { SoundParams } from "@/audio/types";
@@ -141,6 +145,10 @@ const clampParam = (v: number) => Math.max(-1, Math.min(1, v));
 
 /** Pre-mode value of every param key the ACTIVE overlay touched. */
 let baseline: Partial<SoundParams> = {};
+/** Additive amounts currently layered on top of baseline. */
+let activeOverlay: Partial<SoundParams> = {};
+/** True while applyAirMode is writing — skips baseline resync. */
+let applyingAir = false;
 
 /**
  * The pre-overlay values of the params the active mode is touching right now
@@ -152,6 +160,20 @@ export function getActiveAirBaseline(): Partial<SoundParams> {
 }
 
 /**
+ * After an external writer changes live params, peel the active overlay off
+ * the new live values so baseline tracks Sculptor / Tractor / Mission work.
+ * No-op when no overlay is engaged or when applyAirMode itself is writing.
+ */
+export function syncAirBaselineAfterExternalWrite(): void {
+  if (applyingAir) return;
+  if (Object.keys(activeOverlay).length === 0) return;
+  const cur = useAudioStore.getState().params;
+  for (const [k, ov] of Object.entries(activeOverlay) as [keyof SoundParams, number][]) {
+    baseline[k] = clampParam((cur[k] as number) - ov);
+  }
+}
+
+/**
  * Apply (or clear, with mode "off") the Airspace voicing. Idempotent and
  * baseline-safe: always restores the previous overlay before applying the
  * next one, so repeated calls never stack.
@@ -160,27 +182,34 @@ export function applyAirMode(mode: AirMode, opts: Record<string, boolean>): void
   const audio = useAudioStore.getState();
   const cur = audio.params;
 
-  // 1. Restore whatever the previous overlay changed.
-  const restored: Partial<SoundParams> = { ...baseline };
-  baseline = {};
+  applyingAir = true;
+  try {
+    // 1. Restore whatever the previous overlay changed.
+    const restored: Partial<SoundParams> = { ...baseline };
+    baseline = {};
+    activeOverlay = {};
 
-  // 2. Sum the enabled options' overlays for the new mode.
-  const overlay: Partial<SoundParams> = {};
-  for (const opt of optionsForMode(mode)) {
-    if (!(opts[opt.id] ?? opt.defaultOn)) continue;
-    for (const [k, v] of Object.entries(opt.params) as [keyof SoundParams, number][]) {
-      overlay[k] = (overlay[k] ?? 0) + v;
+    // 2. Sum the enabled options' overlays for the new mode.
+    const overlay: Partial<SoundParams> = {};
+    for (const opt of optionsForMode(mode)) {
+      if (!(opts[opt.id] ?? opt.defaultOn)) continue;
+      for (const [k, v] of Object.entries(opt.params) as [keyof SoundParams, number][]) {
+        overlay[k] = (overlay[k] ?? 0) + v;
+      }
     }
-  }
 
-  // 3. Snapshot baselines for the new overlay keys (post-restore values) and
-  //    build the final patch: baseline + overlay, clamped.
-  const patch: Partial<SoundParams> = { ...restored };
-  for (const [k, v] of Object.entries(overlay) as [keyof SoundParams, number][]) {
-    const base = restored[k] !== undefined ? (restored[k] as number) : cur[k];
-    baseline[k] = base;
-    patch[k] = clampParam(base + v);
-  }
+    // 3. Snapshot baselines for the new overlay keys (post-restore values) and
+    //    build the final patch: baseline + overlay, clamped.
+    const patch: Partial<SoundParams> = { ...restored };
+    for (const [k, v] of Object.entries(overlay) as [keyof SoundParams, number][]) {
+      const base = restored[k] !== undefined ? (restored[k] as number) : cur[k];
+      baseline[k] = base;
+      patch[k] = clampParam(base + v);
+    }
+    activeOverlay = overlay;
 
-  if (Object.keys(patch).length > 0) audio.setParams(patch);
+    if (Object.keys(patch).length > 0) audio.setParams(patch);
+  } finally {
+    applyingAir = false;
+  }
 }

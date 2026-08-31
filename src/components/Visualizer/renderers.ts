@@ -1,5 +1,5 @@
 /**
- * Canvas renderers for the Library Visualizer — five distinct modes, all
+ * Canvas renderers for the Library Visualizer — ten distinct modes, all
  * fed from the SAME shared post-chain analyser (engine.analyserPost, the
  * tap on destinationTap) so what you see is exactly what you hear, for any
  * source: library tracks, mic input, or Exterior Audio loopback capture.
@@ -75,6 +75,8 @@ export interface ModeRenderer {
   /** Re-derive size-dependent state. Called on mount and on every resize. */
   resize(W: number, H: number): void;
   draw(f: RenderFrame): void;
+  /** Release GPU/context resources (WebGL modes). Renderer is dead after. */
+  dispose?(): void;
 }
 
 // ─── small helpers ───────────────────────────────────────────────────────────
@@ -149,6 +151,64 @@ function bandPeak(freq: Uint8Array, b0: number, b1: number): number {
     if (v > p) p = v;
   }
   return p / 255;
+}
+
+/**
+ * Live track palette — wraps intel.colA/B/C (album art + spectral hue).
+ * Mutated in place; syncLivePalette returns true only when colours moved
+ * enough to justify rebuilding LUTs / cached rgba strings.
+ */
+interface LivePalette {
+  /** Primary (HUD / cyan role). */
+  a: RGB;
+  /** Hot accent (plasma role). */
+  b: RGB;
+  /** Glow / violet role. */
+  c: RGB;
+  /** Warm mid (amber role) — lerp of a→b. */
+  mid: RGB;
+}
+
+function makeLivePalette(fb: ThemePalette): LivePalette {
+  return {
+    a: [fb.cyan[0], fb.cyan[1], fb.cyan[2]],
+    b: [fb.plasma[0], fb.plasma[1], fb.plasma[2]],
+    c: [fb.violet[0], fb.violet[1], fb.violet[2]],
+    mid: [fb.amber[0], fb.amber[1], fb.amber[2]],
+  };
+}
+
+function copyRgb(dst: RGB, src: RGB): void {
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+}
+
+/** Returns true when the palette actually changed. */
+function syncLivePalette(lp: LivePalette, it: IntelSnapshot): boolean {
+  const ca = it.colA;
+  const cb = it.colB;
+  const cc = it.colC;
+  if (
+    Math.abs(lp.a[0] - ca[0]) < 4 &&
+    Math.abs(lp.a[1] - ca[1]) < 4 &&
+    Math.abs(lp.a[2] - ca[2]) < 4 &&
+    Math.abs(lp.b[0] - cb[0]) < 4 &&
+    Math.abs(lp.b[1] - cb[1]) < 4 &&
+    Math.abs(lp.b[2] - cb[2]) < 4 &&
+    Math.abs(lp.c[0] - cc[0]) < 4 &&
+    Math.abs(lp.c[1] - cc[1]) < 4 &&
+    Math.abs(lp.c[2] - cc[2]) < 4
+  ) {
+    return false;
+  }
+  copyRgb(lp.a, ca);
+  copyRgb(lp.b, cb);
+  copyRgb(lp.c, cc);
+  lp.mid[0] = (ca[0] + cb[0]) >> 1;
+  lp.mid[1] = (ca[1] + cb[1]) >> 1;
+  lp.mid[2] = (ca[2] + cb[2]) >> 1;
+  return true;
 }
 
 const MONO_FONT = "JetBrains Mono, Consolas, monospace";
@@ -1002,10 +1062,11 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
   // Deterministic skyline: heights hashed so resize doesn't reshuffle it.
   const skyH = (i: number) => 0.35 + (Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1) * 0.65;
 
-  const lut = gradientLut(
+  const lp = makeLivePalette(pal);
+  let lut = gradientLut(
     [
-      { t: 0, c: pal.plasma },
-      { t: 0.45, c: pal.amber },
+      { t: 0, c: lp.b },
+      { t: 0.45, c: lp.mid },
       { t: 0.8, c: [255, 244, 224] as RGB },
       { t: 1, c: [255, 255, 255] as RGB },
     ],
@@ -1013,13 +1074,33 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
     0.9,
   );
   const flakCol = rgba([235, 250, 255] as RGB, 0.95);
-  const gridCol = rgba(pal.cyan, 0.06);
-  const gridHot = rgba(pal.cyan, 0.16);
-  const ringCol = rgba(pal.plasma, 0.5);
-  const ringBigCol = rgba(pal.amber, 0.65);
-  const seekCol = rgba(pal.cyan, 0.75);
-  const lockCol = rgba(pal.plasma, 0.95);
-  const labelCol = rgba(pal.cyan, 0.5);
+  let gridCol = rgba(lp.a, 0.06);
+  let gridHot = rgba(lp.a, 0.16);
+  let ringCol = rgba(lp.b, 0.5);
+  let ringBigCol = rgba(lp.mid, 0.65);
+  let seekCol = rgba(lp.a, 0.75);
+  let lockCol = rgba(lp.b, 0.95);
+  let labelCol = rgba(lp.a, 0.5);
+
+  const refreshStrikePalette = (): void => {
+    lut = gradientLut(
+      [
+        { t: 0, c: lp.b },
+        { t: 0.45, c: lp.mid },
+        { t: 0.8, c: [255, 244, 224] as RGB },
+        { t: 1, c: [255, 255, 255] as RGB },
+      ],
+      33,
+      0.9,
+    );
+    gridCol = rgba(lp.a, 0.06);
+    gridHot = rgba(lp.a, 0.16);
+    ringCol = rgba(lp.b, 0.5);
+    ringBigCol = rgba(lp.mid, 0.65);
+    seekCol = rgba(lp.a, 0.75);
+    lockCol = rgba(lp.b, 0.95);
+    labelCol = rgba(lp.a, 0.5);
+  };
 
   // Crosshair state machine.
   let chX = 0.5;
@@ -1190,6 +1271,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
 
       // tactical grid, brightening on the beat envelope
       const it = f.intel;
+      if (syncLivePalette(lp, it)) refreshStrikePalette();
       const spacing = 48;
       g.lineWidth = 1;
       g.strokeStyle = f.beat > 0.25 ? gridHot : gridCol;
@@ -1210,7 +1292,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
       if (gridLocked) {
         const sx = it.barPhase * W;
         const sweepA = 0.1 + (it.barTick ? 0.5 : 0) + Math.max(0, 0.25 - it.beatPhase * 0.6);
-        g.strokeStyle = rgba(pal.cyan, Math.min(0.6, sweepA));
+        g.strokeStyle = rgba(lp.a, Math.min(0.6, sweepA));
         g.lineWidth = it.beatPhase < 0.1 ? 2 : 1;
         g.beginPath();
         g.moveTo(sx, 0);
@@ -1467,7 +1549,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
       if (horizonFlash > 0.01 && !reduced) {
         const hf = g.createLinearGradient(0, gy - H * 0.16, 0, gy);
         hf.addColorStop(0, "rgba(4,5,10,0)");
-        hf.addColorStop(1, rgba(pal.amber, horizonFlash * 0.28));
+        hf.addColorStop(1, rgba(lp.mid, horizonFlash * 0.28));
         g.fillStyle = hf;
         g.fillRect(0, gy - H * 0.16, W, H * 0.16);
       }
@@ -1480,7 +1562,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
         const bh = skyH(i) * H * 0.055;
         g.fillRect(i * bw, gy - bh, bw - 3, bh);
       }
-      g.strokeStyle = rgba(pal.cyan, 0.2);
+      g.strokeStyle = rgba(lp.a, 0.2);
       g.lineWidth = 1;
       g.beginPath();
       g.moveTo(0, gy);
@@ -1495,7 +1577,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
           const bx = baseX + Math.cos(a) * H * 0.9;
           const by = gy + Math.sin(a) * H * 0.9;
           const sl = g.createLinearGradient(baseX, gy, bx, by);
-          sl.addColorStop(0, rgba(pal.cyan, 0.1 + f.high * 0.14));
+          sl.addColorStop(0, rgba(lp.a, 0.1 + f.high * 0.14));
           sl.addColorStop(1, "rgba(4,5,10,0)");
           g.strokeStyle = sl;
           g.lineWidth = 14;
@@ -1515,9 +1597,9 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
         const x = ctX[i] * W;
         const y = ctY[i] * H;
         const s = Math.max(9, czUnit * 0.016); // half-size of the silhouette
-        const hostile = rgba(pal.plasma, 0.85);
+        const hostile = rgba(lp.b, 0.85);
         const hurt = ctHp[i] === 1 && (ctKind[i] === 2 || ctKind[i] === 3 || ctKind[i] === 4);
-        g.strokeStyle = hurt ? rgba(pal.amber, 0.9) : hostile;
+        g.strokeStyle = hurt ? rgba(lp.mid, 0.9) : hostile;
         g.lineWidth = 1.4;
         g.beginPath();
         switch (ctKind[i]) {
@@ -1540,7 +1622,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
             g.closePath();
             g.stroke();
             // vapor trail
-            g.strokeStyle = rgba(pal.cyan, 0.18);
+            g.strokeStyle = rgba(lp.a, 0.18);
             g.beginPath();
             g.moveTo(x - dir * s * 1.6, y);
             g.lineTo(x - dir * s * 5, y);
@@ -1564,7 +1646,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
             g.lineTo(x + s * 0.45, gy - s * 0.9);
             g.stroke();
             if ((f.now * 0.002 + i) % 2 < 1) {
-              g.fillStyle = rgba(pal.plasma, 0.95);
+              g.fillStyle = rgba(lp.b, 0.95);
               g.fillRect(x - 1.5, gy - s * 2.4 - 3, 3, 3);
             }
             break;
@@ -1583,7 +1665,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
           }
         }
         // Designation tag under the contact (the crosshair's mark runs hot).
-        g.fillStyle = i === chTarget ? rgba(pal.amber, 0.85) : rgba(pal.cyan, 0.4);
+        g.fillStyle = i === chTarget ? rgba(lp.mid, 0.85) : rgba(lp.a, 0.4);
         g.fillText(ctTag[i], x, (ctKind[i] === 2 || ctKind[i] === 3 ? gy : y + s * 1.6) + 12);
       }
 
@@ -1607,7 +1689,7 @@ export function createStrikeField(pal: ThemePalette): ModeRenderer {
         g.save();
         g.translate(wkX[i], wkY[i]);
         g.rotate(wkRot[i]);
-        g.strokeStyle = rgba(pal.amber, 0.9);
+        g.strokeStyle = rgba(lp.mid, 0.9);
         g.lineWidth = 1.6;
         g.strokeRect(-ws, -ws * 0.4, ws * 2, ws * 0.8);
         g.restore();
@@ -1757,23 +1839,43 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
   const ringAge = new Float32Array(RINGS).fill(99);
   let ringCursor = 0;
 
-  // Wider LUTs so the hue cycler has room to travel.
-  const bandCols = [
+  const lp = makeLivePalette(pal);
+  // Wider LUTs so the hue cycler has room to travel — rebuilt when cover palette shifts.
+  let bandCols = [
     gradientLut(
-      [{ t: 0, c: pal.amber }, { t: 0.5, c: pal.plasma }, { t: 1, c: pal.violet }],
+      [{ t: 0, c: lp.mid }, { t: 0.5, c: lp.b }, { t: 1, c: lp.c }],
       33, 0.95,
     ),
     gradientLut(
-      [{ t: 0, c: pal.violet }, { t: 0.5, c: pal.plasma }, { t: 1, c: pal.cyan }],
+      [{ t: 0, c: lp.c }, { t: 0.5, c: lp.b }, { t: 1, c: lp.a }],
       33, 0.95,
     ),
     gradientLut(
-      [{ t: 0, c: pal.cyan }, { t: 0.5, c: [235, 250, 255] as RGB }, { t: 1, c: pal.lime }],
+      [{ t: 0, c: lp.a }, { t: 0.5, c: [235, 250, 255] as RGB }, { t: 1, c: lp.mid }],
       33, 0.95,
     ),
   ];
-  const ringCol = rgba(pal.cyan, 0.5);
-  const coreCol = rgba(pal.cyan, 0.16);
+  let ringCol = rgba(lp.a, 0.5);
+  let coreCol = rgba(lp.a, 0.16);
+
+  const refreshTunnelPalette = (): void => {
+    bandCols = [
+      gradientLut(
+        [{ t: 0, c: lp.mid }, { t: 0.5, c: lp.b }, { t: 1, c: lp.c }],
+        33, 0.95,
+      ),
+      gradientLut(
+        [{ t: 0, c: lp.c }, { t: 0.5, c: lp.b }, { t: 1, c: lp.a }],
+        33, 0.95,
+      ),
+      gradientLut(
+        [{ t: 0, c: lp.a }, { t: 0.5, c: [235, 250, 255] as RGB }, { t: 1, c: lp.mid }],
+        33, 0.95,
+      ),
+    ];
+    ringCol = rgba(lp.a, 0.5);
+    coreCol = rgba(lp.a, 0.16);
+  };
 
   let rot = 0;      // global field rotation
   let hue = 0;      // colour cycle phase 0..1
@@ -1832,6 +1934,7 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
       // and a hard beat slams the throttle open for a moment. When the BPM
       // clock is confident the slams land exactly on the grid.
       const it = f.intel;
+      if (syncLivePalette(lp, it)) refreshTunnelPalette();
       const gridLocked = it.bpm > 0 && it.bpmConf > 0.3;
       const beatSlam = gridLocked ? it.beatTick : f.beatHit;
       if (beatSlam) boost = Math.min(1.6, boost + 0.55 + f.low * 0.6);
@@ -1924,7 +2027,7 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
 
       // Kaleidoscope spokes: six faint mirror seams rotating with the field.
       if (!reduced && f.rms > 0.01) {
-        g.strokeStyle = rgba(pal.cyan, 0.05 + f.beat * 0.1);
+        g.strokeStyle = rgba(lp.a, 0.05 + f.beat * 0.1);
         g.lineWidth = 1;
         g.beginPath();
         for (let s = 0; s < 6; s++) {
@@ -1945,7 +2048,7 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
         const alpha = Math.min(1, t * 4) * Math.max(0, 1.2 - t) * 0.55;
         const sides = gateSides[i];
         const ga = gateRot[i] + rot * 0.4;
-        g.strokeStyle = rgba(pal.plasma, alpha);
+        g.strokeStyle = rgba(lp.b, alpha);
         g.lineWidth = 1.2 + t * 3;
         g.beginPath();
         for (let v = 0; v <= sides; v++) {
@@ -1957,7 +2060,7 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
         }
         g.stroke();
         // Vertex beacons.
-        g.fillStyle = rgba(pal.cyan, alpha * 1.3);
+        g.fillStyle = rgba(lp.a, alpha * 1.3);
         for (let v = 0; v < sides; v++) {
           const a = ga + (v / sides) * Math.PI * 2;
           const x = cx + camX * t + Math.cos(a) * rr;
@@ -1992,7 +2095,7 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
           const y = cy + camY * r + Math.sin(a) * r * maxR;
           const size = 2 + r * unit * 0.02;
           const spin = f.now * 0.001 * dbSpin[i];
-          g.strokeStyle = rgba(pal.amber, Math.min(0.7, r * 0.9));
+          g.strokeStyle = rgba(lp.mid, Math.min(0.7, r * 0.9));
           g.lineWidth = 1.1;
           g.beginPath();
           for (let v = 0; v <= dbSides[i]; v++) {
@@ -2011,7 +2114,7 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
         const j = jump * jump;
         const jg = g.createRadialGradient(cx + camX, cy + camY, 0, cx + camX, cy + camY, maxR);
         jg.addColorStop(0, `rgba(235,245,255,${j * 0.55})`);
-        jg.addColorStop(0.4, rgba(pal.cyan, j * 0.25));
+        jg.addColorStop(0.4, rgba(lp.a, j * 0.25));
         jg.addColorStop(1, "rgba(4,5,10,0)");
         g.fillStyle = jg;
         g.fillRect(0, 0, W, H);
@@ -2040,14 +2143,14 @@ export function createWarpTunnel(pal: ThemePalette): ModeRenderer {
 
       // Section-entry flash: the whole tunnel mouth ignites for a moment.
       if (sectionFlash > 0.01) {
-        g.fillStyle = rgba(pal.plasma, sectionFlash * sectionFlash * 0.12);
+        g.fillStyle = rgba(lp.b, sectionFlash * sectionFlash * 0.12);
         g.fillRect(0, 0, W, H);
       }
 
       // Breathing core (rides the camera so the vanishing point tracks it).
       const coreR = unit * (0.035 + f.low * 0.05 + f.beat * 0.02);
       const grad = g.createRadialGradient(cx + camX, cy + camY, 0, cx + camX, cy + camY, coreR * 3);
-      grad.addColorStop(0, rgba(pal.cyan, 0.5 + f.beat * 0.4));
+      grad.addColorStop(0, rgba(lp.a, 0.5 + f.beat * 0.4));
       grad.addColorStop(0.4, coreCol);
       grad.addColorStop(1, "rgba(4,5,10,0)");
       g.fillStyle = grad;
@@ -2082,20 +2185,55 @@ export function createPulseLattice(
   const wamp = new Float32Array(WAVES);
   let wCursor = 0;
 
-  const lut = gradientLut(
+  const lp = makeLivePalette(pal);
+  let lut = gradientLut(
     [
-      { t: 0, c: pal.violet },
-      { t: 0.45, c: pal.cyan },
-      { t: 0.75, c: pal.plasma },
+      { t: 0, c: lp.c },
+      { t: 0.45, c: lp.a },
+      { t: 0.75, c: lp.b },
       { t: 1, c: [255, 245, 230] as RGB },
     ],
     49,
     0.95,
   );
+  let linkCol = rgba(lp.a, 0.5);
+
+  const refreshLatticePalette = (): void => {
+    lut = gradientLut(
+      [
+        { t: 0, c: lp.c },
+        { t: 0.45, c: lp.a },
+        { t: 0.75, c: lp.b },
+        { t: 1, c: [255, 245, 230] as RGB },
+      ],
+      49,
+      0.95,
+    );
+    linkCol = rgba(lp.a, 0.5);
+  };
 
   let cols = 32;
   let rows = 18;
   let spacing = 42;
+
+  const spawnWave = (
+    ox: number,
+    oy: number,
+    colBias: number,
+    amp: number,
+  ): void => {
+    // colBias 0..1 = prefer left (bass) → right (air) columns.
+    let best = Math.max(0, Math.min(cols - 1, Math.round(colBias * (cols - 1))));
+    // Prefer the loudest column near that bias when available.
+    const lo = Math.max(0, best - 3);
+    const hi = Math.min(cols - 1, best + 3);
+    for (let c = lo; c <= hi; c++) if (colLvl[c] > colLvl[best]) best = c;
+    wx[wCursor] = ox + best * spacing;
+    wy[wCursor] = oy + (0.25 + Math.random() * 0.5) * (rows - 1) * spacing;
+    wage[wCursor] = 0;
+    wamp[wCursor] = amp;
+    wCursor = (wCursor + 1) % WAVES;
+  };
 
   return {
     resize(W: number, H: number) {
@@ -2109,11 +2247,26 @@ export function createPulseLattice(
 
     draw(f: RenderFrame) {
       const { g, W, H, freq, dt, reduced } = f;
+      const it = f.intel;
+      if (syncLivePalette(lp, it)) refreshLatticePalette();
+
       g.fillStyle = "#04050a";
       g.fillRect(0, 0, W, H);
 
-      const ox = (W - (cols - 1) * spacing) / 2;
+      // Stereo skew: width / phase gently shifts the lattice off-center.
+      const stereoSkew =
+        (it.width - 0.35) * spacing * 1.1 + it.phaseCorr * spacing * 0.45;
+      const ox = (W - (cols - 1) * spacing) / 2 + stereoSkew;
       const oy = (H - (rows - 1) * spacing) / 2;
+
+      // Section density: drops run hot; breakdowns cool and slow.
+      const sectionMul =
+        it.section === "drop" ? 1.35 :
+        it.section === "buildup" ? 1.2 :
+        it.section === "breakdown" || it.section === "idle" ? 0.65 : 1;
+      const waveSpeedMul =
+        it.section === "drop" || it.section === "buildup" ? 1.25 :
+        it.section === "breakdown" || it.section === "idle" ? 0.7 : 1;
 
       // Per-column band levels (attack fast, release slow). A gentle tilt
       // compensates music's natural bass dominance so the right half of the
@@ -2127,24 +2280,30 @@ export function createPulseLattice(
         colLvl[c] = raw > prev ? prev + (raw - prev) * riseK : prev + (raw - prev) * fallK;
       }
 
-      // Beat → spawn a shockwave at the loudest column, mid-height-ish.
-      if (f.beatHit) {
-        let best = 0;
-        for (let c = 1; c < cols; c++) if (colLvl[c] > colLvl[best]) best = c;
-        wx[wCursor] = ox + best * spacing;
-        wy[wCursor] = oy + (0.25 + Math.random() * 0.5) * (rows - 1) * spacing;
-        wage[wCursor] = 0;
-        wamp[wCursor] = 0.6 + f.low * 0.9;
-        wCursor = (wCursor + 1) % WAVES;
+      // Beat → shockwave (BPM-locked when confident). Kick / snare / hat
+      // add band-biased waves for drum-aware choreography.
+      const gridLocked = it.bpm > 0 && it.bpmConf > 0.3;
+      const beatNow = gridLocked ? it.beatTick : f.beatHit;
+      if (beatNow) {
+        spawnWave(ox, oy, 0.45 + Math.random() * 0.15, (0.6 + f.low * 0.9) * sectionMul);
       }
-      const waveSpeed = (reduced ? 240 : 380) + f.rms * 260;
+      if (it.kickHit) {
+        spawnWave(ox, oy, 0.15 + Math.random() * 0.15, (0.85 + it.kick * 0.4) * sectionMul);
+      }
+      if (it.snareHit) {
+        spawnWave(ox, oy, 0.5 + Math.random() * 0.15, (0.7 + it.snare * 0.35) * sectionMul);
+      }
+      if (it.hatHit && !reduced) {
+        spawnWave(ox, oy, 0.75 + Math.random() * 0.2, (0.45 + it.hat * 0.35) * sectionMul);
+      }
+      const waveSpeed = ((reduced ? 240 : 380) + f.rms * 260) * waveSpeedMul;
       for (let i = 0; i < WAVES; i++) {
         if (wage[i] < 3) wage[i] += dt;
       }
 
       // Nodes. The beat pushes the whole lattice hotter up the LUT, and the
       // per-node level is remembered for the constellation pass below.
-      const beatLift = (f.beat * 7) | 0;
+      const beatLift = ((f.beat * 7 * sectionMul) | 0);
       for (let r = 0; r < rows; r++) {
         const ny = oy + r * spacing;
         for (let c = 0; c < cols; c++) {
@@ -2159,7 +2318,7 @@ export function createPulseLattice(
             const dd = (dist - front) / (spacing * 1.4);
             dz += Math.exp(-dd * dd) * wamp[i] * Math.max(0, 1 - age * 0.55);
           }
-          const lvl = Math.min(1, colLvl[c] * 1.25 + dz * 0.8);
+          const lvl = Math.min(1, colLvl[c] * 1.25 * sectionMul + dz * 0.8);
           const yOff = -dz * spacing * 0.45;
           nodeLvl[r * MAX_COLS + c] = lvl;
           nodeOff[r * MAX_COLS + c] = yOff;
@@ -2180,9 +2339,9 @@ export function createPulseLattice(
 
       // Constellation pass: bright neighbours link up — loud music wires the
       // whole grid together, quiet music lets it fall apart.
-      const TH = 0.42;
+      const TH = it.section === "drop" ? 0.36 : it.section === "breakdown" ? 0.5 : 0.42;
       g.lineWidth = 1;
-      g.strokeStyle = rgba(pal.cyan, 0.5);
+      g.strokeStyle = linkCol;
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols - 1; c++) {
           const a = nodeLvl[r * MAX_COLS + c];
@@ -2235,7 +2394,21 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
   const plHue = new Uint8Array(PILLARS);
   let plCursor = 0;
 
-  const ribbonCols: RGB[] = [pal.plasma, pal.amber, pal.violet, pal.cyan];
+  const lp = makeLivePalette(pal);
+  // Mutable ribbon colours — rewritten when the live palette shifts.
+  const ribbonCols: RGB[] = [
+    [lp.b[0], lp.b[1], lp.b[2]],
+    [lp.mid[0], lp.mid[1], lp.mid[2]],
+    [lp.c[0], lp.c[1], lp.c[2]],
+    [lp.a[0], lp.a[1], lp.a[2]],
+  ];
+
+  const refreshAuroraPalette = (): void => {
+    copyRgb(ribbonCols[0], lp.b);
+    copyRgb(ribbonCols[1], lp.mid);
+    copyRgb(ribbonCols[2], lp.c);
+    copyRgb(ribbonCols[3], lp.a);
+  };
 
   return {
     resize(W: number, _H: number) {
@@ -2248,9 +2421,20 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
         for (let i = 0; i < POINTS; i++) xs[i] = (i / (POINTS - 1)) * W;
       }
 
-      // Night-sky wash, hue-shifted by the centroid.
+      const it = f.intel;
+      if (syncLivePalette(lp, it)) refreshAuroraPalette();
+
+      // Section mood: drops/buildups lift curtains; breakdowns stay quiet.
+      const mood =
+        it.section === "drop" || it.section === "buildup" ? 1.25 :
+        it.section === "breakdown" || it.section === "idle" ? 0.7 : 1;
+
+      // Night-sky wash, tinted toward the cover primary + centroid.
       const bgGrad = g.createLinearGradient(0, 0, 0, H);
-      bgGrad.addColorStop(0, `rgba(${6 + f.centroid * 6},${5 + f.centroid * 10},${14 + f.centroid * 14},1)`);
+      bgGrad.addColorStop(
+        0,
+        `rgba(${Math.min(40, 6 + f.centroid * 6 + (lp.a[0] >> 5))},${Math.min(40, 5 + f.centroid * 10 + (lp.a[1] >> 5))},${Math.min(48, 14 + f.centroid * 14 + (lp.a[2] >> 5))},1)`,
+      );
       bgGrad.addColorStop(1, "rgba(3,4,8,1)");
       g.fillStyle = bgGrad;
       g.fillRect(0, 0, W, H);
@@ -2258,7 +2442,6 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
       // Beat → a light pillar ignites somewhere along the sky and washes out.
       // BPM-locked when the shared clock is confident, so pillars land in
       // strict time; kick onsets fire them too for extra punch.
-      const it = f.intel;
       const gridLocked = it.bpm > 0 && it.bpmConf > 0.3;
       const beatNow = gridLocked ? it.beatTick : f.beatHit;
       if ((beatNow || it.kickHit) && !reduced) {
@@ -2271,11 +2454,11 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
         if (plAge[i] > 1.2) continue;
         plAge[i] += dt;
         const a = Math.max(0, 1 - plAge[i] / 1.2);
-        const wPil = 30 + (1 - a) * 70;
+        const wPil = (30 + (1 - a) * 70) * mood;
         const c = ribbonCols[plHue[i]];
         const pil = g.createLinearGradient(plX[i] - wPil, 0, plX[i] + wPil, 0);
         pil.addColorStop(0, rgba(c, 0));
-        pil.addColorStop(0.5, rgba(c, a * a * 0.2));
+        pil.addColorStop(0.5, rgba(c, a * a * 0.2 * mood));
         pil.addColorStop(1, rgba(c, 0));
         g.fillStyle = pil;
         g.fillRect(plX[i] - wPil, 0, wPil * 2, H);
@@ -2284,6 +2467,7 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
       const bands = [f.low, f.mid * 0.9 + f.low * 0.1, f.mid, f.high];
       // reflection floor: ribbons mirror into still water below this line
       const floorY = H * 0.94;
+      const vocal = it.vocal;
 
       for (let rb = 0; rb < RIBBONS; rb++) {
         const lvl = Math.min(1, bands[rb] * 1.9);
@@ -2291,10 +2475,10 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
         const springK = reduced ? 30 : 55;
         const dampK = reduced ? 8 : 6.5;
         vel[rb] += (lvl - smooth[rb]) * springK * dt;
-        if (beatNow) vel[rb] += 0.9 + f.low * 1.2;
+        if (beatNow) vel[rb] += (0.9 + f.low * 1.2) * mood;
         vel[rb] *= Math.exp(-dt * dampK);
         smooth[rb] = Math.max(0, Math.min(1.4, smooth[rb] + vel[rb] * dt));
-        const energy = smooth[rb];
+        const energy = smooth[rb] * mood;
         // Lows drift slow and huge; airs flicker fast and tight.
         phase[rb] += dt * (0.25 + rb * 0.35 + energy * (1.6 + rb * 0.7) + f.beat * 1.1);
 
@@ -2303,6 +2487,8 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
           H * (0.045 + energy * (0.2 - rb * 0.015) + f.beat * 0.02) * (reduced ? 0.6 : 1);
         const k1 = 2.2 + rb * 1.3;
         const k2 = 5.1 + rb * 2.2;
+        // Upper ribbon shimmers with sustained vocal presence.
+        const vocalShimmer = rb === RIBBONS - 1 ? vocal * H * 0.028 : 0;
 
         for (let i = 0; i < POINTS; i++) {
           const t = i / (POINTS - 1);
@@ -2310,7 +2496,10 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
             baseline -
             Math.sin(phase[rb] + t * Math.PI * k1) * amp -
             Math.sin(phase[rb] * 1.7 + t * Math.PI * k2 + rb) * amp * 0.45 -
-            energy * H * 0.05;
+            energy * H * 0.05 -
+            (vocalShimmer > 0
+              ? vocalShimmer * Math.sin(phase[rb] * 3.2 + t * Math.PI * 8)
+              : 0);
         }
 
         const c = ribbonCols[rb];
@@ -2355,12 +2544,12 @@ export function createAuroraFlow(pal: ThemePalette): ModeRenderer {
 
       // Star dust twinkling with the high band (deterministic positions).
       const stars = 40;
-      g.fillStyle = rgba(pal.cyan, 0.5);
+      g.fillStyle = rgba(lp.a, 0.5);
       for (let i = 0; i < stars; i++) {
         const sx = ((i * 733) % 997) / 997 * W;
         const sy = ((i * 389) % 613) / 613 * H * 0.45;
         const tw = 0.5 + 0.5 * Math.sin(f.now * 0.001 * (1 + (i % 7)) + i);
-        g.globalAlpha = tw * (0.12 + f.high * 0.75);
+        g.globalAlpha = tw * (0.12 + f.high * 0.75 + vocal * 0.15);
         g.fillRect(sx, sy, 1.6, 1.6);
       }
       g.globalAlpha = 1;

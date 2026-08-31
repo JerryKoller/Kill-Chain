@@ -18,25 +18,41 @@ export async function extractMetadata(blob: Blob): Promise<TrackMetadata> {
   };
 
   try {
-    // We only need the first ~256 KB to parse most tags (APIC can be big).
-    const headerSlice = blob.slice(0, Math.min(blob.size, 256 * 1024));
-    const buf = new Uint8Array(await headerSlice.arrayBuffer());
-    if (buf.length < 10) return empty;
-    if (buf[0] !== 0x49 || buf[1] !== 0x44 || buf[2] !== 0x33) return empty;
+    // Read the tag header first, then pull exactly the declared tag size —
+    // the old fixed 256 KB slice truncated large embedded covers (broken /
+    // missing art for anything past the cap).
+    const head = new Uint8Array(await blob.slice(0, Math.min(blob.size, 10)).arrayBuffer());
+    if (head.length < 10) return empty;
+    if (head[0] !== 0x49 || head[1] !== 0x44 || head[2] !== 0x33) return empty;
 
-    const versionMajor = buf[3];
-    const tagSize = synchsafeToInt(buf[6], buf[7], buf[8], buf[9]);
-    const tagEnd = Math.min(buf.length, 10 + tagSize);
+    const versionMajor = head[3];
+    const flags = head[5];
+    const declaredSize = synchsafeToInt(head[6], head[7], head[8], head[9]);
+    // Sane ceiling (8 MB) so a corrupt size field can't allocate the world.
+    const readLen = Math.min(blob.size, 10 + Math.min(declaredSize, 8 * 1024 * 1024));
+    const buf = new Uint8Array(await blob.slice(0, readLen).arrayBuffer());
+    const tagEnd = Math.min(buf.length, 10 + declaredSize);
 
     let p = 10;
+    // Extended header (flag bit 6): skip it or every following frame
+    // boundary is misaligned and the parse silently returns nothing.
+    if (flags & 0x40 && tagEnd >= p + 6) {
+      const extSize =
+        versionMajor === 4
+          ? synchsafeToInt(buf[p], buf[p + 1], buf[p + 2], buf[p + 3])
+          : (((buf[p] << 24) | (buf[p + 1] << 16) | (buf[p + 2] << 8) | buf[p + 3]) >>> 0) + 4;
+      p += Math.max(0, Math.min(extSize, tagEnd - p));
+    }
     const out: TrackMetadata = { ...empty };
     while (p < tagEnd - 10) {
       const id = String.fromCharCode(buf[p], buf[p + 1], buf[p + 2], buf[p + 3]);
       if (id === "\u0000\u0000\u0000\u0000") break;
+      // v2.3 sizes are plain 32-bit big-endian; force unsigned — a signed
+      // shift on a high bit produced a NEGATIVE size and a garbage dataEnd.
       const size =
         versionMajor === 4
           ? synchsafeToInt(buf[p + 4], buf[p + 5], buf[p + 6], buf[p + 7])
-          : (buf[p + 4] << 24) | (buf[p + 5] << 16) | (buf[p + 6] << 8) | buf[p + 7];
+          : ((buf[p + 4] << 24) | (buf[p + 5] << 16) | (buf[p + 6] << 8) | buf[p + 7]) >>> 0;
       const dataStart = p + 10;
       const dataEnd = dataStart + size;
       if (size === 0 || dataEnd > tagEnd) break;

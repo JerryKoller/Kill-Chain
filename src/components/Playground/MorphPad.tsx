@@ -16,6 +16,9 @@ export function MorphPad({ onInteract }: { onInteract?: () => void } = {}) {
   const params = useAudioStore((s) => s.params);
   const setParams = useAudioStore((s) => s.setParams);
   const padRef = useRef<HTMLDivElement>(null);
+  // Ref mirror: setState is async, so early pointermoves after pointerdown
+  // were dropped and the pad ignored the first pixels of every drag.
+  const draggingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
 
   // Derive pad position from current params (rough inverse of applyAt)
@@ -66,17 +69,19 @@ export function MorphPad({ onInteract }: { onInteract?: () => void } = {}) {
   const onDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
     onInteract?.();
+    draggingRef.current = true;
     setDragging(true);
     const { x: nx, y: ny } = pointerToNorm(e.clientX, e.clientY);
     applyAt(nx, ny);
   };
   const onMove = (e: React.PointerEvent) => {
-    if (!dragging) return;
+    if (!draggingRef.current) return;
     const { x: nx, y: ny } = pointerToNorm(e.clientX, e.clientY);
     applyAt(nx, ny);
   };
   const onUp = (e: React.PointerEvent) => {
     try { (e.target as Element).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    draggingRef.current = false;
     setDragging(false);
   };
 

@@ -1,4 +1,3 @@
-import { motion } from "framer-motion";
 import { useAudioStore } from "@/state/audioStore";
 
 export function HistoryStrip() {
@@ -10,6 +9,9 @@ export function HistoryStrip() {
   const past = history.slice(-12);
   const next = future.slice(0, 6);
 
+  // Plain ticks: index-based layoutIds made undo/redo replay WRONG shared-
+  // layout morphs (entries shift index every step), and per-tick framer
+  // springs on a strip that changes every knob drag was wasted work.
   return (
     <div className="flex items-center gap-2">
       <button
@@ -26,23 +28,11 @@ export function HistoryStrip() {
           </span>
         )}
         {past.map((_, i) => (
-          <motion.span
-            layoutId={`hist-past-${i}`}
-            key={`p${i}`}
-            className="h-4 w-1 rounded-full bg-cyan/50"
-            initial={{ scaleY: 0 }}
-            animate={{ scaleY: 1 }}
-          />
+          <span key={`p${i}`} className="h-4 w-1 rounded-full bg-cyan/50 kc-hist-tick" />
         ))}
         <span className="h-5 w-[3px] rounded-full bg-plasma shadow-plasma mx-1" />
         {next.map((_, i) => (
-          <motion.span
-            layoutId={`hist-future-${i}`}
-            key={`f${i}`}
-            className="h-4 w-1 rounded-full bg-violet/50"
-            initial={{ scaleY: 0 }}
-            animate={{ scaleY: 1 }}
-          />
+          <span key={`f${i}`} className="h-4 w-1 rounded-full bg-violet/50 kc-hist-tick" />
         ))}
       </div>
       <button

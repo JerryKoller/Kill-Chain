@@ -56,6 +56,24 @@
     autoLock.setAutoLock(false);
     missionLog.useMissionLogStore.getState().setAutoRestore(true);
 
+    // ── 0. Legal gate ──
+    // A FRESH dev profile boots into the legal gate, which blocks the whole
+    // app chrome (TransportBar never mounts → no <audio> element → every
+    // playback test reports "empty"/silent). Accept it programmatically the
+    // way the modal's button does, then wait for the transport to attach.
+    {
+      const legal = M.legal ?? null;
+      const version = legal?.LEGAL_VERSION ?? "1.0-draft";
+      const st = useSettingsStore.getState();
+      if (!st.legalAcceptedAt || st.legalAcceptedVersion !== version) {
+        st.set("legalAcceptedVersion", version);
+        st.set("legalAcceptedAt", new Date().toISOString());
+      }
+      const attached = await until(() => !!usePlayerStore.getState().element, 10000);
+      t("Boot: transport attached (legal gate cleared)", attached,
+        attached ? "element ready" : "no <audio> element after 10s");
+    }
+
     // ── 1. Cold boot → engine ready ──
     await useAudioStore.getState().ensureReady();
     const engine = eng.getEngine();
@@ -101,14 +119,22 @@
       mission.useMissionStateStore.getState().lastAction ?? "");
 
     // ── 5. Manual override flags + holds ──
-    useAudioStore.getState().setParam("bass", 0.3);
+    // On a re-run, Source Memory may have ALREADY restored bass=0.3 from the
+    // previous run's log entry — setting the same value is a no-op and the
+    // manual watch (rightly) never fires. Always write a genuinely new value.
+    const bassNow = useAudioStore.getState().params.bass;
+    useAudioStore.getState().setParam("bass", Math.abs(bassNow - 0.3) < 0.01 ? 0.24 : 0.3);
     await sleep(400);
     t("Manual override: hold raised on user edit",
       mission.useMissionStateStore.getState().manualHold === true,
       `appliedBy=${mission.useMissionStateStore.getState().appliedBy}`);
 
     // ── 6. Source memory: save → switch → return → restore ──
-    const savedName = await missionLog.logCurrentSource(); // captures bass=0.3
+    // Remember exactly what we saved — the restore assertion below must
+    // compare against THIS, not a hardcoded constant (the manual-edit value
+    // alternates across runs to defeat source-memory no-op collisions).
+    const savedBass = useAudioStore.getState().params.bass;
+    const savedName = await missionLog.logCurrentSource();
     t("Mission Log: chain logged for source", savedName !== null, savedName ?? "null");
 
     await usePlayerStore.getState().loadDataUrlOrPath(urlB, "smoke-tone-B.wav");
@@ -126,11 +152,11 @@
       const s = mission.useMissionStateStore.getState();
       return s.appliedBy === "memory" && s.pendingOp === null;
     }, 12000);
-    const bassBack = Math.abs(useAudioStore.getState().params.bass - 0.3) < 0.01;
+    const bassBack = Math.abs(useAudioStore.getState().params.bass - savedBass) < 0.01;
     t("Memory restore: pipeline applied saved chain", restored,
       `appliedBy=${mission.useMissionStateStore.getState().appliedBy}`);
     t("Memory restore: params actually restored", bassBack,
-      `bass=${useAudioStore.getState().params.bass}`);
+      `bass=${useAudioStore.getState().params.bass} expected=${savedBass}`);
 
     // ── 7. Priority: memory > Auto-Lock (lock record present but memory wins) ──
     const keyA = `file:${S.toneA}`;

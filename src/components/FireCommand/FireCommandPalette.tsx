@@ -6,13 +6,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID } from "./fireModuleAtlas";
+import { FIRE_PARAM_INDEX } from "./fireParamIndex";
 import { jumpToModule } from "./fireNavigate";
 import { useFireLayout } from "./FireLayoutContext";
+
+/**
+ * Fired by chrome that wants to open the palette (the "Jump ⌘K" hint in the
+ * utility strip). An event keeps the affordance decoupled from where the
+ * palette's open state happens to live.
+ */
+export const FIRE_PALETTE_EVENT = "killchain.fire.palette.open";
 
 type Item = {
   id: string;
   label: string;
   hint: string;
+  /** Extra search terms (aliases, nicknames) that aren't shown in the row. */
+  keywords?: string;
   run: () => void;
 };
 
@@ -142,10 +152,27 @@ export function FireCommandPalette({
           id: `mod-${mod.id}`,
           label: `${mod.title}`,
           hint: `${band.title} · ${mod.short}`,
+          // Search the character nickname and abbreviation too: a user who
+          // knows a module as "Prime Voice" or "OscA" could not find
+          // "Oscillator A" when only label + hint were matched.
+          keywords: `${mod.short} ${mod.subtitle} ${mod.abbrev} ${band.short} ${band.hint}`,
           // Jump only — soloing every palette destination was too aggressive.
           run: () => jumpToModule(mod.id),
         });
       }
+    }
+    // PARAMETER INDEX. Knobs were unreachable from the palette, so finding one
+    // meant knowing which of the six bands owns it. Each entry jumps to the
+    // owning module (and wakes it if a preset slept it).
+    for (const p of FIRE_PARAM_INDEX) {
+      const mod = FIRE_MODULE_BY_ID.get(p.moduleId);
+      list.push({
+        id: `param-${p.moduleId}-${p.label}`,
+        label: p.label,
+        hint: `Parameter · ${mod?.title ?? p.moduleId}`,
+        keywords: `${p.keywords ?? ""} ${mod?.short ?? ""} ${mod?.abbrev ?? ""}`,
+        run: () => jumpToModule(p.moduleId),
+      });
     }
     return list;
   }, [
@@ -155,10 +182,24 @@ export function FireCommandPalette({
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return items.slice(0, 24);
-    return items
-      .filter((it) => `${it.label} ${it.hint}`.toLowerCase().includes(needle))
-      .slice(0, 28);
+    // Empty query used to show an arbitrary first 24 entries, which buried the
+    // module list under the action commands. Show actions + every module.
+    if (!needle) return items.filter((it) => !it.id.startsWith("param-"));
+    const hay = (it: Item) =>
+      `${it.label} ${it.hint} ${it.keywords ?? ""}`.toLowerCase();
+    // Rank exact label prefix > label contains > anything else, so typing
+    // "cut" surfaces "Cutoff" above a module whose hint mentions it.
+    const scored = items
+      .map((it) => {
+        const label = it.label.toLowerCase();
+        if (label.startsWith(needle)) return { it, s: 0 };
+        if (label.includes(needle)) return { it, s: 1 };
+        if (hay(it).includes(needle)) return { it, s: 2 };
+        return null;
+      })
+      .filter((x): x is { it: Item; s: number } => x !== null)
+      .sort((a, b) => a.s - b.s);
+    return scored.slice(0, 40).map((x) => x.it);
   }, [items, q]);
 
   const [active, setActive] = useState(0);

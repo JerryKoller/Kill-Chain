@@ -276,7 +276,11 @@ export async function integratedLufs(
   const r = rendered.getChannelData(1);
   const block = Math.round(sampleRate * 0.4);
   const hop = Math.round(sampleRate * 0.1);
-  const blocks: number[] = [];
+  // BS.1770: per-channel mean squares SUM (G=1 for L and R), gate at
+  // -70 LUFS absolute, then -10 LU relative — with both the relative gate
+  // threshold and the final integration computed over block ENERGIES.
+  // Averaging LUFS values (log domain) biased quiet blocks upward.
+  const blockEnergies: number[] = [];
   for (let start = 0; start + block <= frames; start += hop) {
     let sum = 0;
     for (let i = start; i < start + block; i++) {
@@ -284,12 +288,15 @@ export async function integratedLufs(
     }
     const ms = sum / block;
     const lufs = ms > 1e-12 ? -0.691 + 10 * Math.log10(ms) : -120;
-    if (lufs > -70) blocks.push(lufs);
+    if (lufs > -70) blockEnergies.push(ms);
   }
-  if (blocks.length === 0) return -120;
-  const mean = blocks.reduce((a, b) => a + b, 0) / blocks.length;
-  const gated = blocks.filter((b) => b >= mean - 10);
-  return gated.length > 0 ? gated.reduce((a, b) => a + b, 0) / gated.length : -120;
+  if (blockEnergies.length === 0) return -120;
+  const meanMs = blockEnergies.reduce((a, b) => a + b, 0) / blockEnergies.length;
+  const gateMs = meanMs / 10; // -10 LU in the energy domain
+  const kept = blockEnergies.filter((ms) => ms >= gateMs);
+  if (kept.length === 0) return -120;
+  const keptMean = kept.reduce((a, b) => a + b, 0) / kept.length;
+  return keptMean > 1e-12 ? -0.691 + 10 * Math.log10(keptMean) : -120;
 }
 
 /** Apply a gain (dB), scaling back if the result would clip past −0.1 dBFS. */

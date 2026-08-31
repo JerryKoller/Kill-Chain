@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { create } from "zustand";
 import {
@@ -57,9 +57,25 @@ export function HeadphoneWizard() {
   const [step, setStep] = useState<WizardStep>("search");
   const [query, setQuery] = useState("");
 
-  const settings = useSettingsStore();
+  // NOTE: this component is mounted app-wide (App.tsx). Subscribing to the
+  // whole settings store re-rendered it on every settings change; select
+  // just the one field the list highlights.
+  const activeHeadphone = useSettingsStore((s) => s.headphone);
   const setHeadphoneProfile = useAudioStore((s) => s.setHeadphoneProfile);
   const toast = useUIStore((s) => s.toast);
+
+  // Escape closes — every other modal in the app already does this.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        closeWizard();
+      }
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [open, closeWizard]);
 
   const customs = useCustomHeadphonesStore((s) => s.profiles);
   const addProfile = useCustomHeadphonesStore((s) => s.addProfile);
@@ -89,7 +105,7 @@ export function HeadphoneWizard() {
   if (!open) return null;
 
   const activate = (id: string, name?: string) => {
-    settings.set("headphone", id);
+    useSettingsStore.getState().set("headphone", id);
     setHeadphoneProfile(id);
     toast(`Correction: ${name ?? HEADPHONES[id]?.name ?? id}`);
     closeWizard();
@@ -226,7 +242,7 @@ export function HeadphoneWizard() {
                     key={h.id}
                     onClick={() => activate(h.id, h.name)}
                     className={`rounded-xl p-3 border text-left transition ${
-                      settings.headphone === h.id
+                      activeHeadphone === h.id
                         ? "border-cyan/60 bg-cyan/10"
                         : "border-white/10 hover:border-white/25 hover:bg-white/[0.03]"
                     }`}
@@ -358,7 +374,7 @@ export function HeadphoneWizard() {
                         <button
                           onClick={() => {
                             removeProfile(p.id);
-                            if (settings.headphone === p.id) activate("neutral");
+                            if (activeHeadphone === p.id) activate("neutral");
                           }}
                           className="text-[11px] text-red-400/80 hover:text-red-400"
                         >

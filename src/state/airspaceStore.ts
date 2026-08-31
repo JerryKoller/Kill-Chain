@@ -197,7 +197,11 @@ export const useAirspaceStore = create<AirspaceState>((set, get) => {
 
     applyAirModeNow: () => {
       const s = get();
-      if (s.airMode !== "off") applyAirMode(s.airMode, s.airOpts);
+      if (s.airMode === "off") return;
+      // Remount re-apply must not flag a manual hold / cancel Mission settle.
+      void import("@/state/missionStateStore").then(({ runAsAutomation }) => {
+        void runAsAutomation(() => applyAirMode(s.airMode, s.airOpts));
+      });
     },
 
     setMedia: (m) => {

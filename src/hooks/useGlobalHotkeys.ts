@@ -68,19 +68,20 @@ export function useGlobalHotkeys(): void {
       // Never hijack OS-level shortcuts (Ctrl+C, Ctrl+S, Alt+Tab remnants…).
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const tgt = e.target as HTMLElement | null;
+      // closest() also catches focus INSIDE composite widgets (a span nested
+      // in a [role=slider], custom editors…) that the old tag check missed.
       if (
         tgt &&
-        (tgt.tagName === "INPUT" ||
-          tgt.tagName === "TEXTAREA" ||
-          tgt.tagName === "SELECT" ||
-          tgt.isContentEditable ||
-          // Focused knobs/sliders own the arrow keys for value nudging.
-          tgt.getAttribute?.("role") === "slider")
+        typeof tgt.closest === "function" &&
+        tgt.closest("input, textarea, select, [contenteditable='true'], [role='slider']")
       ) {
         return;
       }
 
       const ui = useUIStore.getState();
+      // While the cheat-sheet overlay is up, it owns the keyboard: only "?"
+      // (toggle) passes through — Space used to play/pause underneath it.
+      if (ui.hotkeyOverlayOpen && e.key !== "?") return;
       const audio = useAudioStore.getState();
       const settings = useSettingsStore.getState();
       const player = usePlayerStore.getState();

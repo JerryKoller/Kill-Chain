@@ -269,6 +269,13 @@ export class Spatializer3D {
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
     this.input = ctx.createGain();
+    // Force stereo before the splitter — Airspace / Exterior capture is often
+    // a mono MediaStream. Without an explicit upmix, ChannelSplitter leaves
+    // output 1 silent and default L/R speaker layouts collapse to one side
+    // (Library file playback is stereo so it never showed the bug).
+    this.input.channelCount = 2;
+    this.input.channelCountMode = "explicit";
+    this.input.channelInterpretation = "speakers";
     this.output = ctx.createGain();
 
     // Split the stereo input into L (0) and R (1).
@@ -531,7 +538,9 @@ export class Spatializer3D {
       count++;
     }
     const avg = count > 0 ? sum / count : 1;
-    const target = Math.max(1, Math.min(4, 1.25 / avg));
+    // Cap makeup at +6 dB — the old 4× (+12 dB) ceiling could blast the mix
+    // when every voice sat far away and then snap down when one moved close.
+    const target = Math.max(1, Math.min(2, 1.25 / avg));
     this.output.gain.setTargetAtTime(target, this.ctx.currentTime, 0.08);
   }
 

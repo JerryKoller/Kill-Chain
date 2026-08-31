@@ -18,6 +18,8 @@ import {
   type ArrangementClip,
 } from "@/state/fireSequencerStore";
 import { useUIStore } from "@/state/uiStore";
+import { usePanelHeight } from "./usePanelHeight";
+import { PanelResizeHandle } from "./PanelResizeHandle";
 import { CollapseToggle } from "./CollapseToggle";
 import { useFireCollapsed } from "./useFireCollapsed";
 import { ArrangementBarsControls } from "./ArrangementBarsControls";
@@ -134,6 +136,14 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const storeSelectedClipId = useFireSequencerStore((s) => s.selectedClipId);
   const trackHeaderWidth = useFireSequencerStore((s) => s.trackHeaderWidth);
   const setTrackHeaderWidth = useFireSequencerStore((s) => s.setTrackHeaderWidth);
+  const markers = useFireSequencerStore((s) => s.markers);
+  const addMarker = useFireSequencerStore((s) => s.addMarker);
+  const removeMarker = useFireSequencerStore((s) => s.removeMarker);
+  const renameMarker = useFireSequencerStore((s) => s.renameMarker);
+  const copyClips = useFireSequencerStore((s) => s.copyClips);
+  const pasteClips = useFireSequencerStore((s) => s.pasteClips);
+  const setClipTranspose = useFireSequencerStore((s) => s.setClipTranspose);
+  const setClipGain = useFireSequencerStore((s) => s.setClipGain);
   const toast = useUIStore((s) => s.toast);
   const [patternsCollapsed, togglePatterns] = useFireCollapsed("seq.patterns", false);
   const [arrCollapsed, toggleArr] = useFireCollapsed("seq.arrangement", false);
@@ -141,14 +151,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   /** Session-only: patterns dock starts collapsed in fullscreen so the timeline dominates. */
   const [fsPatternsCollapsed, setFsPatternsCollapsed] = useState(true);
 
-  useEffect(() => {
-    if (!arrFullscreen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setArrFullscreen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [arrFullscreen]);
+  /* Fullscreen Escape handling moved below the clip/place-mode state
+     declarations (TDZ) — see the effect after `selectedClips`. */
 
   useEffect(() => {
     if (arrFullscreen) setFsPatternsCollapsed(true);
@@ -167,6 +171,10 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const [playingPattern, setPlayingPattern] = useState<string | null>(null);
   const [playingClips, setPlayingClips] = useState<Set<string>>(() => new Set());
   const [playheadStep, setPlayheadStep] = useState(0);
+  // Mirrored to a ref: the paste shortcut needs the CURRENT playhead, and
+  // depending on the state would rebind the key listener every RAF frame.
+  const playheadStepRef = useRef(0);
+  playheadStepRef.current = playheadStep;
   const [selectedClip, setSelectedClip] = useState<string | null>(null);
   const [clipMenu, setClipMenu] = useState<string | null>(null);
   const [appendOpen, setAppendOpen] = useState(false);
@@ -197,6 +205,45 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     patternId: string; bars: number; color: string; name: string;
   } | null>(null);
   const [selectedClips, setSelectedClips] = useState<Set<string>>(() => new Set());
+
+  // Escape cascade for fullscreen: open menus, place-mode and clip selection
+  // each consume one Escape before fullscreen exits — one press used to
+  // cancel place-mode AND drop fullscreen simultaneously.
+  useEffect(() => {
+    if (!arrFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (clipMenu || appendOpen || placeMode) return;
+      if (selectedClip || selectedClips.size > 0) return;
+      setArrFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [arrFullscreen, clipMenu, appendOpen, placeMode, selectedClip, selectedClips]);
+
+  // The clip overflow menu had no Escape / outside-click dismissal at all.
+  useEffect(() => {
+    if (!clipMenu) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest("[data-fire-clip-menu]")) {
+        setClipMenu(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setClipMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [clipMenu]);
+
   const [marquee, setMarquee] = useState<{
     x0: number; y0: number; x1: number; y1: number;
   } | null>(null);
@@ -345,6 +392,14 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const lengthBars = Math.max(1, Math.ceil(arrangementEndStep / STEPS_PER_BAR));
   const laneH = arrFullscreen ? LANE_H_FS : LANE_H;
   const playlistH = MAX_PLAYLIST_TRACKS * laneH;
+  // Resizable track viewport. Floor is ~2 lanes plus the ruler so it can be
+  // tucked away; ceiling is the full stack (beyond that it would just be empty).
+  const arrH = usePanelHeight(
+    "killchain.fire.arrViewportH",
+    Math.min(RULER_H + laneH * 5, RULER_H + playlistH),
+    RULER_H + laneH * 2,
+    RULER_H + playlistH,
+  );
 
   useEffect(() => {
     if (arrCollapsed) return;
@@ -662,12 +717,49 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
         return;
       }
 
+      // Clip clipboard. Paste lands at the playhead on the selected clip's
+      // track (or track 0), so a copied chorus block can be dropped anywhere
+      // instead of deleted and re-dragged.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        const st = useFireSequencerStore.getState();
+        if (!st.hasClipClipboard()) { toast("No clips copied"); return; }
+        const anchor = selectedClip
+          ? st.arrangement.find((c) => c.id === selectedClip)
+          : undefined;
+        const newIds = st.pasteClips(playheadStepRef.current, anchor?.track ?? 0);
+        if (newIds.length === 0) { toast("Can't paste — no space on that track"); return; }
+        setSelectedClips(new Set(newIds));
+        setSelectedClip(newIds[newIds.length - 1]!);
+        toast(`Pasted ${newIds.length} clip${newIds.length === 1 ? "" : "s"}`);
+        return;
+      }
+
       const ids = selectedClips.size > 0
         ? [...selectedClips]
         : selectedClip
           ? [selectedClip]
           : [];
       if (ids.length === 0) return;
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        const n = copyClips(ids);
+        toast(n > 0 ? `Copied ${n} clip${n === 1 ? "" : "s"}` : "Nothing to copy");
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
+        e.preventDefault();
+        const n = copyClips(ids);
+        if (n > 0) {
+          for (const id of ids) removeClip(id);
+          setSelectedClip(null);
+          setSelectedClips(new Set());
+          clearSelectedClip();
+          toast(`Cut ${n} clip${n === 1 ? "" : "s"}`);
+        }
+        return;
+      }
 
       const grid = Math.max(0.25, effectiveSnapRef.current);
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -714,7 +806,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     return () => window.removeEventListener("keydown", onKey);
   }, [
     selectedClip, selectedClips, placeMode, removeClip, nudgeClip, moveClip,
-    duplicateClip, selectClipForEdit, clearSelectedClip, toast,
+    duplicateClip, selectClipForEdit, clearSelectedClip, toast, copyClips,
   ]);
 
   const seekFromRuler = (clientX: number, soft: boolean) => {
@@ -1103,6 +1195,44 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 </button>
               ))}
             </div>
+            {/* Markers: name song sections instead of counting bars. */}
+            <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/25 px-1 h-8">
+              <button
+                type="button"
+                className="h-7 px-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider text-white/55 hover:text-[#ffbfa0]"
+                onClick={() => {
+                  const step = playheadStep;
+                  const id = addMarker(step);
+                  const mk = useFireSequencerStore.getState().markers.find((m) => m.id === id);
+                  toast(`Marker · ${mk?.label ?? "added"}`);
+                }}
+                title="Drop a marker at the playhead"
+              >+ Mark</button>
+              <button
+                type="button"
+                className="h-7 px-1.5 rounded-md text-[10px] font-mono text-white/45 hover:text-white disabled:opacity-30"
+                disabled={markers.length === 0}
+                onClick={() => {
+                  const st = useFireSequencerStore.getState();
+                  const cue = playheadStep;
+                  const prev = st.markerBefore(cue);
+                  if (prev) { seekArrangement(prev.step); toast(prev.label); }
+                  else { seekArrangement(0); toast("Start"); }
+                }}
+                title="Previous marker"
+              >|◀</button>
+              <button
+                type="button"
+                className="h-7 px-1.5 rounded-md text-[10px] font-mono text-white/45 hover:text-white disabled:opacity-30"
+                disabled={markers.length === 0}
+                onClick={() => {
+                  const st = useFireSequencerStore.getState();
+                  const next = st.markerAfter(playheadStep);
+                  if (next) { seekArrangement(next.step); toast(next.label); }
+                }}
+                title="Next marker"
+              >▶|</button>
+            </div>
             <div className="inline-flex items-center gap-1 rounded-lg border border-white/12 bg-black/25 px-1.5 h-8">
               <button
                 type="button"
@@ -1425,7 +1555,12 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
           <div
             ref={scrollRef}
             className={`relative flex-1 editor-scroll overflow-auto ${arrFullscreen ? "min-h-0" : ""}`}
-            style={arrFullscreen ? undefined : { maxHeight: RULER_H + playlistH }}
+            // Height was pinned to the FULL ten-track stack (~390 px) whether or
+            // not ten tracks existed, so the arrangement always claimed that
+            // much vertical space and squeezed the roll and automation lanes
+            // below it. Now user-resizable and persisted; the viewport already
+            // scrolls, so a shorter box just shows fewer tracks at once.
+            style={arrFullscreen ? undefined : { height: arrH.height, maxHeight: RULER_H + playlistH }}
             onDragOver={(e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "copy";
@@ -1464,6 +1599,46 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       {b + 1}
                     </span>
                   </div>
+                ))}
+
+                {/* Song markers. The ruler showed only bar numbers, so song
+                    sections lived in the user's head. Click jumps, right-click
+                    (or shift-click) removes. */}
+                {markers.map((mk) => (
+                  <button
+                    key={mk.id}
+                    type="button"
+                    className="absolute top-0 z-10 flex items-center gap-1 pr-1 text-[9px] font-bold uppercase tracking-wider"
+                    style={{
+                      left: (mk.step / STEPS_PER_BAR) * pxPerBar,
+                      height: RULER_H,
+                      color: mk.color ?? "#ff6a3d",
+                      borderLeft: `2px solid ${mk.color ?? "#ff6a3d"}`,
+                      background: `linear-gradient(90deg, ${mk.color ?? "#ff6a3d"}33, transparent)`,
+                      paddingLeft: 3,
+                      maxWidth: 140,
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.shiftKey) {
+                        removeMarker(mk.id);
+                        toast(`Marker removed · ${mk.label}`);
+                        return;
+                      }
+                      seekArrangement(mk.step);
+                      toast(mk.label);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const next = window.prompt("Marker name", mk.label);
+                      if (next != null) renameMarker(mk.id, next);
+                    }}
+                    title={`${mk.label} · bar ${Math.floor(mk.step / STEPS_PER_BAR) + 1} — click to jump, shift-click to remove, right-click to rename`}
+                  >
+                    <span className="truncate">{mk.label}</span>
+                  </button>
                 ))}
               </div>
 
@@ -1680,6 +1855,8 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                         toast(`Removed clip “${displayName}”`);
                       }}
                       onTrim={(steps) => trimClip(clip.id, steps)}
+                      onTranspose={(semis) => setClipTranspose(clip.id, semis)}
+                      onGain={(db) => setClipGain(clip.id, db)}
                       onDragStart={(e) => beginClipDrag(e, clip, color, bars)}
                     />
                   );
@@ -1698,6 +1875,10 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
               </div>
             </div>
           </div>
+          {/* Vertical resizer: the track viewport used to be locked to the
+              full ten-lane height, which starved the roll and automation
+              lanes underneath it. */}
+          {!arrFullscreen && <PanelResizeHandle panel={arrH} label="arrangement" />}
         </div>
         )}
       </div>
@@ -1738,6 +1919,8 @@ function TimelineClip({
   onDuplicateLinked,
   onRemove,
   onTrim,
+  onTranspose,
+  onGain,
   onDragStart,
 }: {
   clip: ArrangementClip;
@@ -1764,8 +1947,12 @@ function TimelineClip({
   onDuplicateLinked: () => void;
   onRemove: () => void;
   onTrim: (lengthSteps: number) => void;
+  onTranspose: (semitones: number) => void;
+  onGain: (gainDb: number) => void;
   onDragStart: (e: React.PointerEvent) => void;
 }) {
+  const transpose = clip.transpose ?? 0;
+  const gainDb = clip.gainDb ?? 0;
   const track = clampTrack(clip.track ?? 0);
   const left = (clip.startStep / STEPS_PER_BAR) * pxPerBar;
   // Allow true 1/16-bar clips — old 0.35·bar floor made 1/4 look identical to ~1/3.
@@ -1917,6 +2104,24 @@ function TimelineClip({
           {hasAutomation && (
             <span className="w-1.5 h-1.5 rounded-full bg-amber-300/80 shrink-0" title="Has automation" />
           )}
+          {/* Transpose / gain are otherwise invisible — a clip that sounds
+              different from its pattern must say so on the clip. */}
+          {transpose !== 0 && (
+            <span
+              className="shrink-0 rounded bg-black/45 px-1 font-mono text-[8px] font-bold text-[#bdf5ea]"
+              title={`Clip transposed ${transpose > 0 ? "+" : ""}${transpose} semitones`}
+            >
+              {transpose > 0 ? `+${transpose}` : transpose}
+            </span>
+          )}
+          {gainDb !== 0 && (
+            <span
+              className="shrink-0 rounded bg-black/45 px-1 font-mono text-[8px] font-bold text-white/70"
+              title={`Clip gain ${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)} dB`}
+            >
+              {gainDb > 0 ? `+${gainDb.toFixed(0)}` : gainDb.toFixed(0)}dB
+            </span>
+          )}
         </div>
       </div>
       <button
@@ -1947,6 +2152,46 @@ function TimelineClip({
           <button type="button" className="block w-full px-2.5 py-1.5 text-left text-[10px] text-white/75 hover:bg-white/10" onClick={onDuplicateLinked}>
             {unique ? "Duplicate unique" : "Duplicate linked"}
           </button>
+          {/* Per-clip pitch/level. Reusing a pattern a fifth up previously
+              forced a UNIQUE clone of the whole thing. */}
+          <div className="mt-1 border-t border-white/[0.08] px-2.5 pb-1 pt-1.5">
+            <div className="mb-1 flex items-center justify-between text-[9px] uppercase tracking-wider text-white/35">
+              <span>Pitch</span>
+              <span className="font-mono text-white/60">
+                {transpose === 0 ? "0" : `${transpose > 0 ? "+" : ""}${transpose}`}
+              </span>
+            </div>
+            <div className="flex gap-0.5">
+              {[-12, -5, -1, 1, 5, 12].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className="flex-1 rounded border border-white/12 py-0.5 text-[9px] font-mono text-white/65 hover:border-white/30 hover:text-white"
+                  onClick={() => onTranspose(transpose + d)}
+                  title={`${d > 0 ? "+" : ""}${d} semitones`}
+                >{d > 0 ? `+${d}` : d}</button>
+              ))}
+              <button
+                type="button"
+                className="rounded border border-white/12 px-1 py-0.5 text-[9px] text-white/45 hover:text-white"
+                onClick={() => onTranspose(0)}
+                title="Reset pitch"
+              >0</button>
+            </div>
+            <div className="mb-1 mt-1.5 flex items-center justify-between text-[9px] uppercase tracking-wider text-white/35">
+              <span>Level</span>
+              <span className="font-mono text-white/60">
+                {gainDb === 0 ? "0 dB" : `${gainDb > 0 ? "+" : ""}${gainDb.toFixed(1)} dB`}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={-24} max={6} step={0.5}
+              value={gainDb}
+              onChange={(e) => onGain(Number(e.target.value))}
+              className="w-full accent-[#ff6a3d]"
+            />
+          </div>
           <button type="button" className="block w-full px-2.5 py-1.5 text-left text-[10px] text-rose-300/80 hover:bg-white/10" onClick={onRemove}>
             Remove clip
           </button>

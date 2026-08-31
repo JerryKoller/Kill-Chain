@@ -239,7 +239,9 @@ async function tryAutoFlatten(src: MissionSource, ac: AbortController): Promise<
   if (!useSettingsStore.getState().autoFlatten) return false;
   const { autoFlatten } = await import("@/audio/AutoFlatten");
   if (ac.signal.aborted) return false;
-  await runAsAutomation(() => autoFlatten());
+  // Pass the abort signal through so a source change mid-analysis stops the
+  // 8-second sampling loop instead of applying a stale correction.
+  await runAsAutomation(() => autoFlatten(ac.signal));
   return !ac.signal.aborted;
 }
 
@@ -343,24 +345,30 @@ async function pollOnce(): Promise<void> {
 // a source is active flags the manual hold. Output gain is deliberately NOT
 // watched (LUFS normalize trims it on a timer).
 
+let manualWatchUnsubs: Array<() => void> = [];
+
 async function wireManualWatch(): Promise<void> {
   const { useAudioStore } = await import("@/state/audioStore");
   const { useEqStore } = await import("@/state/eqStore");
 
   let a = useAudioStore.getState();
-  useAudioStore.subscribe((s) => {
-    const changed =
-      s.params !== a.params || s.restore !== a.restore || s.clarity !== a.clarity;
-    a = s;
-    if (changed && !isAutomationApplying()) noteManualOverride();
-  });
+  manualWatchUnsubs.push(
+    useAudioStore.subscribe((s) => {
+      const changed =
+        s.params !== a.params || s.restore !== a.restore || s.clarity !== a.clarity;
+      a = s;
+      if (changed && !isAutomationApplying()) noteManualOverride();
+    }),
+  );
 
   let bands = useEqStore.getState().bands;
-  useEqStore.subscribe((s) => {
-    const changed = s.bands !== bands;
-    bands = s.bands;
-    if (changed && !isAutomationApplying()) noteManualOverride();
-  });
+  manualWatchUnsubs.push(
+    useEqStore.subscribe((s) => {
+      const changed = s.bands !== bands;
+      bands = s.bands;
+      if (changed && !isAutomationApplying()) noteManualOverride();
+    }),
+  );
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
@@ -396,6 +404,12 @@ export function stopMissionState(): void {
   settleTimer = null;
   currentRun?.abort();
   currentRun = null;
+  // Drop the manual-override store subscriptions — a stop/start cycle used to
+  // stack duplicate watchers that double-fired manual holds.
+  for (const unsub of manualWatchUnsubs) {
+    try { unsub(); } catch { /* ignore */ }
+  }
+  manualWatchUnsubs = [];
   started = false;
   lastSig = "";
 }

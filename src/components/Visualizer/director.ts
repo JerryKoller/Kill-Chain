@@ -12,14 +12,18 @@
  *
  * Transitions are BPM-aware: they wait for a bar boundary when the tempo
  * clock is confident, then crossfade over two bars (clamped 1.5–6 s; 2.8 s
- * when the tempo is unknown). A minimum dwell keeps it from thrashing.
+ * when the tempo is unknown). Cuts INTO a drop are snappier — one bar /
+ * beat-aligned with a shorter fade — so Strike / Singularity land harder.
+ * A minimum dwell keeps it from thrashing.
  */
 
 import type { ModeRenderer, RenderFrame } from "./renderers";
 import type { VisualizerMode } from "@/state/visualizerStore";
 
 const MIN_DWELL_S = 14;
+const DROP_DWELL_S = 10; // slightly earlier cuts when heading into a drop
 const FALLBACK_FADE_S = 2.8;
+const DROP_FADE_S = 1.4;
 
 interface Scene {
   r: ModeRenderer;
@@ -57,8 +61,13 @@ export function createDirector(
       scenes.set(m, s);
     }
     if (s.w !== W || s.h !== H) {
-      s.canvas.width = Math.max(1, W);
-      s.canvas.height = Math.max(1, H);
+      // Back the offscreen canvas with DEVICE pixels (same cap as the host
+      // overlay) — CSS-sized scenes were upscaled by the outer DPR transform
+      // and every Cinema layer looked soft on hiDPI displays.
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      s.canvas.width = Math.max(1, Math.round(W * dpr));
+      s.canvas.height = Math.max(1, Math.round(H * dpr));
+      s.g.setTransform(dpr, 0, 0, dpr, 0, 0);
       s.r.resize(W, H);
       s.w = W;
       s.h = H;
@@ -123,16 +132,21 @@ export function createDirector(
       // ── decide whether to cut ──
       if (!incoming) {
         const want = pick(f);
-        if (want !== current && dwell >= MIN_DWELL_S) {
+        const toDrop = want === "strike" || want === "singularity";
+        const dwellNeed = toDrop ? DROP_DWELL_S : MIN_DWELL_S;
+        if (want !== current && dwell >= dwellNeed) {
           // BPM-aware: wait for the bar line when the clock is confident,
-          // otherwise go now.
+          // otherwise go now. Drop entries may also cut on a beat tick so
+          // the impact scene lands closer to the downbeat.
           const clocked = it.bpm > 0 && it.bpmConf > 0.25;
-          if (!clocked || it.barTick) {
+          if (!clocked || it.barTick || (toDrop && it.beatTick)) {
             incoming = want;
             fadeT = 0;
             fadeDur = clocked
-              ? Math.min(6, Math.max(1.5, (60 / it.bpm) * 8)) // two 4-beat bars
-              : FALLBACK_FADE_S;
+              ? Math.min(6, Math.max(1.2, (60 / it.bpm) * (toDrop ? 4 : 8))) // 1 bar into drop, 2 otherwise
+              : toDrop
+                ? DROP_FADE_S
+                : FALLBACK_FADE_S;
             // advance the alternators so repeat visits vary
             if (want === "lattice" || want === "spectrum") verseFlip = !verseFlip;
             if (want === "singularity" || want === "strike") dropFlip = !dropFlip;
@@ -171,6 +185,14 @@ export function createDirector(
         ? `CINEMA LOCK · ${current.toUpperCase()} → ${incoming.toUpperCase()}`
         : `CINEMA LOCK · ${current.toUpperCase()} · ${it.section.toUpperCase()}`;
       g.fillText(label, 8, f.H - 10);
+    },
+
+    dispose() {
+      // Forward to nested scene renderers (Singularity holds GPU resources).
+      for (const s of scenes.values()) {
+        try { s.r.dispose?.(); } catch { /* ignore */ }
+      }
+      scenes.clear();
     },
   };
 }

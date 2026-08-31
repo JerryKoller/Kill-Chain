@@ -571,21 +571,45 @@ export function sanitizePersistShape(parsed: Partial<PersistShape> | null | unde
   const d = defaults();
   if (!parsed || typeof parsed !== "object") return d;
   const lp = parsed.listenerPos;
+  // Numeric clamps mirror the runtime setters — a hand-edited .kdim file or
+  // corrupt storage must never feed NaN / extremes into the spatial engine.
+  const roomDim = (v: unknown, lim: { min: number; max: number; default: number }): number =>
+    Number.isFinite(Number(v)) ? Math.max(lim.min, Math.min(lim.max, Number(v))) : lim.default;
+  const norm = (v: unknown): number =>
+    Number.isFinite(Number(v)) ? Math.max(-1, Math.min(1, Number(v))) : 0;
+  const rawRoom = parsed.room ?? {};
   return {
     ...d,
     ...parsed,
     mode: parsed.mode === "band" || parsed.mode === "motion" ? parsed.mode : "speaker",
     signal: parsed.signal === "raw" ? "raw" : "eqd",
-    room: { ...d.room, ...(parsed.room ?? {}) },
+    room: {
+      width: roomDim((rawRoom as { width?: unknown }).width, ROOM_LIMITS.width),
+      height: roomDim((rawRoom as { height?: unknown }).height, ROOM_LIMITS.height),
+      depth: roomDim((rawRoom as { depth?: unknown }).depth, ROOM_LIMITS.depth),
+    },
+    absorption: Number.isFinite(Number(parsed.absorption))
+      ? Math.max(ABSORPTION_LIMITS.min, Math.min(ABSORPTION_LIMITS.max, Number(parsed.absorption)))
+      : ABSORPTION_LIMITS.default,
     listenerYaw: Number.isFinite(Number(parsed.listenerYaw)) ? Number(parsed.listenerYaw) : 0,
     listenerPos: {
-      x: Number.isFinite(Number(lp?.x)) ? Number(lp!.x) : 0,
-      y: Number.isFinite(Number(lp?.y)) ? Number(lp!.y) : 0,
-      z: Number.isFinite(Number(lp?.z)) ? Number(lp!.z) : 0,
+      x: norm(lp?.x),
+      y: norm(lp?.y),
+      z: norm(lp?.z),
     },
     speakers:
       Array.isArray(parsed.speakers) && parsed.speakers.length > 0
-        ? parsed.speakers.map((s) => ({ ...s, id: s.id || sid() }))
+        ? parsed.speakers.map((s) => ({
+            ...s,
+            id: s.id || sid(),
+            nx: norm(s.nx),
+            ny: norm(s.ny),
+            nz: norm(s.nz),
+            gainDb: Number.isFinite(Number(s.gainDb))
+              ? Math.max(-12, Math.min(12, Number(s.gainDb)))
+              : 0,
+            enabled: s.enabled !== false,
+          }))
         : d.speakers,
     bandPlacements: parsed.bandPlacements ?? {},
     motion: sanitizeMotion(parsed.motion),
@@ -612,8 +636,10 @@ function schedulePersist(state: DimensionState): void {
   persistTimer = setTimeout(() => {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persistShapeOf(state)));
-    } catch {
-      /* ignore */
+    } catch (err) {
+      void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+        reportStorageFailure("3rd Dimension scene", err),
+      );
     }
   }, 350);
 }
@@ -881,6 +907,26 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
         void engine.resume();
         engine.setDimensionSignal(get().signal);
         pushStructure();
+        // Dimension only shapes Kill-Chain's engine output. Airspace's dry
+        // webview audio is outside that path until "Route through Kill-Chain".
+        void Promise.all([
+          import("@/state/playerStore"),
+          import("@/state/airspaceStore"),
+          import("@/state/uiStore"),
+        ]).then(([{ usePlayerStore }, { useAirspaceStore }, { useUIStore }]) => {
+          const p = usePlayerStore.getState();
+          const air = useAirspaceStore.getState().media;
+          if (
+            air &&
+            !air.paused &&
+            !(p.loopbackActive && p.loopbackMode === "airspace")
+          ) {
+            useUIStore.getState().toast(
+              "Route Airspace through Kill-Chain so 3rd Dimension can shape it",
+              "info",
+            );
+          }
+        });
       } else {
         engine.dimension.stopMotion();
         syncTempoProvider(get());

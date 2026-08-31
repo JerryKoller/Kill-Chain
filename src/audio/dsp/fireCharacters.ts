@@ -48,10 +48,11 @@ export const FIRE_CHARACTERS: FireCharacter[] = [
     focusModules: ["mixer.unison", "filter", "fx.chorus", "fx.vintage", "analog.life"],
     inspiration: "early-80s poly stack",
     patch: {
-      oscATable: "saw", oscAPos: 0.88, oscALevel: 0.72,
-      oscBTable: "saw", oscBPos: 0.78, oscBDetune: 10, oscBLevel: 0.55,
-      oscCTable: "harmonic", oscCPos: 0.55, oscCOctave: 1, oscCLevel: 0.18, oscCDetune: -6,
-      unison: 6, unisonDetune: 22, unisonWidth: 0.85, subWave: "sine", subLevel: 0.18,
+      // Headroom pass: see char-formant-wall — 6-voice stack trimmed ~15%.
+      oscATable: "saw", oscAPos: 0.88, oscALevel: 0.62,
+      oscBTable: "saw", oscBPos: 0.78, oscBDetune: 10, oscBLevel: 0.47,
+      oscCTable: "harmonic", oscCPos: 0.55, oscCOctave: 1, oscCLevel: 0.16, oscCDetune: -6,
+      unison: 6, unisonDetune: 22, unisonWidth: 0.85, subWave: "sine", subLevel: 0.15,
       filterType: "lowpass", filterCutoff: 1800, filterResonance: 2.2,
       filterEnvAmount: 0.55, filtAttack: 0.08, filtDecay: 1.4, filtSustain: 0.35, filtRelease: 0.8,
       ampAttack: 0.06, ampDecay: 0.5, ampSustain: 0.85, ampRelease: 0.7,
@@ -395,10 +396,13 @@ export const FIRE_CHARACTERS: FireCharacter[] = [
     focusModules: ["fire.sec.warp", "mixer.unison", "filter", "fx.spectral"],
     inspiration: "hypersaw formant wall",
     patch: {
-      oscATable: "saw", oscAPos: 0.95, oscALevel: 0.75,
-      oscBTable: "fold", oscBPos: 0.6, oscBLevel: 0.55, oscBDetune: 12,
-      oscCTable: "sync", oscCPos: 0.5, oscCLevel: 0.3, oscCOctave: 1,
-      unison: 7, unisonDetune: 28, unisonWidth: 1, subLevel: 0.15,
+      // Headroom pass: 7-voice unison × osc sum ~1.75 guaranteed clip on
+      // chords — trimmed ~18% (character intact, the wall now comes from
+      // unison width + warp, not raw overload).
+      oscATable: "saw", oscAPos: 0.95, oscALevel: 0.62,
+      oscBTable: "fold", oscBPos: 0.6, oscBLevel: 0.46, oscBDetune: 12,
+      oscCTable: "sync", oscCPos: 0.5, oscCLevel: 0.25, oscCOctave: 1,
+      unison: 7, unisonDetune: 28, unisonWidth: 1, subLevel: 0.12,
       warpStretch: 0.35, warpTilt: -0.2, warpComb: 0.25,
       filterType: "lowpass", filterCutoff: 2800, filterResonance: 4, filterDrive: 0.35,
       filterEnvAmount: 0.4, ampAttack: 0.01, ampDecay: 0.3, ampSustain: 0.85, ampRelease: 0.35,
@@ -415,9 +419,11 @@ export const FIRE_CHARACTERS: FireCharacter[] = [
     focusModules: ["mixer.unison", "filter", "fx.chorus", "lfo.1"],
     inspiration: "wide supersaw lead",
     patch: {
-      oscATable: "saw", oscAPos: 0.92, oscALevel: 0.72, oscAEnv: 0.15,
-      oscBTable: "saw", oscBPos: 0.85, oscBDetune: 11, oscBLevel: 0.6,
-      oscCTable: "saw", oscCPos: 0.75, oscCOctave: 1, oscCDetune: -8, oscCLevel: 0.28,
+      // Headroom pass: see char-formant-wall — supersaw stays super via
+      // unison/detune, not via a 1.68 osc sum.
+      oscATable: "saw", oscAPos: 0.92, oscALevel: 0.6, oscAEnv: 0.15,
+      oscBTable: "saw", oscBPos: 0.85, oscBDetune: 11, oscBLevel: 0.5,
+      oscCTable: "saw", oscCPos: 0.75, oscCOctave: 1, oscCDetune: -8, oscCLevel: 0.24,
       unison: 7, unisonDetune: 26, unisonWidth: 1, subLevel: 0.08,
       filterType: "lowpass", filterCutoff: 6500, filterResonance: 1.4,
       filterEnvAmount: 0.4, ampAttack: 0.04, ampDecay: 0.35, ampSustain: 0.85, ampRelease: 0.5,

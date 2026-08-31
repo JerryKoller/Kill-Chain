@@ -110,8 +110,14 @@ export function GateCharacterStrip() {
           tone={tone}
           character={GATE_CHAR}
           caseMode="normal"
-          onClick={() => setParam("gatePattern", [...p.steps])}
-          title={p.name}
+          onClick={() => {
+            setParam("gatePattern", [...p.steps]);
+            // Picking a chop pattern arms the gate — matching the Chord
+            // panel's behavior. Choosing a pattern that stayed silent until
+            // a separate Arm click read as a dead control.
+            setParam("gateOn", true);
+          }}
+          title={`${p.name} — selects the pattern and arms the gate`}
         >
           {p.name}
         </FcChip>

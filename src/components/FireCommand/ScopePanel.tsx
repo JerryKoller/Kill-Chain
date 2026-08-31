@@ -210,7 +210,7 @@ export function ScopeOscWave({ group, color }: { group: "a" | "b" | "c"; color: 
       cacheTable = id;
     };
     const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
       size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       size.h = 88;
       canvas.width = Math.floor(size.w * dpr);

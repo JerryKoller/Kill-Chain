@@ -58,7 +58,19 @@ function load(): Persisted {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
-    return { ...DEFAULTS, ...JSON.parse(raw) };
+    const p = { ...DEFAULTS, ...JSON.parse(raw) } as Persisted;
+    // Corrupt storage must never produce NaN XP / negative counters.
+    const nat = (v: unknown): number =>
+      typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+    p.xp = nat(p.xp);
+    p.gamesPlayed = nat(p.gamesPlayed);
+    p.rounds = nat(p.rounds);
+    p.correct = nat(p.correct);
+    p.bestStreak = nat(p.bestStreak);
+    if (!p.bandStats || typeof p.bandStats !== "object" || Array.isArray(p.bandStats)) {
+      p.bandStats = {};
+    }
+    return p;
   } catch {
     return { ...DEFAULTS };
   }

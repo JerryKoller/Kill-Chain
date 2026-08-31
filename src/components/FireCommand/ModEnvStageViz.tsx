@@ -23,7 +23,7 @@ import { type ModEnvPoint, type EnvCurve, normalizeModEnvPoints, applyEnvCurve }
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 import { useStageCanvas } from "./useStageCanvas";
-import { useToneTelemetry } from "./useToneTelemetry";
+import { useToneTelemetryRef } from "./useToneTelemetry";
 import {
   bezel,
   cachedGrad,
@@ -465,7 +465,10 @@ export function ModEnvStageViz() {
   const envB = useFireCommandStore((s) => s.patch.oscBEnv) ?? 0;
   const envC = useFireCommandStore((s) => s.patch.oscCEnv) ?? 0;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const tel = useToneTelemetry();
+  // Ref-based telemetry: refreshed inside hints() so notes don't re-render
+  // this component at 30 fps (see useToneTelemetryRef).
+  const telRef = useToneTelemetryRef();
+  const tel = telRef.current;
 
   const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
@@ -651,26 +654,33 @@ export function ModEnvStageViz() {
         flashRef.current *= 0.86;
         paintModEnv(ctx, W, Hh, st.current, now, flashRef.current);
       },
-      () => ({
-        flash: flashRef.current,
-        active: st.current.voices > 0,
-        dragging: !!dragRef.current,
-        visible: visibleRef.current,
-        motionKey: motionHash(
-          pointsDigest(st.current.points),
-          st.current.sustainIndex,
-          st.current.loop,
-          st.current.envA,
-          st.current.envB,
-          st.current.envC,
-          st.current.telLevel,
-          st.current.voices,
-        ),
-      }),
+      () => {
+        const tv = telRef.current;
+        st.current.telPhase = tv.mod.phase;
+        st.current.telLevel = tv.mod.level;
+        st.current.telReleasing = tv.mod.releasing;
+        st.current.voices = tv.voiceCount;
+        return {
+          flash: flashRef.current,
+          active: st.current.voices > 0,
+          dragging: !!dragRef.current,
+          visible: visibleRef.current,
+          motionKey: motionHash(
+            pointsDigest(st.current.points),
+            st.current.sustainIndex,
+            st.current.loop,
+            st.current.envA,
+            st.current.envB,
+            st.current.envC,
+            st.current.telLevel,
+            st.current.voices,
+          ),
+        };
+      },
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, [canvasRef, sizeRef, visibleRef]);
+  }, [canvasRef, sizeRef, visibleRef, telRef]);
 
   return (
     <div

@@ -23,11 +23,41 @@ function ser(patch, indent = 4) {
   return `{\n${lines.join("\n")}\n${" ".repeat(indent - 2)}}`;
 }
 
+/**
+ * Showcase normalization — applied to every authored patch at generation
+ * time so the whole bank presents the CURRENT engine well:
+ *  - masterGain floors: the engine gained a transparent lookahead limiter and
+ *    ~6 dB of honest restage; the old 0.55–0.66 authored gains read as
+ *    "washed out / faded" against it.
+ *  - reverb: exponential-RT60 IR landed in the synth; predelay gives wet
+ *    patches transient separation, and mix/size ceilings keep even Atmos
+ *    defined instead of cavernous.
+ */
+function showcaseNormalize(patch, cat) {
+  const p = { ...patch };
+  const atmospheric = cat === "Atmos" || cat === "FX";
+  // Loudness floor / lift (never lowers an authored value).
+  const floor = atmospheric ? 0.66 : 0.7;
+  if (typeof p.masterGain === "number") {
+    p.masterGain = Math.min(0.8, Math.max(p.masterGain, Math.min(floor, p.masterGain + 0.08)));
+    if (p.masterGain < floor) p.masterGain = floor;
+  } else {
+    p.masterGain = 0.72;
+  }
+  // Space: defined, not drowned.
+  if (typeof p.reverbSize === "number" && p.reverbSize > 6) p.reverbSize = 6;
+  if (typeof p.reverbMix === "number") {
+    p.reverbMix = Math.min(p.reverbMix, atmospheric ? 0.5 : 0.42);
+    if (p.reverbMix >= 0.28 && p.reverbPredelay === undefined) p.reverbPredelay = 0.028;
+  }
+  return p;
+}
+
 function preset(id, name, desc, cat, patch, arp) {
   const arpStr = arp
     ? `, { enabled: ${!!arp.enabled}, mode: "${arp.mode}", bpm: ${arp.bpm}, division: "${arp.division}", octaves: ${arp.octaves}, gate: ${arp.gate} }`
     : "";
-  return `  preset("${id}", "${name}", "${desc}", "${cat}", ${ser(patch)}${arpStr}),\n`;
+  return `  preset("${id}", "${name}", "${desc}", "${cat}", ${ser(showcaseNormalize(patch, cat))}${arpStr}),\n`;
 }
 
 /** Shared musical helpers */
@@ -801,7 +831,7 @@ const vintage = [
     crush: 0.25, hiss: 0.12, hum: 0.08, ampAttack: 0.01, ampSustain: 0.75, ampRelease: 0.3, masterGain: 0.62,
   }],
   ["fc-vin-cassette", "Cassette Deck", "Cassette deck warmth", {
-    oscATable: "saw", oscALevel: 0.58, oscBTable: "basic", oscBLevel: 0.35, cassetteGen: 0.6, ageMacro: 0.5, wowFlutter: 0.3,
+    oscATable: "saw", oscALevel: 0.48, oscBTable: "basic", oscBLevel: 0.28, cassetteGen: 0.42, ageMacro: 0.3, wowFlutter: 0.24,
     filterCutoff: 2200, chorusMix: 0.15, ampAttack: 0.03, ampSustain: 0.8, ampRelease: 0.45, masterGain: 0.64,
   }],
   ["fc-vin-analog", "Analog Drift", "Drifting analog voice", {
@@ -1045,22 +1075,1370 @@ const fm = [
   }],
 ];
 
+/* ═══════════════════════════════════════════════════════════════════════
+   WAVE 2 — 200 additional presets (`fc2-` ids).
+   Authored against the current engine: exponential-RT60 reverb (so wet
+   values are lower than the old bank needed), transparent bus limiter,
+   absolute filter Q. Module pruning happens at LOAD time, so these only
+   set the parameters they actually mean to use.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+const bass2 = [
+  ["fc2-bass-round", "Round Bottom", "Soft round sine-triangle bass", {
+    oscATable: "basic", oscAPos: 0.12, oscALevel: 0.7, oscAOctave: -1,
+    subLevel: 0.45, subWave: "triangle", filterCutoff: 420, filterResonance: 1.4,
+    filterEnvAmount: 0.2, filtDecay: 0.3, ampAttack: 0.006, ampDecay: 0.4,
+    ampSustain: 0.6, ampRelease: 0.35, mono: true, punch: 0.25, masterGain: 0.74,
+  }],
+  ["fc2-bass-reese-wide", "Reese Chasm", "Two detuned saws, deep and wide", {
+    oscATable: "saw", oscALevel: 0.6, oscAOctave: -1,
+    oscBTable: "saw", oscBLevel: 0.55, oscBDetune: 22, oscBOctave: -1,
+    filterCutoff: 620, filterResonance: 2.2, filterEnvAmount: 0.3, filtDecay: 0.5,
+    ampAttack: 0.01, ampSustain: 0.8, ampRelease: 0.4, stereoWidth: 1.2, masterGain: 0.72,
+  }],
+  ["fc2-bass-acid-303", "Acid 303", "Squelchy resonant ladder bass", {
+    oscATable: "pulse", oscALevel: 0.72, oscAOctave: -1, pulseDuty: 0.42,
+    filterModel: "ladder", filterCutoff: 260, filterResonance: 9.5, filterDrive: 0.3,
+    filterEnvAmount: 0.7, filtAttack: 0.004, filtDecay: 0.22, filtSustain: 0.1,
+    ampAttack: 0.003, ampDecay: 0.28, ampSustain: 0.35, ampRelease: 0.16,
+    mono: true, glide: 0.05, slideOn: true, accentAmount: 0.4, chipAcidMix: 0.7, masterGain: 0.72,
+  }],
+  ["fc2-bass-fm-punch", "FM Punch", "Percussive FM bass with tight decay", {
+    oscATable: "basic", oscALevel: 0.66, oscAOctave: -1,
+    fmAmount: 0.42, fmRatio: 2, filterCutoff: 900, filterResonance: 1.8,
+    filterEnvAmount: 0.45, filtDecay: 0.14, filtSustain: 0.05,
+    ampAttack: 0.002, ampDecay: 0.22, ampSustain: 0.25, ampRelease: 0.2,
+    mono: true, punch: 0.4, masterGain: 0.74,
+  }],
+  ["fc2-bass-growl-mid", "Growl Engine", "Mid-forward growling bass", {
+    oscATable: "growl", oscAPos: 0.6, oscALevel: 0.68, oscAOctave: -1,
+    subLevel: 0.3, filterCutoff: 780, filterResonance: 3.2, filterDrive: 0.28,
+    filterEnvAmount: 0.4, filtDecay: 0.35, ampAttack: 0.006, ampSustain: 0.7,
+    ampRelease: 0.3, drive: 0.24, driveMode: "tube", mono: true, masterGain: 0.72,
+  }],
+  ["fc2-bass-wobble", "Wobble Cell", "LFO-swept dubstep bass", {
+    oscATable: "saw", oscALevel: 0.62, oscAOctave: -1, oscBTable: "pulse",
+    oscBLevel: 0.4, oscBDetune: 12, filterCutoff: 500, filterResonance: 5.5,
+    lfo1Wave: "sine", lfo1Rate: 2.8, lfo1Depth: 0.6, lfo1Dest: "filter",
+    ampAttack: 0.01, ampSustain: 0.85, ampRelease: 0.3, drive: 0.2, masterGain: 0.72,
+  }],
+  ["fc2-bass-upright", "Upright Ghost", "Plucked acoustic-flavoured bass", {
+    oscATable: "harmonic", oscAPos: 0.3, oscALevel: 0.62, oscAOctave: -1,
+    subLevel: 0.28, noiseLevel: 0.05, noiseMode: "burst",
+    filterCutoff: 700, filterResonance: 1.6, filterEnvAmount: 0.35, filtDecay: 0.2,
+    lpgOn: true, lpgDecay: 0.5, lpgColor: 0.6,
+    ampAttack: 0.004, ampDecay: 0.4, ampSustain: 0.2, ampRelease: 0.5, mono: true, masterGain: 0.74,
+  }],
+  ["fc2-bass-organ", "Organ Pedal", "Drawbar-style organ bass", {
+    oscATable: "additive", oscAPos: 0.25, oscALevel: 0.66, oscAOctave: -1,
+    subLevel: 0.4, subWave: "sine", filterCutoff: 1200, filterResonance: 1.2,
+    ampAttack: 0.012, ampSustain: 0.9, ampRelease: 0.2, chorusMix: 0.14, masterGain: 0.74,
+  }],
+  ["fc2-bass-808", "808 Glide", "Long sine 808 with pitch glide", {
+    oscATable: "basic", oscAPos: 0.02, oscALevel: 0.72, oscAOctave: -1,
+    subLevel: 0.6, subWave: "sine", filterCutoff: 260, filterResonance: 1.1,
+    pitchEnvAmount: -14, pitchEnvTime: 0.1,
+    ampAttack: 0.002, ampDecay: 1.4, ampSustain: 0.1, ampRelease: 1.2,
+    mono: true, glide: 0.06, masterGain: 0.76,
+  }],
+  ["fc2-bass-neuro", "Neuro Morph", "Morphing metallic neuro bass", {
+    oscATable: "metallic", oscAPos: 0.5, oscALevel: 0.6, oscAOctave: -1,
+    oscBTable: "fold", oscBLevel: 0.4, oscBDetune: 8,
+    filterModel: "svf", filterCutoff: 640, filterResonance: 6.5,
+    lfo1Wave: "sample-hold", lfo1Rate: 6, lfo1Depth: 0.4, lfo1Dest: "filter",
+    ampAttack: 0.005, ampSustain: 0.8, ampRelease: 0.25, drive: 0.3, masterGain: 0.7,
+  }],
+  ["fc2-bass-dub-deep", "Dub Cellar", "Deep dub bass with tape echo", {
+    oscATable: "basic", oscAPos: 0.08, oscALevel: 0.68, oscAOctave: -1,
+    subLevel: 0.5, filterCutoff: 320, filterResonance: 1.5, filterEnvAmount: 0.25,
+    ampAttack: 0.02, ampDecay: 0.6, ampSustain: 0.6, ampRelease: 0.5,
+    delayTime: 0.42, delayFeedback: 0.5, delayMix: 0.24, delayFbFilter: 0.55,
+    mono: true, masterGain: 0.72,
+  }],
+  ["fc2-bass-saw-stack", "Saw Foundation", "Three-layer saw bass stack", {
+    oscATable: "saw", oscALevel: 0.55, oscAOctave: -1,
+    oscBTable: "saw", oscBLevel: 0.42, oscBDetune: 9,
+    oscCTable: "basic", oscCLevel: 0.3, oscCOctave: -2,
+    unison: 3, unisonDetune: 10, unisonWidth: 0.5,
+    filterCutoff: 760, filterResonance: 2.0, filterEnvAmount: 0.32, filtDecay: 0.4,
+    ampAttack: 0.008, ampSustain: 0.8, ampRelease: 0.35, masterGain: 0.7,
+  }],
+  ["fc2-bass-square-sub", "Square Vault", "Hollow square bass with sub", {
+    oscATable: "pulse", oscAPos: 0.5, oscALevel: 0.66, oscAOctave: -1, pulseDuty: 0.5,
+    subLevel: 0.48, filterCutoff: 540, filterResonance: 1.8, filterEnvAmount: 0.28,
+    filtDecay: 0.3, ampAttack: 0.004, ampSustain: 0.75, ampRelease: 0.28,
+    mono: true, masterGain: 0.74,
+  }],
+  ["fc2-bass-warm-tri", "Warm Triangle", "Gentle triangle bass, no edge", {
+    oscATable: "basic", oscAPos: 0.2, oscALevel: 0.7, oscAOctave: -1,
+    subLevel: 0.35, subWave: "triangle", filterCutoff: 600, filterResonance: 1.2,
+    ampAttack: 0.02, ampDecay: 0.5, ampSustain: 0.7, ampRelease: 0.45,
+    airAmount: 0.15, masterGain: 0.74,
+  }],
+  ["fc2-bass-hybrid", "Hybrid Drive", "Half analog, half digital bass", {
+    oscATable: "saw", oscALevel: 0.58, oscAOctave: -1,
+    oscBTable: "additive", oscBPos: 0.4, oscBLevel: 0.4,
+    filterModel: "ladder", filterCutoff: 700, filterResonance: 3.5, filterDrive: 0.25,
+    filterEnvAmount: 0.4, filtDecay: 0.3, ampAttack: 0.005, ampSustain: 0.75,
+    ampRelease: 0.3, drive: 0.22, masterGain: 0.72,
+  }],
+  ["fc2-bass-sync", "Sync Stab", "Hard-sync bass stab", {
+    oscATable: "sync", oscAPos: 0.45, oscALevel: 0.66, oscAOctave: -1, hardSync: true,
+    filterCutoff: 900, filterResonance: 2.6, filterEnvAmount: 0.5, filtDecay: 0.18,
+    filtSustain: 0.1, ampAttack: 0.002, ampDecay: 0.25, ampSustain: 0.3,
+    ampRelease: 0.2, mono: true, punch: 0.35, masterGain: 0.72,
+  }],
+  ["fc2-bass-vocal", "Vocal Floor", "Formant-tinted bass", {
+    oscATable: "vocal", oscAPos: 0.35, oscALevel: 0.62, oscAOctave: -1,
+    subLevel: 0.4, filterCutoff: 620, filterResonance: 2.4,
+    filterCarve: "formant", filterCarveAmount: 0.3,
+    ampAttack: 0.01, ampSustain: 0.78, ampRelease: 0.3, masterGain: 0.72,
+  }],
+  ["fc2-bass-pluck-short", "Pluck Floor", "Short plucked bass, tight gate", {
+    oscATable: "harmonic", oscAPos: 0.2, oscALevel: 0.66, oscAOctave: -1,
+    subLevel: 0.32, filterCutoff: 820, filterResonance: 2.2,
+    filterEnvAmount: 0.5, filtAttack: 0.003, filtDecay: 0.14, filtSustain: 0.05,
+    ampAttack: 0.002, ampDecay: 0.18, ampSustain: 0.15, ampRelease: 0.22,
+    mono: true, masterGain: 0.74,
+  }],
+  ["fc2-bass-drift", "Drift Anchor", "Analog-drifting sustained bass", {
+    oscATable: "saw", oscAPos: 0.7, oscALevel: 0.6, oscAOctave: -1,
+    oscBTable: "basic", oscBLevel: 0.35, oscBDetune: -6,
+    drift: 0.3, driftRate: 0.3, voiceInstability: 0.12, tuneVariance: 0.1,
+    filterCutoff: 700, filterResonance: 1.8, ampAttack: 0.015, ampSustain: 0.82,
+    ampRelease: 0.4, masterGain: 0.72,
+  }],
+];
+
+const lead2 = [
+  ["fc2-lead-supersaw-hi", "Supersaw Ascent", "Seven-voice supersaw lead", {
+    oscATable: "saw", oscAPos: 0.9, oscALevel: 0.6,
+    unison: 7, unisonDetune: 22, unisonWidth: 0.9,
+    filterCutoff: 5200, filterResonance: 1.6, filterEnvAmount: 0.3, filtDecay: 0.4,
+    ampAttack: 0.02, ampSustain: 0.85, ampRelease: 0.4,
+    chorusMix: 0.2, reverbMix: 0.2, reverbSize: 2.6, masterGain: 0.72,
+  }],
+  ["fc2-lead-pwm", "PWM Blade", "Pulse-width modulated lead", {
+    oscATable: "pulse", oscAPos: 0.4, oscALevel: 0.7, pulseDuty: 0.35,
+    lfo1Wave: "triangle", lfo1Rate: 0.5, lfo1Depth: 0.3, lfo1Dest: "pitch",
+    filterCutoff: 4200, filterResonance: 2.2, ampAttack: 0.01, ampSustain: 0.85,
+    ampRelease: 0.3, mono: true, glide: 0.04, masterGain: 0.74,
+  }],
+  ["fc2-lead-sync-scream", "Sync Scream", "Screaming sync lead", {
+    oscATable: "sync", oscAPos: 0.6, oscALevel: 0.66, hardSync: true,
+    filterCutoff: 3800, filterResonance: 4.5, filterDrive: 0.3,
+    filterEnvAmount: 0.5, filtDecay: 0.35, ampAttack: 0.005, ampSustain: 0.8,
+    ampRelease: 0.25, drive: 0.3, driveMode: "hard", mono: true, masterGain: 0.7,
+  }],
+  ["fc2-lead-fm-bell", "Bell Lead", "FM bell-toned lead line", {
+    oscATable: "bell", oscALevel: 0.6, fmAmount: 0.4, fmRatio: 3,
+    filterCutoff: 5000, filterResonance: 1.4, ampAttack: 0.004, ampDecay: 0.6,
+    ampSustain: 0.5, ampRelease: 0.6, delayTime: 0.3, delayMix: 0.18,
+    reverbMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-lead-flute", "Breath Flute", "Soft breathy flute lead", {
+    oscATable: "basic", oscAPos: 0.15, oscALevel: 0.62,
+    noiseLevel: 0.08, noiseColor: 0.4, filterCutoff: 3200, filterResonance: 1.3,
+    ampAttack: 0.09, ampSustain: 0.85, ampRelease: 0.35,
+    reverbMix: 0.26, reverbSize: 2.4, mono: true, glide: 0.03, masterGain: 0.74,
+  }],
+  ["fc2-lead-formant", "Formant Voice", "Vowel-shifting vocal lead", {
+    oscATable: "formant2", oscAPos: 0.45, oscALevel: 0.64, oscAEnv: 0.3,
+    filterCutoff: 3000, filterResonance: 2.6, filterCarve: "formant",
+    filterCarveAmount: 0.4, ampAttack: 0.02, ampSustain: 0.82, ampRelease: 0.35,
+    reverbMix: 0.2, masterGain: 0.72,
+  }],
+  ["fc2-lead-chip-hi", "Chip Blade", "Bright chiptune lead", {
+    oscATable: "chip", oscALevel: 0.7, pulseDuty: 0.25, chipNoise: "nes",
+    filterCutoff: 6500, filterResonance: 1.5, ampAttack: 0.002, ampDecay: 0.3,
+    ampSustain: 0.8, ampRelease: 0.12, mono: true, masterGain: 0.74,
+  }],
+  ["fc2-lead-octave", "Octave Twin", "Lead doubled an octave up", {
+    oscATable: "saw", oscAPos: 0.75, oscALevel: 0.58,
+    oscBTable: "pulse", oscBLevel: 0.42, oscBOctave: 1,
+    filterCutoff: 4800, filterResonance: 2.0, filterEnvAmount: 0.3, filtDecay: 0.3,
+    ampAttack: 0.008, ampSustain: 0.82, ampRelease: 0.28, mono: true, masterGain: 0.72,
+  }],
+  ["fc2-lead-tremolo", "Tremolo Wire", "Amplitude-shivered lead", {
+    oscATable: "saw", oscAPos: 0.6, oscALevel: 0.66,
+    lfo1Wave: "sine", lfo1Rate: 5.5, lfo1Depth: 0.45, lfo1Dest: "volume",
+    filterCutoff: 4000, filterResonance: 1.8, ampAttack: 0.01, ampSustain: 0.85,
+    ampRelease: 0.3, masterGain: 0.74,
+  }],
+  ["fc2-lead-ring", "Ring Cutter", "Ring-modulated metallic lead", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.62,
+    ringAmount: 0.32, ringFreq: 320, filterCutoff: 4400, filterResonance: 2.4,
+    ampAttack: 0.006, ampSustain: 0.78, ampRelease: 0.25, mono: true, masterGain: 0.72,
+  }],
+  ["fc2-lead-warp", "Warp Runner", "Spectrally warped lead", {
+    oscATable: "fold", oscAPos: 0.5, oscALevel: 0.64,
+    warpMode: "scramble", warpStretch: 0.35, warpTilt: -0.2, warpComb: 0.2,
+    filterCutoff: 4200, filterResonance: 2.8, ampAttack: 0.008, ampSustain: 0.8,
+    ampRelease: 0.3, masterGain: 0.7,
+  }],
+  ["fc2-lead-phase", "Phase Ribbon", "Phaser-swept smooth lead", {
+    oscATable: "saw", oscAPos: 0.55, oscALevel: 0.64,
+    phaserRate: 0.35, phaserDepth: 0.7, phaserMix: 0.35, phaserStages: 6,
+    filterCutoff: 3800, filterResonance: 1.6, ampAttack: 0.02, ampSustain: 0.85,
+    ampRelease: 0.4, masterGain: 0.72,
+  }],
+  ["fc2-lead-echo-wide", "Echo Ribbon", "Wide delayed lead", {
+    oscATable: "harmonic", oscAPos: 0.55, oscALevel: 0.62,
+    filterCutoff: 4600, filterResonance: 1.5,
+    delayTime: 0.375, delayFeedback: 0.48, delayMix: 0.3, delayCascadeMode: "dub",
+    ampAttack: 0.006, ampDecay: 0.4, ampSustain: 0.6, ampRelease: 0.5,
+    stereoWidth: 1.25, masterGain: 0.72,
+  }],
+  ["fc2-lead-grit", "Grit Wire", "Overdriven gritty lead", {
+    oscATable: "growl", oscAPos: 0.65, oscALevel: 0.62,
+    filterCutoff: 3400, filterResonance: 3.0, filterDrive: 0.35,
+    drive: 0.4, driveMode: "fuzz", crush: 0.12,
+    ampAttack: 0.005, ampSustain: 0.8, ampRelease: 0.22, mono: true, masterGain: 0.7,
+  }],
+  ["fc2-lead-glass", "Glass Edge", "Bright glassy digital lead", {
+    oscATable: "additive", oscAPos: 0.7, oscALevel: 0.6, oscAEnv: 0.25,
+    filterType: "highpass", filterCutoff: 700, filterResonance: 1.6,
+    ampAttack: 0.004, ampDecay: 0.5, ampSustain: 0.65, ampRelease: 0.4,
+    reverbMix: 0.24, reverbSize: 2.8, airAmount: 0.28, masterGain: 0.72,
+  }],
+  ["fc2-lead-portamento", "Slide Voice", "Heavy portamento mono lead", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.68,
+    filterCutoff: 3600, filterResonance: 2.4, filterEnvAmount: 0.35, filtDecay: 0.3,
+    ampAttack: 0.01, ampSustain: 0.85, ampRelease: 0.3,
+    mono: true, glide: 0.14, glideMode: "always", masterGain: 0.74,
+  }],
+  ["fc2-lead-stack-wide", "Wide Stack", "Unison stack with air", {
+    oscATable: "saw", oscAPos: 0.85, oscALevel: 0.55,
+    oscBTable: "saw", oscBLevel: 0.4, oscBDetune: 14,
+    unison: 5, unisonDetune: 18, unisonWidth: 0.95,
+    filterCutoff: 5000, filterResonance: 1.5, ampAttack: 0.02, ampSustain: 0.85,
+    ampRelease: 0.45, airAmount: 0.3, stereoWidth: 1.2, masterGain: 0.7,
+  }],
+  ["fc2-lead-soft-square", "Soft Square", "Rounded square lead, no bite", {
+    oscATable: "pulse", oscAPos: 0.5, oscALevel: 0.68, pulseDuty: 0.5,
+    filterCutoff: 2600, filterResonance: 1.2, ampAttack: 0.03, ampSustain: 0.85,
+    ampRelease: 0.35, chorusMix: 0.18, masterGain: 0.74,
+  }],
+  ["fc2-lead-acid-hi", "Acid Ceiling", "High resonant acid lead", {
+    oscATable: "pulse", oscAPos: 0.35, oscALevel: 0.66, pulseDuty: 0.4,
+    filterModel: "ladder", filterCutoff: 1400, filterResonance: 10,
+    filterEnvAmount: 0.6, filtDecay: 0.25, filtSustain: 0.15,
+    ampAttack: 0.003, ampSustain: 0.75, ampRelease: 0.18,
+    mono: true, glide: 0.05, slideOn: true, chipAcidMix: 0.65, masterGain: 0.7,
+  }],
+];
+
+const pluck2 = [
+  ["fc2-pluck-harp", "Harp Thread", "Soft harp-like pluck", {
+    oscATable: "harmonic", oscAPos: 0.35, oscALevel: 0.62,
+    filterCutoff: 3400, filterResonance: 1.4, filterEnvAmount: 0.4, filtDecay: 0.25,
+    lpgOn: true, lpgDecay: 0.6, lpgColor: 0.7,
+    ampAttack: 0.002, ampDecay: 0.5, ampSustain: 0.12, ampRelease: 0.7,
+    reverbMix: 0.24, reverbSize: 2.6, masterGain: 0.74,
+  }],
+  ["fc2-pluck-koto", "Koto String", "Plucked eastern string", {
+    oscATable: "additive", oscAPos: 0.4, oscALevel: 0.6,
+    filterCutoff: 2800, filterResonance: 2.2, filterEnvAmount: 0.5, filtDecay: 0.18,
+    ampAttack: 0.002, ampDecay: 0.4, ampSustain: 0.1, ampRelease: 0.5,
+    pitchEnvAmount: 3, pitchEnvTime: 0.06, reverbMix: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-pluck-marimba", "Marimba Wood", "Warm wooden mallet", {
+    oscATable: "basic", oscAPos: 0.18, oscALevel: 0.66,
+    fmAmount: 0.2, fmRatio: 4, filterCutoff: 2400, filterResonance: 1.3,
+    ampAttack: 0.002, ampDecay: 0.35, ampSustain: 0.05, ampRelease: 0.4,
+    reverbMix: 0.18, masterGain: 0.74,
+  }],
+  ["fc2-pluck-kalimba", "Kalimba Tine", "Thumb-piano tine", {
+    oscATable: "bell", oscALevel: 0.58, fmAmount: 0.28, fmRatio: 5,
+    filterCutoff: 3600, filterResonance: 1.5,
+    ampAttack: 0.001, ampDecay: 0.45, ampSustain: 0.08, ampRelease: 0.5,
+    reverbMix: 0.22, reverbSize: 2.2, masterGain: 0.74,
+  }],
+  ["fc2-pluck-pizz", "Pizzicato", "Short bowed-string pizz", {
+    oscATable: "saw", oscAPos: 0.4, oscALevel: 0.6,
+    noiseLevel: 0.06, noiseMode: "burst",
+    filterCutoff: 2600, filterResonance: 1.8, filterEnvAmount: 0.55,
+    filtAttack: 0.002, filtDecay: 0.12, filtSustain: 0.02,
+    ampAttack: 0.002, ampDecay: 0.16, ampSustain: 0.04, ampRelease: 0.25, masterGain: 0.74,
+  }],
+  ["fc2-pluck-glass-bell", "Glass Bead", "Glassy short bell pluck", {
+    oscATable: "additive", oscAPos: 0.75, oscALevel: 0.56,
+    filterType: "highpass", filterCutoff: 900, filterResonance: 1.4,
+    ampAttack: 0.001, ampDecay: 0.4, ampSustain: 0.06, ampRelease: 0.45,
+    reverbMix: 0.28, reverbSize: 3.0, airAmount: 0.25, masterGain: 0.72,
+  }],
+  ["fc2-pluck-muted", "Muted Thumb", "Dampened muted pluck", {
+    oscATable: "basic", oscAPos: 0.25, oscALevel: 0.68,
+    filterCutoff: 1400, filterResonance: 1.2, filterEnvAmount: 0.3, filtDecay: 0.1,
+    lpgOn: true, lpgDecay: 0.25, lpgColor: 0.4,
+    ampAttack: 0.002, ampDecay: 0.2, ampSustain: 0.05, ampRelease: 0.25, masterGain: 0.76,
+  }],
+  ["fc2-pluck-electric", "Electric Snap", "Electric-guitar-ish snap", {
+    oscATable: "growl", oscAPos: 0.45, oscALevel: 0.6,
+    filterCutoff: 2200, filterResonance: 2.4, filterEnvAmount: 0.5, filtDecay: 0.16,
+    drive: 0.2, driveMode: "tube",
+    ampAttack: 0.002, ampDecay: 0.3, ampSustain: 0.15, ampRelease: 0.35, masterGain: 0.74,
+  }],
+  ["fc2-pluck-steel", "Steel Wire", "Bright steel-string pluck", {
+    oscATable: "saw", oscAPos: 0.7, oscALevel: 0.58,
+    filterCutoff: 4200, filterResonance: 1.6, filterEnvAmount: 0.45, filtDecay: 0.2,
+    ampAttack: 0.001, ampDecay: 0.42, ampSustain: 0.1, ampRelease: 0.45,
+    delayMix: 0.14, delayTime: 0.22, masterGain: 0.74,
+  }],
+  ["fc2-pluck-dulcimer", "Dulcimer", "Hammered double-string", {
+    oscATable: "harmonic", oscAPos: 0.5, oscALevel: 0.55,
+    oscBTable: "harmonic", oscBLevel: 0.35, oscBDetune: 11,
+    filterCutoff: 3000, filterResonance: 1.5, filterEnvAmount: 0.4, filtDecay: 0.2,
+    ampAttack: 0.002, ampDecay: 0.45, ampSustain: 0.08, ampRelease: 0.55,
+    reverbMix: 0.22, masterGain: 0.72,
+  }],
+  ["fc2-pluck-tine", "Tine Drop", "FM tine with soft tail", {
+    oscATable: "bell", oscALevel: 0.56, fmAmount: 0.35, fmRatio: 2,
+    filterCutoff: 3200, filterResonance: 1.3,
+    ampAttack: 0.001, ampDecay: 0.55, ampSustain: 0.1, ampRelease: 0.6,
+    chorusMix: 0.16, reverbMix: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-pluck-bamboo", "Bamboo Tap", "Hollow bamboo tap", {
+    // Bandpass sits near the playing register: a 1.8 kHz band with Q 3 removed
+    // the fundamental of a near-sine table and left almost nothing.
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.78,
+    noiseLevel: 0.14, noiseMode: "burst", noiseColor: 0.3,
+    filterType: "bandpass", filterCutoff: 700, filterResonance: 1.6,
+    ampAttack: 0.001, ampDecay: 0.2, ampSustain: 0.08, ampRelease: 0.24, masterGain: 0.78,
+  }],
+  ["fc2-pluck-plastic", "Plastic Click", "Synthetic clicky pluck", {
+    oscATable: "pulse", oscAPos: 0.6, oscALevel: 0.62, pulseDuty: 0.2,
+    filterCutoff: 3800, filterResonance: 2.0, filterEnvAmount: 0.5,
+    filtAttack: 0.001, filtDecay: 0.08,
+    ampAttack: 0.001, ampDecay: 0.14, ampSustain: 0.02, ampRelease: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-pluck-sub-pluck", "Sub Pluck", "Low plucked body", {
+    oscATable: "basic", oscAPos: 0.15, oscALevel: 0.64, oscAOctave: -1,
+    subLevel: 0.35, filterCutoff: 900, filterResonance: 1.6,
+    filterEnvAmount: 0.45, filtDecay: 0.14,
+    ampAttack: 0.002, ampDecay: 0.3, ampSustain: 0.08, ampRelease: 0.35, masterGain: 0.76,
+  }],
+  ["fc2-pluck-chime", "Chime Tap", "Small metallic chime", {
+    oscATable: "metallic", oscAPos: 0.4, oscALevel: 0.5,
+    filterType: "highpass", filterCutoff: 1200, filterResonance: 1.8,
+    ampAttack: 0.001, ampDecay: 0.5, ampSustain: 0.05, ampRelease: 0.55,
+    reverbMix: 0.3, reverbSize: 3.2, masterGain: 0.72,
+  }],
+  ["fc2-pluck-warm-nylon", "Warm Nylon", "Soft nylon-string pluck", {
+    oscATable: "harmonic", oscAPos: 0.28, oscALevel: 0.66,
+    filterCutoff: 2000, filterResonance: 1.3, filterEnvAmount: 0.35, filtDecay: 0.22,
+    lpgOn: true, lpgDecay: 0.45, lpgColor: 0.55,
+    ampAttack: 0.003, ampDecay: 0.4, ampSustain: 0.1, ampRelease: 0.5, masterGain: 0.74,
+  }],
+  ["fc2-pluck-vibra", "Vibra Tap", "Vibrato-tailed pluck", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.64,
+    lfo1Wave: "sine", lfo1Rate: 5, lfo1Depth: 0.2, lfo1Dest: "pitch",
+    filterCutoff: 2600, filterResonance: 1.4,
+    ampAttack: 0.002, ampDecay: 0.5, ampSustain: 0.12, ampRelease: 0.6, masterGain: 0.74,
+  }],
+  ["fc2-pluck-dark", "Dark Pluck", "Low-passed brooding pluck", {
+    oscATable: "growl", oscAPos: 0.3, oscALevel: 0.62,
+    filterCutoff: 1100, filterResonance: 2.0, filterEnvAmount: 0.4, filtDecay: 0.18,
+    ampAttack: 0.002, ampDecay: 0.35, ampSustain: 0.08, ampRelease: 0.4,
+    reverbMix: 0.2, masterGain: 0.74,
+  }],
+];
+
+const pad2 = [
+  ["fc2-pad-strings", "String Loom", "Warm string ensemble pad", {
+    oscATable: "saw", oscAPos: 0.6, oscALevel: 0.5,
+    oscBTable: "saw", oscBLevel: 0.4, oscBDetune: 12,
+    unison: 5, unisonDetune: 12, unisonWidth: 0.8,
+    filterCutoff: 2600, filterResonance: 1.4,
+    ampAttack: 0.5, ampDecay: 0.8, ampSustain: 0.9, ampRelease: 1.4,
+    chorusMix: 0.22, reverbMix: 0.3, reverbSize: 3.4, masterGain: 0.7,
+  }],
+  ["fc2-pad-choir", "Choir Halo", "Vocal choir pad", {
+    oscATable: "vocal", oscAPos: 0.4, oscALevel: 0.55, oscALfo: 0.15,
+    oscBTable: "formant2", oscBLevel: 0.35, oscBDetune: 8,
+    filterCutoff: 2200, filterResonance: 1.5,
+    ampAttack: 0.7, ampSustain: 0.9, ampRelease: 1.6,
+    reverbMix: 0.34, reverbSize: 4.0, masterGain: 0.7,
+  }],
+  ["fc2-pad-glass", "Glass Shelf", "Bright glassy pad", {
+    oscATable: "additive", oscAPos: 0.65, oscALevel: 0.5, oscAEnv: 0.2,
+    filterType: "highpass", filterCutoff: 500, filterResonance: 1.3,
+    ampAttack: 0.6, ampSustain: 0.88, ampRelease: 1.5,
+    airAmount: 0.3, reverbMix: 0.32, reverbSize: 3.6, masterGain: 0.7,
+  }],
+  ["fc2-pad-evolve", "Evolving Field", "Slowly morphing pad", {
+    oscATable: "harmonic", oscAPos: 0.4, oscALevel: 0.52, oscALfo: 0.3,
+    oscBTable: "additive", oscBLevel: 0.36, oscBDetune: 7,
+    lfo1Wave: "triangle", lfo1Rate: 0.09, lfo1Depth: 0.4, lfo1Dest: "filter",
+    filterCutoff: 1800, filterResonance: 1.8,
+    ampAttack: 0.9, ampSustain: 0.9, ampRelease: 2.0,
+    reverbMix: 0.3, reverbSize: 3.8, masterGain: 0.7,
+  }],
+  ["fc2-pad-dark", "Dark Mantle", "Low brooding pad", {
+    oscATable: "growl", oscAPos: 0.3, oscALevel: 0.55, oscAOctave: -1,
+    subLevel: 0.3, filterCutoff: 900, filterResonance: 1.6,
+    ampAttack: 0.8, ampSustain: 0.9, ampRelease: 1.8,
+    reverbMix: 0.28, reverbSize: 3.4, masterGain: 0.72,
+  }],
+  ["fc2-pad-shimmer", "Shimmer Veil", "High shimmering pad", {
+    oscATable: "bell", oscALevel: 0.46, fmAmount: 0.18, fmRatio: 3,
+    filterType: "highpass", filterCutoff: 800, filterResonance: 1.4,
+    ampAttack: 0.7, ampSustain: 0.85, ampRelease: 2.0,
+    reverbMix: 0.4, reverbSize: 4.6, airAmount: 0.32, masterGain: 0.68,
+  }],
+  ["fc2-pad-analog", "Analog Poly", "Classic analog poly pad", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.55,
+    oscBTable: "pulse", oscBLevel: 0.4, oscBDetune: -9,
+    drift: 0.22, driftRate: 0.3, tuneVariance: 0.1,
+    filterCutoff: 2000, filterResonance: 1.8, filterEnvAmount: 0.3,
+    filtAttack: 0.4, filtDecay: 1.0,
+    ampAttack: 0.35, ampSustain: 0.88, ampRelease: 1.2,
+    chorusMix: 0.2, reverbMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-pad-digital", "Digital Frost", "Cold digital pad", {
+    oscATable: "metallic", oscAPos: 0.5, oscALevel: 0.48,
+    oscCTable: "additive", oscCLevel: 0.28, oscCOctave: 1,
+    filterCutoff: 3000, filterResonance: 1.6,
+    ampAttack: 0.45, ampSustain: 0.85, ampRelease: 1.4,
+    reverbMix: 0.3, reverbSize: 3.2, masterGain: 0.7,
+  }],
+  ["fc2-pad-breath", "Breath Field", "Airy breathy pad", {
+    oscATable: "basic", oscAPos: 0.2, oscALevel: 0.52,
+    noiseLevel: 0.1, noiseColor: 0.5, noiseMode: "bed",
+    filterCutoff: 2400, filterResonance: 1.2,
+    ampAttack: 0.8, ampSustain: 0.9, ampRelease: 1.6,
+    reverbMix: 0.32, reverbSize: 3.6, airAmount: 0.25, masterGain: 0.7,
+  }],
+  ["fc2-pad-swell", "Slow Swell", "Very slow attack swell", {
+    oscATable: "saw", oscAPos: 0.55, oscALevel: 0.5,
+    unison: 3, unisonDetune: 10, unisonWidth: 0.7,
+    filterCutoff: 1800, filterResonance: 1.5, filterEnvAmount: 0.35,
+    filtAttack: 1.2, filtDecay: 1.5,
+    ampAttack: 1.4, ampSustain: 0.9, ampRelease: 2.2,
+    reverbMix: 0.3, reverbSize: 4.0, masterGain: 0.7,
+  }],
+  ["fc2-pad-cinema", "Cinema Bed", "Wide cinematic bed", {
+    oscATable: "harmonic", oscAPos: 0.45, oscALevel: 0.5,
+    oscBTable: "saw", oscBLevel: 0.35, oscBDetune: 14, oscBOctave: -1,
+    unison: 5, unisonDetune: 14, unisonWidth: 0.9,
+    filterCutoff: 2200, filterResonance: 1.4,
+    ampAttack: 0.9, ampSustain: 0.92, ampRelease: 2.4,
+    reverbMix: 0.36, reverbSize: 4.4, stereoWidth: 1.25, masterGain: 0.68,
+  }],
+  ["fc2-pad-hybrid", "Hybrid Weave", "Analog body, digital top", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.5,
+    oscBTable: "additive", oscBPos: 0.6, oscBLevel: 0.36, oscBOctave: 1,
+    filterCutoff: 2600, filterResonance: 1.6,
+    ampAttack: 0.5, ampSustain: 0.88, ampRelease: 1.5,
+    chorusMix: 0.2, reverbMix: 0.28, masterGain: 0.7,
+  }],
+  ["fc2-pad-detune", "Detune Drift", "Heavily detuned drifting pad", {
+    oscATable: "saw", oscAPos: 0.6, oscALevel: 0.48,
+    oscBTable: "saw", oscBLevel: 0.42, oscBDetune: 26,
+    drift: 0.32, driftRate: 0.25, voiceInstability: 0.15,
+    filterCutoff: 2000, filterResonance: 1.5,
+    ampAttack: 0.6, ampSustain: 0.9, ampRelease: 1.8,
+    chorusMix: 0.24, reverbMix: 0.28, masterGain: 0.7,
+  }],
+  ["fc2-pad-sweep", "Filter Tide", "Slow filter sweep pad", {
+    oscATable: "pulse", oscAPos: 0.45, oscALevel: 0.55, pulseDuty: 0.45,
+    lfo1Wave: "sine", lfo1Rate: 0.07, lfo1Depth: 0.5, lfo1Dest: "filter",
+    filterCutoff: 1400, filterResonance: 2.4,
+    ampAttack: 0.6, ampSustain: 0.9, ampRelease: 1.6,
+    reverbMix: 0.26, masterGain: 0.7,
+  }],
+  ["fc2-pad-deep", "Deep Mantle", "Sub-heavy foundational pad", {
+    oscATable: "basic", oscAPos: 0.25, oscALevel: 0.55, oscAOctave: -1,
+    subLevel: 0.42, subWave: "sine",
+    filterCutoff: 1100, filterResonance: 1.3,
+    ampAttack: 0.7, ampSustain: 0.92, ampRelease: 1.8,
+    reverbMix: 0.24, reverbSize: 3.0, masterGain: 0.72,
+  }],
+  ["fc2-pad-formant-wash", "Formant Wash", "Vowel-washed pad", {
+    oscATable: "formant2", oscAPos: 0.5, oscALevel: 0.52, oscALfo: 0.2,
+    filterCutoff: 2000, filterResonance: 2.0, filterCarve: "formant",
+    filterCarveAmount: 0.32,
+    ampAttack: 0.7, ampSustain: 0.88, ampRelease: 1.7,
+    reverbMix: 0.32, reverbSize: 3.8, masterGain: 0.7,
+  }],
+  ["fc2-pad-warm-tape", "Tape Bed", "Warm tape-worn pad", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.52,
+    oscBTable: "basic", oscBLevel: 0.35, oscBDetune: -8,
+    cassetteGen: 0.3, wowFlutter: 0.14, hiss: 0.03,
+    filterCutoff: 1900, filterResonance: 1.4,
+    ampAttack: 0.6, ampSustain: 0.9, ampRelease: 1.6,
+    reverbMix: 0.26, masterGain: 0.7,
+  }],
+  ["fc2-pad-octave-air", "Octave Air", "Octave-stacked airy pad", {
+    oscATable: "harmonic", oscAPos: 0.4, oscALevel: 0.5,
+    oscCTable: "basic", oscCLevel: 0.3, oscCOctave: 1,
+    filterCutoff: 2800, filterResonance: 1.3,
+    ampAttack: 0.55, ampSustain: 0.88, ampRelease: 1.5,
+    airAmount: 0.3, reverbMix: 0.3, reverbSize: 3.4, masterGain: 0.7,
+  }],
+];
+
+const keys2 = [
+  ["fc2-keys-tine-soft", "Soft Tine", "Mellow electric piano tine", {
+    oscATable: "bell", oscALevel: 0.6, fmAmount: 0.3, fmRatio: 2,
+    filterCutoff: 2600, filterResonance: 1.3,
+    ampAttack: 0.003, ampDecay: 0.7, ampSustain: 0.35, ampRelease: 0.5,
+    chorusMix: 0.18, reverbMix: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-keys-dx-bright", "DX Bright", "Bright FM digital piano", {
+    oscATable: "additive", oscAPos: 0.55, oscALevel: 0.58,
+    fmEngine: "ops4", fmAlg: 2, fmAmount: 0.45, fmOp2Ratio: 3, fmOp3Ratio: 5,
+    filterCutoff: 5000, filterResonance: 1.2,
+    ampAttack: 0.002, ampDecay: 0.6, ampSustain: 0.3, ampRelease: 0.45,
+    reverbMix: 0.18, masterGain: 0.72,
+  }],
+  ["fc2-keys-clav", "Clav Funk", "Snappy clavinet", {
+    oscATable: "pulse", oscAPos: 0.6, oscALevel: 0.66, pulseDuty: 0.28,
+    filterCutoff: 3000, filterResonance: 2.4, filterEnvAmount: 0.5,
+    filtAttack: 0.002, filtDecay: 0.12, filtSustain: 0.08,
+    ampAttack: 0.002, ampDecay: 0.3, ampSustain: 0.2, ampRelease: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-keys-organ-draw", "Drawbar Organ", "Additive drawbar organ", {
+    oscATable: "additive", oscAPos: 0.3, oscALevel: 0.62,
+    oscCTable: "basic", oscCLevel: 0.3, oscCOctave: 1,
+    filterCutoff: 3400, filterResonance: 1.1,
+    ampAttack: 0.01, ampSustain: 0.92, ampRelease: 0.12,
+    chorusMix: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-keys-harpsi", "Harpsichord", "Plucked baroque keyboard", {
+    oscATable: "saw", oscAPos: 0.75, oscALevel: 0.58,
+    filterCutoff: 4200, filterResonance: 1.8, filterEnvAmount: 0.4, filtDecay: 0.12,
+    ampAttack: 0.001, ampDecay: 0.35, ampSustain: 0.05, ampRelease: 0.3,
+    reverbMix: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-keys-celesta", "Celesta", "Delicate bell keyboard", {
+    oscATable: "bell", oscALevel: 0.52, fmAmount: 0.22, fmRatio: 7,
+    filterType: "highpass", filterCutoff: 900, filterResonance: 1.3,
+    ampAttack: 0.001, ampDecay: 0.6, ampSustain: 0.08, ampRelease: 0.6,
+    reverbMix: 0.28, reverbSize: 3.0, masterGain: 0.72,
+  }],
+  ["fc2-keys-wurly", "Wurly Bark", "Barking vintage electric piano", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.64,
+    fmAmount: 0.36, fmRatio: 2, drive: 0.2, driveMode: "tube",
+    filterCutoff: 2400, filterResonance: 1.6,
+    ampAttack: 0.002, ampDecay: 0.55, ampSustain: 0.3, ampRelease: 0.4,
+    chorusMix: 0.14, masterGain: 0.74,
+  }],
+  ["fc2-keys-toy", "Toy Piano", "Small bright toy piano", {
+    oscATable: "metallic", oscAPos: 0.35, oscALevel: 0.55,
+    filterCutoff: 3800, filterResonance: 1.6,
+    ampAttack: 0.001, ampDecay: 0.3, ampSustain: 0.06, ampRelease: 0.3,
+    reverbMix: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-keys-house", "House Chord", "Classic house piano stab", {
+    oscATable: "saw", oscAPos: 0.55, oscALevel: 0.55,
+    oscBTable: "pulse", oscBLevel: 0.38, oscBDetune: 8,
+    filterCutoff: 3200, filterResonance: 1.8, filterEnvAmount: 0.35, filtDecay: 0.2,
+    ampAttack: 0.003, ampDecay: 0.35, ampSustain: 0.35, ampRelease: 0.3,
+    reverbMix: 0.22, masterGain: 0.72,
+  }],
+  ["fc2-keys-dirty-organ", "Dirty Organ", "Overdriven rock organ", {
+    oscATable: "additive", oscAPos: 0.35, oscALevel: 0.6,
+    drive: 0.34, driveMode: "fuzz", filterCutoff: 2800, filterResonance: 1.6,
+    ampAttack: 0.008, ampSustain: 0.9, ampRelease: 0.14,
+    ampModel: "vca", masterGain: 0.7,
+  }],
+  ["fc2-keys-bell-keys", "Bell Keys", "Bell-layered keyboard", {
+    oscATable: "basic", oscAPos: 0.2, oscALevel: 0.55,
+    oscBTable: "bell", oscBLevel: 0.4, oscBOctave: 1,
+    filterCutoff: 3600, filterResonance: 1.3,
+    ampAttack: 0.002, ampDecay: 0.6, ampSustain: 0.25, ampRelease: 0.55,
+    reverbMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-keys-vibes", "Vibraphone", "Vibrato metal bars", {
+    oscATable: "basic", oscAPos: 0.12, oscALevel: 0.6,
+    fmAmount: 0.2, fmRatio: 4,
+    lfo1Wave: "sine", lfo1Rate: 4.5, lfo1Depth: 0.25, lfo1Dest: "volume",
+    filterCutoff: 2600, filterResonance: 1.2,
+    ampAttack: 0.002, ampDecay: 0.8, ampSustain: 0.15, ampRelease: 0.8,
+    reverbMix: 0.24, masterGain: 0.74,
+  }],
+  ["fc2-keys-glass-keys", "Glass Keys", "Transparent glassy keys", {
+    oscATable: "additive", oscAPos: 0.7, oscALevel: 0.55,
+    filterType: "highpass", filterCutoff: 600, filterResonance: 1.4,
+    ampAttack: 0.002, ampDecay: 0.65, ampSustain: 0.25, ampRelease: 0.6,
+    airAmount: 0.26, reverbMix: 0.26, masterGain: 0.72,
+  }],
+  ["fc2-keys-accord", "Reed Box", "Accordion-style reeds", {
+    oscATable: "vocal", oscAPos: 0.3, oscALevel: 0.58,
+    oscBTable: "saw", oscBLevel: 0.36, oscBDetune: 14,
+    filterCutoff: 2600, filterResonance: 1.6,
+    ampAttack: 0.03, ampSustain: 0.9, ampRelease: 0.2,
+    chorusMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-keys-soft-ep", "Whisper EP", "Very soft electric piano", {
+    oscATable: "bell", oscALevel: 0.52, fmAmount: 0.2, fmRatio: 2,
+    filterCutoff: 1800, filterResonance: 1.2,
+    ampAttack: 0.004, ampDecay: 0.8, ampSustain: 0.3, ampRelease: 0.6,
+    reverbMix: 0.24, reverbSize: 2.6, masterGain: 0.74,
+  }],
+  ["fc2-keys-stab", "Synth Stab", "Short bright chord stab", {
+    oscATable: "saw", oscAPos: 0.7, oscALevel: 0.6,
+    oscBTable: "pulse", oscBLevel: 0.4, oscBDetune: -10,
+    filterCutoff: 3600, filterResonance: 2.2, filterEnvAmount: 0.45,
+    filtAttack: 0.002, filtDecay: 0.14, filtSustain: 0.05,
+    ampAttack: 0.002, ampDecay: 0.2, ampSustain: 0.1, ampRelease: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-keys-warm-poly", "Warm Poly", "Rounded polysynth keys", {
+    oscATable: "saw", oscAPos: 0.45, oscALevel: 0.58,
+    oscBTable: "basic", oscBLevel: 0.36, oscBDetune: -7,
+    drift: 0.18, filterCutoff: 2400, filterResonance: 1.5,
+    ampAttack: 0.02, ampDecay: 0.5, ampSustain: 0.7, ampRelease: 0.4,
+    chorusMix: 0.18, reverbMix: 0.2, masterGain: 0.72,
+  }],
+  ["fc2-keys-tape-piano", "Tape Piano", "Worn tape keyboard", {
+    oscATable: "harmonic", oscAPos: 0.35, oscALevel: 0.6,
+    cassetteGen: 0.34, wowFlutter: 0.16, hiss: 0.03,
+    filterCutoff: 2000, filterResonance: 1.3,
+    ampAttack: 0.003, ampDecay: 0.6, ampSustain: 0.3, ampRelease: 0.45,
+    reverbMix: 0.2, masterGain: 0.72,
+  }],
+];
+
+const arp2 = [
+  ["fc2-arp-pluck-up", "Pluck Ladder", "Plucked ascending arp", {
+    oscATable: "harmonic", oscAPos: 0.35, oscALevel: 0.62,
+    filterCutoff: 3000, filterResonance: 2.0, filterEnvAmount: 0.45, filtDecay: 0.14,
+    lpgOn: true, lpgDecay: 0.3,
+    ampAttack: 0.002, ampDecay: 0.2, ampSustain: 0.1, ampRelease: 0.18,
+    delayMix: 0.16, delayTime: 0.25, masterGain: 0.74,
+  }, { enabled: true, mode: "up", bpm: 124, division: "1/16", octaves: 2, gate: 0.6 }],
+  ["fc2-arp-down-soft", "Soft Descent", "Gentle descending arp", {
+    oscATable: "basic", oscAPos: 0.25, oscALevel: 0.62,
+    filterCutoff: 2600, filterResonance: 1.6,
+    ampAttack: 0.004, ampDecay: 0.24, ampSustain: 0.2, ampRelease: 0.22,
+    reverbMix: 0.24, masterGain: 0.74,
+  }, { enabled: true, mode: "down", bpm: 110, division: "1/8", octaves: 2, gate: 0.7 }],
+  ["fc2-arp-bell-run", "Bell Run", "Bell-toned arp cascade", {
+    oscATable: "bell", oscALevel: 0.56, fmAmount: 0.26, fmRatio: 3,
+    filterType: "highpass", filterCutoff: 700, filterResonance: 1.4,
+    ampAttack: 0.001, ampDecay: 0.3, ampSustain: 0.1, ampRelease: 0.3,
+    delayMix: 0.2, delayTime: 0.28, reverbMix: 0.26, masterGain: 0.72,
+  }, { enabled: true, mode: "updown", bpm: 128, division: "1/16", octaves: 2, gate: 0.55 }],
+  ["fc2-arp-chip-run", "Chip Run", "Retro chip arp", {
+    oscATable: "chip", oscALevel: 0.66, pulseDuty: 0.3, chipNoise: "gb",
+    filterCutoff: 5200, filterResonance: 1.4,
+    ampAttack: 0.001, ampDecay: 0.14, ampSustain: 0.25, ampRelease: 0.08, masterGain: 0.74,
+  }, { enabled: true, mode: "up", bpm: 140, division: "1/16", octaves: 3, gate: 0.5 }],
+  ["fc2-arp-acid-run", "Acid Sequence", "Resonant acid arp", {
+    oscATable: "pulse", oscAPos: 0.4, oscALevel: 0.64, pulseDuty: 0.42,
+    filterModel: "ladder", filterCutoff: 700, filterResonance: 8.5,
+    filterEnvAmount: 0.6, filtDecay: 0.14, filtSustain: 0.08,
+    ampAttack: 0.002, ampDecay: 0.16, ampSustain: 0.2, ampRelease: 0.12,
+    slideOn: true, accentAmount: 0.35, chipAcidMix: 0.6, masterGain: 0.72,
+  }, { enabled: true, mode: "up", bpm: 132, division: "1/16", octaves: 2, gate: 0.55 }],
+  ["fc2-arp-wide-dub", "Dub Ladder", "Delayed dub arp", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.6,
+    filterCutoff: 2400, filterResonance: 2.0,
+    delayTime: 0.375, delayFeedback: 0.5, delayMix: 0.28, delayCascadeMode: "dub",
+    ampAttack: 0.003, ampDecay: 0.2, ampSustain: 0.15, ampRelease: 0.2,
+    stereoWidth: 1.2, masterGain: 0.72,
+  }, { enabled: true, mode: "updown", bpm: 120, division: "1/8", octaves: 2, gate: 0.65 }],
+  ["fc2-arp-random-walk", "Random Walk", "Wandering random arp", {
+    oscATable: "additive", oscAPos: 0.5, oscALevel: 0.6,
+    filterCutoff: 3000, filterResonance: 2.2,
+    ampAttack: 0.002, ampDecay: 0.18, ampSustain: 0.15, ampRelease: 0.18,
+    reverbMix: 0.22, masterGain: 0.74,
+  }, { enabled: true, mode: "random", bpm: 118, division: "1/16", octaves: 2, gate: 0.5 }],
+  ["fc2-arp-converge", "Converge Weave", "Inward-converging arp", {
+    oscATable: "harmonic", oscAPos: 0.45, oscALevel: 0.6,
+    filterCutoff: 2800, filterResonance: 1.8,
+    ampAttack: 0.002, ampDecay: 0.2, ampSustain: 0.18, ampRelease: 0.2,
+    delayMix: 0.16, reverbMix: 0.2, masterGain: 0.74,
+  }, { enabled: true, mode: "converge", bpm: 126, division: "1/16", octaves: 2, gate: 0.55 }],
+  ["fc2-arp-triplet", "Triplet Skip", "Triplet-feel arp", {
+    oscATable: "pulse", oscAPos: 0.5, oscALevel: 0.62, pulseDuty: 0.35,
+    filterCutoff: 3400, filterResonance: 1.8,
+    ampAttack: 0.002, ampDecay: 0.16, ampSustain: 0.2, ampRelease: 0.14, masterGain: 0.74,
+  }, { enabled: true, mode: "up", bpm: 120, division: "1/8T", octaves: 2, gate: 0.55 }],
+  ["fc2-arp-gate-pulse", "Gated Pulse", "Trance-gated arp", {
+    oscATable: "saw", oscAPos: 0.7, oscALevel: 0.6,
+    unison: 3, unisonDetune: 12, filterCutoff: 3600, filterResonance: 1.8,
+    gateOn: true, gateRate: 8, gateDepth: 0.8, gateSmooth: 0.3,
+    ampAttack: 0.004, ampSustain: 0.8, ampRelease: 0.15,
+    reverbMix: 0.2, masterGain: 0.72,
+  }, { enabled: true, mode: "up", bpm: 138, division: "1/16", octaves: 2, gate: 0.7 }],
+  ["fc2-arp-octave-jump", "Octave Jump", "Wide octave-spanning arp", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.62,
+    filterCutoff: 3000, filterResonance: 1.6,
+    ampAttack: 0.002, ampDecay: 0.18, ampSustain: 0.15, ampRelease: 0.16,
+    delayMix: 0.14, masterGain: 0.74,
+  }, { enabled: true, mode: "updown", bpm: 130, division: "1/16", octaves: 4, gate: 0.5 }],
+  ["fc2-arp-slow-swell", "Slow Ladder", "Slow sustained arp", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.58,
+    unison: 3, unisonDetune: 10, filterCutoff: 2200, filterResonance: 1.5,
+    ampAttack: 0.06, ampDecay: 0.4, ampSustain: 0.6, ampRelease: 0.5,
+    reverbMix: 0.28, reverbSize: 3.0, masterGain: 0.72,
+  }, { enabled: true, mode: "up", bpm: 92, division: "1/4", octaves: 2, gate: 0.85 }],
+  ["fc2-arp-fm-run", "FM Ladder", "FM-toned arp", {
+    oscATable: "additive", oscAPos: 0.5, oscALevel: 0.58,
+    fmAmount: 0.35, fmRatio: 2, filterCutoff: 3400, filterResonance: 1.6,
+    ampAttack: 0.002, ampDecay: 0.2, ampSustain: 0.15, ampRelease: 0.2,
+    reverbMix: 0.2, masterGain: 0.72,
+  }, { enabled: true, mode: "up", bpm: 128, division: "1/16", octaves: 2, gate: 0.55 }],
+  ["fc2-arp-dark-run", "Dark Ladder", "Low brooding arp", {
+    oscATable: "growl", oscAPos: 0.4, oscALevel: 0.62, oscAOctave: -1,
+    filterCutoff: 1400, filterResonance: 2.6,
+    ampAttack: 0.002, ampDecay: 0.2, ampSustain: 0.15, ampRelease: 0.18,
+    delayMix: 0.16, masterGain: 0.74,
+  }, { enabled: true, mode: "down", bpm: 122, division: "1/16", octaves: 2, gate: 0.55 }],
+  ["fc2-arp-glass-run", "Glass Ladder", "Glassy bright arp", {
+    oscATable: "additive", oscAPos: 0.75, oscALevel: 0.55,
+    filterType: "highpass", filterCutoff: 800, filterResonance: 1.4,
+    ampAttack: 0.001, ampDecay: 0.22, ampSustain: 0.1, ampRelease: 0.25,
+    airAmount: 0.25, reverbMix: 0.28, masterGain: 0.72,
+  }, { enabled: true, mode: "updown", bpm: 134, division: "1/16", octaves: 3, gate: 0.5 }],
+  ["fc2-arp-sub-pulse", "Sub Pulse", "Bass-register pulsing arp", {
+    oscATable: "pulse", oscAPos: 0.45, oscALevel: 0.64, oscAOctave: -1,
+    subLevel: 0.3, filterCutoff: 900, filterResonance: 2.2,
+    ampAttack: 0.002, ampDecay: 0.16, ampSustain: 0.2, ampRelease: 0.14, masterGain: 0.76,
+  }, { enabled: true, mode: "up", bpm: 128, division: "1/16", octaves: 1, gate: 0.6 }],
+  ["fc2-arp-warm-cycle", "Warm Cycle", "Soft cycling arp", {
+    oscATable: "basic", oscAPos: 0.22, oscALevel: 0.64,
+    filterCutoff: 2000, filterResonance: 1.4,
+    ampAttack: 0.01, ampDecay: 0.24, ampSustain: 0.3, ampRelease: 0.3,
+    chorusMix: 0.18, reverbMix: 0.22, masterGain: 0.74,
+  }, { enabled: true, mode: "updown", bpm: 104, division: "1/8", octaves: 2, gate: 0.7 }],
+  ["fc2-arp-metal-run", "Metal Ladder", "Metallic percussive arp", {
+    oscATable: "metallic", oscAPos: 0.45, oscALevel: 0.55,
+    filterCutoff: 3800, filterResonance: 2.4,
+    ampAttack: 0.001, ampDecay: 0.14, ampSustain: 0.08, ampRelease: 0.16,
+    delayMix: 0.18, reverbMix: 0.22, masterGain: 0.72,
+  }, { enabled: true, mode: "up", bpm: 136, division: "1/16", octaves: 2, gate: 0.45 }],
+];
+
+const fx2 = [
+  ["fc2-fx-riser-long", "Long Riser", "Slow rising tension sweep", {
+    oscATable: "saw", oscAPos: 0.6, oscALevel: 0.5,
+    noiseLevel: 0.14, noiseColor: 0.4,
+    lfo1Wave: "sawtooth", lfo1Rate: 0.12, lfo1Depth: 0.6, lfo1Dest: "filter",
+    filterCutoff: 900, filterResonance: 3.5, pitchEnvAmount: 24, pitchEnvTime: 3.0,
+    ampAttack: 1.5, ampSustain: 0.9, ampRelease: 0.5,
+    reverbMix: 0.3, masterGain: 0.7,
+  }],
+  ["fc2-fx-faller", "Down Fall", "Descending pitch fall", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.6,
+    pitchEnvAmount: -30, pitchEnvTime: 1.2,
+    filterCutoff: 2000, filterResonance: 2.4,
+    ampAttack: 0.01, ampDecay: 1.0, ampSustain: 0.3, ampRelease: 0.8,
+    reverbMix: 0.28, masterGain: 0.72,
+  }],
+  ["fc2-fx-impact", "Deep Impact", "Low impact hit", {
+    oscATable: "basic", oscAPos: 0.05, oscALevel: 0.7, oscAOctave: -2,
+    subLevel: 0.55, noiseLevel: 0.16, noiseMode: "burst",
+    filterCutoff: 400, filterResonance: 1.6, pitchEnvAmount: -18, pitchEnvTime: 0.3,
+    ampAttack: 0.001, ampDecay: 1.2, ampSustain: 0.05, ampRelease: 1.0,
+    reverbMix: 0.3, reverbSize: 4.0, masterGain: 0.74,
+  }],
+  ["fc2-fx-whoosh", "Air Whoosh", "Filtered noise pass-by", {
+    oscATable: "basic", oscAPos: 0.1, oscALevel: 0.2,
+    noiseLevel: 0.4, noiseColor: 0.2, noiseMode: "bed",
+    filterType: "bandpass", filterCutoff: 1200, filterResonance: 3.0,
+    lfo1Wave: "triangle", lfo1Rate: 0.3, lfo1Depth: 0.7, lfo1Dest: "filter",
+    ampAttack: 0.4, ampDecay: 0.6, ampSustain: 0.5, ampRelease: 0.7,
+    reverbMix: 0.3, masterGain: 0.7,
+  }],
+  ["fc2-fx-laser", "Laser Zip", "Fast descending zap", {
+    oscATable: "sync", oscAPos: 0.6, oscALevel: 0.6, hardSync: true,
+    pitchEnvAmount: -36, pitchEnvTime: 0.18,
+    filterCutoff: 4000, filterResonance: 3.0,
+    ampAttack: 0.001, ampDecay: 0.22, ampSustain: 0.05, ampRelease: 0.2,
+    delayMix: 0.18, masterGain: 0.72,
+  }],
+  ["fc2-fx-siren", "Siren Cycle", "Cycling alarm siren", {
+    oscATable: "basic", oscAPos: 0.2, oscALevel: 0.6,
+    lfo1Wave: "triangle", lfo1Rate: 1.2, lfo1Depth: 0.7, lfo1Dest: "pitch",
+    filterCutoff: 2600, filterResonance: 2.0,
+    ampAttack: 0.02, ampSustain: 0.88, ampRelease: 0.2, masterGain: 0.72,
+  }],
+  ["fc2-fx-sub-drop", "Sub Drop", "Deep dropping sub tone", {
+    oscATable: "basic", oscAPos: 0.02, oscALevel: 0.72, oscAOctave: -2,
+    subLevel: 0.6, pitchEnvAmount: -24, pitchEnvTime: 1.6,
+    filterCutoff: 300, filterResonance: 1.2,
+    ampAttack: 0.01, ampDecay: 1.6, ampSustain: 0.2, ampRelease: 1.4, masterGain: 0.76,
+  }],
+  ["fc2-fx-glitch", "Glitch Cell", "Bit-crushed glitch texture", {
+    oscATable: "chip", oscALevel: 0.6, chipNoise: "periodic",
+    bitDepth: "8bit", sampleRateReduce: 0.35, crush: 0.3,
+    filterCutoff: 3000, filterResonance: 2.0,
+    lfo1Wave: "sample-hold", lfo1Rate: 12, lfo1Depth: 0.5, lfo1Dest: "pitch",
+    ampAttack: 0.001, ampDecay: 0.3, ampSustain: 0.3, ampRelease: 0.2, masterGain: 0.7,
+  }],
+  ["fc2-fx-reverse-swell", "Reverse Swell", "Backwards-sounding swell", {
+    oscATable: "harmonic", oscAPos: 0.5, oscALevel: 0.55,
+    filterCutoff: 1800, filterResonance: 2.2, filterEnvAmount: 0.5,
+    filtAttack: 1.0, filtDecay: 0.2,
+    ampAttack: 1.2, ampDecay: 0.1, ampSustain: 0.9, ampRelease: 0.08,
+    reverbMix: 0.34, reverbSize: 3.8, masterGain: 0.7,
+  }],
+  ["fc2-fx-metal-hit", "Metal Strike", "Metallic percussive hit", {
+    oscATable: "metallic", oscAPos: 0.5, oscALevel: 0.75,
+    ringAmount: 0.18, ringFreq: 420,
+    filterType: "bandpass", filterCutoff: 1800, filterResonance: 2.0,
+    ampAttack: 0.001, ampDecay: 0.7, ampSustain: 0.12, ampRelease: 0.8,
+    reverbMix: 0.3, reverbSize: 3.6, masterGain: 0.78,
+  }],
+  ["fc2-fx-static", "Static Field", "Radio static bed", {
+    oscATable: "basic", oscAPos: 0.1, oscALevel: 0.12,
+    noiseLevel: 0.45, noiseColor: -0.2, noiseMode: "storm", noiseDensity: 0.6,
+    filterType: "bandpass", filterCutoff: 1600, filterResonance: 2.2,
+    hiss: 0.06, dust: 0.08,
+    ampAttack: 0.2, ampSustain: 0.85, ampRelease: 0.4, masterGain: 0.7,
+  }],
+  ["fc2-fx-alarm", "Alarm Pulse", "Pulsing warning tone", {
+    oscATable: "pulse", oscAPos: 0.5, oscALevel: 0.62, pulseDuty: 0.5,
+    gateOn: true, gateRate: 4, gateDepth: 1, gateSteps: 8, gateSmooth: 0.1,
+    filterCutoff: 2800, filterResonance: 2.0,
+    ampAttack: 0.005, ampSustain: 0.85, ampRelease: 0.15, masterGain: 0.72,
+  }],
+  ["fc2-fx-warp-tear", "Warp Tear", "Torn spectral texture", {
+    oscATable: "fold", oscAPos: 0.6, oscALevel: 0.55,
+    warpMode: "scramble", warpStretch: 0.7, warpComb: 0.5,
+    filterCutoff: 2400, filterResonance: 3.0,
+    ampAttack: 0.05, ampSustain: 0.8, ampRelease: 0.4,
+    reverbMix: 0.28, masterGain: 0.68,
+  }],
+  ["fc2-fx-bloom", "Spectral Bloom", "Blooming spectral wash", {
+    oscATable: "additive", oscAPos: 0.55, oscALevel: 0.5,
+    spectralMode: "smear", spectralAmount: 0.6, spectralMix: 0.45,
+    filterCutoff: 2600, filterResonance: 1.6,
+    ampAttack: 0.6, ampSustain: 0.85, ampRelease: 1.2,
+    reverbMix: 0.32, reverbSize: 3.6, masterGain: 0.68,
+  }],
+  ["fc2-fx-tape-stop", "Tape Stop", "Tape slowing to a halt", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.6,
+    pitchEnvAmount: -20, pitchEnvTime: 0.9,
+    cassetteGen: 0.5, wowFlutter: 0.4, tapeSpeed: -0.2,
+    filterCutoff: 1800, filterResonance: 1.6,
+    ampAttack: 0.01, ampDecay: 0.8, ampSustain: 0.3, ampRelease: 0.6, masterGain: 0.7,
+  }],
+  ["fc2-fx-noise-sweep", "Noise Sweep", "Rising filtered noise", {
+    oscATable: "basic", oscAPos: 0.1, oscALevel: 0.1,
+    noiseLevel: 0.42, noiseColor: 0.5,
+    filterType: "highpass", filterCutoff: 400, filterResonance: 2.6,
+    lfo1Wave: "sawtooth", lfo1Rate: 0.2, lfo1Depth: 0.7, lfo1Dest: "filter",
+    ampAttack: 0.8, ampSustain: 0.9, ampRelease: 0.4, masterGain: 0.7,
+  }],
+  ["fc2-fx-drone-hit", "Drone Hit", "Sustained impact drone", {
+    oscATable: "growl", oscAPos: 0.4, oscALevel: 0.55, oscAOctave: -1,
+    subLevel: 0.4, filterCutoff: 700, filterResonance: 2.4,
+    ampAttack: 0.002, ampDecay: 1.4, ampSustain: 0.5, ampRelease: 1.6,
+    reverbMix: 0.34, reverbSize: 4.2, masterGain: 0.72,
+  }],
+  ["fc2-fx-bit-zap", "Bit Zap", "Digital zap artifact", {
+    oscATable: "chip", oscALevel: 0.6, pulseDuty: 0.15,
+    bitDepth: "12bit", crush: 0.25,
+    pitchEnvAmount: 18, pitchEnvTime: 0.12,
+    filterCutoff: 4200, filterResonance: 1.8,
+    ampAttack: 0.001, ampDecay: 0.18, ampSustain: 0.04, ampRelease: 0.16, masterGain: 0.72,
+  }],
+];
+
+const atmos2 = [
+  ["fc2-atmos-glacier", "Glacier", "Vast cold ice field", {
+    oscATable: "additive", oscAPos: 0.6, oscALevel: 0.42, oscALfo: 0.2,
+    filterType: "highpass", filterCutoff: 500, filterResonance: 1.4,
+    lfo1Wave: "sine", lfo1Rate: 0.05, lfo1Depth: 0.35, lfo1Dest: "filter",
+    ampAttack: 1.6, ampSustain: 0.9, ampRelease: 2.6,
+    reverbMix: 0.42, reverbSize: 5.0, airAmount: 0.28, masterGain: 0.68,
+  }],
+  ["fc2-atmos-undertow", "Undertow", "Submerged moving mass", {
+    oscATable: "basic", oscAPos: 0.2, oscALevel: 0.48, oscAOctave: -1,
+    subLevel: 0.35, filterCutoff: 700, filterResonance: 1.8,
+    lfo1Wave: "triangle", lfo1Rate: 0.08, lfo1Depth: 0.4, lfo1Dest: "filter",
+    ampAttack: 1.2, ampSustain: 0.9, ampRelease: 2.2,
+    reverbMix: 0.38, reverbSize: 4.4, masterGain: 0.7,
+  }],
+  ["fc2-atmos-monolith", "Monolith", "Massive static presence", {
+    oscATable: "growl", oscAPos: 0.35, oscALevel: 0.46, oscAOctave: -1,
+    oscBTable: "harmonic", oscBLevel: 0.32, oscBDetune: 9,
+    subLevel: 0.3, filterCutoff: 800, filterResonance: 1.6,
+    ampAttack: 1.8, ampSustain: 0.92, ampRelease: 3.0,
+    reverbMix: 0.4, reverbSize: 5.2, masterGain: 0.68,
+  }],
+  ["fc2-atmos-aurora", "Aurora", "Shifting high curtain", {
+    oscATable: "bell", oscALevel: 0.4, fmAmount: 0.16, fmRatio: 5,
+    filterType: "highpass", filterCutoff: 900, filterResonance: 1.3,
+    lfo1Wave: "sine", lfo1Rate: 0.06, lfo1Depth: 0.4, lfo1Dest: "pan",
+    ampAttack: 1.4, ampSustain: 0.88, ampRelease: 2.8,
+    reverbMix: 0.44, reverbSize: 5.4, airAmount: 0.3, masterGain: 0.66,
+  }],
+  ["fc2-atmos-machine", "Machine Hum", "Industrial idling hum", {
+    oscATable: "pulse", oscAPos: 0.3, oscALevel: 0.44, oscAOctave: -1, pulseDuty: 0.45,
+    hum: 0.06, hiss: 0.04,
+    filterCutoff: 600, filterResonance: 2.0,
+    lfo1Wave: "sine", lfo1Rate: 0.25, lfo1Depth: 0.2, lfo1Dest: "volume",
+    ampAttack: 1.0, ampSustain: 0.9, ampRelease: 1.8,
+    reverbMix: 0.3, reverbSize: 3.6, masterGain: 0.7,
+  }],
+  ["fc2-atmos-ghost", "Ghost Choir", "Distant vocal spectre", {
+    oscATable: "vocal", oscAPos: 0.45, oscALevel: 0.42, oscALfo: 0.25,
+    filterCutoff: 1600, filterResonance: 2.2,
+    ampAttack: 1.5, ampSustain: 0.88, ampRelease: 2.6,
+    reverbMix: 0.44, reverbSize: 5.0, masterGain: 0.66,
+  }],
+  ["fc2-atmos-forest", "Forest Floor", "Organic granular bed", {
+    oscATable: "harmonic", oscAPos: 0.3, oscALevel: 0.4,
+    noiseLevel: 0.14, noiseMode: "storm", noiseDensity: 0.4, noiseGrain: 0.5,
+    filterCutoff: 1400, filterResonance: 1.6,
+    ampAttack: 1.2, ampSustain: 0.88, ampRelease: 2.0,
+    reverbMix: 0.36, reverbSize: 4.0, masterGain: 0.68,
+  }],
+  ["fc2-atmos-bells-far", "Distant Bells", "Faraway bell wash", {
+    oscATable: "metallic", oscAPos: 0.4, oscALevel: 0.38,
+    filterType: "highpass", filterCutoff: 700, filterResonance: 1.5,
+    ampAttack: 0.8, ampDecay: 1.6, ampSustain: 0.4, ampRelease: 2.8,
+    reverbMix: 0.46, reverbSize: 5.6, masterGain: 0.66,
+  }],
+  ["fc2-atmos-tape-wash", "Tape Wash", "Degraded tape ambience", {
+    oscATable: "saw", oscAPos: 0.4, oscALevel: 0.42,
+    cassetteGen: 0.45, wowFlutter: 0.3, hiss: 0.05, printThrough: 0.06,
+    filterCutoff: 1500, filterResonance: 1.4,
+    ampAttack: 1.3, ampSustain: 0.88, ampRelease: 2.2,
+    reverbMix: 0.36, reverbSize: 4.2, masterGain: 0.68,
+  }],
+  ["fc2-atmos-abyss", "Abyss", "Bottomless low drone", {
+    oscATable: "basic", oscAPos: 0.08, oscALevel: 0.46, oscAOctave: -2,
+    subLevel: 0.45, filterCutoff: 340, filterResonance: 1.3,
+    ampAttack: 2.0, ampSustain: 0.92, ampRelease: 3.2,
+    reverbMix: 0.34, reverbSize: 4.6, masterGain: 0.7,
+  }],
+  ["fc2-atmos-cloud", "Cloud Bank", "Soft diffuse cloud", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.44,
+    noiseLevel: 0.1, noiseColor: 0.5,
+    filterCutoff: 1800, filterResonance: 1.2,
+    ampAttack: 1.6, ampSustain: 0.9, ampRelease: 2.6,
+    reverbMix: 0.4, reverbSize: 4.8, airAmount: 0.24, masterGain: 0.68,
+  }],
+  ["fc2-atmos-signal", "Lost Signal", "Broken transmission bed", {
+    oscATable: "chip", oscALevel: 0.4, chipNoise: "periodic",
+    bitDepth: "12bit", sampleRateReduce: 0.2,
+    filterType: "bandpass", filterCutoff: 1400, filterResonance: 3.0,
+    lfo1Wave: "sample-hold", lfo1Rate: 3, lfo1Depth: 0.3, lfo1Dest: "filter",
+    ampAttack: 0.9, ampSustain: 0.85, ampRelease: 1.6,
+    reverbMix: 0.32, masterGain: 0.68,
+  }],
+  ["fc2-atmos-hollow", "Hollow Hall", "Hollow resonant space", {
+    oscATable: "formant2", oscAPos: 0.4, oscALevel: 0.42,
+    filterCutoff: 1300, filterResonance: 2.6, filterCarve: "formant",
+    filterCarveAmount: 0.3,
+    ampAttack: 1.4, ampSustain: 0.88, ampRelease: 2.4,
+    reverbMix: 0.42, reverbSize: 4.8, masterGain: 0.66,
+  }],
+  ["fc2-atmos-warm-drone", "Warm Drone", "Comfortable sustained drone", {
+    oscATable: "saw", oscAPos: 0.35, oscALevel: 0.46,
+    oscBTable: "basic", oscBLevel: 0.32, oscBDetune: -7,
+    drift: 0.24, filterCutoff: 1200, filterResonance: 1.4,
+    ampAttack: 1.5, ampSustain: 0.92, ampRelease: 2.4,
+    reverbMix: 0.32, reverbSize: 3.8, masterGain: 0.7,
+  }],
+  ["fc2-atmos-spark", "Spark Field", "Sparse crackling texture", {
+    oscATable: "metallic", oscAPos: 0.55, oscALevel: 0.34,
+    noiseLevel: 0.16, noiseMode: "storm", noiseDensity: 0.25, noiseGrain: 0.7,
+    dust: 0.1, filterType: "highpass", filterCutoff: 1200, filterResonance: 1.8,
+    ampAttack: 0.8, ampSustain: 0.85, ampRelease: 1.8,
+    reverbMix: 0.4, reverbSize: 4.4, masterGain: 0.68,
+  }],
+  ["fc2-atmos-breath-room", "Breath Room", "Human-scale breathing room", {
+    oscATable: "vocal", oscAPos: 0.3, oscALevel: 0.44,
+    noiseLevel: 0.12, noiseColor: 0.4,
+    filterCutoff: 1700, filterResonance: 1.5,
+    lfo1Wave: "sine", lfo1Rate: 0.15, lfo1Depth: 0.25, lfo1Dest: "volume",
+    ampAttack: 1.1, ampSustain: 0.88, ampRelease: 1.9,
+    reverbMix: 0.34, reverbSize: 3.8, masterGain: 0.68,
+  }],
+  ["fc2-atmos-sub-choir", "Sub Choir", "Low choral undertone", {
+    oscATable: "vocal", oscAPos: 0.25, oscALevel: 0.44, oscAOctave: -1,
+    subLevel: 0.32, filterCutoff: 900, filterResonance: 1.6,
+    ampAttack: 1.7, ampSustain: 0.9, ampRelease: 2.8,
+    reverbMix: 0.38, reverbSize: 4.6, masterGain: 0.68,
+  }],
+  ["fc2-atmos-orbit", "Orbit Pan", "Slowly orbiting texture", {
+    oscATable: "additive", oscAPos: 0.5, oscALevel: 0.42,
+    lfo1Wave: "sine", lfo1Rate: 0.04, lfo1Depth: 0.6, lfo1Dest: "pan",
+    filterCutoff: 2000, filterResonance: 1.5,
+    ampAttack: 1.3, ampSustain: 0.88, ampRelease: 2.4,
+    reverbMix: 0.38, reverbSize: 4.4, stereoWidth: 1.3, masterGain: 0.68,
+  }],
+];
+
+const vintage2 = [
+  ["fc2-vin-tape-saw", "Tape Saw", "Saw through worn tape", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.62,
+    cassetteGen: 0.4, wowFlutter: 0.2, hiss: 0.04,
+    filterCutoff: 2200, filterResonance: 1.6,
+    ampAttack: 0.01, ampSustain: 0.82, ampRelease: 0.35, masterGain: 0.72,
+  }],
+  ["fc2-vin-cassette-pad", "Cassette Pad", "Soft pad on old cassette", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.55,
+    oscBTable: "saw", oscBLevel: 0.35, oscBDetune: -9,
+    cassetteGen: 0.5, wowFlutter: 0.28, hiss: 0.05, printThrough: 0.05,
+    filterCutoff: 1700, filterResonance: 1.3,
+    ampAttack: 0.5, ampSustain: 0.9, ampRelease: 1.3,
+    reverbMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-vin-vhs-lead", "VHS Lead", "Video-tape coloured lead", {
+    oscATable: "pulse", oscAPos: 0.45, oscALevel: 0.62, pulseDuty: 0.4,
+    vhsColor: 0.35, cassetteGen: 0.28, wowFlutter: 0.16,
+    filterCutoff: 2600, filterResonance: 1.8,
+    ampAttack: 0.008, ampSustain: 0.85, ampRelease: 0.3, mono: true, masterGain: 0.72,
+  }],
+  ["fc2-vin-worn-keys", "Worn Keys", "Aged keyboard with wear", {
+    oscATable: "harmonic", oscAPos: 0.35, oscALevel: 0.6,
+    cassetteGen: 0.32, dust: 0.06, hiss: 0.035,
+    filterCutoff: 1900, filterResonance: 1.4,
+    ampAttack: 0.003, ampDecay: 0.6, ampSustain: 0.3, ampRelease: 0.45, masterGain: 0.72,
+  }],
+  ["fc2-vin-dusty-bass", "Dusty Bass", "Low-fi dusty bass", {
+    oscATable: "basic", oscAPos: 0.15, oscALevel: 0.66, oscAOctave: -1,
+    subLevel: 0.4, bitDepth: "12bit", dust: 0.08, hum: 0.03,
+    filterCutoff: 520, filterResonance: 1.5,
+    ampAttack: 0.004, ampSustain: 0.78, ampRelease: 0.3, mono: true, masterGain: 0.74,
+  }],
+  ["fc2-vin-flutter", "Flutter Drift", "Heavy wow and flutter", {
+    oscATable: "saw", oscAPos: 0.45, oscALevel: 0.6,
+    wowFlutter: 0.45, cassetteGen: 0.3, tapeSpeed: 0.08,
+    filterCutoff: 2000, filterResonance: 1.5,
+    ampAttack: 0.02, ampSustain: 0.85, ampRelease: 0.4, masterGain: 0.72,
+  }],
+  ["fc2-vin-lofi-bell", "Lo-Fi Bell", "Crushed bell tone", {
+    oscATable: "bell", oscALevel: 0.55, fmAmount: 0.25, fmRatio: 3,
+    bitDepth: "8bit", sampleRateReduce: 0.22,
+    filterCutoff: 2600, filterResonance: 1.4,
+    ampAttack: 0.001, ampDecay: 0.6, ampSustain: 0.1, ampRelease: 0.55,
+    reverbMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-vin-radio", "Radio Voice", "Band-limited radio tone", {
+    oscATable: "vocal", oscAPos: 0.4, oscALevel: 0.6,
+    filterType: "bandpass", filterCutoff: 1400, filterResonance: 3.2,
+    hiss: 0.05, dust: 0.05, bitDepth: "12bit",
+    ampAttack: 0.01, ampSustain: 0.85, ampRelease: 0.25, masterGain: 0.72,
+  }],
+  ["fc2-vin-old-organ", "Chapel Organ", "Aged chapel organ", {
+    oscATable: "additive", oscAPos: 0.3, oscALevel: 0.6,
+    cassetteGen: 0.24, wowFlutter: 0.12,
+    filterCutoff: 2400, filterResonance: 1.2,
+    ampAttack: 0.02, ampSustain: 0.9, ampRelease: 0.3,
+    reverbMix: 0.3, reverbSize: 3.6, masterGain: 0.72,
+  }],
+  ["fc2-vin-warped", "Warped Reel", "Badly warped tape reel", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.6,
+    wowFlutter: 0.55, tapeSpeed: -0.15, cassetteGen: 0.45, printThrough: 0.08,
+    filterCutoff: 1500, filterResonance: 1.6,
+    ampAttack: 0.03, ampSustain: 0.82, ampRelease: 0.5, masterGain: 0.7,
+  }],
+  ["fc2-vin-mello", "Mello Flute", "Tape-keyboard flute", {
+    oscATable: "basic", oscAPos: 0.18, oscALevel: 0.58,
+    noiseLevel: 0.07, cassetteGen: 0.35, wowFlutter: 0.2, hiss: 0.04,
+    filterCutoff: 2000, filterResonance: 1.3,
+    ampAttack: 0.06, ampSustain: 0.88, ampRelease: 0.35,
+    reverbMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-vin-vinyl", "Vinyl Bed", "Record-surface texture pad", {
+    oscATable: "harmonic", oscAPos: 0.4, oscALevel: 0.5,
+    dust: 0.12, hiss: 0.04, printThrough: 0.06,
+    filterCutoff: 1800, filterResonance: 1.3,
+    ampAttack: 0.4, ampSustain: 0.88, ampRelease: 1.0,
+    reverbMix: 0.26, masterGain: 0.72,
+  }],
+  ["fc2-vin-broken", "Broken Circuit", "Malfunctioning vintage gear", {
+    oscATable: "growl", oscAPos: 0.5, oscALevel: 0.58,
+    bitDepth: "8bit", sampleRateReduce: 0.4, crush: 0.28, hum: 0.05,
+    filterCutoff: 1600, filterResonance: 2.6,
+    ampAttack: 0.006, ampSustain: 0.8, ampRelease: 0.3, masterGain: 0.7,
+  }],
+  ["fc2-vin-aged-pluck", "Aged Pluck", "Old plucked string", {
+    oscATable: "harmonic", oscAPos: 0.32, oscALevel: 0.6,
+    cassetteGen: 0.3, dust: 0.06,
+    filterCutoff: 2000, filterResonance: 1.6, filterEnvAmount: 0.4, filtDecay: 0.18,
+    lpgOn: true, lpgDecay: 0.4, lpgModel: "aged",
+    ampAttack: 0.002, ampDecay: 0.35, ampSustain: 0.1, ampRelease: 0.4, masterGain: 0.74,
+  }],
+  ["fc2-vin-brass", "Retro Brass", "Analog brass section", {
+    oscATable: "saw", oscAPos: 0.6, oscALevel: 0.58,
+    oscBTable: "pulse", oscBLevel: 0.4, oscBDetune: 10,
+    filterCutoff: 2400, filterResonance: 2.0, filterEnvAmount: 0.4,
+    filtAttack: 0.08, filtDecay: 0.5,
+    cassetteGen: 0.2, drift: 0.2,
+    ampAttack: 0.05, ampSustain: 0.85, ampRelease: 0.3, masterGain: 0.72,
+  }],
+  ["fc2-vin-drift-poly", "Drift Poly", "Unstable vintage poly", {
+    oscATable: "saw", oscAPos: 0.5, oscALevel: 0.55,
+    oscBTable: "saw", oscBLevel: 0.4, oscBDetune: 16,
+    drift: 0.38, driftRate: 0.28, tuneVariance: 0.18, voiceInstability: 0.16,
+    filterCutoff: 2200, filterResonance: 1.8,
+    ampAttack: 0.03, ampSustain: 0.85, ampRelease: 0.5,
+    chorusMix: 0.2, masterGain: 0.72,
+  }],
+  ["fc2-vin-muffled", "Muffled Room", "Dark muffled vintage tone", {
+    oscATable: "basic", oscAPos: 0.25, oscALevel: 0.62,
+    cassetteGen: 0.4, filterCutoff: 1100, filterResonance: 1.2,
+    ampAttack: 0.02, ampSustain: 0.85, ampRelease: 0.4,
+    reverbMix: 0.22, masterGain: 0.74,
+  }],
+  ["fc2-vin-bbd", "BBD Chorus", "Bucket-brigade chorus tone", {
+    oscATable: "saw", oscAPos: 0.45, oscALevel: 0.6,
+    bbdChorus: 0.5, analogComp: 0.3, cassetteGen: 0.2,
+    filterCutoff: 2300, filterResonance: 1.5,
+    ampAttack: 0.015, ampSustain: 0.86, ampRelease: 0.35, masterGain: 0.72,
+  }],
+];
+
+const chip2 = [
+  ["fc2-chip-nes-lead", "NES Lead", "Classic NES pulse lead", {
+    oscATable: "chip", oscALevel: 0.68, pulseDuty: 0.25, chipNoise: "nes",
+    filterCutoff: 6000, filterResonance: 1.3,
+    ampAttack: 0.001, ampDecay: 0.2, ampSustain: 0.8, ampRelease: 0.06,
+    mono: true, masterGain: 0.74,
+  }],
+  ["fc2-chip-gb-bass", "GB Bass", "Game Boy bass line", {
+    oscATable: "chip", oscALevel: 0.68, oscAOctave: -1, pulseDuty: 0.5, chipNoise: "gb",
+    filterCutoff: 1400, filterResonance: 1.4,
+    ampAttack: 0.001, ampDecay: 0.2, ampSustain: 0.7, ampRelease: 0.06,
+    mono: true, masterGain: 0.76,
+  }],
+  ["fc2-chip-duty-sweep", "Duty Sweep", "Sweeping pulse width", {
+    oscATable: "pulse", oscALevel: 0.66, pulseDuty: 0.2,
+    lfo1Wave: "triangle", lfo1Rate: 1.4, lfo1Depth: 0.35, lfo1Dest: "pitch",
+    filterCutoff: 5000, filterResonance: 1.4,
+    ampAttack: 0.001, ampSustain: 0.82, ampRelease: 0.08, masterGain: 0.74,
+  }],
+  ["fc2-chip-tri-bass", "Triangle Floor", "NES triangle bass", {
+    oscATable: "basic", oscAPos: 0.15, oscALevel: 0.7, oscAOctave: -1,
+    chipVoiceLimit: 1, filterCutoff: 900, filterResonance: 1.2,
+    ampAttack: 0.001, ampSustain: 0.8, ampRelease: 0.05,
+    mono: true, masterGain: 0.76,
+  }],
+  ["fc2-chip-acid", "Chip Acid", "Chip-flavoured acid line", {
+    oscATable: "chip", oscALevel: 0.64, pulseDuty: 0.35,
+    filterModel: "ladder", filterCutoff: 800, filterResonance: 8,
+    filterEnvAmount: 0.6, filtDecay: 0.16,
+    ampAttack: 0.001, ampDecay: 0.16, ampSustain: 0.3, ampRelease: 0.08,
+    mono: true, slideOn: true, accentAmount: 0.4, chipAcidMix: 0.7, masterGain: 0.72,
+  }],
+  ["fc2-chip-noise-perc", "Noise Perc", "Chip noise percussion", {
+    oscATable: "basic", oscAPos: 0.1, oscALevel: 0.15,
+    noiseLevel: 0.5, noiseMode: "burst", chipNoise: "periodic",
+    filterType: "highpass", filterCutoff: 2000, filterResonance: 2.0,
+    ampAttack: 0.001, ampDecay: 0.1, ampSustain: 0.02, ampRelease: 0.1, masterGain: 0.74,
+  }],
+  ["fc2-chip-echo", "Chip Echo", "Delayed chip melody", {
+    oscATable: "chip", oscALevel: 0.62, pulseDuty: 0.3,
+    filterCutoff: 5200, filterResonance: 1.4,
+    delayTime: 0.18, delayFeedback: 0.45, delayMix: 0.26,
+    ampAttack: 0.001, ampDecay: 0.16, ampSustain: 0.5, ampRelease: 0.08, masterGain: 0.72,
+  }],
+  ["fc2-chip-sync", "Chip Sync", "Hard-synced chip tone", {
+    oscATable: "sync", oscAPos: 0.5, oscALevel: 0.64, hardSync: true, pulseDuty: 0.3,
+    filterCutoff: 4600, filterResonance: 2.0,
+    ampAttack: 0.001, ampDecay: 0.18, ampSustain: 0.6, ampRelease: 0.08, masterGain: 0.72,
+  }],
+  ["fc2-chip-fat", "Fat Chip", "Detuned double chip", {
+    oscATable: "chip", oscALevel: 0.55,
+    oscBTable: "chip", oscBLevel: 0.45, oscBDetune: 18,
+    filterCutoff: 5000, filterResonance: 1.5,
+    ampAttack: 0.001, ampSustain: 0.8, ampRelease: 0.08, masterGain: 0.72,
+  }],
+  ["fc2-chip-siren", "Chip Siren", "Rising chip alarm", {
+    oscATable: "pulse", oscALevel: 0.62, pulseDuty: 0.4,
+    lfo1Wave: "sawtooth", lfo1Rate: 1.8, lfo1Depth: 0.5, lfo1Dest: "pitch",
+    filterCutoff: 5200, filterResonance: 1.6,
+    ampAttack: 0.002, ampSustain: 0.85, ampRelease: 0.1, masterGain: 0.72,
+  }],
+  ["fc2-chip-blip", "Blip Dot", "Tiny short blip", {
+    oscATable: "chip", oscALevel: 0.66, pulseDuty: 0.15,
+    filterCutoff: 6500, filterResonance: 1.2,
+    ampAttack: 0.001, ampDecay: 0.06, ampSustain: 0.02, ampRelease: 0.05, masterGain: 0.74,
+  }],
+  ["fc2-chip-bell", "Chip Bell", "Bell-like chip tone", {
+    oscATable: "chip", oscALevel: 0.58, fmAmount: 0.3, fmRatio: 4,
+    filterCutoff: 5600, filterResonance: 1.4,
+    ampAttack: 0.001, ampDecay: 0.4, ampSustain: 0.15, ampRelease: 0.35,
+    delayMix: 0.16, masterGain: 0.72,
+  }],
+  ["fc2-chip-sweep", "Chip Sweep", "Downward chip sweep", {
+    oscATable: "chip", oscALevel: 0.62, pulseDuty: 0.3,
+    pitchEnvAmount: -18, pitchEnvTime: 0.25,
+    filterCutoff: 5000, filterResonance: 1.6,
+    ampAttack: 0.001, ampDecay: 0.25, ampSustain: 0.1, ampRelease: 0.12, masterGain: 0.72,
+  }],
+  ["fc2-chip-pad", "Chip Pad", "Sustained chip chord bed", {
+    oscATable: "chip", oscALevel: 0.5,
+    oscBTable: "pulse", oscBLevel: 0.36, oscBDetune: 12,
+    filterCutoff: 3800, filterResonance: 1.4,
+    ampAttack: 0.2, ampSustain: 0.85, ampRelease: 0.6,
+    reverbMix: 0.24, masterGain: 0.7,
+  }],
+  ["fc2-chip-arp-fast", "Chip Rush", "Very fast chip arp", {
+    oscATable: "chip", oscALevel: 0.64, pulseDuty: 0.25,
+    filterCutoff: 5800, filterResonance: 1.3,
+    ampAttack: 0.001, ampDecay: 0.08, ampSustain: 0.4, ampRelease: 0.05, masterGain: 0.74,
+  }, { enabled: true, mode: "up", bpm: 150, division: "1/16", octaves: 3, gate: 0.45 }],
+  ["fc2-chip-hat", "Chip Hat", "Chip hi-hat tick", {
+    oscATable: "basic", oscAPos: 0.1, oscALevel: 0.1,
+    noiseLevel: 0.45, noiseMode: "burst", chipNoise: "nes",
+    filterType: "highpass", filterCutoff: 5000, filterResonance: 1.6,
+    ampAttack: 0.001, ampDecay: 0.05, ampSustain: 0.01, ampRelease: 0.05, masterGain: 0.74,
+  }],
+  ["fc2-chip-organ", "Chip Organ", "Chip-additive organ", {
+    oscATable: "chip", oscALevel: 0.52,
+    oscCTable: "chip", oscCLevel: 0.32, oscCOctave: 1,
+    filterCutoff: 4400, filterResonance: 1.2,
+    ampAttack: 0.004, ampSustain: 0.88, ampRelease: 0.08, masterGain: 0.72,
+  }],
+  ["fc2-chip-crush", "Crush Chip", "Bit-crushed chip lead", {
+    oscATable: "chip", oscALevel: 0.62, pulseDuty: 0.3,
+    bitDepth: "8bit", sampleRateReduce: 0.25, crush: 0.2,
+    filterCutoff: 4800, filterResonance: 1.5,
+    ampAttack: 0.001, ampSustain: 0.8, ampRelease: 0.08, masterGain: 0.72,
+  }],
+];
+
+const fm2 = [
+  ["fc2-fm-ep-warm", "FM Warm EP", "Warm four-op electric piano", {
+    oscATable: "basic", oscAPos: 0.1, oscALevel: 0.6,
+    fmEngine: "ops4", fmAlg: 1, fmAmount: 0.42, fmOp2Ratio: 1, fmOp3Ratio: 2,
+    filterCutoff: 3000, filterResonance: 1.3,
+    ampAttack: 0.002, ampDecay: 0.7, ampSustain: 0.3, ampRelease: 0.5,
+    chorusMix: 0.16, reverbMix: 0.2, masterGain: 0.72,
+  }],
+  ["fc2-fm-bell-deep", "FM Deep Bell", "Long-decay FM bell", {
+    oscATable: "bell", oscALevel: 0.55, fmAmount: 0.5, fmRatio: 7,
+    filterCutoff: 4200, filterResonance: 1.2,
+    ampAttack: 0.001, ampDecay: 1.4, ampSustain: 0.1, ampRelease: 1.4,
+    reverbMix: 0.3, reverbSize: 3.6, masterGain: 0.7,
+  }],
+  ["fc2-fm-brass", "FM Brass", "Brassy FM stack", {
+    oscATable: "saw", oscAPos: 0.4, oscALevel: 0.58,
+    fmEngine: "ops4", fmAlg: 4, fmAmount: 0.45, fmOp2Ratio: 1, fmOp3Ratio: 3,
+    filterCutoff: 2800, filterResonance: 1.8, filterEnvAmount: 0.4,
+    filtAttack: 0.06, filtDecay: 0.4,
+    ampAttack: 0.04, ampSustain: 0.85, ampRelease: 0.3, masterGain: 0.72,
+  }],
+  ["fc2-fm-bass-tight", "FM Tight Bass", "Focused FM bass", {
+    oscATable: "basic", oscAPos: 0.05, oscALevel: 0.66, oscAOctave: -1,
+    fmAmount: 0.4, fmRatio: 2, subLevel: 0.3,
+    filterCutoff: 700, filterResonance: 1.6, filterEnvAmount: 0.35, filtDecay: 0.16,
+    ampAttack: 0.002, ampDecay: 0.25, ampSustain: 0.4, ampRelease: 0.2,
+    mono: true, masterGain: 0.74,
+  }],
+  ["fc2-fm-marimba", "FM Marimba", "Wooden FM mallet", {
+    oscATable: "basic", oscAPos: 0.12, oscALevel: 0.62,
+    fmAmount: 0.34, fmRatio: 4,
+    filterCutoff: 2600, filterResonance: 1.3,
+    ampAttack: 0.001, ampDecay: 0.4, ampSustain: 0.05, ampRelease: 0.4,
+    reverbMix: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-fm-glass", "FM Glass", "Transparent FM tone", {
+    oscATable: "additive", oscAPos: 0.6, oscALevel: 0.56,
+    fmAmount: 0.3, fmRatio: 3,
+    filterType: "highpass", filterCutoff: 700, filterResonance: 1.3,
+    ampAttack: 0.003, ampDecay: 0.6, ampSustain: 0.3, ampRelease: 0.6,
+    airAmount: 0.24, reverbMix: 0.26, masterGain: 0.72,
+  }],
+  ["fc2-fm-organ", "FM Organ", "Additive FM organ", {
+    oscATable: "additive", oscAPos: 0.3, oscALevel: 0.6,
+    fmAmount: 0.22, fmRatio: 2,
+    filterCutoff: 3400, filterResonance: 1.1,
+    ampAttack: 0.01, ampSustain: 0.9, ampRelease: 0.14, masterGain: 0.74,
+  }],
+  ["fc2-fm-metal", "FM Metal", "Inharmonic metallic FM", {
+    oscATable: "metallic", oscAPos: 0.5, oscALevel: 0.52,
+    fmEngine: "ops4", fmAlg: 6, fmAmount: 0.5, fmOp2Ratio: 1.5, fmOp3Ratio: 5, fmOp4Ratio: 7,
+    filterCutoff: 3800, filterResonance: 1.8,
+    ampAttack: 0.001, ampDecay: 0.8, ampSustain: 0.1, ampRelease: 0.8,
+    reverbMix: 0.28, masterGain: 0.7,
+  }],
+  ["fc2-fm-wood", "FM Wood", "Hollow wooden FM", {
+    oscATable: "basic", oscAPos: 0.2, oscALevel: 0.6,
+    fmAmount: 0.36, fmRatio: 3, ringAmount: 0.12,
+    filterType: "bandpass", filterCutoff: 1600, filterResonance: 2.4,
+    ampAttack: 0.001, ampDecay: 0.3, ampSustain: 0.06, ampRelease: 0.35, masterGain: 0.74,
+  }],
+  ["fc2-fm-vocal", "FM Vocal", "Voice-like FM tone", {
+    oscATable: "vocal", oscAPos: 0.4, oscALevel: 0.58,
+    fmAmount: 0.28, fmRatio: 1.5,
+    filterCutoff: 2400, filterResonance: 2.0,
+    ampAttack: 0.02, ampSustain: 0.85, ampRelease: 0.3,
+    reverbMix: 0.22, masterGain: 0.72,
+  }],
+  ["fc2-fm-pluck", "FM Pluck", "Short FM pluck", {
+    oscATable: "harmonic", oscAPos: 0.3, oscALevel: 0.6,
+    fmAmount: 0.4, fmRatio: 4,
+    filterCutoff: 3000, filterResonance: 1.6, filterEnvAmount: 0.45, filtDecay: 0.12,
+    ampAttack: 0.001, ampDecay: 0.25, ampSustain: 0.06, ampRelease: 0.3, masterGain: 0.74,
+  }],
+  ["fc2-fm-pad", "FM Pad", "Slow evolving FM pad", {
+    oscATable: "additive", oscAPos: 0.45, oscALevel: 0.5,
+    fmAmount: 0.26, fmRatio: 2, fmFeedback: 0.15,
+    filterCutoff: 2400, filterResonance: 1.4,
+    ampAttack: 0.7, ampSustain: 0.88, ampRelease: 1.5,
+    reverbMix: 0.3, reverbSize: 3.4, masterGain: 0.7,
+  }],
+  ["fc2-fm-lead", "FM Lead", "Cutting FM lead line", {
+    oscATable: "basic", oscAPos: 0.3, oscALevel: 0.62,
+    fmEngine: "ops4", fmAlg: 3, fmAmount: 0.5, fmOp2Ratio: 2, fmOp3Ratio: 3,
+    filterCutoff: 4000, filterResonance: 1.8,
+    ampAttack: 0.005, ampSustain: 0.85, ampRelease: 0.25,
+    mono: true, glide: 0.04, masterGain: 0.72,
+  }],
+  ["fc2-fm-gong", "FM Gong", "Large inharmonic gong", {
+    oscATable: "metallic", oscAPos: 0.35, oscALevel: 0.5,
+    fmAmount: 0.55, fmRatio: 5, ringAmount: 0.2, ringFreq: 180,
+    filterCutoff: 2600, filterResonance: 1.6,
+    ampAttack: 0.002, ampDecay: 2.0, ampSustain: 0.08, ampRelease: 2.2,
+    reverbMix: 0.34, reverbSize: 4.4, masterGain: 0.68,
+  }],
+  ["fc2-fm-harp", "FM Harp", "Plucked FM harp", {
+    oscATable: "harmonic", oscAPos: 0.4, oscALevel: 0.56,
+    fmAmount: 0.3, fmRatio: 3,
+    filterCutoff: 3400, filterResonance: 1.3,
+    lpgOn: true, lpgDecay: 0.55,
+    ampAttack: 0.001, ampDecay: 0.5, ampSustain: 0.1, ampRelease: 0.6,
+    reverbMix: 0.24, masterGain: 0.72,
+  }],
+  ["fc2-fm-clav", "FM Clav", "Snappy FM clavinet", {
+    oscATable: "pulse", oscAPos: 0.5, oscALevel: 0.62, pulseDuty: 0.3,
+    fmAmount: 0.34, fmRatio: 2,
+    filterCutoff: 3200, filterResonance: 2.2, filterEnvAmount: 0.45, filtDecay: 0.1,
+    ampAttack: 0.001, ampDecay: 0.25, ampSustain: 0.15, ampRelease: 0.2, masterGain: 0.74,
+  }],
+  ["fc2-fm-tubular", "FM Tubular", "Tubular bell FM", {
+    oscATable: "bell", oscALevel: 0.52, fmAmount: 0.44, fmRatio: 6,
+    filterType: "highpass", filterCutoff: 600, filterResonance: 1.3,
+    ampAttack: 0.001, ampDecay: 1.6, ampSustain: 0.08, ampRelease: 1.6,
+    reverbMix: 0.34, reverbSize: 4.0, masterGain: 0.68,
+  }],
+  ["fc2-fm-drone", "FM Drone", "Sustained FM drone", {
+    oscATable: "harmonic", oscAPos: 0.35, oscALevel: 0.5,
+    fmAmount: 0.3, fmRatio: 1.5, fmFeedback: 0.22,
+    filterCutoff: 1600, filterResonance: 1.6,
+    ampAttack: 1.2, ampSustain: 0.92, ampRelease: 2.0,
+    reverbMix: 0.3, reverbSize: 3.8, masterGain: 0.7,
+  }],
+];
+
 const CATEGORIES = [
-  ["Bass", bass],
-  ["Lead", lead],
-  ["Pluck", pluck],
-  ["Pad", pad],
-  ["Keys", keys],
-  ["Arp", arp],
-  ["FX", fx],
-  ["Atmos", atmos],
-  ["Vintage", vintage],
-  ["Chip", chip],
-  ["FM", fm],
+  ["Bass", [...bass, ...bass2]],
+  ["Lead", [...lead, ...lead2]],
+  ["Pluck", [...pluck, ...pluck2]],
+  ["Pad", [...pad, ...pad2]],
+  ["Keys", [...keys, ...keys2]],
+  ["Arp", [...arp, ...arp2]],
+  ["FX", [...fx, ...fx2]],
+  ["Atmos", [...atmos, ...atmos2]],
+  ["Vintage", [...vintage, ...vintage2]],
+  ["Chip", [...chip, ...chip2]],
+  ["FM", [...fm, ...fm2]],
 ];
 
 let out = `import {
-  DEFAULT_FIRE_PATCH,
+  cloneFirePatch,
   makeModMatrix,
   type FirePatch,
   type ModRoute,
@@ -1069,7 +2447,8 @@ let out = `import {
 } from "./FireCommandSynth";
 import type { FirePreset, PresetCategory, PresetArp } from "./firePresetBank";
 
-const P = (over: Partial<FirePatch>): FirePatch => ({ ...DEFAULT_FIRE_PATCH, ...over });
+/** Deep factory patch — never share DEFAULT nests across presets / NS. */
+const P = (over: Partial<FirePatch>): FirePatch => cloneFirePatch(over);
 const MR = (source: ModSource, dest: ModDest, amount: number): ModRoute => ({ source, dest, amount });
 
 function preset(
@@ -1088,8 +2467,10 @@ function preset(
 }
 
 /**
- * Factory curated bank — 20 unique presets × 11 categories = 220.
- * Authored for the current Fire Command synth (absolute Q, ladder/svf, ops4, warp, LPG).
+ * Factory curated bank — 420 presets across 11 categories.
+ * Wave 1 (\`fc-\`) plus wave 2 (\`fc2-\`), both authored for the current Fire
+ * Command synth (absolute Q, ladder/svf, ops4, warp, LPG, RT60 reverb).
+ * Unused modules are slept at load time — see lib/fireModuleUsage.
  */
 export const CURATED_PRESETS: FirePreset[] = [
 `;
@@ -1100,7 +2481,7 @@ const CAT_Q = {
 };
 
 for (const [cat, rows] of CATEGORIES) {
-  out += `\n  // ===== ${cat.toUpperCase()} (20) =====\n`;
+  out += `\n  // ===== ${cat.toUpperCase()} (${rows.length}) =====\n`;
   for (const row of rows) {
     const [id, name, desc, patch, arp] = row;
     const clean = { ...patch };
@@ -1119,9 +2500,18 @@ out += `];\n`;
 fs.writeFileSync(OUT, out);
 const counts = Object.fromEntries(CATEGORIES.map(([c, r]) => [c, r.length]));
 console.log("Wrote", OUT.pathname, counts);
-const bad = Object.entries(counts).filter(([, n]) => n !== 20);
-if (bad.length) {
-  console.error("Category count errors:", bad);
+const total = CATEGORIES.reduce((n, [, r]) => n + r.length, 0);
+
+// Every category must be substantial, and every id unique across both waves.
+const thin = Object.entries(counts).filter(([, n]) => n < 20);
+if (thin.length) {
+  console.error("Category too small:", thin);
   process.exit(1);
 }
-console.log("OK: 11 × 20 = 220 presets");
+const ids = CATEGORIES.flatMap(([, rows]) => rows.map((r) => r[0]));
+const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+if (dupes.length) {
+  console.error("Duplicate preset ids:", [...new Set(dupes)]);
+  process.exit(1);
+}
+console.log(`OK: ${total} presets, ${ids.length} unique ids`);

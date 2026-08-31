@@ -29,8 +29,16 @@ export class LUFSMeter {
   /** Integrated loudness since reset() - LUFS */
   integratedLufs = -120;
 
-  private momentaryHistory: number[] = [];
-  private allBlocks: number[] = [];
+  /** Mean-square (energy) histories — BS.1770 averages energies, then
+   *  converts to LUFS once. Averaging LUFS values (log domain) understates
+   *  loud passages and overstates quiet ones. */
+  private momentaryMs: number[] = [];
+  /** Bounded ring buffer of block energies (1 h of 100 ms blocks). The old
+   *  unbounded array grew ~36k entries/hour forever during long sessions. */
+  private blockMs: Float64Array = new Float64Array(36_000);
+  private blockCount = 0;
+  private blockHead = 0;
+  private tickN = 0;
   private buf: Float32Array<ArrayBuffer>;
   private timer: number | null = null;
 
@@ -56,7 +64,9 @@ export class LUFSMeter {
 
     this.analyserL = ctx.createAnalyser();
     this.analyserR = ctx.createAnalyser();
-    // 400 ms @ 48k = 19200 samples. AnalyserNode max fftSize is 32768, OK.
+    // 400 ms @ 48k = 19200 samples; the closest power of two is 16384
+    // (~341 ms) — much nearer the BS.1770 window than rounding UP to 32768
+    // (~683 ms), which stretched every "momentary" reading.
     const sr = (this.ctx as AudioContext).sampleRate || 48000;
     const fft = nearestPow2(Math.min(32768, Math.floor(sr * 0.4)));
     this.analyserL.fftSize = fft;
@@ -81,8 +91,10 @@ export class LUFSMeter {
   }
 
   reset(): void {
-    this.momentaryHistory = [];
-    this.allBlocks = [];
+    this.momentaryMs = [];
+    this.blockCount = 0;
+    this.blockHead = 0;
+    this.tickN = 0;
     this.momentaryLufs = -120;
     this.shortTermLufs = -120;
     this.integratedLufs = -120;
@@ -101,22 +113,45 @@ export class LUFSMeter {
 
     // Stereo loudness with channel weights = 1 each.
     const ms = msL + msR;
-    const lufs = ms > 1e-12 ? -0.691 + 10 * Math.log10(ms) : -120;
-    this.momentaryLufs = lufs;
+    this.momentaryLufs = lufsOf(ms);
 
-    this.momentaryHistory.push(lufs);
-    if (this.momentaryHistory.length > 30) this.momentaryHistory.shift();
-    this.shortTermLufs = average(this.momentaryHistory);
+    // Short-term (~3 s): mean of block ENERGIES, converted once.
+    this.momentaryMs.push(ms);
+    if (this.momentaryMs.length > 30) this.momentaryMs.shift();
+    let stSum = 0;
+    for (const v of this.momentaryMs) stSum += v;
+    this.shortTermLufs = lufsOf(stSum / this.momentaryMs.length);
 
-    if (lufs > -70) this.allBlocks.push(lufs);
-    if (this.allBlocks.length > 0) {
-      // Apply -10 LU relative gate.
-      const ungatedMean = average(this.allBlocks);
-      const gateLU = ungatedMean - 10;
-      const gated = this.allBlocks.filter((l) => l >= gateLU);
-      this.integratedLufs = gated.length > 0 ? average(gated) : -120;
+    // Integrated: absolute gate at -70 LUFS on entry.
+    if (this.momentaryLufs > -70) {
+      this.blockMs[this.blockHead] = ms;
+      this.blockHead = (this.blockHead + 1) % this.blockMs.length;
+      if (this.blockCount < this.blockMs.length) this.blockCount++;
+    }
+    // Recomputing the two-pass relative gate is O(blocks); do it at 1 Hz
+    // instead of every 100 ms tick — integrated loudness moves slowly.
+    this.tickN++;
+    if (this.blockCount > 0 && this.tickN % 10 === 0) {
+      let sum = 0;
+      for (let i = 0; i < this.blockCount; i++) sum += this.blockMs[i];
+      const ungatedMeanMs = sum / this.blockCount;
+      // -10 LU relative gate applied in the energy domain (10 LU = 10 dB).
+      const gateMs = ungatedMeanMs / 10;
+      let gatedSum = 0;
+      let gatedN = 0;
+      for (let i = 0; i < this.blockCount; i++) {
+        if (this.blockMs[i] >= gateMs) {
+          gatedSum += this.blockMs[i];
+          gatedN++;
+        }
+      }
+      this.integratedLufs = gatedN > 0 ? lufsOf(gatedSum / gatedN) : -120;
     }
   }
+}
+
+function lufsOf(meanSquare: number): number {
+  return meanSquare > 1e-12 ? -0.691 + 10 * Math.log10(meanSquare) : -120;
 }
 
 function makePre(ctx: BaseAudioContext): BiquadFilterNode {
@@ -136,15 +171,10 @@ function makeRLB(ctx: BaseAudioContext): BiquadFilterNode {
   return f;
 }
 
+/** Nearest power of two (not next-up) so the analysis window hugs the target. */
 function nearestPow2(n: number): number {
   let p = 32;
   while (p < n) p <<= 1;
-  return p;
-}
-
-function average(arr: number[]): number {
-  if (arr.length === 0) return -120;
-  let s = 0;
-  for (const v of arr) s += v;
-  return s / arr.length;
+  const down = p >> 1;
+  return n - down < p - n ? down : p;
 }

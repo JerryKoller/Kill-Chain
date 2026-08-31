@@ -100,17 +100,22 @@ export class DeHummer {
       !("startRendering" in this.ctx);
     if (wantTimer && this.timer === null) {
       if (!this.analyser) {
-        // 32768-point FFT → ~1.5 Hz bins at 48 kHz: cleanly separates 50 / 60.
+        // 16384-point FFT → ~2.9 Hz bins at 48 kHz: still separates 50 / 60
+        // cleanly at half the per-frame FFT cost of the old 32768 size.
         this.analyser = this.ctx.createAnalyser();
-        this.analyser.fftSize = 32768;
+        this.analyser.fftSize = 16384;
         this.analyser.smoothingTimeConstant = 0.5;
         this.freqBuf = new Float32Array(this.analyser.frequencyBinCount) as Float32Array<ArrayBuffer>;
-        this.input.connect(this.analyser);
       }
+      this.input.connect(this.analyser);
       this.timer = window.setInterval(() => this.detect(), 600);
     } else if (!wantTimer && this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
+      // Idle de-hum shouldn't keep a big FFT wired into the graph.
+      if (this.analyser) {
+        try { this.input.disconnect(this.analyser); } catch { /* ignore */ }
+      }
     }
   }
 
@@ -139,6 +144,11 @@ export class DeHummer {
     if (this.timer !== null && typeof window !== "undefined") {
       window.clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.analyser) {
+      try { this.input.disconnect(this.analyser); } catch { /* ignore */ }
+      this.analyser = null;
+      this.freqBuf = null;
     }
   }
 }

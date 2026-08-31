@@ -181,22 +181,34 @@ export function GoldenEarsView() {
     setPhase("idle");
   }, []);
 
-  // Keyboard shortcuts while playing/revealed.
+  // Keyboard shortcuts while playing/revealed. Captured + stopped so the
+  // GLOBAL hotkeys (Space = play/pause, digits = view switch) don't also
+  // fire — both used to run, so Space toggled the boost AND the transport.
   useEffect(() => {
     if (phase !== "playing" && phase !== "revealed") return;
     const onKey = (e: KeyboardEvent) => {
+      // Never hijack typing (custom-track name fields, future inputs).
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (e.key === " ") {
         e.preventDefault();
+        e.stopImmediatePropagation();
         if (phase === "playing") toggleBoost();
       } else if (e.key === "Enter") {
-        if (phase === "revealed") nextRound();
+        if (phase === "revealed") {
+          e.stopImmediatePropagation();
+          nextRound();
+        }
       } else if (/^[0-9]$/.test(e.key) && phase === "playing") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
         const n = e.key === "0" ? 9 : parseInt(e.key, 10) - 1;
         if (n < bands.length) makeGuess(n);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture phase → runs before the global bubble-phase hotkey handler.
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [phase, bands.length, toggleBoost, nextRound, makeGuess]);
 
   const rank = rankForXp(stats.xp);

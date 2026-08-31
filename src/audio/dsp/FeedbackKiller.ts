@@ -83,11 +83,18 @@ export class FeedbackKiller {
     this.lfoGain.connect(this.delay.delayTime);
     try { this.lfoOsc.start(); } catch { /* already started */ }
 
-    // 5 notches tuned at musically-spaced startup positions — they'll be
-    // re-tuned dynamically by the analyser tick.
+    // 5 adaptive cut filters at musically-spaced startup positions — they'll
+    // be re-tuned dynamically by the analyser tick.
+    //
+    // TYPE MATTERS: BiquadFilter "notch" IGNORES its gain param — a notch is
+    // always fully carved at its Q. The old code used type:"notch" and drove
+    // depth via gain, so all five filters sat permanently engaged (hollow,
+    // phasey Exterior Audio) and "release" did nothing. "peaking" honours
+    // gain: 0 dB = bit-transparent, negative dB = surgical cut, and the
+    // release ramp back to 0 dB genuinely restores flat response.
     this.notches = [800, 1500, 2500, 4000, 6500].map((freq) => {
       const n = ctx.createBiquadFilter();
-      n.type = "notch";
+      n.type = "peaking";
       n.Q.value = 12;
       n.frequency.value = freq;
       n.gain.value = 0;
@@ -290,10 +297,11 @@ export class FeedbackKiller {
           // Engage / refresh the notch.
           this.notches[i].frequency.setTargetAtTime(slot.targetHz, t, 0.01);
           this.notches[i].Q.setTargetAtTime(20, t, 0.05);
-          // The longer it has held, the deeper the notch. Caps at -1.0
-          // (a single notch BiquadFilter cuts ~18 dB at center freq with Q=20).
+          // The longer it has held, the deeper the cut: ~-7 dB at first
+          // confirmation ramping to -24 dB for a locked-in squeal (peaking
+          // gain is in real dB, so depth 0..1 scales a 24 dB range).
           const depth = Math.min(1, (slot.holdMs - ENGAGE_MS) / 600 + 0.3);
-          this.notches[i].gain.setTargetAtTime(-depth, t, 0.04);
+          this.notches[i].gain.setTargetAtTime(-depth * 24, t, 0.04);
         }
       } else {
         // Peak gone. Hold the notch briefly in case it returns, then release.
@@ -352,7 +360,7 @@ export class FeedbackKiller {
           this.notchState[i].lastSeenMs = now;
           this.notches[i].frequency.setTargetAtTime(p.hz, t, 0.005);
           this.notches[i].Q.setTargetAtTime(22, t, 0.02);
-          this.notches[i].gain.setTargetAtTime(-1, t, 0.02);
+          this.notches[i].gain.setTargetAtTime(-24, t, 0.02);
         }
       }
     }

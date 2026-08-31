@@ -171,9 +171,15 @@ export function MissionLogPanel({ onClose }: { onClose: () => void }) {
                           renameEntry(e.key, renameValue);
                           setRenaming(null);
                         }
+                        // Escape = explicit cancel (blur commits below).
                         if (ev.key === "Escape") setRenaming(null);
                       }}
-                      onBlur={() => setRenaming(null)}
+                      onBlur={() => {
+                        // Commit on blur — clicking away used to silently
+                        // throw the typed name away.
+                        if (renameValue.trim()) renameEntry(e.key, renameValue);
+                        setRenaming(null);
+                      }}
                       className="bg-white/[0.06] border border-cyan/40 rounded px-1.5 py-0.5 text-sm w-full outline-none"
                     />
                   ) : (

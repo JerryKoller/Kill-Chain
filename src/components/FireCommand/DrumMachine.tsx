@@ -633,6 +633,41 @@ function LaneInspector({
           </select>
         </label>
       </div>
+      {/* Per-lane groove. Global swing moved the whole kit together, so
+          shuffled hats over a straight kick were impossible; flam adds the
+          grace hit a step grid otherwise can't express. */}
+      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+        <label className="text-[8px] uppercase text-white/40">
+          Lane swing
+          <input type="range" min={-0.3} max={0.3} step={0.01} value={mix.swing ?? 0}
+            onChange={(e) => setMix(lane, { swing: Number(e.target.value) })}
+            className="mt-1 w-full accent-amber-400"
+            title="Offsets this lane's off-beats against the global drum swing. Negative = pushed early." />
+          <span className="font-mono text-[9px] text-white/50">
+            {(mix.swing ?? 0) === 0 ? "global" : `${(mix.swing ?? 0) > 0 ? "+" : ""}${Math.round((mix.swing ?? 0) * 100)}%`}
+          </span>
+        </label>
+        <label className="text-[8px] uppercase text-white/40">
+          Flam
+          <input type="range" min={0} max={0.5} step={0.01} value={mix.flam ?? 0}
+            onChange={(e) => setMix(lane, { flam: Number(e.target.value) })}
+            className="mt-1 w-full accent-amber-400"
+            title="Grace hit before each main hit, as a fraction of a 16th" />
+          <span className="font-mono text-[9px] text-white/50">
+            {(mix.flam ?? 0) === 0 ? "off" : `${Math.round((mix.flam ?? 0) * 100)}%`}
+          </span>
+        </label>
+        <label className="text-[8px] uppercase text-white/40">
+          Flam level
+          <input type="range" min={0} max={1} step={0.01} value={mix.flamVel ?? 0.55}
+            onChange={(e) => setMix(lane, { flamVel: Number(e.target.value) })}
+            className="mt-1 w-full accent-amber-400"
+            disabled={(mix.flam ?? 0) === 0} />
+          <span className="font-mono text-[9px] text-white/50">
+            {Math.round((mix.flamVel ?? 0.55) * 100)}%
+          </span>
+        </label>
+      </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <span className="text-[8px] uppercase text-white/40">Feel</span>
         {FEEL_OPTS.map((f) => (
@@ -921,6 +956,24 @@ const DrumRow = memo(function DrumRow({
                 { label: locked ? "Unlock" : "Lock", run: () => toggleLock(laneId) },
                 { label: "Rotate", run: () => useFireSequencerStore.getState().transformDrumLane(laneId, "rotate") },
                 { label: "Reverse", run: () => useFireSequencerStore.getState().transformDrumLane(laneId, "reverse") },
+                // Lane clipboard: moving a groove between lanes/patterns used
+                // to mean redrawing it by hand.
+                { label: "Copy lane", run: () => {
+                  const n = useFireSequencerStore.getState().copyDrumLane(laneId);
+                  useUIStore.getState().toast(`Copied ${n} steps`);
+                } },
+                { label: "Paste lane", run: () => {
+                  const n = useFireSequencerStore.getState().pasteDrumLane(laneId);
+                  useUIStore.getState().toast(n > 0 ? `Pasted ${n} steps` : "Nothing copied yet");
+                } },
+                { label: "Ramp up", run: () => {
+                  const n = useFireSequencerStore.getState().rampDrumLane(laneId, 0.35, 1);
+                  useUIStore.getState().toast(n > 0 ? `Ramped ${n} hits` : "No hits in lane");
+                } },
+                { label: "Ramp down", run: () => {
+                  const n = useFireSequencerStore.getState().rampDrumLane(laneId, 1, 0.35);
+                  useUIStore.getState().toast(n > 0 ? `Ramped ${n} hits` : "No hits in lane");
+                } },
                 { label: "Inspect step…", run: () => onContextStep(0) },
               ].map((it) => (
                 <button

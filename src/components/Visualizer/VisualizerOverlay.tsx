@@ -423,6 +423,12 @@ export function VisualizerOverlay() {
       ro.disconnect();
       engine.releaseLufsMeter();
       intel.stop();
+      // Free GPU-backed renderers (Singularity / Cinema) — closing the
+      // overlay used to strand their WebGL contexts until process exit.
+      for (const s of slots.values()) {
+        try { s.r.dispose?.(); } catch { /* ignore */ }
+      }
+      slots.clear();
     };
   }, []);
 

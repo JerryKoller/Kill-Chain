@@ -49,9 +49,14 @@ export class PseudoStereo {
     mono.channelInterpretation = "speakers";
     this.input.connect(mono);
 
+    // Skip comb centers at/above Nyquist — writing an out-of-range frequency
+    // into a BiquadFilter throws (matters for 22.05/16 kHz contexts).
+    const nyq = ctx.sampleRate * 0.45;
+    const usable = COMB_FREQS.filter((f) => f < nyq);
+
     const buildTree = (sign: 1 | -1): AudioNode => {
       let node: AudioNode = mono;
-      COMB_FREQS.forEach((freq, i) => {
+      usable.forEach((freq, i) => {
         const f = ctx.createBiquadFilter();
         f.type = "peaking";
         f.frequency.value = freq;

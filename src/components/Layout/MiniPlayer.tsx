@@ -126,13 +126,14 @@ export function MiniPlayer() {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <MiniBtn label="\u23EE" onClick={() => previous()} />
+          <MiniBtn label="\u23EE" aria="Previous track" onClick={() => previous()} />
           <MiniBtn
             label={status === "playing" ? "\u275A\u275A" : "\u25B6"}
+            aria={status === "playing" ? "Pause" : "Play"}
             big
             onClick={() => void toggle()}
           />
-          <MiniBtn label="\u23ED" onClick={() => next()} />
+          <MiniBtn label="\u23ED" aria="Next track" onClick={() => next()} />
         </div>
       </div>
       <div className="px-4 pb-2">
@@ -144,16 +145,21 @@ export function MiniPlayer() {
 
 function MiniBtn({
   label,
+  aria,
   onClick,
   big,
 }: {
   label: string;
+  /** Accessible name — the glyph labels are invisible to screen readers. */
+  aria: string;
   onClick: () => void;
   big?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      aria-label={aria}
+      title={aria}
       className={`grid place-items-center rounded-lg border border-white/15 bg-white/5 hover:bg-white/15 transition ${
         big ? "w-10 h-10 text-lg" : "w-8 h-8 text-sm"
       }`}

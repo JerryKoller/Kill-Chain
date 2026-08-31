@@ -193,7 +193,12 @@ class SpectralProcessor extends AudioWorkletProcessor {
   runChannel(st, inArr, outArr) {
     const mix = this.mix;
     for (let i = 0; i < outArr.length; i++) {
-      const x = inArr ? inArr[i] : 0;
+      let x = inArr ? inArr[i] : 0;
+      // NaN/Inf firewall: one poisoned sample entering the FIFO would put
+      // NaN through the FFT into avgMag / accum, and the one-pole smear
+      // average NEVER recovers from NaN — the wet path would output NaN
+      // (silence at the DAC) forever. Range test is false for NaN.
+      if (!(x > -1e6 && x < 1e6)) x = 0;
       const wet = st.outFifo[st.rover - LATENCY];
       const dry = st.dryRing[st.dryPos]; // x from exactly FFT_SIZE samples ago
       st.dryRing[st.dryPos] = x;
@@ -204,6 +209,11 @@ class SpectralProcessor extends AudioWorkletProcessor {
       if (st.rover >= FFT_SIZE) {
         st.rover = LATENCY;
         this.frame(st);
+        // Belt-and-braces: if a frame still turned the accumulator non-finite
+        // (e.g. a mode edge case), reset instead of latching silence forever.
+        if (!Number.isFinite(st.accum[LATENCY]) || !Number.isFinite(st.avgMag[1])) {
+          st.reset();
+        }
       }
     }
   }

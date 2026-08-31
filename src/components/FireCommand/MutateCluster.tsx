@@ -20,6 +20,9 @@ function PressureKnob({
   const ref = useRef<HTMLDivElement>(null);
   const startY = useRef(0);
   const startV = useRef(0);
+  // Ref mirror: setState is async, so pointermoves arriving before the
+  // re-render were dropped — the first stretch of every drag felt dead.
+  const dragRef = useRef(false);
   const [drag, setDrag] = useState(false);
   const t = Math.max(0, Math.min(1, value));
   const color = "#34d399";
@@ -28,10 +31,11 @@ function PressureKnob({
     (e.target as Element).setPointerCapture(e.pointerId);
     startY.current = e.clientY;
     startV.current = t;
+    dragRef.current = true;
     setDrag(true);
   };
   const move = (e: React.PointerEvent) => {
-    if (!drag) return;
+    if (!dragRef.current) return;
     const scale = e.shiftKey ? 2400 : 180;
     const next = Math.max(0, Math.min(1, startV.current + (startY.current - e.clientY) / scale));
     startY.current = e.clientY;
@@ -44,6 +48,7 @@ function PressureKnob({
     } catch {
       /* ignore */
     }
+    dragRef.current = false;
     setDrag(false);
   };
 

@@ -47,6 +47,35 @@ const bridge = {
     setMiniSize: (mini: boolean) => ipcRenderer.invoke("window:miniSize", mini),
     setFullscreen: (full: boolean) => ipcRenderer.invoke("window:fullscreen", full),
   },
+  /**
+   * Multi-monitor layout. Spanning ONE window across two displays keeps a
+   * single AudioContext — a second BrowserWindow would get its own engine and
+   * could not share the audio graph.
+   */
+  displays: {
+    list: () => ipcRenderer.invoke("display:list") as Promise<{
+      id: number;
+      label: string;
+      bounds: { x: number; y: number; width: number; height: number };
+      workArea: { x: number; y: number; width: number; height: number };
+      scaleFactor: number;
+      isPrimary: boolean;
+      isCurrent: boolean;
+    }[]>,
+    /** Stretch across two side-by-side displays. `seamX` is the bezel offset. */
+    span: (targetId?: number) => ipcRenderer.invoke("display:span", targetId) as Promise<{
+      ok: boolean;
+      reason?: string;
+      bounds?: { x: number; y: number; width: number; height: number };
+      seamX?: number;
+      displays?: number;
+    }>,
+    unspan: () => ipcRenderer.invoke("display:unspan") as Promise<{ ok: boolean }>,
+    moveTo: (targetId: number) => ipcRenderer.invoke("display:moveTo", targetId) as Promise<{
+      ok: boolean;
+      reason?: string;
+    }>,
+  },
   platform: process.platform,
   versions: process.versions,
 

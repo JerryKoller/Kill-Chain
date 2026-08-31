@@ -32,7 +32,9 @@ export function lowProtectHz(p: FirePatch): number {
 /** Map moduleEnable + mix/path into Enabled / Dry / Bypassed / Suspended. */
 export function fxTechState(
   moduleId: string,
-  patch: FirePatch,
+  /** Only the module-enable map is read — accepting a narrow slice lets the
+   *  FX panels subscribe to that alone instead of the whole patch. */
+  patch: { moduleEnable?: Record<string, boolean> },
   opts: { mix?: number; pathOn?: boolean; suspended?: boolean } = {},
 ): FxTechState {
   if (opts.suspended) return "suspended";

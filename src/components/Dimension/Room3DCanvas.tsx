@@ -603,6 +603,13 @@ export function Room3DCanvas() {
 
     let raf = 0;
     const loop = () => {
+      // Minimized / hidden window: park the loop entirely; the visibility
+      // listener below restarts it. This scene repainted the full 3D room
+      // every frame while music played even with the app minimized.
+      if (document.hidden) {
+        raf = 0;
+        return;
+      }
       const playing = usePlayerStore.getState().status === "playing";
       const sc = sceneRef.current;
       // Motion Mode animates positions continuously while engaged — render
@@ -618,6 +625,13 @@ export function Room3DCanvas() {
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
+    const onVisibility = () => {
+      if (!document.hidden && raf === 0) {
+        dirtyRef.current = true;
+        raf = requestAnimationFrame(loop);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     // ───── Interaction ─────
     const pointerPos = (e: PointerEvent) => {
@@ -802,6 +816,7 @@ export function Room3DCanvas() {
 
     return () => {
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
       ro.disconnect();
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);

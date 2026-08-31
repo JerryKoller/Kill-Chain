@@ -243,6 +243,18 @@ export function LibraryView() {
   const listRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewH, setViewH] = useState(480);
+  // rAF-coalesced scroll → at most one virtual-list re-render per frame
+  // (raw onScroll fired setState for every wheel/trackpad event).
+  const scrollRaf = useRef(0);
+  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const top = e.currentTarget.scrollTop;
+    if (scrollRaf.current) return;
+    scrollRaf.current = requestAnimationFrame(() => {
+      scrollRaf.current = 0;
+      setScrollTop(listRef.current?.scrollTop ?? top);
+    });
+  };
+  useEffect(() => () => cancelAnimationFrame(scrollRaf.current), []);
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -367,7 +379,7 @@ export function LibraryView() {
               <button
                 onClick={() => setVizOpen(true)}
                 className="kc-vz-launch text-xs"
-                title="Open the full-panel visualizer — 5 modes locked to the live output signal"
+                title="Open the full-panel visualizer — 10 modes locked to the live output signal"
               >
                 ▦ VISUALIZER
               </button>
@@ -668,7 +680,7 @@ export function LibraryView() {
                 ref={listRef}
                 tabIndex={0}
                 onKeyDown={onListKeyDown}
-                onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+                onScroll={onListScroll}
                 className="overflow-y-auto sidebar-scroll outline-none focus:ring-1 focus:ring-cyan/20"
                 style={{ height: listHeight, minHeight: 260 }}
               >

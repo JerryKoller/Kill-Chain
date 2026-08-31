@@ -40,6 +40,31 @@ declare global {
         setMiniSize?: (mini: boolean) => Promise<void>;
         setFullscreen?: (full: boolean) => Promise<void>;
       };
+      /**
+       * Multi-monitor layout. One window spanning two displays keeps a single
+       * AudioContext; a second BrowserWindow would get its own engine.
+       */
+      displays?: {
+        list: () => Promise<{
+          id: number;
+          label: string;
+          bounds: { x: number; y: number; width: number; height: number };
+          workArea: { x: number; y: number; width: number; height: number };
+          scaleFactor: number;
+          isPrimary: boolean;
+          isCurrent: boolean;
+        }[]>;
+        span: (targetId?: number) => Promise<{
+          ok: boolean;
+          reason?: string;
+          bounds?: { x: number; y: number; width: number; height: number };
+          /** Bezel offset from the window's left edge, for the layout split. */
+          seamX?: number;
+          displays?: number;
+        }>;
+        unspan: () => Promise<{ ok: boolean }>;
+        moveTo: (targetId: number) => Promise<{ ok: boolean; reason?: string }>;
+      };
       platform: string;
       versions: Record<string, string>;
       /**

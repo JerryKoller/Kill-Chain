@@ -57,9 +57,13 @@ export class PureToneCalibrator {
       if (!(k in map)) {
         node.gain.gain.setTargetAtTime(0, t, 0.03);
         const osc = node.osc;
+        const gain = node.gain;
         window.setTimeout(() => {
           try { osc.stop(); } catch { /* already stopped */ }
           try { osc.disconnect(); } catch { /* ignore */ }
+          // The gain stage must go too — it used to stay wired to master
+          // forever, leaking one node per removed tone.
+          try { gain.disconnect(); } catch { /* ignore */ }
         }, 120);
         this.tones.delete(k);
       }

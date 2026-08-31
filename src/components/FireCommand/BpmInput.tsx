@@ -28,6 +28,12 @@ export function BpmInput({
   }, [value, focused]);
 
   const commit = () => {
+    // An EMPTY field is a cancel, not a commit — Number("") is 0, so clearing
+    // the field and clicking away used to slam the tempo to min BPM.
+    if (!draft.trim()) {
+      setDraft(String(value));
+      return;
+    }
     const n = Number(draft);
     if (!Number.isFinite(n)) {
       setDraft(String(value));

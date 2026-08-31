@@ -50,6 +50,10 @@ export function DeadflatPanel() {
       await audio.ensureReady();
       // Step 1+2: flatten the transducer, zero the colour.
       audio.setCorrectionEnabled(true);
+      // Commit any open Calibration preview session so leave-restore doesn't
+      // undo this intentional flatten.
+      const { requestPreviewCommit } = await import("@/lib/previewCommitBus");
+      requestPreviewCommit();
       audio.replaceParams({ ...NEUTRAL_PARAMS });
       audio.setRoom("off", 0);
       audio.setClarity(0);

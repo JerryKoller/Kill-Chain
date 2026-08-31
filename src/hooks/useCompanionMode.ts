@@ -29,10 +29,14 @@ export function useCompanionMode(): void {
 
     let lastName = "";
     let lastApplied: string | null = null;
+    let disposed = false;
 
     const poll = async () => {
       try {
         const name = (await api.getDefaultOutputName()) ?? "";
+        // The async device query can land AFTER Companion Mode was turned
+        // off — applying a profile then would override the user's choice.
+        if (disposed) return;
         if (name === lastName) return;
         lastName = name;
         const matched = matchHeadphoneByDeviceName(name);
@@ -65,6 +69,9 @@ export function useCompanionMode(): void {
 
     void poll();
     const id = window.setInterval(poll, 4000);
-    return () => window.clearInterval(id);
+    return () => {
+      disposed = true;
+      window.clearInterval(id);
+    };
   }, [enabled]);
 }

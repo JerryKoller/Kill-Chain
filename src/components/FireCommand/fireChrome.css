@@ -70,6 +70,25 @@
   font-size: var(--fc-text-telemetry, 9px);
 }
 
+/* Module card padding — tokenised so density can tighten every Section card
+   at once instead of each card hard-coding a Tailwind pad. Unscoped base rule
+   first so cards mounted in portals / fullscreen editors still get a pad. */
+.fc-mod-card {
+  padding: var(--fc-mod-pad, 8px);
+}
+[data-fire-root] .fc-mod-card {
+  padding: var(--fc-mod-pad, 8px);
+}
+[data-fire-root][data-fire-density="compact"] .fc-mod-card,
+[data-fire-root][data-fire-density="focus"] .fc-mod-card {
+  padding: var(--fc-mod-pad-tight, 6px);
+}
+/* Sleeping cards give their space back — a preset that sleeps 30 modules
+   should not leave 30 full-height dead cards in the way. */
+[data-fire-root] .fc-mod-card[data-fire-asleep="1"] {
+  padding: var(--fc-mod-pad-tight, 6px);
+}
+
 /* Canonical asleep/disabled dim — the one recipe for sleeping modules
    (Section cards, band chips, deck nodes, FX cards). */
 .fc-asleep {
@@ -152,7 +171,337 @@
   }
 }
 .fc-utility-strip__left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   min-width: 0;
+}
+
+/* ── Snap sequencer to the second display ─────────────────────────────
+   The window spans both monitors, but everything EXCEPT the sequencer is
+   padded into the left one, so the keyboard, transport, sidebar and title bar
+   never straddle the bezel. --fc-snap-w is the right display's width. */
+body[data-fc-snap="right"] .kc-app-root {
+  /* WIDTH, not padding. `transform` below makes this element the containing
+     block for position:fixed descendants, and that containing block is the
+     PADDING box — so padding-right would have let full-screen overlays spill
+     back across the bezel. An explicit width keeps the padding box equal to
+     the left display. */
+  width: var(--fc-left-w, 100vw);
+  /* The load-bearing line. Every modal and fullscreen editor in the app is
+     position:fixed (PresetBrowser is `fixed inset-0`, FullscreenEditorShell is
+     `fixed left-0 right-0`), which resolves against the VIEWPORT — i.e. both
+     monitors — so the patch library opened centred on the bezel and half of it
+     landed under the sequencer. A transformed ancestor becomes the containing
+     block for fixed descendants, which confines every one of them to this
+     display without each component needing to know about snap mode. */
+  transform: translate(0);
+}
+.fc-snap-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #07080c;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: -14px 0 40px rgba(0, 0, 0, 0.55);
+  /* Same trick for the sequencer's own overlays: Arrangement / Piano Roll
+     fullscreen is position:fixed and would otherwise cover both displays. */
+  transform: translate(0);
+}
+.fc-snap-panel__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.1), transparent);
+  /* Frameless window: this strip is the only drag handle on the right screen. */
+  -webkit-app-region: drag;
+}
+.fc-snap-panel__title {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #a5f3fc;
+}
+.fc-snap-panel__hint {
+  flex: 1 1 auto;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.3);
+}
+.fc-snap-panel__close {
+  -webkit-app-region: no-drag;
+  padding: 2px 8px;
+  border-radius: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+}
+.fc-snap-panel__close:hover {
+  color: #a5f3fc;
+  border-color: rgba(34, 211, 238, 0.45);
+  background: rgba(34, 211, 238, 0.14);
+}
+.fc-snap-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Dual-monitor button ─────────────────────────────────────────────── */
+.fc-dual-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  gap: 1px;
+}
+.fc-dual-btn__main,
+.fc-dual-btn__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.3);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+.fc-dual-btn__main { border-radius: 0.4rem 0 0 0.4rem; }
+.fc-dual-btn__more { border-radius: 0 0.4rem 0.4rem 0; padding: 0 0.3rem; }
+/* No chevron (two displays: nothing to choose) — round both ends. */
+.fc-dual-btn[data-solo="1"] .fc-dual-btn__main { border-radius: 0.4rem; }
+.fc-dual-btn__main:hover:not(:disabled),
+.fc-dual-btn__more:hover {
+  color: #a5f3fc;
+  border-color: rgba(34, 211, 238, 0.45);
+  background: rgba(34, 211, 238, 0.12);
+}
+.fc-dual-btn__main:disabled { opacity: 0.35; cursor: not-allowed; }
+.fc-dual-btn__main[data-on="1"] {
+  color: #a5f3fc;
+  border-color: rgba(34, 211, 238, 0.55);
+  background: rgba(34, 211, 238, 0.18);
+}
+.fc-dual-btn__glyph {
+  display: inline-flex;
+  gap: 2px;
+}
+.fc-dual-btn__screen {
+  width: 7px;
+  height: 9px;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  opacity: 0.75;
+}
+.fc-dual-btn__main[data-on="1"] .fc-dual-btn__screen:last-child {
+  background: currentColor;
+}
+@media (max-width: 1100px) {
+  .fc-dual-btn__label { display: none; }
+}
+.fc-dual-btn__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 60;
+  min-width: 190px;
+  padding: 4px;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #0b0d13;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.8);
+}
+.fc-dual-btn__menu-head {
+  padding: 4px 6px 2px;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+.fc-dual-btn__menu button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 0.3rem;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  text-align: left;
+}
+.fc-dual-btn__menu button:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+.fc-dual-btn__menu button[data-active="1"] {
+  color: #a5f3fc;
+  background: rgba(34, 211, 238, 0.14);
+}
+.fc-dual-btn__dim {
+  font-size: 9px;
+  font-family: ui-monospace, monospace;
+  color: rgba(255, 255, 255, 0.35);
+}
+.fc-workspace-tabs__aside {
+  display: flex;
+  align-items: center;
+  padding: 0 0.5rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* ── Segmented-tab badge ─────────────────────────────────────────────
+   Awake-module count per band, so an inert band reads as inert. */
+.fc-seg-badge {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 6px;
+  font-size: 8px;
+  font-weight: 900;
+  line-height: 12px;
+  letter-spacing: 0;
+  text-align: center;
+  pointer-events: none;
+}
+@media (max-width: 760px) {
+  .fc-seg-badge { display: none; }
+}
+
+/* ── Breadcrumb links ─────────────────────────────────────────────────
+   The trail is interactive: workspace / band / module each navigate. Styled
+   as text (not buttons) so the strip stays quiet until hovered. */
+.fc-crumb-link {
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0 1px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.fc-crumb-link:hover {
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.07);
+}
+.fc-crumb-link--strong {
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* ── "Jump ⌘K" affordance ─────────────────────────────────────────────
+   Makes the command palette discoverable; it was a code-only key binding. */
+.fc-jump-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2px 6px;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.28);
+  font-size: var(--fc-text-telemetry, 9px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+.fc-jump-hint:hover {
+  color: rgba(255, 255, 255, 0.9);
+  border-color: rgba(232, 184, 109, 0.45);
+  background: rgba(232, 184, 109, 0.14);
+}
+.fc-jump-hint kbd {
+  font-family: inherit;
+  font-size: 0.9em;
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+}
+@media (max-width: 900px) {
+  .fc-jump-hint__label { display: none; }
+}
+
+/* ── Module budget readout ─────────────────────────────────────────────
+   Sits beside the breadcrumb: how many of the 42 modules are awake, plus a
+   one-click wake-all when a preset / Natural Selection has slept some. */
+.fc-module-budget {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1px 2px 1px 0;
+  white-space: nowrap;
+}
+.fc-module-budget__count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.1rem;
+  padding: 2px 6px;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.28);
+  font-size: var(--fc-text-telemetry, 9px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: default;
+}
+.fc-module-budget__count strong {
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.82);
+}
+.fc-module-budget__unit {
+  padding-left: 0.15rem;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.fc-module-budget__wake {
+  padding: 2px 7px;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(232, 184, 109, 0.34);
+  background: rgba(232, 184, 109, 0.12);
+  font-size: var(--fc-text-telemetry, 9px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fc-chrome-brass-soft, #f5d9a8);
+  transition: filter 120ms ease, background-color 120ms ease;
+}
+.fc-module-budget__wake:hover {
+  filter: brightness(1.2);
+  background: rgba(232, 184, 109, 0.2);
+}
+/* Focus density hides optional chrome — the budget is optional there. */
+[data-fire-root][data-fire-density="focus"] .fc-module-budget {
+  display: none;
 }
 .fc-utility-strip__center {
   display: flex;
@@ -543,6 +892,16 @@
   grid-template-columns: 1fr 1fr;
   min-height: 44px;
 }
+/* With the dual-monitor control present the row grows a third, auto-width
+   column so the two tabs keep splitting the remaining space evenly. */
+.fc-workspace-tabs__grid:has(.fc-workspace-tabs__aside) {
+  grid-template-columns: 1fr 1fr auto;
+}
+/* Sequencer expanded onto the other display: one tab, full width. */
+.fc-workspace-tabs__grid[data-solo="1"] { grid-template-columns: 1fr; }
+.fc-workspace-tabs__grid[data-solo="1"]:has(.fc-workspace-tabs__aside) {
+  grid-template-columns: 1fr auto;
+}
 .fc-workspace-tabs__btn {
   position: relative;
   display: flex;
@@ -766,4 +1125,30 @@
 .sample-deck-empty[data-drag="1"] {
   border-color: rgba(251, 191, 36, 0.55);
   background: rgba(251, 191, 36, 0.08);
+}
+
+/* Stacked sequencer section height grip (arrangement, piano roll). */
+.fc-vresize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 10px;
+  margin-top: 4px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+.fc-vresize__grip {
+  display: block;
+  width: 56px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  transition: background 120ms ease, width 120ms ease;
+}
+.fc-vresize:hover .fc-vresize__grip,
+.fc-vresize[data-dragging="1"] .fc-vresize__grip {
+  width: 72px;
+  background: rgba(34, 211, 238, 0.55);
 }

@@ -4,6 +4,8 @@
  */
 
 import type { FireWorkspace } from "./useFireWorkspace";
+import type { DualMonitorState } from "./useDualMonitor";
+import { FireDualMonitorButton } from "./FireDualMonitorButton";
 
 const MODES: {
   id: FireWorkspace;
@@ -70,11 +72,16 @@ export function FireWorkspaceTabs({
   workspace,
   onChange,
   flush = false,
+  dual,
 }: {
   workspace: FireWorkspace;
   onChange: (ws: FireWorkspace) => void;
   flush?: boolean;
+  /** When present, adds the dual-monitor control beside the tabs. */
+  dual?: DualMonitorState;
 }) {
+  // Sequencer lives on the other display: only one tab is meaningful.
+  const expanded = dual?.active === true;
   return (
     <div
       className={`fc-workspace-tabs ${flush ? "" : "rounded-2xl"}`}
@@ -82,7 +89,7 @@ export function FireWorkspaceTabs({
         flush
           ? {
               background:
-                workspace === "synth"
+                workspace === "synth" || expanded
                   ? "linear-gradient(180deg, rgba(167,139,250,0.08) 0%, rgba(18,20,28,0.2) 55%, transparent 100%)"
                   : "linear-gradient(180deg, rgba(34,211,238,0.1) 0%, rgba(18,20,28,0.2) 55%, transparent 100%)",
               borderBottom: "1px solid rgba(255,255,255,0.06)",
@@ -99,15 +106,18 @@ export function FireWorkspaceTabs({
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            workspace === "synth"
+            workspace === "synth" || expanded
               ? "radial-gradient(ellipse 55% 100% at 18% 50%, rgba(167,139,250,0.12), transparent 60%)"
               : "radial-gradient(ellipse 55% 100% at 82% 50%, rgba(34,211,238,0.14), transparent 60%)",
         }}
       />
 
-      <div className="fc-workspace-tabs__grid">
-        {MODES.map((mode, i) => {
-          const on = workspace === mode.id;
+      {/* When the sequencer is expanded onto the second display its tab has
+          nothing to switch to, so it is removed and Synth takes the full
+          width rather than leaving a dead half-tab behind. */}
+      <div className="fc-workspace-tabs__grid" data-solo={expanded ? "1" : undefined}>
+        {(expanded ? MODES.filter((m) => m.id === "synth") : MODES).map((mode, i) => {
+          const on = expanded ? true : workspace === mode.id;
           const isSynth = mode.id === "synth";
           return (
             <button
@@ -117,7 +127,7 @@ export function FireWorkspaceTabs({
               aria-selected={on}
               onClick={() => onChange(mode.id)}
               title={`${mode.label} — ${mode.detail}`}
-              className={`fc-workspace-tabs__btn group ${i === 0 ? "border-r border-white/[0.07]" : ""}`}
+              className={`fc-workspace-tabs__btn group ${i === 0 && !expanded ? "border-r border-white/[0.07]" : ""}`}
               style={{
                 background: on
                   ? `linear-gradient(${isSynth ? "120deg" : "240deg"}, ${mode.accent}22, transparent 75%)`
@@ -189,6 +199,11 @@ export function FireWorkspaceTabs({
             </button>
           );
         })}
+        {dual && (
+          <div className="fc-workspace-tabs__aside">
+            <FireDualMonitorButton dual={dual} />
+          </div>
+        )}
       </div>
     </div>
   );

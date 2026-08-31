@@ -75,9 +75,9 @@ export class ParametricEQ {
     for (const b of bands) {
       const node = this.ctx.createBiquadFilter();
       node.type = b.type;
-      node.frequency.value = b.freq;
-      node.gain.value = b.gain;
-      node.Q.value = b.q;
+      node.frequency.value = this.safeFreq(b.freq);
+      node.gain.value = Number.isFinite(b.gain) ? b.gain : 0;
+      node.Q.value = safeQ(b.q);
       prev.connect(node);
       prev = node;
       this.nodes.set(b.id, node);
@@ -90,21 +90,30 @@ export class ParametricEQ {
     this.syncDynTimer();
   }
 
+  /** Clamp a band frequency to (0, Nyquist) — out-of-range values THROW when
+   *  written to a BiquadFilter's AudioParam and can kill the whole rebuild. */
+  private safeFreq(f: number): number {
+    const nyq = this.ctx.sampleRate * 0.49;
+    if (!Number.isFinite(f)) return 1000;
+    return Math.max(10, Math.min(nyq, f));
+  }
+
   updateBand(b: ParametricBand): void {
     const n = this.nodes.get(b.id);
     if (!n) return;
     const t = this.ctx.currentTime;
     n.type = b.type;
-    n.frequency.setTargetAtTime(b.freq, t, 0.02);
-    n.Q.setTargetAtTime(b.q, t, 0.02);
+    n.frequency.setTargetAtTime(this.safeFreq(b.freq), t, 0.02);
+    n.Q.setTargetAtTime(safeQ(b.q), t, 0.02);
     const d = this.dyn.get(b.id);
+    const gainDb = Number.isFinite(b.gain) ? b.gain : 0;
     if (d) {
       // Keep the sidechain aimed at the band; the watchdog owns n.gain.
-      d.targetDb = b.gain;
-      d.side.frequency.setTargetAtTime(b.freq, t, 0.02);
-      d.side.Q.setTargetAtTime(Math.max(0.5, b.q), t, 0.02);
+      d.targetDb = gainDb;
+      d.side.frequency.setTargetAtTime(this.safeFreq(b.freq), t, 0.02);
+      d.side.Q.setTargetAtTime(Math.max(0.5, safeQ(b.q)), t, 0.02);
     } else {
-      n.gain.setTargetAtTime(b.gain, t, 0.02);
+      n.gain.setTargetAtTime(gainDb, t, 0.02);
     }
   }
 
@@ -219,4 +228,9 @@ export class ParametricEQ {
 
 function isGainType(t: BiquadFilterType): boolean {
   return t === "peaking" || t === "lowshelf" || t === "highshelf";
+}
+
+function safeQ(q: number): number {
+  if (!Number.isFinite(q)) return 1;
+  return Math.max(0.0001, Math.min(40, q));
 }

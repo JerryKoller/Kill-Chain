@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { getEngine } from "@/audio/AudioEngine";
 import { usePlayerStore } from "@/state/playerStore";
+import { useFireSequencerStore } from "@/state/fireSequencerStore";
+import { useAirspaceStore } from "@/state/airspaceStore";
 
 interface MeterStats {
   rms: number;
@@ -13,7 +15,12 @@ interface MeterStats {
 }
 
 export function AdvancedMeter() {
-  const playing = usePlayerStore((s) => s.status === "playing");
+  // Meter any live source — Exterior Audio, the Fire sequencer and Airspace
+  // all feed the same analyser but used to leave this meter frozen dark.
+  const filePlaying = usePlayerStore((s) => s.status === "playing" || s.loopbackActive);
+  const seqPlaying = useFireSequencerStore((s) => s.playing);
+  const airPlaying = useAirspaceStore((s) => s.media != null && !s.media.paused);
+  const playing = filePlaying || seqPlaying || airPlaying;
   const statsRef = useRef<MeterStats>({
     rms: 0,
     peak: 0,

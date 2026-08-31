@@ -27,7 +27,7 @@ import { applyEnvCurve, type AmpModel, type EnvCurve } from "@/audio/dsp/toneDif
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 import { useStageCanvas } from "./useStageCanvas";
-import { useToneTelemetry } from "./useToneTelemetry";
+import { useToneTelemetryRef } from "./useToneTelemetry";
 import {
   bezel,
   cachedGrad,
@@ -516,9 +516,11 @@ export function AmpEnvStageViz() {
   const model = useFireCommandStore((s) => s.patch.ampModel) ?? "vca";
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const tel = useToneTelemetry();
+  // Telemetry through a ref — the paint loop refreshes st.current from it in
+  // hints(), so playing notes no longer re-renders this component at 30 fps.
+  const telRef = useToneTelemetryRef();
   const parked = lpgOn && pluckOn;
-  const telSrc = lpgOn ? tel.pluck : tel.amp;
+  const telSrc = lpgOn ? telRef.current.pluck : telRef.current.amp;
 
   const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
@@ -527,12 +529,12 @@ export function AmpEnvStageViz() {
   const st = useRef<AmpEnvVizState>({
     a, d, sus, r, vel, parked, lpgDecay, lpgColor,
     atkCurve, decCurve, relCurve, hold, overshoot, model,
-    telStage: telSrc.stage, telPhase: telSrc.phase, telLevel: telSrc.level, voices: tel.voiceCount, lpgOn,
+    telStage: telSrc.stage, telPhase: telSrc.phase, telLevel: telSrc.level, voices: telRef.current.voiceCount, lpgOn,
   });
   st.current = {
     a, d, sus, r, vel, parked, lpgDecay, lpgColor,
     atkCurve, decCurve, relCurve, hold, overshoot, model,
-    telStage: telSrc.stage, telPhase: telSrc.phase, telLevel: telSrc.level, voices: tel.voiceCount, lpgOn,
+    telStage: telSrc.stage, telPhase: telSrc.phase, telLevel: telSrc.level, voices: telRef.current.voiceCount, lpgOn,
   };
 
   useEffect(() => {
@@ -643,30 +645,39 @@ export function AmpEnvStageViz() {
         flashRef.current *= 0.86;
         paintAmpEnv(ctx, W, Hh, st.current, now, flashRef.current);
       },
-      () => ({
-        flash: flashRef.current,
-        active: st.current.voices > 0,
-        dragging: !!dragRef.current,
-        visible: visibleRef.current,
-        motionKey: motionHash(
-          st.current.a,
-          st.current.d,
-          st.current.sus,
-          st.current.r,
-          st.current.vel,
-          st.current.hold,
-          st.current.overshoot,
-          st.current.parked,
-          st.current.lpgDecay,
-          st.current.lpgColor,
-          st.current.telLevel,
-          st.current.voices,
-        ),
-      }),
+      () => {
+        // Pull fresh telemetry straight from the bus ref each pump frame.
+        const tv = telRef.current;
+        const src = st.current.lpgOn ? tv.pluck : tv.amp;
+        st.current.telStage = src.stage;
+        st.current.telPhase = src.phase;
+        st.current.telLevel = src.level;
+        st.current.voices = tv.voiceCount;
+        return {
+          flash: flashRef.current,
+          active: st.current.voices > 0,
+          dragging: !!dragRef.current,
+          visible: visibleRef.current,
+          motionKey: motionHash(
+            st.current.a,
+            st.current.d,
+            st.current.sus,
+            st.current.r,
+            st.current.vel,
+            st.current.hold,
+            st.current.overshoot,
+            st.current.parked,
+            st.current.lpgDecay,
+            st.current.lpgColor,
+            st.current.telLevel,
+            st.current.voices,
+          ),
+        };
+      },
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, [canvasRef, sizeRef, visibleRef]);
+  }, [canvasRef, sizeRef, visibleRef, telRef]);
 
   return (
     <div

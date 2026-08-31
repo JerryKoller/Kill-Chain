@@ -256,6 +256,7 @@ export function MorphLabView() {
           const d = Math.abs(t - n);
           if (d > maxDelta) maxDelta = d;
         }
+        preview.touch(tgt.keys);
         previewParams(out);
         if (maxDelta < 0.002) {
           for (const k of tgt.keys) cur[k] = tgt.partial[k] as number;

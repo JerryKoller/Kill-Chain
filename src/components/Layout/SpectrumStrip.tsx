@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { getEngine } from "@/audio/AudioEngine";
 import { usePlayerStore } from "@/state/playerStore";
+import { useFireSequencerStore } from "@/state/fireSequencerStore";
+import { useAirspaceStore } from "@/state/airspaceStore";
 
 /**
  * Tiny live spectrum analyzer for the sidebar — always shows whether
@@ -8,7 +10,13 @@ import { usePlayerStore } from "@/state/playerStore";
  */
 export function SpectrumStrip() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const playing = usePlayerStore((s) => s.status === "playing");
+  // Audio can flow from the file player, Exterior Audio capture, the Fire
+  // sequencer, or Airspace — gating on the file player alone left the strip
+  // dark for every other source.
+  const filePlaying = usePlayerStore((s) => s.status === "playing" || s.loopbackActive);
+  const seqPlaying = useFireSequencerStore((s) => s.playing);
+  const airPlaying = useAirspaceStore((s) => s.media != null && !s.media.paused);
+  const playing = filePlaying || seqPlaying || airPlaying;
 
   useEffect(() => {
     if (!playing) {

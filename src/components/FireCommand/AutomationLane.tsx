@@ -21,7 +21,6 @@ import {
   type AutoParamDef,
   type AutoParamId,
 } from "@/state/fireSequencerStore";
-import { pushFireHistory } from "@/lib/fireHistory";
 import { useUIStore } from "@/state/uiStore";
 import { useRollFit, subscribeRollHScroll, setRollHScroll } from "./useRollFit";
 
@@ -107,14 +106,18 @@ function fmtValue(paramId: AutoParamId, n: number): string {
   return `${Math.round(v * 100)}%`;
 }
 
+/**
+ * Smooth / Invert / Paste all replace a whole lane.
+ *
+ * This used to write `automation` with a raw setState and then call
+ * setSelectionRange with the values it already had — persisting only as a side
+ * effect of that call. It worked, but nothing here said "save this", and the
+ * obvious optimization of skipping setSelectionRange when the range is
+ * unchanged would have silently turned these edits into data loss. The store
+ * action owns history + state + persist, exactly like setAutomationPoint.
+ */
 function replaceAutomationLane(param: AutoParamId, arr: (number | null)[]) {
-  const st = useFireSequencerStore.getState();
-  pushFireHistory(`auto:${param}`);
-  const automation = { ...st.automation };
-  if (arr.every((v) => v == null)) delete automation[param];
-  else automation[param] = arr;
-  useFireSequencerStore.setState({ automation });
-  st.setSelectionRange(st.selectionStart, st.selectionEnd);
+  useFireSequencerStore.getState().setAutomationLane(param, arr);
 }
 
 function smoothLane(arr: (number | null)[], total: number): (number | null)[] {
@@ -348,7 +351,7 @@ export function AutomationLane() {
     if (!open) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
     canvas.width = gridW * dpr;
     canvas.height = laneH * dpr;
     canvas.style.width = `${gridW}px`;

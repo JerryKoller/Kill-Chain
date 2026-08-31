@@ -646,10 +646,11 @@ export function ScopeStageViz({
     return () => {
       const t = tapsRef.current;
       if (!t) return;
-      try {
-        t.tap.disconnect(t.mono);
-        t.tap.disconnect(t.split);
-      } catch { /* ignore */ }
+      // Disconnect EVERY edge — the splitter→L/R analysers used to stay
+      // wired, stacking orphaned analysers on fireTap across remounts.
+      try { t.tap.disconnect(t.mono); } catch { /* ignore */ }
+      try { t.tap.disconnect(t.split); } catch { /* ignore */ }
+      try { t.split.disconnect(); } catch { /* ignore */ }
       tapsRef.current = null;
     };
   }, []);

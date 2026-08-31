@@ -9,6 +9,14 @@ export type FireSegItem<T extends string> = {
   label: string;
   color: string;
   title?: string;
+  /**
+   * Optional count shown as a corner badge. Band tabs use it to show how many
+   * modules in that band are awake, so an inactive band is visible without
+   * opening it.
+   */
+  badge?: number;
+  /** Dim the tab — nothing in it is doing anything. */
+  dim?: boolean;
 };
 
 export function FireSegTabs<T extends string>({
@@ -56,17 +64,29 @@ export function FireSegTabs<T extends string>({
                 color: item.color,
                 boxShadow: `0 0 14px ${item.color}33`,
               }
-            : { color: "rgba(255,255,255,0.42)" };
+            : { color: item.dim ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.42)" };
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => onChange(item.id)}
-              className={`${pad} min-w-0 flex-1 font-black uppercase rounded-lg transition text-center`}
+              className={`${pad} relative min-w-0 flex-1 font-black uppercase rounded-lg transition text-center`}
               style={style}
               title={item.title ?? item.label}
             >
               <span className="block truncate">{item.label}</span>
+              {item.badge != null && item.badge > 0 && (
+                <span
+                  className="fc-seg-badge"
+                  style={{
+                    background: active ? item.color : "rgba(255,255,255,0.28)",
+                    color: active ? "#07090d" : "rgba(0,0,0,0.72)",
+                  }}
+                  aria-hidden
+                >
+                  {item.badge}
+                </span>
+              )}
             </button>
           );
         })}

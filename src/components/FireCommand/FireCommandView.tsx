@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./fireChrome.css";
 import { ModuleBackdrop } from "./ModuleBackdrop";
 import { GlassPanel } from "@/components/shared/GlassPanel";
@@ -27,7 +27,7 @@ import { useFireMidiFocusStore, bootFireMidiFocus } from "@/state/fireMidiFocusS
 import { focusPageKnobs, focusModuleAt, focusPageCount, FIRE_FOCUS_COUNT } from "./fireKnobFocus";
 import { setStageVizPressureSource } from "./stageVizRaf";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
-import { DEFAULT_FIRE_PATCH, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode, type FilterModel, type WarpMode } from "@/audio/dsp/FireCommandSynth";
+import { DEFAULT_FIRE_PATCH, SPECTRAL_FFT_SIZE, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode, type FilterModel, type WarpMode, type DelayCascadeMode } from "@/audio/dsp/FireCommandSynth";
 import { matrixArcsForParam, countRoutesFrom, MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
 import { fxTechState, fxTechBadge, FX_QUALITY_LABELS, type FxQuality, type LowProtect } from "@/audio/dsp/fxClarity";
 import {
@@ -290,7 +290,10 @@ import { FireCommandDeck } from "./FireCommandDeck";
 import { ensureExpanded, foldStorageKey, scrollFireCommandTop, writeFold } from "./fireNavigate";
 import { useFireWorkspace, type FireWorkspace } from "./useFireWorkspace";
 import { FireWorkspaceTabs } from "./FireWorkspaceTabs";
-import { FireCommandPalette } from "./FireCommandPalette";
+import { FireCommandPalette, FIRE_PALETTE_EVENT } from "./FireCommandPalette";
+import { FireShortcutsOverlay } from "./FireShortcutsOverlay";
+import { useDualMonitor } from "./useDualMonitor";
+import { FireSnapPanel } from "./FireSnapPanel";
 import { FireSaveTiers } from "./FireSaveTiers";
 import { useFireSynthBand, type FireSynthBand } from "./useFireSynthBand";
 import { FireSynthBandTabs } from "./FireSynthBandTabs";
@@ -298,13 +301,13 @@ import { OscAStageViz } from "./OscAStageViz";
 import { OscBStageViz } from "./OscBStageViz";
 import { OscCStageViz } from "./OscCStageViz";
 import { FC, bandShade, FC_BAND } from "./fireColors";
+import {
+  FIRE, ICE, GRN,
+  fmtHz, fmtSec, fmtPct, fmtBi, fmtCents, fmtSemi, fmtRatio, fmtOct, fmtQ, fmtBpm, fmtInt, fmtHzRate,
+  useCollapsed, Section, KnobRow, type NumericKey,
+} from "./fireUiKit";
 
-const FIRE = FC.fire; // mix / destination coral
-const ICE = FC.lfo; // modulation sky
-const GRN = FC.envAmp; // envelope lime (Tone)
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-
-type NumericKey = { [K in keyof FirePatch]: FirePatch[K] extends number ? K : never }[keyof FirePatch];
 
 const KEY_TO_SEMITONE: Record<string, number> = {
   a: 0, w: 1, s: 2, e: 3, d: 4, f: 5, t: 6, g: 7, y: 8, h: 9, u: 10, j: 11,
@@ -314,18 +317,6 @@ const SEMITONE_TO_KEY: Record<number, string> = Object.fromEntries(
   Object.entries(KEY_TO_SEMITONE).map(([k, v]) => [v, k === ";" ? ";" : k.toUpperCase()]),
 );
 const noteName = (midi: number) => `${NOTE_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
-const fmtHz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)}k` : `${Math.round(v)}`);
-const fmtSec = (v: number) => (v < 1 ? `${Math.round(v * 1000)}ms` : `${v.toFixed(2)}s`);
-const fmtPct = (v: number) => `${Math.round(v * 100)}%`;
-const fmtBi = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}`;
-const fmtCents = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v)}¢`;
-const fmtSemi = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v)}st`;
-const fmtRatio = (v: number) => `${v.toFixed(2)}×`;
-const fmtOct = (v: number) => (v === 0 ? "0" : `${v > 0 ? "+" : ""}${v}`);
-const fmtQ = (v: number) => v.toFixed(1);
-const fmtBpm = (v: number) => `${Math.round(v)}`;
-const fmtInt = (v: number) => `${Math.round(v)}`;
-const fmtHzRate = (v: number) => `${v.toFixed(2)}Hz`;
 
 function StudioBay({ compact = false }: { compact?: boolean }) {
   const undoDepth = useFireHistoryStore((s) => s.undoDepth);
@@ -436,7 +427,6 @@ export function FireCommandView() {
   const octave = useFireCommandStore((s) => s.octave);
   const midiInputs = useMidiStore((s) => s.inputs);
   const midiListening = useMidiStore((s) => s.listening);
-  const midiLastNote = useMidiStore((s) => s.lastNote);
   const midiAvailable = useMidiStore((s) => s.available);
   const midiError = useMidiStore((s) => s.error);
   const rescanMidi = useMidiStore((s) => s.rescan);
@@ -459,6 +449,12 @@ export function FireCommandView() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [characterBrowserOpen, setCharacterBrowserOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // The "Jump ⌘K" chip in the utility strip asks for the palette by event.
+  useEffect(() => {
+    const open = () => setPaletteOpen(true);
+    window.addEventListener(FIRE_PALETTE_EVENT, open);
+    return () => window.removeEventListener(FIRE_PALETTE_EVENT, open);
+  }, []);
   const [confirmDefaults, setConfirmDefaults] = useState(false);
   const [workspace, setWorkspaceRaw] = useFireWorkspace();
   const [synthBand, setSynthBandRaw] = useFireSynthBand();
@@ -627,6 +623,107 @@ export function FireCommandView() {
   }, []);
 
   const flush = true; // Synth + Sequencer share one continuous console
+
+  // Dual-monitor split: one window spanned across two displays renders both
+  // workspaces at once instead of switching between them.
+  const dual = useDualMonitor();
+  const dualSeamPx = dual.seamPx;
+
+  // The synth band stack, extracted so the single-workspace layout and the
+  // dual-monitor split can both render it without duplicating the tree.
+  const synthPane = (
+    <>
+      {/* Home = Signal Path hub; band tabs mount only that category */}
+      {synthBand === "home" && <FireCommandDeck flush={flush} />}
+
+      {synthBand === "band.sources" && (
+      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="prime · twin · depth · forge · circuit · storm · tectonic" foldable={false} flush={flush}>
+        <SourceRelationshipStrip />
+        <OscAPanel chipHosted />
+        <OscBPanel chipHosted />
+        <OscCPanel chipHosted />
+        <WarpPanel chipHosted />
+        <ChipPanel chipHosted />
+        <NoisePanel chipHosted />
+        <SubPanel chipHosted />
+      </FireBand>
+      )}
+
+      {synthBand === "band.tone" && (
+      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes" foldable={false} flush={flush}>
+        <UnisonPanel chipHosted />
+        <AnalogLifePanel chipHosted />
+        <FilterPanel chipHosted />
+        <AmpEnvPanel chipHosted />
+        <ModEnvPanel chipHosted />
+        <FiltEnvPanel chipHosted />
+        <PluckPanel chipHosted />
+      </FireBand>
+      )}
+
+      {synthBand === "band.mod" && (
+      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp" foldable={false} flush={flush}>
+        <Lfo1Panel chipHosted />
+        <Lfo2Panel chipHosted />
+        <FmPanel chipHosted />
+        <FmRackPanel chipHosted />
+        <PitchPanel chipHosted />
+        <ModMatrixPanel chipHosted />
+        <ArpPanel chipHosted />
+      </FireBand>
+      )}
+
+      {synthBand === "band.fx" && (
+      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="Drive → Age → Chorus → Phaser → Delay → Tone → Reverb → Spectral" foldable={false} flush={flush}>
+        <FxRackChrome />
+        <DrivePanel chipHosted />
+        <AgePanel chipHosted />
+        <ChorusPanel chipHosted />
+        <PhaserPanel chipHosted />
+        <DelayPanel chipHosted />
+        <ReverbPanel chipHosted />
+        <SpectralPanel chipHosted />
+      </FireBand>
+      )}
+
+      {synthBand === "band.mix" && (
+      <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="A/B/Drums/Samples → Mixer → Glue → Air → Width → Limiter → Scope · Morph/Live are state" foldable={false} flush={flush}>
+        <MixRackChrome />
+        <MixGroupHeader title="Routing" moduleIds={["mixer"]} />
+        <MixerPanel chipHosted />
+        <MixGroupHeader title="Morph" moduleIds={["morph"]} />
+        <FireMorphPad chipHosted />
+        <MixGroupHeader title="Mastering" moduleIds={["glue", "air", "width"]} />
+        <GluePanel chipHosted />
+        <AirPanel chipHosted />
+        <WidthPanel chipHosted />
+        <MixGroupHeader title="Analysis" moduleIds={["output"]} />
+        <ScopePanel chipHosted />
+        <MixGroupHeader title="Stage" moduleIds={["performance"]} />
+        <LivePanel chipHosted />
+      </FireBand>
+      )}
+
+      {synthBand === "band.perf" && (
+      <FireBand title="Performance" color={FC_BAND.perf} bandKey="band.perf" hint="Control · Rhythm · Pitch" foldable={false} flush={flush}>
+        <PerfRelationshipStrip />
+        <PerfGroupHeader title="Control" subtitle="Macros · Scenes" moduleIds={["macros", "scenes"]} />
+        <MacrosPanel chipHosted />
+        <ScenesPanel chipHosted />
+        <PerfGroupHeader title="Rhythm" subtitle="Gate · Humanize" moduleIds={["gate", "human"]} />
+        <GatePanel chipHosted />
+        <HumanPanel chipHosted />
+        <PerfGroupHeader title="Pitch" subtitle="Scale · Chord · Harmony" moduleIds={["scale", "chord", "harmony"]} />
+        <ScalePanel chipHosted />
+        <ChordPanel chipHosted />
+        <HarmonyPanel chipHosted />
+      </FireBand>
+      )}
+
+
+    </>
+  );
+
 
   return (
     <FireLayoutProvider>
@@ -817,15 +914,38 @@ export function FireCommandView() {
         </div>
       </div>
 
+      {dual.active && (
+        <FireSnapPanel
+          seamPx={dualSeamPx}
+          widthPx={dual.rightPx}
+          onUnsnap={() => { void dual.unspan(); }}
+        >
+          <SequencerPanel flush />
+        </FireSnapPanel>
+      )}
+      <FireShortcutsOverlay />
       <FireCommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onWorkspace={setWorkspace}
       />
 
-      <FireWorkspaceTabs workspace={workspace} onChange={setWorkspace} flush={flush} />
+      <FireWorkspaceTabs workspace={workspace} onChange={setWorkspace} flush={flush} dual={dual} />
 
-      {workspace === "sequencer" ? (
+      {/* DUAL-MONITOR LAYOUT. When the window is spanned across two displays
+          the two workspaces render SIDE BY SIDE instead of as exclusive tabs,
+          with the split landing on the physical bezel. One window (and so one
+          AudioContext) rather than a second BrowserWindow, which would get its
+          own engine and could not share the audio graph. */}
+      {/* EXPANDED: the sequencer is lifted onto the second display (see
+          FireSnapPanel) and everything else — keyboard and transport included —
+          stays on this one, so only the synth renders here. */}
+      {dual.active ? (
+        <>
+          <FireSynthBandTabs band={synthBand} onChange={setSynthBand} flush={flush} />
+          {synthPane}
+        </>
+      ) : workspace === "sequencer" ? (
         <div className="flex-1 min-h-0 flex flex-col min-w-0">
           <SequencerPanel flush={flush} />
         </div>
@@ -834,93 +954,7 @@ export function FireCommandView() {
       {/* Synth chrome — band tabs flush into the console (Open Fire lives in the app dock) */}
       <FireSynthBandTabs band={synthBand} onChange={setSynthBand} flush={flush} />
 
-      {/* Home = Signal Path hub; band tabs mount only that category */}
-      {synthBand === "home" && <FireCommandDeck flush={flush} />}
-
-      {synthBand === "band.sources" && (
-      <FireBand title="Sources" color={FC_BAND.sources} bandKey="band.sources" hint="prime · twin · depth · forge · circuit · storm · tectonic" foldable={false} flush={flush}>
-        <SourceRelationshipStrip />
-        <OscAPanel chipHosted />
-        <OscBPanel chipHosted />
-        <OscCPanel chipHosted />
-        <WarpPanel chipHosted />
-        <ChipPanel chipHosted />
-        <NoisePanel chipHosted />
-        <SubPanel chipHosted />
-      </FireBand>
-      )}
-
-      {synthBand === "band.tone" && (
-      <FireBand title="Tone" color={FC_BAND.tone} bandKey="band.tone" hint="unison · analog life · filter · envelopes" foldable={false} flush={flush}>
-        <UnisonPanel chipHosted />
-        <AnalogLifePanel chipHosted />
-        <FilterPanel chipHosted />
-        <AmpEnvPanel chipHosted />
-        <ModEnvPanel chipHosted />
-        <FiltEnvPanel chipHosted />
-        <PluckPanel chipHosted />
-      </FireBand>
-      )}
-
-      {synthBand === "band.mod" && (
-      <FireBand title="Modulation" color={FC_BAND.mod} bandKey="band.mod" hint="lfos · fm · fm rack · pitch · matrix · arp" foldable={false} flush={flush}>
-        <Lfo1Panel chipHosted />
-        <Lfo2Panel chipHosted />
-        <FmPanel chipHosted />
-        <FmRackPanel chipHosted />
-        <PitchPanel chipHosted />
-        <ModMatrixPanel chipHosted />
-        <ArpPanel chipHosted />
-      </FireBand>
-      )}
-
-      {synthBand === "band.fx" && (
-      <FireBand title="FX" color={FC_BAND.fx} bandKey="band.fx" hint="Drive → Age → Chorus → Phaser → Delay → Tone → Reverb → Spectral" foldable={false} flush={flush}>
-        <FxRackChrome />
-        <DrivePanel chipHosted />
-        <AgePanel chipHosted />
-        <ChorusPanel chipHosted />
-        <PhaserPanel chipHosted />
-        <DelayPanel chipHosted />
-        <ReverbPanel chipHosted />
-        <SpectralPanel chipHosted />
-      </FireBand>
-      )}
-
-      {synthBand === "band.mix" && (
-      <FireBand title="Mix & Output" color={FC_BAND.mix} bandKey="band.mix" hint="A/B/Drums/Samples → Mixer → Glue → Air → Width → Limiter → Scope · Morph/Live are state" foldable={false} flush={flush}>
-        <MixRackChrome />
-        <MixGroupHeader title="Routing" moduleIds={["mixer"]} />
-        <MixerPanel chipHosted />
-        <MixGroupHeader title="Morph" moduleIds={["morph"]} />
-        <FireMorphPad chipHosted />
-        <MixGroupHeader title="Mastering" moduleIds={["glue", "air", "width"]} />
-        <GluePanel chipHosted />
-        <AirPanel chipHosted />
-        <WidthPanel chipHosted />
-        <MixGroupHeader title="Analysis" moduleIds={["output"]} />
-        <ScopePanel chipHosted />
-        <MixGroupHeader title="Stage" moduleIds={["performance"]} />
-        <LivePanel chipHosted />
-      </FireBand>
-      )}
-
-      {synthBand === "band.perf" && (
-      <FireBand title="Performance" color={FC_BAND.perf} bandKey="band.perf" hint="Control · Rhythm · Pitch" foldable={false} flush={flush}>
-        <PerfRelationshipStrip />
-        <PerfGroupHeader title="Control" subtitle="Macros · Scenes" moduleIds={["macros", "scenes"]} />
-        <MacrosPanel chipHosted />
-        <ScenesPanel chipHosted />
-        <PerfGroupHeader title="Rhythm" subtitle="Gate · Humanize" moduleIds={["gate", "human"]} />
-        <GatePanel chipHosted />
-        <HumanPanel chipHosted />
-        <PerfGroupHeader title="Pitch" subtitle="Scale · Chord · Harmony" moduleIds={["scale", "chord", "harmony"]} />
-        <ScalePanel chipHosted />
-        <ChordPanel chipHosted />
-        <HarmonyPanel chipHosted />
-      </FireBand>
-      )}
-
+      {synthPane}
       </>
       )}
       </div>{/* /modules scroll */}
@@ -990,14 +1024,12 @@ export function FireCommandView() {
         }
 
         return (
-          <Keyboard
+          <KeyboardWithMidiActivity
             octave={octave}
             onMinimize={cycleKeyboardMode}
             onCycleMode={cycleKeyboardMode}
             flush={flush}
             midiLabel={midiText}
-            midiHot={!!midiLastNote && Date.now() - midiLastNote.at < 400}
-            midiNote={midiLastNote?.midi ?? null}
             onRescanMidi={() => void rescanMidi()}
           />
         );
@@ -1045,7 +1077,7 @@ function WaveDisplay({ group, color }: { group: "a" | "b" | "c"; color: string }
       cacheTable = id;
     };
     const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
       size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       size.h = 96;
       canvas.width = Math.floor(size.w * dpr);
@@ -1214,7 +1246,7 @@ function Scope() {
     const PHOSPHOR_N = 5;
 
     const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
       size.w = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       size.h = 100;
       canvas.width = Math.floor(size.w * dpr);
@@ -5203,7 +5235,7 @@ function FilterPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
 
       <div className="flex items-end justify-evenly gap-1 flex-wrap">
         <FParamKnob paramKey="filterCutoff" label="Cutoff" min={20} max={18000} curve="log" format={fmtHz} def={2600} size={50} color={cCut} />
-        <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={28} curve="log" format={fmtQ} def={0.7} size={50} color={cRes} />
+        <FParamKnob paramKey="filterResonance" label="Reso" min={0.1} max={18} curve="log" format={fmtQ} def={0.7} size={50} color={cRes} />
         <FParamKnob paramKey="filterEnvAmount" label="Env→Cut" min={-1} max={1} bipolar format={fmtBi} def={0} size={42} color={cEnv} />
         <FParamKnob paramKey="filterEnvResoAmount" label="Env→Reso" min={-1} max={1} bipolar format={fmtBi} def={0} size={42} color={bandShade(FC.tone, 0.7)} />
         <FParamKnob paramKey="filterKeyTrack" label="Key Trk" min={0} max={1} format={fmtPct} def={0.3} size={40} color={cKey} />
@@ -8771,7 +8803,11 @@ function LivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           options={[{ id: "poly", label: "Poly" }, { id: "mono", label: "Mono" }]}
           color={c}
         />
-        <FParamKnob paramKey="masterGain" label="Master" min={0} max={1.2} format={fmtPct} def={0.72} size={48} color={LIVE_C_MST} />
+        {/* Named "Patch Out", not "Master": the Fire Mixer in this same band
+            has its own master fader (sequencer state). Two adjacent controls
+            both labelled Master had users adjusting one and wondering why the
+            other reading didn't move. This one is the patch's own output. */}
+        <FParamKnob paramKey="masterGain" label="Patch Out" min={0} max={1.2} format={fmtPct} def={0.72} size={48} color={LIVE_C_MST} />
       </div>
       <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
         POLYPHONY = note count · Unison is Voice Choir. Cease Fire respects Notes / Notes+Tails / Total.
@@ -8876,14 +8912,17 @@ function ScopePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       <div className="mb-2 flex flex-wrap items-center justify-center gap-1">
         <span className="mr-1 text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: `${c}66` }}>View</span>
         {([
-          { id: "oscilloscope" as const, label: "Osc" },
-          { id: "spectrum" as const, label: "FFT" },
-          { id: "vectorscope" as const, label: "Vector" },
+          { id: "oscilloscope" as const, label: "Osc", name: "Oscilloscope — waveform over time" },
+          { id: "spectrum" as const, label: "FFT", name: "Spectrum analyser — level per frequency" },
+          { id: "vectorscope" as const, label: "Vector", name: "Vectorscope — stereo image" },
         ]).map((o) => (
           <button
             key={o.id}
             type="button"
             onClick={() => setMixView(o.id)}
+            aria-label={o.name}
+            aria-pressed={mixView === o.id}
+            title={o.name}
             className="rounded-md border px-2 py-0.5 text-[9px] font-black"
             style={
               mixView === o.id
@@ -9805,7 +9844,7 @@ function ReverbPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const setParam = useFireCommandStore((s) => s.setParam);
   const live = mix > 0.02;
   const sizeN = Math.log(Math.max(0.3, size) / 0.3) / Math.log(6 / 0.3);
-  const patch = useFireCommandStore((s) => s.patch);
+  const patch = useFxPathSlice();
   const pathOn = patch.pathFx !== false;
   const tech = fxTechState("fx.reverb", patch, { mix, pathOn });
   const thematic = !live ? "Dry" : freeze ? "Freeze" : size > 4 ? "Hall" : size < 1 ? "Room" : "Vault";
@@ -9902,7 +9941,12 @@ const DELAY_CHARS = [
   { id: "dub", label: "Dub", time: 0.45, fbk: 0.72, mix: 0.55 },
   { id: "bounce", label: "Bounce", time: 0.22, fbk: 0.55, mix: 0.5 },
   { id: "long", label: "Long", time: 0.85, fbk: 0.5, mix: 0.4 },
-  { id: "infinite", label: "∞", time: 0.35, fbk: 0.88, mix: 0.6 },
+  // fbk values must be reachable: the store and engine both clamp delay
+  // feedback to 0.72, so "∞" asking for 0.88 could never round-trip — the chip
+  // never lit up and never delivered. The ∞ character comes from the cascade
+  // MODE (which the engine lifts to 0.78–0.85 internally), not from a
+  // feedback value the clamp rejects.
+  { id: "infinite", label: "∞", time: 0.45, fbk: 0.72, mix: 0.6 },
 ] as const;
 
 const DELAY_TIMES = [
@@ -9923,7 +9967,33 @@ const DELAY_MIXES = [
 ] as const;
 
 const DELAY_MIX_CYCLE = [0, 0.5, 1] as const;
-const DELAY_FBK_MAX = 0.92;
+/**
+ * Narrow patch slice for the FX panel headers.
+ *
+ * These panels only need the module-enable map plus their signal-path flag,
+ * but each one used to subscribe to the ENTIRE patch — so every knob move
+ * anywhere in the synth re-rendered all seven heavy FX panels (Reverb,
+ * Delay, Chorus, Phaser, Age, Drive, Spectral) at pointer-move rate. Each
+ * field here is a primitive or a stable object reference, so a scrub of an
+ * unrelated parameter no longer touches them.
+ */
+function useFxPathSlice(): {
+  moduleEnable: Record<string, boolean>;
+  pathFx?: boolean;
+  pathAge?: boolean;
+  pathDrive?: boolean;
+  fxQuality?: FxQuality;
+} {
+  const moduleEnable = useFireCommandStore((s) => s.patch.moduleEnable);
+  const pathFx = useFireCommandStore((s) => s.patch.pathFx);
+  const pathAge = useFireCommandStore((s) => s.patch.pathAge);
+  const pathDrive = useFireCommandStore((s) => s.patch.pathDrive);
+  const fxQuality = useFireCommandStore((s) => s.patch.fxQuality);
+  return { moduleEnable, pathFx, pathAge, pathDrive, fxQuality };
+}
+
+/** Engine ceiling for delay feedback (matches the synth's hard clamp). */
+const DELAY_FBK_MAX = 0.72;
 
 function delayNear(a: number, b: number, eps = 0.06) {
   return Math.abs(a - b) < eps;
@@ -9937,6 +10007,7 @@ function DelayCharacterStrip() {
   const time = useFireCommandStore((s) => s.patch.delayTime) ?? 0.28;
   const fbk = useFireCommandStore((s) => s.patch.delayFeedback) ?? 0.3;
   const mix = useFireCommandStore((s) => s.patch.delayMix) ?? 0;
+  const cascade = useFireCommandStore((s) => s.patch.delayCascadeMode) ?? "echo";
   const setParams = useFireCommandStore((s) => s.setParams);
   const c = FC.delay;
   return (
@@ -9947,16 +10018,22 @@ function DelayCharacterStrip() {
       {DELAY_CHARS.map((p) => {
         const on =
           (p.id === "idle" && mix < 0.03) ||
-          (p.id !== "idle" && delayNearTime(time, p.time) && delayNear(fbk, p.fbk) && delayNear(mix, p.mix));
+          (p.id !== "idle"
+            && cascade === p.id
+            && delayNearTime(time, p.time) && delayNear(fbk, p.fbk) && delayNear(mix, p.mix));
         return (
           <button
             key={p.id}
             type="button"
             onClick={() => {
+              // These chips are named after the engine's cascade modes, but
+              // used to set only time/feedback/mix — so "Dub" never selected
+              // dub and "∞" never selected infinite. Set the mode too.
               setParams({
                 delayTime: p.time,
                 delayFeedback: p.fbk,
                 delayMix: p.mix,
+                ...(p.id === "idle" ? {} : { delayCascadeMode: p.id as DelayCascadeMode }),
               });
             }}
             className="rounded-md border px-2 py-0.5 text-[9px] font-black transition"
@@ -10169,7 +10246,7 @@ function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const live = mix > 0.02;
   const timeN = Math.log(Math.max(0.01, time) / 0.01) / Math.log(1.5 / 0.01);
   const fbkN = fbk / DELAY_FBK_MAX;
-  const patch = useFireCommandStore((s) => s.patch);
+  const patch = useFxPathSlice();
   const pathOn = patch.pathFx !== false;
   const tech = fxTechState("fx.delay", patch, { mix, pathOn });
   const thematic = !live ? "Dry" : freeze ? "Freeze" : fbk > 0.7 ? "∞" : time < 0.08 ? "Slap" : "Ping";
@@ -10268,7 +10345,7 @@ function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
 
       <div className="flex items-end justify-evenly gap-1 flex-wrap">
         <FParamKnob paramKey="delayTime" label="Time" min={0.01} max={1.5} curve="log" format={fmtSec} def={0.28} size={52} color={cTime} />
-        <FParamKnob paramKey="delayFeedback" label="Fbk" min={0} max={0.92} format={fmtPct} def={0.3} size={52} color={cFbk} />
+        <FParamKnob paramKey="delayFeedback" label="Fbk" min={0} max={0.72} format={fmtPct} def={0.3} size={52} color={cFbk} />
         <FParamKnob paramKey="delayDuck" label="Duck" min={0} max={1} format={fmtPct} def={0} size={44} color={cDuck} />
         <FParamKnob paramKey="delayFbFilter" label="FbFilt" min={0} max={1} format={fmtPct} def={0.35} size={44} color={cFilt} />
         <FParamKnob paramKey="delayFbDrive" label="FbDrv" min={0} max={1} format={fmtPct} def={0} size={44} color={cDrive} />
@@ -10550,7 +10627,7 @@ function ChorusPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const setParam = useFireCommandStore((s) => s.setParam);
   const live = mix > 0.02;
   const rateN = Math.log(Math.max(0.05, rate) / 0.05) / Math.log(8 / 0.05);
-  const patch = useFireCommandStore((s) => s.patch);
+  const patch = useFxPathSlice();
   const pathOn = patch.pathFx !== false;
   const tech = fxTechState("fx.chorus", patch, { mix, pathOn });
   const thematic = !live ? "Dry" : rate > 3 ? "Wide" : rate < 0.25 ? "Slow" : "Ensemble";
@@ -10913,7 +10990,7 @@ function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const setParam = useFireCommandStore((s) => s.setParam);
   const live = mix > 0.02;
   const rateN = Math.log(Math.max(0.02, rate) / 0.02) / Math.log(12 / 0.02);
-  const patch = useFireCommandStore((s) => s.patch);
+  const patch = useFxPathSlice();
   const pathOn = patch.pathFx !== false;
   const tech = fxTechState("fx.phaser", patch, { mix, pathOn });
   const thematic = !live ? "Bypass" : rate > 4 ? "Jet" : rate < 0.2 ? "Slow" : "Sweep";
@@ -11013,7 +11090,7 @@ function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
         <FParamKnob paramKey="phaserRate" label="Rate" min={0.02} max={12} curve="log" format={fmtHzRate} def={0.4} size={52} color={cRate} />
         <FParamKnob paramKey="phaserDepth" label="Depth" min={0} max={1} format={fmtPct} def={0.6} size={52} color={cDepth} />
         <FParamKnob paramKey="phaserStages" label="Stages" min={2} max={12} integer format={fmtInt} def={4} size={44} color={cStages} />
-        <FParamKnob paramKey="phaserFeedback" label="Fb" min={0} max={0.9} format={fmtPct} def={0.35} size={44} color={cFb} />
+        <FParamKnob paramKey="phaserFeedback" label="Fb" min={0} max={0.72} format={fmtPct} def={0.35} size={44} color={cFb} />
         <FParamKnob paramKey="phaserCenter" label="Center" min={100} max={8000} curve="log" format={fmtHz} def={800} size={44} color={cCenter} />
         <FParamKnob paramKey="phaserMix" label="Mix" min={0} max={1} format={fmtPct} def={0} size={52} color={cMix} />
       </div>
@@ -11373,7 +11450,7 @@ function AgePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const lockWear = useFireCommandStore((s) => s.patch.ageLockWear) ?? false;
   const lockRes = useFireCommandStore((s) => s.patch.ageLockResolution) ?? false;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const patch = useFireCommandStore((s) => s.patch);
+  const patch = useFxPathSlice();
   const pathOn = patch.pathAge !== false;
   const tech = fxTechState("fx.vintage", patch, { mix: live ? 1 : 0, pathOn });
   const thematic = !live ? "Clean" : bit !== "off" ? bit : vhs > 0.4 ? "VHS" : bbd > 0.45 ? "BBD" : "Aged";
@@ -11806,7 +11883,7 @@ function DrivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const setParam = useFireCommandStore((s) => s.setParam);
   const live = drive > 0.02 || crush > 0.02;
   const toneN = Math.log(Math.max(1000, tone) / 1000) / Math.log(18000 / 1000);
-  const patch = useFireCommandStore((s) => s.patch);
+  const patch = useFxPathSlice();
   const pathOn = patch.pathDrive !== false;
   const tech = fxTechState("fx.drive", patch, { mix: live ? 1 : 0, pathOn });
   const thematic = live ? (crush > drive ? "Crush" : mode) : "Clean";
@@ -13199,6 +13276,27 @@ function MpkKnobName({ label, color }: { label: string | null; color?: string })
   );
 }
 
+/**
+ * Keyboard + the MIDI activity subscription, isolated.
+ *
+ * `midiStore.lastNote` updates on EVERY incoming note. Subscribing to it at
+ * the root of FireCommandView re-rendered the entire Fire tree (header, all
+ * six bands, modals) per note — a visible stutter while playing a controller.
+ * Only the keyboard needs the flash, so only the keyboard subscribes.
+ */
+function KeyboardWithMidiActivity(
+  props: Omit<React.ComponentProps<typeof Keyboard>, "midiHot" | "midiNote">,
+) {
+  const last = useMidiStore((s) => s.lastNote);
+  return (
+    <Keyboard
+      {...props}
+      midiHot={!!last && Date.now() - last.at < 400}
+      midiNote={last?.midi ?? null}
+    />
+  );
+}
+
 function Keyboard({
   octave,
   onMinimize,
@@ -13715,6 +13813,10 @@ function Keyboard({
 
 // ════════════════════ store-bound controls ════════════════════
 
+/**
+ * Store-bound knob. Stays here (not in fireUiKit) because it wraps `Dial`,
+ * which is still declared in this file — see the note in fireUiKit.
+ */
 function FParamKnob({
   paramKey, label, min, max, curve = "lin", integer = false, bipolar = false, format, def, color = FIRE, size = 40,
   modEnv, modLfo,
@@ -14938,12 +15040,15 @@ function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const mode = (useFireCommandStore((s) => s.patch.spectralMode) ?? "off") as SpectralMode;
   const amount = useFireCommandStore((s) => s.patch.spectralAmount) ?? 0.6;
   const mix = useFireCommandStore((s) => s.patch.spectralMix) ?? 0.5;
-  const fftSize = useFireCommandStore((s) => s.patch.spectralFftSize) ?? 2048;
+  // The STFT window is fixed at 2048 in the worklet (its tables are sized at
+  // module load), so report the real value rather than a patch field that
+  // looks configurable but nothing reads.
+  const fftSize = SPECTRAL_FFT_SIZE;
   const wetOnly = useFireCommandStore((s) => s.patch.spectralWetOnly) ?? false;
   const setParam = useFireCommandStore((s) => s.setParam);
   const live = mode !== "off";
   const amountLabel = spectralAmountLabel(mode);
-  const patch = useFireCommandStore((s) => s.patch);
+  const patch = useFxPathSlice();
   const pathOn = patch.pathFx !== false;
   const tech = fxTechState("fx.spectral", patch, { mix: live ? mix : 0, pathOn });
   const quality = (patch.fxQuality ?? "live") as FxQuality;
@@ -15206,171 +15311,9 @@ function AdsrRow({ a, d, s, r, color = GRN }: { a: NumericKey; d: NumericKey; s:
 
 // ════════════════════ primitives ════════════════════
 
-function useCollapsed(key: string | undefined, def: boolean): [boolean, () => void] {
-  return useFireCollapsed(key, def);
-}
-
-function Section({ title, color = FIRE, right, children, className, collapseKey, defaultCollapsed = false, chipHosted = false, statusLine }: {
-  title: string; color?: string; right?: React.ReactNode; children: React.ReactNode; className?: string;
-  /** When set, the section header toggles fold state (persisted under this key). */
-  collapseKey?: string; defaultCollapsed?: boolean;
-  /** When true inside a FireBand, collapsed sections disappear (chips show instead). */
-  chipHosted?: boolean;
-  /** Optional collapsed-card status (model, mods, lock). */
-  statusLine?: string;
-}) {
-  const [collapsed, toggle] = useCollapsed(collapseKey, defaultCollapsed);
-  const { focusActive, focusId, isFocused, enterFocus } = useFireLayout();
-  const accordionMode = useFireCommandStore((s) => s.accordionMode);
-  const pinnedModules = useFireCommandStore((s) => s.pinnedModules);
-  const toggleModulePin = useFireCommandStore((s) => s.toggleModulePin);
-  const toggleModuleLock = useFireCommandStore((s) => s.toggleModuleLock);
-  const locked = useFireCommandStore((s) => !!(collapseKey && s.moduleLocks[collapseKey]));
-  const moduleAwake = useFireCommandStore((s) =>
-    !collapseKey ? true : s.patch.moduleEnable?.[collapseKey] !== false,
-  );
-  const atlas = collapseKey ? FIRE_MODULE_BY_ID.get(collapseKey) : undefined;
-  const labelMode = useFireCommandStore((s) => s.labelMode);
-  // Register both name forms so the band chips can honor labelMode too.
-  useFireBandRegister(
-    collapseKey,
-    atlas?.title ?? title,
-    color,
-    collapsed,
-    toggle,
-    !!chipHosted && !!collapseKey,
-    atlas?.short ?? title,
-  );
-
-  const displayTitle =
-    labelMode === "character" && atlas ? atlas.short
-      : labelMode === "technical" && atlas ? atlas.title
-        : title;
-
-  // Focus mode: keep the soloed module forced open
-  useEffect(() => {
-    if (collapseKey && isFocused(collapseKey) && collapsed) {
-      ensureExpanded(collapseKey);
-    }
-  }, [collapseKey, collapsed, isFocused]);
-
-  const onToggle = () => {
-    if (!collapseKey) {
-      toggle();
-      return;
-    }
-    const opening = collapsed;
-    if (opening && accordionMode && !pinnedModules.includes(collapseKey)) {
-      // Smart accordion: collapse other non-pinned modules in the same band.
-      const band = atlas?.bandKey;
-      if (band) {
-        const entry = FIRE_BANDS.find((b) => b.id === band);
-        for (const mod of entry?.modules ?? []) {
-          if (mod.id === collapseKey) continue;
-          if (pinnedModules.includes(mod.id)) continue;
-          // Already collapsed — skip the storage write + event fan-out.
-          try {
-            if (window.localStorage.getItem(foldStorageKey(mod.id)) === "1") continue;
-          } catch { /* storage unavailable — fold anyway */ }
-          writeFold(mod.id, true);
-        }
-      }
-    }
-    toggle();
-  };
-
-  // Hide non-focused modules while focus mode is on
-  if (focusActive && collapseKey && focusId !== collapseKey) return null;
-
-  if (chipHosted && collapseKey && collapsed && !isFocused(collapseKey)) return null;
-
-  const open = !collapsed || isFocused(collapseKey);
-  // Atlas subtitles fall back to the short name — only surface real ones.
-  const subtitle =
-    atlas?.subtitle && atlas.subtitle !== atlas.short && atlas.subtitle !== atlas.title
-      ? atlas.subtitle
-      : null;
-  const asleepStatus = !moduleAwake ? `${ASLEEP_STATE} — press Wake here, on the Signal Path, or on the Command Map` : null;
-
-  return (
-    <GlassPanel
-      className={`p-2.5 transition-[opacity,filter] ${!moduleAwake ? "fc-asleep" : ""} ${className ?? ""}`}
-      data-fire-module={collapseKey || undefined}
-      data-fire-asleep={!moduleAwake ? "1" : undefined}
-    >
-      <ModuleBackdrop moduleId={collapseKey} color={color} awake={moduleAwake} />
-      <div className="fc-mod-content-well">
-      <div className={`flex items-center justify-between gap-2 min-w-0 ${open ? "mb-2" : ""}`}>
-        {collapseKey ? (
-          <button
-            onClick={onToggle}
-            aria-expanded={open}
-            className="flex items-center gap-2 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 min-w-0"
-            title={collapsed ? "Expand section" : "Collapse section"}
-          >
-            <CollapseToggle collapsed={!open} color={moduleAwake ? color : "rgba(255,255,255,0.35)"} />
-            <span
-              className="fc-text-primary font-semibold uppercase tracking-[0.18em] truncate"
-              style={{ color: moduleAwake ? color : "rgba(255,255,255,0.42)" }}
-            >
-              {displayTitle}
-            </span>
-            {!moduleAwake && <AsleepBadge />}
-            {locked && <span className="fc-lock-badge" title="Protected from Random Armory / mutation">LOCK</span>}
-          </button>
-        ) : (
-          <div className="fc-text-primary font-semibold uppercase tracking-[0.18em] truncate min-w-0" style={{ color }}>{displayTitle}</div>
-        )}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* Pin / Lock / Solo only on the open card — collapsed headers stay quiet. */}
-          {collapseKey && open && (
-            <>
-              <button
-                type="button"
-                className="fc-pin-btn rounded border border-white/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/40 hover:text-white/70"
-                data-on={pinnedModules.includes(collapseKey) ? "1" : "0"}
-                title="Pin — stay open when accordion expands another module"
-                onClick={(e) => { e.stopPropagation(); toggleModulePin(collapseKey); }}
-              >
-                Pin
-              </button>
-              <button
-                type="button"
-                className="rounded border border-white/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/40 hover:text-[#f5d9a8]"
-                title="Lock against Random Armory / mutation"
-                onClick={(e) => { e.stopPropagation(); toggleModuleLock(collapseKey); }}
-              >
-                {locked ? "Unlock" : "Lock"}
-              </button>
-              {!isFocused(collapseKey) && (
-                <button
-                  type="button"
-                  className="rounded border border-white/12 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/40 hover:text-white/70"
-                  title="Solo this module — hide the others"
-                  onClick={(e) => { e.stopPropagation(); enterFocus(collapseKey as FireModuleId); }}
-                >
-                  Solo
-                </button>
-              )}
-            </>
-          )}
-          {open && right ? <div className="max-w-[55%] overflow-x-auto">{right}</div> : null}
-        </div>
-      </div>
-      {!open && (asleepStatus || statusLine || subtitle) && (
-        <div className="fc-text-secondary mt-1 truncate opacity-80">
-          {asleepStatus ?? statusLine ?? subtitle}
-        </div>
-      )}
-      {open && children}
-      </div>
-    </GlassPanel>
-  );
-}
-
-function KnobRow({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-wrap items-center justify-evenly gap-1">{children}</div>;
-}
+/* Section / FParamKnob / KnobRow / useCollapsed and the value formatters now
+   live in ./fireUiKit so panels can be lifted out of this file without
+   importing back into it. */
 
 function Stepper({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return <button onClick={onClick} className="w-7 h-7 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white/80 text-base leading-none transition">{children}</button>;
@@ -15431,23 +15374,46 @@ function Dial({
   /** Override the band-derived knob character (rare — mostly for one-offs). */
   character?: DialCharacter;
 }) {
-  const modMatrix = useFireCommandStore((s) => s.patch.modMatrix);
-  const matrixArcs = paramKey ? matrixArcsForParam(paramKey, modMatrix) : [];
-  const autoModulated = (() => {
-    if (modulated != null) return modulated;
-    if (matrixArcs.length > 0) return true;
-    const ll = label.toLowerCase();
-    const routes = modMatrix ?? [];
-    const matchDest = (...dests: string[]) =>
-      routes.some((r) => r.dest !== "none" && Math.abs(r.amount) > 0.05 && dests.includes(r.dest));
-    if (ll.includes("cutoff")) return matchDest("cutoff");
-    if (ll.includes("reso")) return matchDest("resonance");
-    if (ll === "pitch" || ll.includes("pitch ")) return matchDest("pitch");
-    if (ll === "pan") return matchDest("pan");
-    return false;
-  })();
+  // Subscribe to a STRING SIGNATURE of only this knob's routes, not the whole
+  // matrix — with ~190 dials mounted, one matrix tweak used to re-render every
+  // single knob on screen (the dominant UI hitch while patching).
+  const dialModSig = useFireCommandStore((s) => {
+    const routes = s.patch.modMatrix ?? [];
+    let sig = "";
+    if (paramKey) {
+      for (const a of matrixArcsForParam(paramKey, routes)) {
+        sig += `${a.source}:${a.amount};`;
+      }
+    }
+    if (modulated == null && sig === "") {
+      const ll = label.toLowerCase();
+      const dest = ll.includes("cutoff")
+        ? "cutoff"
+        : ll.includes("reso")
+          ? "resonance"
+          : ll === "pitch" || ll.includes("pitch ")
+            ? "pitch"
+            : ll === "pan"
+              ? "pan"
+              : null;
+      if (dest && routes.some((r) => r.dest === dest && Math.abs(r.amount) > 0.05)) {
+        sig = "§auto";
+      }
+    }
+    return sig;
+  });
+  const matrixArcs = useMemo(
+    () =>
+      paramKey && dialModSig !== "" && dialModSig !== "§auto"
+        ? matrixArcsForParam(paramKey, useFireCommandStore.getState().patch.modMatrix)
+        : [],
+    // dialModSig encodes every arc's source + amount for this key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dialModSig, paramKey],
+  );
+  const autoModulated = modulated != null ? modulated : dialModSig !== "";
   const [liveMod, setLiveMod] = useState(0);
-  const matrixKey = matrixArcs.map((a) => `${a.source}:${a.amount}`).join("|");
+  const matrixKey = dialModSig;
   // Each modulated knob used to run its own uncapped 60 fps loop that re-read
   // the engine and re-rendered every frame — up to ~80 loops at once. They all
   // share one 30 fps poll now, and only re-render when the dot actually moves.
@@ -15482,6 +15448,9 @@ function Dial({
   const knobRef = useRef<HTMLDivElement>(null);
   const startY = useRef(0);
   const startT = useRef(0);
+  // Ref mirrors the drag flag: setState is async, so pointermoves that land
+  // before the re-render were silently dropped (first pixels of every drag).
+  const dragRef = useRef(false);
   const [drag, setDrag] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -15496,10 +15465,11 @@ function Dial({
     (e.target as Element).setPointerCapture(e.pointerId);
     startY.current = e.clientY;
     startT.current = t;
+    dragRef.current = true;
     setDrag(true);
   };
   const move = (e: React.PointerEvent) => {
-    if (!drag) return;
+    if (!dragRef.current) return;
     const scale = e.shiftKey ? 2400 : 220;
     const nt = clamp(startT.current + (startY.current - e.clientY) / scale, 0, 1);
     startY.current = e.clientY;
@@ -15508,6 +15478,7 @@ function Dial({
   };
   const up = (e: React.PointerEvent) => {
     try { (e.target as Element).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    dragRef.current = false;
     setDrag(false);
   };
   const dbl = () => onChange(resetVal);

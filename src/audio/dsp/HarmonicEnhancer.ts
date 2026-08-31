@@ -14,6 +14,7 @@ export class HarmonicEnhancer {
   private readonly dry: GainNode;
   private readonly wet: GainNode;
   private readonly hp: BiquadFilterNode;
+  private readonly dcBlock: BiquadFilterNode;
   private readonly shaper: WaveShaperNode;
   private _amount = 0;
 
@@ -23,11 +24,18 @@ export class HarmonicEnhancer {
     this.dry = ctx.createGain();
     this.wet = ctx.createGain();
     this.hp = ctx.createBiquadFilter();
+    this.dcBlock = ctx.createBiquadFilter();
     this.shaper = ctx.createWaveShaper();
 
     this.hp.type = "highpass";
     this.hp.frequency.value = 1800;
     this.hp.Q.value = 0.7;
+
+    // An even-order transfer necessarily rectifies — strip the resulting DC /
+    // sub-sonic drift after the shaper so it can't reach the output mix.
+    this.dcBlock.type = "highpass";
+    this.dcBlock.frequency.value = 200;
+    this.dcBlock.Q.value = 0.5;
 
     this.shaper.oversample = "4x";
     this.shaper.curve = HarmonicEnhancer.makeCurve(0.35);
@@ -35,7 +43,8 @@ export class HarmonicEnhancer {
     this.input.connect(this.dry);
     this.input.connect(this.hp);
     this.hp.connect(this.shaper);
-    this.shaper.connect(this.wet);
+    this.shaper.connect(this.dcBlock);
+    this.dcBlock.connect(this.wet);
     this.dry.connect(this.output);
     this.wet.connect(this.output);
 
@@ -64,8 +73,12 @@ export class HarmonicEnhancer {
     const k = drive * 4;
     for (let i = 0; i < n; i++) {
       const x = (i / (n - 1)) * 2 - 1;
-      // Even-leaning soft-clip — emphasises 2nd harmonic content.
-      const y = Math.tanh(x + k * x * x * Math.sign(x) * 0.5);
+      // Genuinely even-leaning soft-clip. The old x²·sign(x) term made the
+      // transfer odd-symmetric (odd harmonics only — a mild fuzz, not an
+      // exciter). A plain x² term is even-symmetric and yields real 2nd
+      // harmonic content; the post-shaper DC blocker removes the rectified
+      // offset it necessarily produces.
+      const y = Math.tanh(x + k * x * x * 0.5);
       curve[i] = y;
     }
     return curve;

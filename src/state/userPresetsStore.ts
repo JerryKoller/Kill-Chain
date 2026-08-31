@@ -1,9 +1,11 @@
 import { create } from "zustand";
 import type { SoundParams } from "@/audio/types";
-import { NEUTRAL_PARAMS } from "@/audio/types";
+import { NEUTRAL_PARAMS, normalizeParams } from "@/audio/types";
 import { RESTORE_OFF, type RestoreParams } from "@/audio/dsp/Reconstructor";
 
 const STORAGE_KEY = "audio-playground.userPresets.v1";
+/** Hard cap — unbounded growth eventually blows the shared localStorage quota. */
+const MAX_PRESETS = 256;
 
 /** v2.1 — optional repair layer saved alongside the tone params. */
 export interface PresetRepairLayer {
@@ -67,6 +69,7 @@ function loadFromStorage(): UserPreset[] {
     // presets that pre-date a SoundParams change still load cleanly.
     return parsed
       .filter((p) => p && typeof p === "object")
+      .slice(0, MAX_PRESETS)
       .map((p) => ({
         id: String(p.id ?? cryptoId()),
         name: String(p.name ?? "Untitled"),
@@ -74,7 +77,9 @@ function loadFromStorage(): UserPreset[] {
         accent: String(p.accent ?? "#22e8ff"),
         createdAt: Number(p.createdAt ?? Date.now()),
         updatedAt: Number(p.updatedAt ?? Date.now()),
-        params: { ...NEUTRAL_PARAMS, ...(p.params ?? {}) } as SoundParams,
+        // normalizeParams clamps every knob to its legal range — hand-edited
+        // or corrupt values went straight into the DSP before.
+        params: normalizeParams({ ...NEUTRAL_PARAMS, ...(p.params ?? {}) }),
         repair: sanitizeRepair(p.repair),
       }));
   } catch (err) {
@@ -89,6 +94,9 @@ function persist(presets: UserPreset[]): void {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
   } catch (err) {
     console.warn("[userPresets] failed to persist:", err);
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("User presets", err),
+    );
   }
 }
 
@@ -122,7 +130,8 @@ export const useUserPresetsStore = create<UserPresetsState>((set, get) => ({
       createdAt: now,
       updatedAt: now,
     };
-    const next = [preset, ...get().presets];
+    // Newest first; drop the oldest saves past the cap.
+    const next = [preset, ...get().presets].slice(0, MAX_PRESETS);
     set({ presets: next });
     persist(next);
     return id;

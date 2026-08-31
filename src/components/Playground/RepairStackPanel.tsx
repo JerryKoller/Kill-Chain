@@ -338,14 +338,22 @@ function RepairSpectrogram() {
 
     let raf = 0;
     let alive = true;
+    let lastCol = 0;
+    const COL_MS = 50; // ~20 columns/s — plenty for a waterfall, ⅓ the old cost
     const OVERLAY_W = 26; // right-edge strip for the Target Lock gap
 
     const yForFreq = (f: number, h: number) =>
       h - ((Math.log2(f) - Math.log2(F_MIN)) / (Math.log2(F_MAX) - Math.log2(F_MIN))) * h;
 
-    const draw = () => {
+    const draw = (now: number) => {
       if (!alive) return;
       raf = requestAnimationFrame(draw);
+      // Sculptor is the default view — don't burn a 4096 FFT + repaint when
+      // the window is hidden, the context is stopped, or the frame budget
+      // hasn't elapsed. (The waterfall simply pauses; nothing is lost.)
+      if (document.hidden || ctx.state !== "running") return;
+      if (now - lastCol < COL_MS) return;
+      lastCol = now;
       const w = canvas.width;
       const h = canvas.height;
       const specW = w - OVERLAY_W;

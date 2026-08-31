@@ -62,7 +62,9 @@ export async function buildKillChainBackup(): Promise<KillChainBackupPayload> {
     settings,
     library: {
       folders: [...lib.folders],
-      tracks: lib.tracks.slice(0, 5000),
+      // Backups are files on disk — no storage quota. The old 5000-track cap
+      // silently dropped part of large libraries from "full" backups.
+      tracks: lib.tracks,
       sortKey: lib.sortKey,
       sortDir: lib.sortDir,
       groupBy: lib.groupBy,
@@ -116,15 +118,27 @@ export async function importKillChainBackup(
   if (data.kind !== BACKUP_KIND || typeof data.v !== "number") {
     return { ok: false, detail: "Not a Kill-Chain backup file." };
   }
+  if (data.v > BACKUP_VERSION) {
+    return {
+      ok: false,
+      detail: `This backup is from a newer Kill-Chain (v${data.v}). Update the app first.`,
+    };
+  }
 
   const { useSettingsStore } = await import("@/state/settingsStore");
   const { useLibraryStore } = await import("@/state/libraryStore");
   const { useMissionLogStore } = await import("@/state/missionLogStore");
 
   if (data.settings && typeof data.settings === "object") {
-    const set = useSettingsStore.getState().set;
+    const store = useSettingsStore.getState();
+    const set = store.set;
+    // Only apply keys the CURRENT build actually knows — arbitrary keys from
+    // a doctored file otherwise land in the store (and __proto__-style names
+    // are dropped outright).
+    const known = new Set(Object.keys(store).filter((k) => k !== "set" && k !== "toggle"));
     for (const [key, value] of Object.entries(data.settings)) {
-      if (key === "set" || key === "toggle") continue;
+      if (!known.has(key)) continue;
+      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
       try {
         set(key as never, value as never);
       } catch {

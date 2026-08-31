@@ -1,7 +1,6 @@
-import { motion, type HTMLMotionProps } from "framer-motion";
-import { forwardRef, type ReactNode } from "react";
+import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
-export interface GlassPanelProps extends HTMLMotionProps<"div"> {
+export interface GlassPanelProps extends ComponentPropsWithoutRef<"div"> {
   glow?: boolean;
   intense?: boolean;
   /** v2.2 — interactive card: adds the shared hover lift. */
@@ -14,6 +13,10 @@ export interface GlassPanelProps extends HTMLMotionProps<"div"> {
  * Intense (primary) panels keep the corner tick marks, which now follow the
  * module accent (see .panel-ticks in globals.css), and gain a hairline
  * accent edge along the top so key panels read as "powered".
+ *
+ * Renders a PLAIN div: no call site ever passed framer-motion props, yet
+ * every panel in the app was paying motion.div's per-instance overhead.
+ * Hover lift is pure CSS (.kc-lift).
  */
 export const GlassPanel = forwardRef<HTMLDivElement, GlassPanelProps>(
   function GlassPanel({ glow, intense, lift, className = "", children, ...rest }, ref) {
@@ -21,7 +24,7 @@ export const GlassPanel = forwardRef<HTMLDivElement, GlassPanelProps>(
     const glowCls = glow ? "ring-neon" : "";
     const liftCls = lift ? "kc-lift" : "";
     return (
-      <motion.div
+      <div
         ref={ref}
         className={`relative overflow-hidden rounded-2xl ${tone} ${glowCls} ${liftCls} ${className}`}
         {...rest}
@@ -37,7 +40,7 @@ export const GlassPanel = forwardRef<HTMLDivElement, GlassPanelProps>(
           />
         )}
         {children}
-      </motion.div>
+      </div>
     );
   },
 );

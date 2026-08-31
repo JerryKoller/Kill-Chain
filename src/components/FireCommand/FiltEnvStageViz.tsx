@@ -23,7 +23,7 @@ import { applyEnvCurve, type EnvCurve } from "@/audio/dsp/toneDifferentiation";
 import { FC, bandShade } from "./fireColors";
 import { startStageVizLoop } from "./stageVizRaf";
 import { useStageCanvas } from "./useStageCanvas";
-import { useToneTelemetry } from "./useToneTelemetry";
+import { useToneTelemetryRef } from "./useToneTelemetry";
 import {
   bezel,
   cachedGrad,
@@ -505,19 +505,22 @@ export function FiltEnvStageViz() {
   const relCurve = useFireCommandStore((s) => s.patch.filtCurveRelease) ?? "exp";
   const setParam = useFireCommandStore((s) => s.setParam);
 
-  const tel = useToneTelemetry();
+  // Ref-based telemetry: refreshed inside hints() so notes don't re-render
+  // this component at 30 fps (see useToneTelemetryRef).
+  const telRef = useToneTelemetryRef();
 
   const { wrapRef, canvasRef, sizeRef, visibleRef } = useStageCanvas(H);
   const flashRef = useRef(0);
   const dragRef = useRef<DragMode>(null);
   const prevKey = useRef(0);
+  const tel0 = telRef.current;
   const st = useRef<FiltEnvVizState>({
     a, d, sus, r, envAmt, resoAmt, cutoff, reso, type, atkCurve, decCurve, relCurve,
-    telStage: tel.filt.stage, telPhase: tel.filt.phase, telLevel: tel.filt.level, voices: tel.voiceCount,
+    telStage: tel0.filt.stage, telPhase: tel0.filt.phase, telLevel: tel0.filt.level, voices: tel0.voiceCount,
   });
   st.current = {
     a, d, sus, r, envAmt, resoAmt, cutoff, reso, type, atkCurve, decCurve, relCurve,
-    telStage: tel.filt.stage, telPhase: tel.filt.phase, telLevel: tel.filt.level, voices: tel.voiceCount,
+    telStage: st.current.telStage, telPhase: st.current.telPhase, telLevel: st.current.telLevel, voices: st.current.voices,
   };
 
   const sweeping = Math.abs(envAmt) > 0.04 || a > 0.04 || Math.abs(sus - 0.5) > 0.1;
@@ -616,28 +619,35 @@ export function FiltEnvStageViz() {
         flashRef.current *= 0.86;
         paintFiltEnv(ctx, W, Hh, st.current, now, flashRef.current);
       },
-      () => ({
-        flash: flashRef.current,
-        active: st.current.voices > 0,
-        dragging: !!dragRef.current,
-        visible: visibleRef.current,
-        motionKey: motionHash(
-          st.current.a,
-          st.current.d,
-          st.current.sus,
-          st.current.r,
-          st.current.envAmt,
-          st.current.resoAmt,
-          st.current.cutoff,
-          st.current.reso,
-          st.current.telLevel,
-          st.current.voices,
-        ),
-      }),
+      () => {
+        const tv = telRef.current;
+        st.current.telStage = tv.filt.stage;
+        st.current.telPhase = tv.filt.phase;
+        st.current.telLevel = tv.filt.level;
+        st.current.voices = tv.voiceCount;
+        return {
+          flash: flashRef.current,
+          active: st.current.voices > 0,
+          dragging: !!dragRef.current,
+          visible: visibleRef.current,
+          motionKey: motionHash(
+            st.current.a,
+            st.current.d,
+            st.current.sus,
+            st.current.r,
+            st.current.envAmt,
+            st.current.resoAmt,
+            st.current.cutoff,
+            st.current.reso,
+            st.current.telLevel,
+            st.current.voices,
+          ),
+        };
+      },
       { minIntervalMs: 18 },
     );
     return stopLoop;
-  }, [canvasRef, sizeRef, visibleRef]);
+  }, [canvasRef, sizeRef, visibleRef, telRef]);
 
   return (
     <div

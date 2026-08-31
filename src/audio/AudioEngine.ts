@@ -162,10 +162,22 @@ export class AudioEngine {
   private readonly firePart: Record<FireMixPart, { gain: GainNode; pan: StereoPannerNode }>;
   /** Sidechain duck gain on the combined Synth A+B path (kick pump). */
   readonly fireDuck: GainNode;
+  /** Duck HPF split (LR4): when engaged, only content BELOW the cutoff is
+   *  ducked and the highs ride through solid. Off = bit-identical wire. */
+  private readonly duckFull: GainNode;
+  private readonly duckLowWet: GainNode;
+  private readonly duckHighWet: GainNode;
+  private readonly duckSplitFilters: BiquadFilterNode[];
   /** Fire master fader (pre-limiter). */
   private readonly fireMasterGain: GainNode;
-  /** Fire master limiter — glue/safety on the summed Fire output. */
+  /** Fire master limiter — glue/safety on the summed Fire output.
+   *  DynamicsCompressor STAND-IN only; replaced by the kc-limiter worklet
+   *  as soon as its module loads (see initFireLimiterWorklet). */
   private fireLimiter: DynamicsCompressorNode;
+  /** True lookahead limiter (no auto-makeup, no pumping) once loaded. */
+  private fireLimiterWorklet: AudioWorkletNode | null = null;
+  /** Latest gain reduction reported by the worklet (positive dB). */
+  private fireLimiterWorkletGrDb = 0;
   private fireLimiterEnabled = true;
   /** Master listen dim (−12 dB) multiplier applied on top of master fader. */
   private fireDimOn = false;
@@ -210,6 +222,11 @@ export class AudioEngine {
     this.ctx = new Ctor({ latencyHint: "interactive" });
 
     this.inputBus = this.ctx.createGain();
+    // Mono Exterior / Airspace MediaStreams must upmix to L=R for the whole
+    // graph (stereo tools + 3rd Dimension L/R voices). Matches StereoRepair.
+    this.inputBus.channelCount = 2;
+    this.inputBus.channelCountMode = "explicit";
+    this.inputBus.channelInterpretation = "speakers";
     this.preTap = this.ctx.createGain();
     this.fxInput = this.ctx.createGain();
     this.fxInput.gain.value = 0;
@@ -317,18 +334,23 @@ export class AudioEngine {
     // synth OR solo drums at normal level sit in the identity region
     // (bit-exact), and only simultaneous full-scale pile-ups get rounded.
     this.fireBus = this.ctx.createGain();
-    // Fixed headroom for A+B+drums+samples summing. Each part can already
-    // peak near 0.98 from its own soft-clipper; unity sum was ~+6 dBFS into
-    // the Fire limiter and read as constant clipping on the sequencer.
-    this.fireBus.gain.value = 0.58;
+    // Summing headroom for A+B+drums+samples. The old 0.58 pad cost every
+    // part −4.7 dB even playing SOLO — a big slice of the "Fire sounds faded"
+    // complaint. With a true lookahead limiter now guarding the bus (see
+    // initFireLimiterWorklet), a light −1.4 dB pad is enough: solo parts
+    // pass essentially unattenuated and simultaneous pile-ups are caught by
+    // the limiter BEFORE the safety clipper, cleanly.
+    this.fireBus.gain.value = 0.85;
     this.fireBusPad = this.ctx.createGain();
     this.fireBusPad.gain.value = 1 / SAFETY_CLIP_RANGE;
     this.fireBusClip = this.ctx.createWaveShaper();
     this.fireBusClip.curve = makeSafetyClipCurve();
     this.fireBusClip.oversample = "2x";
-    // v1.6 mixer: fireBus → master fader → master limiter → pad → clipper.
-    // Catch A+B+drums pileups earlier so they don't jump from clean to crunch.
-    // WaveShaper remains the hard ceiling; this just glues hot sums sooner.
+    // v1.6 mixer: fireBus → master fader → limiter → pad → clipper.
+    // The limiter is a kc-limiter AudioWorklet (lookahead, no auto-makeup,
+    // ceiling 0.84 = just under the clipper's 0.85 identity knee, so the
+    // clipper never colors limited program). Until the worklet module loads
+    // (~100 ms) a DynamicsCompressor stands in, then the graph hot-swaps.
     this.fireMasterGain = this.ctx.createGain();
     this.fireLimiter = this.ctx.createDynamicsCompressor();
     this.fireLimiter.threshold.value = -2.8;
@@ -340,6 +362,7 @@ export class AudioEngine {
     this.fireMasterGain.connect(this.fireLimiter);
     this.fireLimiter.connect(this.fireBusPad);
     this.fireBusPad.connect(this.fireBusClip);
+    void this.initFireLimiterWorklet();
     // Post-clip: stereo pass OR mono-fold → inputBus; fireTap always post-clip.
     this.fireStereoPass = this.ctx.createGain();
     this.fireMonoIn = this.ctx.createGain();
@@ -373,7 +396,36 @@ export class AudioEngine {
     this.firePartTrimGain = { a: 1, b: 1, drums: 1, samples: 1 };
     // Sidechain ducks Synth A only — bass/808s on Synth B stay solid.
     this.fireDuck = this.ctx.createGain();
-    this.firePart.a.pan.connect(this.fireDuck);
+    // Duck HPF split. Default path (duckFull) is a plain wire into the duck
+    // gain — zero filters in the signal. When the mixer's duck HPF is raised,
+    // we crossfade to an LR4 low/high split: lows go through the duck, highs
+    // bypass it entirely (the classic "HPF on the sidechain bus" behavior).
+    this.duckFull = this.ctx.createGain();
+    this.duckFull.gain.value = 1;
+    this.duckLowWet = this.ctx.createGain();
+    this.duckLowWet.gain.value = 0;
+    this.duckHighWet = this.ctx.createGain();
+    this.duckHighWet.gain.value = 0;
+    const mkLr2 = (type: "lowpass" | "highpass") => {
+      const a = this.ctx.createBiquadFilter();
+      const b = this.ctx.createBiquadFilter();
+      a.type = type; b.type = type;
+      a.frequency.value = 120; b.frequency.value = 120;
+      a.Q.value = 0.7071; b.Q.value = 0.7071;
+      a.connect(b);
+      return { in: a, out: b };
+    };
+    const duckLp = mkLr2("lowpass");
+    const duckHp = mkLr2("highpass");
+    this.duckSplitFilters = [duckLp.in, duckLp.out, duckHp.in, duckHp.out];
+    this.firePart.a.pan.connect(this.duckFull);
+    this.duckFull.connect(this.fireDuck);
+    this.firePart.a.pan.connect(duckLp.in);
+    duckLp.out.connect(this.duckLowWet);
+    this.duckLowWet.connect(this.fireDuck);
+    this.firePart.a.pan.connect(duckHp.in);
+    duckHp.out.connect(this.duckHighWet);
+    this.duckHighWet.connect(this.fireBus);
     this.fireDuck.connect(this.fireBus);
     this.firePart.b.pan.connect(this.fireBus);
     this.firePart.drums.pan.connect(this.fireBus);
@@ -469,10 +521,53 @@ export class AudioEngine {
     this.fireMonoIn.gain.setTargetAtTime(on ? 1 : 0, t, 0.02);
   }
 
+  /**
+   * Load the kc-limiter worklet and hot-swap it in place of the stand-in
+   * DynamicsCompressor. Graceful: any failure keeps the DynComp path.
+   */
+  private async initFireLimiterWorklet(): Promise<void> {
+    try {
+      if (typeof document === "undefined" || !this.ctx.audioWorklet) return;
+      const url = new URL("worklets/limiter-processor.js", document.baseURI).toString();
+      await this.ctx.audioWorklet.addModule(url);
+      const node = new AudioWorkletNode(this.ctx, "kc-limiter", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        channelCount: 2,
+        channelCountMode: "explicit",
+        channelInterpretation: "speakers",
+      });
+      node.port.onmessage = (e: MessageEvent) => {
+        const gr = (e.data as { gr?: number })?.gr;
+        if (typeof gr === "number") this.fireLimiterWorkletGrDb = gr;
+      };
+      // Respect the current enable state via the bypass param (click-free).
+      node.parameters.get("bypass")?.setValueAtTime(this.fireLimiterEnabled ? 0 : 1, 0);
+      // Swap: fireMasterGain → worklet → fireBusPad; retire the DynComp.
+      try { this.fireMasterGain.disconnect(); } catch { /* ignore */ }
+      try { this.fireLimiter.disconnect(); } catch { /* ignore */ }
+      this.fireMasterGain.connect(node);
+      node.connect(this.fireBusPad);
+      this.fireLimiterWorklet = node;
+      console.log("[engine] fire limiter worklet engaged (lookahead, no makeup)");
+    } catch (err) {
+      console.warn("[engine] limiter worklet failed to load — DynamicsCompressor kept:", err);
+    }
+  }
+
   /** Toggle the Fire master limiter (the safety clipper always stays). */
   setFireLimiterEnabled(on: boolean): void {
     if (on === this.fireLimiterEnabled) return;
     this.fireLimiterEnabled = on;
+    if (this.fireLimiterWorklet) {
+      // Worklet path: flip the bypass param — the delay line stays in place
+      // so toggling never clicks or shifts timing.
+      this.fireLimiterWorklet.parameters
+        .get("bypass")
+        ?.setTargetAtTime(on ? 0 : 1, this.ctx.currentTime, 0.005);
+      return;
+    }
     try { this.fireMasterGain.disconnect(); } catch { /* ignore */ }
     if (on) this.fireMasterGain.connect(this.fireLimiter);
     else this.fireMasterGain.connect(this.fireBusPad);
@@ -493,9 +588,13 @@ export class AudioEngine {
   }
 
   /**
-   * Replace the Fire master DynamicsCompressor.
+   * Replace the Fire master DynamicsCompressor (stand-in path only). The
+   * kc-limiter worklet has no compressor state that can pin — its envelope
+   * fully recovers within its release time — so with the worklet engaged
+   * there is nothing to rebuild.
    */
   rebuildFireLimiter(): void {
+    if (this.fireLimiterWorklet) return;
     const old = this.fireLimiter;
     try { this.fireMasterGain.disconnect(); } catch { /* ignore */ }
     try { old.disconnect(); } catch { /* ignore */ }
@@ -576,6 +675,7 @@ export class AudioEngine {
   /** Live gain reduction in dB (≤ 0). 0 when limiter bypassed. */
   getFireLimiterReduction(): number {
     if (!this.fireLimiterEnabled) return 0;
+    if (this.fireLimiterWorklet) return -this.fireLimiterWorkletGrDb;
     return this.fireLimiter.reduction;
   }
 
@@ -605,7 +705,23 @@ export class AudioEngine {
   setDuckEnvelope(opts: { attackSec?: number; holdSec?: number; hpfHz?: number }): void {
     if (typeof opts.attackSec === "number") this.duckAttackSec = Math.max(0.001, Math.min(0.2, opts.attackSec));
     if (typeof opts.holdSec === "number") this.duckHoldSec = Math.max(0, Math.min(0.4, opts.holdSec));
-    if (typeof opts.hpfHz === "number") this.duckHpfHz = Math.max(0, Math.min(500, opts.hpfHz));
+    if (typeof opts.hpfHz === "number") {
+      const hz = Math.max(0, Math.min(500, opts.hpfHz));
+      if (hz !== this.duckHpfHz) {
+        this.duckHpfHz = hz;
+        const t = this.ctx.currentTime;
+        const split = hz > 20;
+        if (split) {
+          for (const f of this.duckSplitFilters) {
+            f.frequency.setTargetAtTime(hz, t, 0.03);
+          }
+        }
+        // Crossfade wire ↔ split so toggling can't click.
+        this.duckFull.gain.setTargetAtTime(split ? 0 : 1, t, 0.03);
+        this.duckLowWet.gain.setTargetAtTime(split ? 1 : 0, t, 0.03);
+        this.duckHighWet.gain.setTargetAtTime(split ? 1 : 0, t, 0.03);
+      }
+    }
   }
 
   /** Post-pan tap point for one Fire part (stems export). */
@@ -726,7 +842,22 @@ export class AudioEngine {
     // returns proper `Access-Control-Allow-Origin: *` headers and a
     // same-origin treatment, so leaving crossOrigin unset is the right
     // thing for both production (Electron) and dev (Vite).
-    const node = this.ctx.createMediaElementSource(el);
+    let node: MediaElementAudioSourceNode;
+    try {
+      node = this.ctx.createMediaElementSource(el);
+    } catch (err) {
+      // InvalidStateError: this element already has a source node from a
+      // PREVIOUS engine lifetime we lost track of. detachSource() above
+      // already ran, so restore the cached wiring if we have one instead of
+      // leaving the graph with no input at all.
+      console.error("[engine] createMediaElementSource failed:", err);
+      if (this.elementSource && this.elementSource.el === el) {
+        try { this.elementSource.node.connect(this.inputBus); } catch { /* ignore */ }
+        this.srcNode = this.elementSource.node;
+        this.source = { kind: "file", element: el };
+      }
+      return;
+    }
     this.elementSource = { el, node };
     node.connect(this.inputBus);
     this.srcNode = node;
@@ -756,19 +887,27 @@ export class AudioEngine {
     const gain = this.ctx.createGain();
     gain.gain.value = AudioEngine.dbToGain(opts?.gainDb ?? 0);
     node.connect(gain);
+    let panner: StereoPannerNode | null = null;
     if (opts?.pan !== undefined && opts.pan !== 0) {
-      const panner = this.ctx.createStereoPanner();
+      panner = this.ctx.createStereoPanner();
       panner.pan.value = opts.pan;
       gain.connect(panner).connect(this.inputBus);
     } else {
       gain.connect(this.inputBus);
     }
+    const cleanup = () => {
+      try { node.disconnect(); } catch { /* ignore */ }
+      try { gain.disconnect(); } catch { /* ignore */ }
+      if (panner) { try { panner.disconnect(); } catch { /* ignore */ } }
+    };
+    // One-shots that run to completion used to leave their gain (and panner)
+    // wired to inputBus forever — cleanup must not depend on the caller.
+    node.onended = cleanup;
     void this.resume();
     node.start();
     return () => {
       try { node.stop(); } catch { /* already stopped */ }
-      try { node.disconnect(); } catch { /* ignore */ }
-      try { gain.disconnect(); } catch { /* ignore */ }
+      cleanup();
     };
   }
 
@@ -780,6 +919,14 @@ export class AudioEngine {
         /* ignore */
       }
       this.srcNode = null;
+    }
+    // A detached capture stream must actually STOP — merely disconnecting
+    // leaves the device capturing (CPU + privacy). Local stop() does not fire
+    // the track's "ended" listener, so loopback teardown logic is unaffected.
+    if (this.source.kind === "mic") {
+      try {
+        this.source.stream.getTracks().forEach((t) => t.stop());
+      } catch { /* ignore */ }
     }
     this.source = { kind: "none" };
   }
@@ -1027,7 +1174,13 @@ export class AudioEngine {
    * Cheap to call from drag handlers — only the affected nodes get touched.
    */
   applyParams(next: Partial<SoundParams>): void {
-    const merged: SoundParams = { ...this.params, ...next };
+    // Drop non-finite numbers before they reach an AudioParam — a single NaN
+    // (corrupt preset, bad MIDI math) silently kills the affected node.
+    const merged: SoundParams = { ...this.params };
+    for (const [k, v] of Object.entries(next)) {
+      if (typeof v === "number" && !Number.isFinite(v)) continue;
+      (merged as unknown as Record<string, unknown>)[k] = v;
+    }
     this.params = merged;
 
     // Update friendly EQ bands.
@@ -1216,10 +1369,14 @@ export class AudioEngine {
   }
 
   static dbToGain(db: number): number {
+    // NaN/Infinity poisons any AudioParam it reaches (silence or a stuck
+    // node). Corrupt persisted settings are the usual source.
+    if (!Number.isFinite(db)) return 1;
     return Math.pow(10, db / 20);
   }
 
   static gainToDb(g: number): number {
+    if (!Number.isFinite(g)) return 0;
     return 20 * Math.log10(Math.max(1e-6, g));
   }
 }

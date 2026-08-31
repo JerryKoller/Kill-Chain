@@ -58,8 +58,11 @@ export class PerBandWidth {
     lowOfHigh.output.connect(this.midChain.input);
     this.midChain.output.connect(this.wet);
 
-    // High band: highOfLow → splitHigh (everything above 3000)
-    highOfLow.output.connect(splitHigh.input);
+    // High band: fed from the DRY input (matches MultibandCompressor). Fed
+    // from highOfLow instead, the recombined sum picks up phase ripple around
+    // the 250 Hz crossover because only two of three bands carry that stage's
+    // allpass rotation.
+    this.input.connect(splitHigh.input);
     this.highChain = new BandStereoStage(ctx);
     splitHigh.output.connect(this.highChain.input);
     this.highChain.output.connect(this.wet);

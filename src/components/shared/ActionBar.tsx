@@ -34,30 +34,30 @@ export function ActionBar({
    *  act on a different thing than what the user is looking at. */
   showActions?: boolean;
 }) {
-  const params = useAudioStore((s) => s.params);
+  // The sticky ActionBar sits on top of Sculptor/Calibration/etc. — it must
+  // NOT subscribe to `params` (that re-rendered it on every knob-drag frame).
+  // Anything save-time only is read via getState() inside the handlers, and
+  // the repair-active flag is derived through a cheap boolean selector.
   const resetToNeutral = useAudioStore((s) => s.resetToNeutral);
   const clearAB = useAudioStore((s) => s.clearAB);
   const correctionEnabled = useAudioStore((s) => s.correctionEnabled);
+  const repairActive = useAudioStore((s) => restoreActive(s.restore) || s.clarity > 0);
   const savePreset = useUserPresetsStore((s) => s.savePreset);
   const toast = useUIStore((s) => s.toast);
-
-  const restore = useAudioStore((s) => s.restore);
-  const clarity = useAudioStore((s) => s.clarity);
 
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [includeRepair, setIncludeRepair] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
 
-  const repairActive = restoreActive(restore) || clarity > 0;
-
   const doSave = () => {
     const name = saveName.trim() || "Untitled tuning";
+    const a = useAudioStore.getState();
     const repair =
       includeRepair && repairActive
-        ? { restore: { ...restore }, clarity }
+        ? { restore: { ...a.restore }, clarity: a.clarity }
         : null;
-    savePreset(name, params, undefined, undefined, repair);
+    savePreset(name, a.params, undefined, undefined, repair);
     playUi("success");
     setSaveOpen(false);
     setSaveName("");

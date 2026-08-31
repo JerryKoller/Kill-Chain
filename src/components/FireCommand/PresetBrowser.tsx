@@ -12,6 +12,9 @@ import {
   type PresetCategory,
 } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
+import {
+  FIRE_SHELF_EVENT, pushRecent, pruneShelves, readFavorites, readRecents, toggleFavorite,
+} from "@/lib/firePresetShelf";
 
 const FIRE = "#ff6a3d";
 
@@ -28,6 +31,8 @@ const CAT_COLOR: Record<string, string> = {
   Chip: "#6ee7a8",
   FM: "#a78bfa",
   User: "#ff9a6b",
+  Starred: "#ffcf6a",
+  Recent: "#9fb4c7",
 };
 
 /** Text marks only — no emoji. */
@@ -45,9 +50,18 @@ const CAT_MARK: Record<string, string> = {
   Chip: "CHP",
   FM: "FM",
   User: "USR",
+  Starred: "\u2605",
+  Recent: "REC",
 };
 
-type Filter = "All" | PresetCategory | "User";
+/** Shelf pseudo-categories — ordered views over the same cards. */
+const SHELF_FAV = "Starred" as const;
+const SHELF_RECENT = "Recent" as const;
+
+type Filter = "All" | PresetCategory | "User" | typeof SHELF_FAV | typeof SHELF_RECENT;
+
+/** Cards previewed per category on the "All" tab before the drill-in button. */
+const ALL_VIEW_PER_CAT = 9;
 
 interface Card {
   id: string;
@@ -77,20 +91,49 @@ export function PresetBrowser({
 
   const [filter, setFilter] = useState<Filter>("All");
   const [query, setQuery] = useState("");
+  // Library shelves live outside the patch store (see firePresetShelf).
+  const [favorites, setFavorites] = useState<Set<string>>(() => new Set());
+  const [recents, setRecents] = useState<string[]>([]);
   const [saveName, setSaveName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // Refs so the window Escape handler always sees the CURRENT edit state
+  // without re-binding on every keystroke.
+  const escGuardRef = useRef({ renaming: false, confirming: false });
+  escGuardRef.current = { renaming: renamingId !== null, confirming: confirmDeleteId !== null };
+
   useEffect(() => {
     if (!open) return;
     if (initialFilter) setFilter(initialFilter);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Escape cascades: rename → confirm-delete → close. It used to cancel
+      // the rename AND slam the whole library shut in the same press.
+      if (escGuardRef.current.renaming) {
+        setRenamingId(null);
+        return;
+      }
+      if (escGuardRef.current.confirming) {
+        setConfirmDeleteId(null);
+        return;
+      }
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     const t = setTimeout(() => searchRef.current?.focus(), 80);
     return () => { window.removeEventListener("keydown", onKey); clearTimeout(t); };
   }, [open, onClose, initialFilter]);
+
+  // Re-read shelves on open and whenever they change elsewhere.
+  useEffect(() => {
+    const sync = () => { setFavorites(readFavorites()); setRecents(readRecents()); };
+    sync();
+    window.addEventListener(FIRE_SHELF_EVENT, sync);
+    return () => window.removeEventListener(FIRE_SHELF_EVENT, sync);
+  }, [open]);
 
   const cards = useMemo<Card[]>(() => {
     const factory: Card[] = FIRE_PRESETS.map((p) => ({
@@ -102,28 +145,60 @@ export function PresetBrowser({
     return [...factory, ...users];
   }, [userPresets]);
 
+  // Deleting a user preset would otherwise leave a permanent phantom in the
+  // shelves — starred/recent ids that resolve to nothing.
+  useEffect(() => {
+    pruneShelves(new Set(cards.map((c) => c.id)));
+    setFavorites(readFavorites());
+    setRecents(readRecents());
+  }, [cards]);
+
   const counts = useMemo(() => {
     const m = new Map<Filter, number>();
     m.set("All", cards.length);
     for (const c of cards) m.set(c.category, (m.get(c.category) ?? 0) + 1);
+    m.set(SHELF_FAV, cards.filter((c) => favorites.has(c.id)).length);
+    m.set(SHELF_RECENT, recents.filter((id) => cards.some((c) => c.id === id)).length);
     return m;
-  }, [cards]);
+  }, [cards, favorites, recents]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const matches = (c: Card) =>
+      !q || c.name.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q);
+    // Shelves are ordered views, not category filters: Starred keeps
+    // category grouping, Recent keeps most-recent-first ordering.
+    if (filter === SHELF_FAV) return cards.filter((c) => favorites.has(c.id) && matches(c));
+    if (filter === SHELF_RECENT) {
+      const byId = new Map(cards.map((c) => [c.id, c]));
+      return recents
+        .map((id) => byId.get(id))
+        .filter((c): c is Card => c !== undefined && matches(c));
+    }
     return cards.filter((c) => {
       if (filter !== "All" && c.category !== filter) return false;
-      if (!q) return true;
-      return c.name.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q);
+      return matches(c);
     });
-  }, [cards, filter, query]);
+  }, [cards, filter, query, favorites, recents]);
 
   const groups = useMemo(() => {
-    if (filter !== "All") return [{ cat: filter, items: filtered }];
+    // Recent is chronological — grouping it by category would destroy the
+    // only thing that makes it useful.
+    if (filter === SHELF_RECENT) return [{ cat: filter, items: filtered, hidden: 0 }];
+    if (filter !== "All") return [{ cat: filter, items: filtered, hidden: 0 }];
+    const searching = query.trim().length > 0;
     return PRESET_CATEGORIES
-      .map((cat) => ({ cat, items: filtered.filter((c) => c.category === cat) }))
+      .map((cat) => {
+        const all = filtered.filter((c) => c.category === cat);
+        // The "All" tab is an OVERVIEW, not a dump: with 420 factory presets,
+        // rendering every card built ~420 gradient cards on open (slow) and
+        // gave an endless scroll with no sense of place. Preview a few per
+        // category and let the header drill in. A search shows every match.
+        const items = searching ? all : all.slice(0, ALL_VIEW_PER_CAT);
+        return { cat, items, hidden: all.length - items.length };
+      })
       .filter((g) => g.items.length > 0);
-  }, [filtered, filter]);
+  }, [filtered, filter, query]);
 
   const doSave = () => {
     const id = savePreset(saveName);
@@ -132,7 +207,7 @@ export function PresetBrowser({
     toast(`Saved · ${useFireCommandStore.getState().userPresets.find((p) => p.id === id)?.name ?? "patch"}`);
   };
 
-  const rail: Filter[] = ["All", ...PRESET_CATEGORIES, "User"];
+  const rail: Filter[] = ["All", SHELF_FAV, SHELF_RECENT, ...PRESET_CATEGORIES, "User"];
 
   return (
     <AnimatePresence>
@@ -247,9 +322,15 @@ export function PresetBrowser({
 
               <div className="flex-1 overflow-y-auto p-4 space-y-5">
                 {groups.length === 0 && (
-                  <div className="text-center text-sm text-white/35 py-12">No patches match.</div>
+                  <div className="py-12 text-center text-sm text-white/35">
+                    {filter === SHELF_FAV && !query.trim()
+                      ? "No starred patches yet — hover a card and click its star."
+                      : filter === SHELF_RECENT && !query.trim()
+                        ? "Nothing loaded yet this session."
+                        : "No patches match."}
+                  </div>
                 )}
-                {groups.map(({ cat, items }) => (
+                {groups.map(({ cat, items, hidden }) => (
                   <div key={String(cat)}>
                     {filter === "All" && (
                       <div
@@ -259,7 +340,9 @@ export function PresetBrowser({
                         <span className="opacity-70">{CAT_MARK[cat]}</span>
                         <span>{cat}</span>
                         <span className="h-px flex-1 bg-white/[0.06]" />
-                        <span className="font-mono text-white/30 normal-case tracking-normal">{items.length}</span>
+                        <span className="font-mono text-white/30 normal-case tracking-normal">
+                          {counts.get(cat) ?? items.length}
+                        </span>
                       </div>
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
@@ -277,6 +360,7 @@ export function PresetBrowser({
                             style={active ? { boxShadow: `inset 3px 0 0 ${color}` } : undefined}
                             onClick={() => {
                               loadPreset(c.id);
+                              pushRecent(c.id);
                               toast(c.name);
                             }}
                           >
@@ -287,6 +371,26 @@ export function PresetBrowser({
                                 </div>
                                 <div className="text-[10px] text-white/35 truncate mt-0.5">{c.desc}</div>
                               </div>
+                              {/* Star stays visible once set, otherwise appears
+                                  on hover so the grid doesn't turn into noise. */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const now = toggleFavorite(c.id);
+                                  toast(now ? `Starred · ${c.name}` : `Unstarred · ${c.name}`);
+                                }}
+                                className={`shrink-0 -mt-0.5 -mr-0.5 grid h-5 w-5 place-items-center rounded text-[11px] transition ${
+                                  favorites.has(c.id)
+                                    ? "text-[#ffcf6a] opacity-100"
+                                    : "text-white/30 opacity-0 group-hover:opacity-100 hover:text-white/70"
+                                }`}
+                                title={favorites.has(c.id) ? "Remove star" : "Star this patch"}
+                                aria-label={favorites.has(c.id) ? "Remove star" : "Star this patch"}
+                                aria-pressed={favorites.has(c.id)}
+                              >
+                                {favorites.has(c.id) ? "\u2605" : "\u2606"}
+                              </button>
                               {c.user && (
                                 <div className="flex items-center gap-0.5 shrink-0 opacity-70 group-hover:opacity-100">
                                   <button
@@ -354,6 +458,15 @@ export function PresetBrowser({
                         );
                       })}
                     </div>
+                    {hidden > 0 && (
+                      <button
+                        type="button"
+                        className="mt-1.5 w-full rounded-lg border border-dashed border-white/[0.09] py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/40 transition hover:border-white/20 hover:text-white/70"
+                        onClick={() => setFilter(cat)}
+                      >
+                        {hidden} more in {String(cat)}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -361,7 +474,11 @@ export function PresetBrowser({
 
             <div className="px-5 py-2 border-t border-white/[0.06] text-[10px] text-white/30 flex justify-between">
               <span>Click a patch to load · Esc closes</span>
-              <span className="font-mono tabular-nums text-white/25">{filtered.length} shown</span>
+              <span className="font-mono tabular-nums text-white/25">
+                {filter === "All" && !query.trim()
+                  ? `${cards.length} patches`
+                  : `${filtered.length} shown`}
+              </span>
             </div>
           </motion.div>
         </motion.div>

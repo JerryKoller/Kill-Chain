@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import { uiTick } from "@/audio/uiSounds";
 
 interface Props {
@@ -33,6 +33,10 @@ function KnobImpl({
   const startY = useRef(0);
   const startV = useRef(0);
   const lastTickRef = useRef(0);
+  // Unique per-instance SVG def ids. Building them from the color produced
+  // ILLEGAL ids for hex colors ("bg-#22e8ff") and shared defs across every
+  // same-color knob — one dragging knob's glow blur leaked into all of them.
+  const uid = useId();
   const [dragging, setDragging] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -249,11 +253,11 @@ function KnobImpl({
       >
         <svg width={size} height={size} className="overflow-visible">
           <defs>
-            <radialGradient id={`bg-${color}`} cx="50%" cy="40%" r="60%">
+            <radialGradient id={`bg-${uid}`} cx="50%" cy="40%" r="60%">
               <stop offset="0%" stopColor="rgba(255,255,255,0.06)" />
               <stop offset="100%" stopColor="rgba(0,0,0,0.45)" />
             </radialGradient>
-            <filter id={`glow-${color}`} x="-50%" y="-50%" width="200%" height="200%">
+            <filter id={`glow-${uid}`} x="-50%" y="-50%" width="200%" height="200%">
               <feGaussianBlur stdDeviation={dragging ? 5 : 3} result="blur" />
               <feMerge>
                 <feMergeNode in="blur" />
@@ -263,7 +267,7 @@ function KnobImpl({
           </defs>
           {/* Machined bezel: hairline outer ring + brushed inner face. */}
           <circle cx={cx} cy={cy} r={r + 2.5} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={1} />
-          <circle cx={cx} cy={cy} r={r + 2} fill={`url(#bg-${color})`} stroke="rgba(0,0,0,0.5)" />
+          <circle cx={cx} cy={cy} r={r + 2} fill={`url(#bg-${uid})`} stroke="rgba(0,0,0,0.5)" />
           <circle cx={cx} cy={cy} r={r - 6} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
           {ticks}
           <path
@@ -279,7 +283,7 @@ function KnobImpl({
             stroke={color}
             strokeWidth={4}
             strokeLinecap="round"
-            filter={`url(#glow-${color})`}
+            filter={`url(#glow-${uid})`}
             style={{ transition: "stroke-width 120ms ease" }}
           />
           <line
@@ -290,14 +294,14 @@ function KnobImpl({
             stroke={color}
             strokeWidth={2.5}
             strokeLinecap="round"
-            filter={`url(#glow-${color})`}
+            filter={`url(#glow-${uid})`}
           />
           <circle
             cx={indicatorX}
             cy={indicatorY}
             r={4}
             fill={color}
-            filter={`url(#glow-${color})`}
+            filter={`url(#glow-${uid})`}
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">

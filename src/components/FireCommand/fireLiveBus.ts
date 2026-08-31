@@ -82,8 +82,10 @@ function sourcesChanged(a: ModSources, b: ModSources): boolean {
 function tick(now: number) {
   raf = 0;
   if (telSubs.size === 0 && modSubs.size === 0) return;
-  raf = requestAnimationFrame(tick);
+  // Hidden window: park completely (visibility listener below restarts) —
+  // scheduling no-op frames still wakes the compositor every vsync.
   if (document.hidden) return;
+  raf = requestAnimationFrame(tick);
   if (now - lastTick < POLL_MS) return;
   lastTick = now;
 
@@ -131,7 +133,13 @@ function tick(now: number) {
 }
 
 function ensureLoop() {
-  if (!raf) raf = requestAnimationFrame(tick);
+  if (!raf && !document.hidden) raf = requestAnimationFrame(tick);
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && (telSubs.size > 0 || modSubs.size > 0)) ensureLoop();
+  });
 }
 
 export function subscribeToneTelemetry(fn: Listener<ToneVoiceTelemetry>): () => void {

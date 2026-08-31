@@ -33,6 +33,19 @@ export function installTestHooks(): void {
       appHealth: await import("@/lib/appHealth"),
       chainSnapshot: await import("@/lib/chainSnapshot"),
       fireStudio: await import("@/lib/fireStudio"),
+      // Smoke needs LEGAL_VERSION to clear the first-boot legal gate.
+      legal: await import("@/lib/legal"),
+      // Fire audio probe (scripts/fire-audio-probe.mjs) drives the synth.
+      fireCommandStore: await import("@/state/fireCommandStore"),
+      // NS batch audit (scripts/fire-ns-audit.mjs) measures offspring.
+      fireNsAudition: await import("@/lib/fireNsAudition"),
+      // Bank audit (scripts/fire-bank-audit.mjs) prunes + measures presets.
+      fireModuleUsage: await import("@/lib/fireModuleUsage"),
+      // Edit check (scripts/fire-edit-check.mjs) exercises the note toolbox,
+      // markers, clip clipboard and preset shelves.
+      fireNoteOps: await import("@/lib/fireNoteOps"),
+      firePresetShelf: await import("@/lib/firePresetShelf"),
+      fireHistory: await import("@/lib/fireHistory"),
     }),
   };
 }

@@ -210,19 +210,21 @@ function tone(c: AudioContext, out: GainNode, s: ToneSpec): void {
   env.gain.exponentialRampToValueAtTime(s.peak, t0 + atk);
   env.gain.exponentialRampToValueAtTime(0.0001, t0 + s.dur);
   let head: AudioNode = osc;
+  let filt: BiquadFilterNode | null = null;
   if (s.filter) {
-    const f = c.createBiquadFilter();
-    f.type = s.filter.type;
-    f.frequency.value = s.filter.freq;
-    f.Q.value = s.filter.q ?? 1;
-    head.connect(f);
-    head = f;
+    filt = c.createBiquadFilter();
+    filt.type = s.filter.type;
+    filt.frequency.value = s.filter.freq;
+    filt.Q.value = s.filter.q ?? 1;
+    head.connect(filt);
+    head = filt;
   }
   head.connect(env).connect(out);
   osc.start(t0);
   osc.stop(t0 + s.dur + 0.03);
   osc.onended = () => {
     try { osc.disconnect(); } catch { /* ignore */ }
+    if (filt) { try { filt.disconnect(); } catch { /* ignore */ } }
     try { env.disconnect(); } catch { /* ignore */ }
   };
 }
@@ -258,6 +260,7 @@ function noise(c: AudioContext, out: GainNode, s: NoiseSpec): void {
   const src = c.createBufferSource();
   src.buffer = getNoiseBuffer(c);
   let head: AudioNode = src;
+  const filters: BiquadFilterNode[] = [];
   if (s.bp) {
     const f = c.createBiquadFilter();
     f.type = "bandpass";
@@ -266,6 +269,7 @@ function noise(c: AudioContext, out: GainNode, s: NoiseSpec): void {
     f.Q.value = s.bp.q ?? 1.4;
     head.connect(f);
     head = f;
+    filters.push(f);
   }
   if (s.lp) {
     const f = c.createBiquadFilter();
@@ -274,6 +278,7 @@ function noise(c: AudioContext, out: GainNode, s: NoiseSpec): void {
     f.frequency.exponentialRampToValueAtTime(s.lp.to, t0 + s.dur);
     head.connect(f);
     head = f;
+    filters.push(f);
   }
   const env = c.createGain();
   env.gain.setValueAtTime(0.0001, t0);
@@ -284,6 +289,7 @@ function noise(c: AudioContext, out: GainNode, s: NoiseSpec): void {
   src.stop(t0 + s.dur + 0.03);
   src.onended = () => {
     try { src.disconnect(); } catch { /* ignore */ }
+    for (const f of filters) { try { f.disconnect(); } catch { /* ignore */ } }
     try { env.disconnect(); } catch { /* ignore */ }
   };
 }

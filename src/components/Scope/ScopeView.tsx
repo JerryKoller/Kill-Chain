@@ -667,8 +667,17 @@ export function ScopeView() {
 
   // Mirror the live stats into React state at a calm rate so the read-out
   // cards update smoothly without re-rendering on every animation frame.
+  // Skip hidden windows and identical snapshots (silence) entirely.
   useEffect(() => {
-    const id = window.setInterval(() => setStats(statsRef.current), 140);
+    let lastSig = "";
+    const id = window.setInterval(() => {
+      if (document.hidden) return;
+      const s = statsRef.current;
+      const sig = `${s.rmsDb.toFixed(1)}|${s.peakDb.toFixed(1)}|${s.crest.toFixed(1)}|${s.centroid.toFixed(0)}|${s.corr.toFixed(2)}|${s.widthPct.toFixed(0)}|${s.dynamics.toFixed(1)}|${s.balance.toFixed(2)}`;
+      if (sig === lastSig) return;
+      lastSig = sig;
+      setStats({ ...s });
+    }, 140);
     return () => window.clearInterval(id);
   }, []);
 

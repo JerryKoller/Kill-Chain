@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import http from "node:http";
 import dgram from "node:dgram";
 import os from "node:os";
+import crypto from "node:crypto";
 import { installNativeMidiHost, shutdownNativeMidiHost } from "./midiHost";
 
 const isDev = process.env.NODE_ENV === "development";
@@ -140,6 +141,9 @@ function mimeTypeFor(filePath: string): string {
   return AUDIO_MIME[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
 
+/** Refuse to serve single files larger than this (multi-GB read = OOM risk). */
+const MAX_SERVE_BYTES = 1_500_000_000;
+
 function registerAudioProtocol(): void {
   protocol.handle("playground-audio", async (request) => {
     let filePath = "(unparsed)";
@@ -161,12 +165,26 @@ function registerAudioProtocol(): void {
         }
       }
 
+      // Only serve recognised audio containers. This protocol used to hand
+      // back ANY readable file on disk, making a compromised renderer a
+      // general local-file exfiltration channel.
+      const mime = AUDIO_MIME[path.extname(filePath).toLowerCase()];
+      if (!mime) {
+        return new Response("playground-audio: not an audio file", {
+          status: 403,
+          headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
+        });
+      }
+
       const stat = await fs.stat(filePath);
       const total = stat.size;
-      const mime = mimeTypeFor(filePath);
+      if (total > MAX_SERVE_BYTES) {
+        return new Response("playground-audio: file too large", {
+          status: 413,
+          headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
+        });
+      }
       const range = request.headers.get("range");
-
-      console.log(`[playground-audio] ${request.method} ${filePath} (${total} bytes, mime=${mime}, range=${range ?? "none"})`);
 
       if (request.method === "HEAD") {
         return new Response(null, {
@@ -185,12 +203,27 @@ function registerAudioProtocol(): void {
         if (m) {
           const start = parseInt(m[1], 10);
           const end   = m[2] ? Math.min(parseInt(m[2], 10), total - 1) : total - 1;
-          const len   = end - start + 1;
+          // Unsatisfiable ranges (start past EOF / inverted) used to produce
+          // a negative-length Buffer.alloc throw inside the handler.
+          if (start >= total || start > end) {
+            return new Response(null, {
+              status: 416,
+              headers: {
+                "Content-Range": `bytes */${total}`,
+                "Access-Control-Allow-Origin": "*",
+              },
+            });
+          }
+          const len = end - start + 1;
+          // try/finally: a throw between open and close leaked the handle.
           const fh = await fs.open(filePath, "r");
-          const buf = Buffer.alloc(len);
-          await fh.read(buf, 0, len, start);
-          await fh.close();
-          return new Response(buf, {
+          const buf = Buffer.alloc(len) as Buffer & { buffer: ArrayBuffer };
+          try {
+            await fh.read(buf, 0, len, start);
+          } finally {
+            await fh.close();
+          }
+          return new Response(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), {
             status: 206,
             headers: {
               "Content-Type":   mime,
@@ -253,13 +286,18 @@ function createMainWindow(): void {
   // ── Airspace <webview> hardening ──
   // Strip any privileged options a guest page could try to smuggle in and
   // keep guests fully isolated (no node, no preload).
+  // Allow about:blank (Airspace's idle start page) and http(s) only —
+  // rejecting about:blank used to prevent the guest from attaching at all,
+  // so the browser pane stayed dead and direct capture never engaged.
   mainWindow.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     delete (webPreferences as { preload?: string }).preload;
     webPreferences.nodeIntegration = false;
     webPreferences.contextIsolation = true;
     webPreferences.sandbox = true;
-    if (params.src && !/^https?:\/\//i.test(String(params.src))) {
-      event.preventDefault();
+    if (params.src) {
+      const src = String(params.src);
+      const ok = src === "about:blank" || /^https?:\/\//i.test(src);
+      if (!ok) event.preventDefault();
     }
   });
 
@@ -286,7 +324,12 @@ function createMainWindow(): void {
 
   // The broadcast window is a satellite of the main one — no point leaving
   // it orphaned (it would keep the app alive with no way to control it).
-  mainWindow.on("closed", () => closeVizWindow());
+  // Null the handle too: IPC/remote/UDP callbacks fire after close, and
+  // webContents.send on a destroyed BrowserWindow throws in the main process.
+  mainWindow.on("closed", () => {
+    closeVizWindow();
+    mainWindow = null;
+  });
 
   // Safety net: force-show the window after a few seconds even if
   // ready-to-show never fires. Without this, a renderer error during
@@ -328,7 +371,12 @@ function createMainWindow(): void {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // http(s) only — this handler used to pass ANY scheme to the OS
+    // (file:, ms-msdt:, etc.), which is a local-execution vector if the
+    // renderer is ever compromised.
+    if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+    }
     return { action: "deny" };
   });
 
@@ -387,6 +435,23 @@ ipcMain.handle("dialog:openAudioMulti", async (): Promise<string[]> => {
   return result.canceled ? [] : result.filePaths;
 });
 
+/** Directories the app has legitimately handed to the renderer this session
+ *  (folder pickers, managed export dir). `file:writeIn` refuses anything
+ *  else, so a compromised renderer can't overwrite arbitrary files. */
+const approvedWriteDirs = new Set<string>();
+function approveWriteDir(dir: string): void {
+  try {
+    approvedWriteDirs.add(path.resolve(dir).toLowerCase());
+  } catch { /* ignore */ }
+}
+function isApprovedWriteDir(dir: string): boolean {
+  try {
+    return approvedWriteDirs.has(path.resolve(dir).toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 // Single output-folder picker (batch restore writes results there).
 ipcMain.handle("dialog:pickOutputFolder", async (): Promise<string | null> => {
   if (!mainWindow) return null;
@@ -395,6 +460,7 @@ ipcMain.handle("dialog:pickOutputFolder", async (): Promise<string | null> => {
     properties: ["openDirectory", "createDirectory"],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
+  approveWriteDir(result.filePaths[0]);
   return result.filePaths[0];
 });
 
@@ -403,9 +469,14 @@ ipcMain.handle(
   "file:writeIn",
   async (_e, opts: { dir: string; name: string; dataBase64: string }) => {
     try {
+      const dir = String(opts.dir);
+      if (!isApprovedWriteDir(dir)) {
+        console.error("[file:writeIn] refused: dir was never picked this session:", dir);
+        return null;
+      }
       // The name must stay a plain file name — no path traversal.
       const safeName = path.basename(String(opts.name || "output.wav"));
-      const full = path.join(String(opts.dir), safeName);
+      const full = path.join(dir, safeName);
       await fs.writeFile(full, Buffer.from(opts.dataBase64, "base64"));
       return full;
     } catch (err) {
@@ -526,9 +597,17 @@ ipcMain.handle("library:scan", async (_e, folders: string[]): Promise<LibFileEnt
 
 /** Managed folder for Fire Command → Library exports. */
 ipcMain.handle("library:getExportDir", async (): Promise<string> => {
-  const dir = path.join(app.getPath("music"), "Kill-Chain", "Fire Exports");
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
+  try {
+    const dir = path.join(app.getPath("music"), "Kill-Chain", "Fire Exports");
+    await fs.mkdir(dir, { recursive: true });
+    approveWriteDir(dir);
+    return dir;
+  } catch (err) {
+    // A read-only Music folder used to reject the whole IPC call and crash
+    // the export flow with an unhandled rejection toast.
+    console.error("[library:getExportDir] mkdir failed:", err);
+    return "";
+  }
 });
 
 /** Stat one audio file for library ingest after export. */
@@ -611,13 +690,12 @@ ipcMain.handle(
 
 ipcMain.handle("shell:open", async (_e, url: string) => {
   if (!url) return;
-  // Allow http(s) URLs and known Windows settings deep-links (ms-settings:*),
-  // plus file:// for local docs. Anything else is rejected to avoid being
-  // turned into a code-execution vector by a malicious renderer.
+  // Allow http(s) URLs and known Windows settings deep-links (ms-settings:*).
+  // file:// was dropped from the list: openExternal on a file URL can LAUNCH
+  // executables on Windows, and no renderer flow ever passed one.
   const safe =
     /^https?:\/\//i.test(url) ||
-    /^ms-settings:/i.test(url) ||
-    /^file:\/\//i.test(url);
+    /^ms-settings:/i.test(url);
   if (!safe) {
     console.warn("[shell:open] refused unsafe URL:", url);
     return;
@@ -638,6 +716,117 @@ ipcMain.handle("window:maximize", () => {
 });
 ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
 ipcMain.handle("window:close", () => mainWindow?.close());
+
+// ──────────────── Multi-monitor layout ────────────────
+// A second BrowserWindow would get its own renderer, and therefore its own
+// AudioContext and AudioEngine — it could not share the audio graph. So
+// "synth on one monitor, sequencer on the other" is done by stretching THIS
+// window across both displays and letting the renderer split its layout.
+// One audio engine, no cross-window state sync.
+
+/** Displays, left-to-right, with the one holding the window marked. */
+ipcMain.handle("display:list", () => {
+  const all = screen.getAllDisplays();
+  const cur = mainWindow
+    ? screen.getDisplayMatching(mainWindow.getBounds()).id
+    : screen.getPrimaryDisplay().id;
+  const primaryId = screen.getPrimaryDisplay().id;
+  return all
+    .map((d) => ({
+      id: d.id,
+      label: d.label || `Display ${d.id}`,
+      bounds: d.bounds,
+      workArea: d.workArea,
+      scaleFactor: d.scaleFactor,
+      isPrimary: d.id === primaryId,
+      isCurrent: d.id === cur,
+    }))
+    .sort((a, b) => a.bounds.x - b.bounds.x);
+});
+
+let preSpanBounds: Electron.Rectangle | null = null;
+
+/**
+ * Stretch the window across two horizontally-adjacent displays.
+ *
+ * Only spans monitors that actually touch, and only when their work areas
+ * overlap vertically — spanning a stacked or diagonal arrangement produces a
+ * window with dead regions the user can't reach.
+ */
+ipcMain.handle("display:span", (_e, targetId?: number) => {
+  if (!mainWindow) return { ok: false, reason: "no window" };
+  const all = screen.getAllDisplays();
+  if (all.length < 2) return { ok: false, reason: "only one display" };
+
+  const here = screen.getDisplayMatching(mainWindow.getBounds());
+  const other = typeof targetId === "number"
+    ? all.find((d) => d.id === targetId)
+    // Default: the nearest display to the right, else the nearest to the left.
+    : all
+      .filter((d) => d.id !== here.id)
+      .sort((a, b) => Math.abs(a.bounds.x - here.bounds.x) - Math.abs(b.bounds.x - here.bounds.x))[0];
+  if (!other || other.id === here.id) return { ok: false, reason: "no second display" };
+
+  const a = here.workArea;
+  const b = other.workArea;
+  const vOverlap = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  if (vOverlap < Math.min(a.height, b.height) * 0.5) {
+    return { ok: false, reason: "displays are not side by side" };
+  }
+
+  if (!preSpanBounds) preSpanBounds = mainWindow.getBounds();
+  const x = Math.min(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const width = Math.max(a.x + a.width, b.x + b.width) - x;
+  const height = vOverlap;
+
+  // Maximized windows ignore setBounds on Windows.
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  mainWindow.setMinimumSize(600, 400);
+  mainWindow.setBounds({ x, y, width, height }, false);
+  return {
+    ok: true,
+    bounds: { x, y, width, height },
+    // The renderer needs the seam so its split lands exactly on the bezel
+    // instead of an arbitrary 50%.
+    seamX: (a.x < b.x ? a.x + a.width : b.x + b.width) - x,
+    displays: 2,
+  };
+});
+
+/** Undo a span, restoring the pre-span bounds. */
+ipcMain.handle("display:unspan", () => {
+  if (!mainWindow) return { ok: false };
+  const b = preSpanBounds;
+  preSpanBounds = null;
+  mainWindow.setMinimumSize(1120, 720);
+  if (b) {
+    // Clamp back inside a currently-connected display: the saved bounds may
+    // reference a monitor that has since been unplugged.
+    const d = screen.getDisplayMatching(b).workArea;
+    mainWindow.setBounds({
+      x: Math.max(d.x, Math.min(b.x, d.x + d.width - 400)),
+      y: Math.max(d.y, Math.min(b.y, d.y + d.height - 300)),
+      width: Math.max(1120, Math.min(b.width, d.width)),
+      height: Math.max(720, Math.min(b.height, d.height)),
+    }, false);
+  } else {
+    mainWindow.center();
+  }
+  return { ok: true };
+});
+
+/** Move the window wholly onto one display, filling its work area. */
+ipcMain.handle("display:moveTo", (_e, targetId: number) => {
+  if (!mainWindow) return { ok: false };
+  const d = screen.getAllDisplays().find((x) => x.id === targetId);
+  if (!d) return { ok: false, reason: "display not found" };
+  preSpanBounds = null;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  const wa = d.workArea;
+  mainWindow.setBounds(wa, false);
+  return { ok: true, bounds: wa };
+});
 
 // ──────────────── Mini-mode / always-on-top ────────────────
 let savedBounds: Electron.Rectangle | null = null;
@@ -989,11 +1178,17 @@ ipcMain.handle("bluetooth:list", async () => {
 // ──────────────── Mobile-friendly Remote HTTP/WebSocket ────────────────
 let remoteServer: http.Server | null = null;
 let remotePort = 0;
+/** Per-session secret baked into the remote URL; rotated on every start. */
+let remoteToken = "";
 
 function remoteState() {
   if (!remoteServer) return { running: false, port: 0, url: "" };
   const ip = pickLocalIp();
-  return { running: true, port: remotePort, url: `http://${ip}:${remotePort}` };
+  return {
+    running: true,
+    port: remotePort,
+    url: `http://${ip}:${remotePort}/?t=${remoteToken}`,
+  };
 }
 
 function pickLocalIp(): string {
@@ -1007,18 +1202,51 @@ function pickLocalIp(): string {
   return "127.0.0.1";
 }
 
+/** Commands the remote page may inject — anything else is dropped in main. */
+const REMOTE_COMMANDS = new Set([
+  "play-pause", "next", "prev", "snapshot-a", "swap-ab", "reset",
+  "correction-toggle", "bypass-toggle", "viz-next",
+  "warmer", "cleaner", "punchier", "wider", "bigger", "tighter",
+]);
+
 ipcMain.handle("remote:start", async (_e, port: number) => {
-  if (remoteServer) return remoteState();
-  remotePort = port;
+  // Changing the port while running now REBINDS instead of silently keeping
+  // the old port (the Settings field looked broken).
+  if (remoteServer && port === remotePort) return remoteState();
+  if (remoteServer) {
+    await new Promise<void>((resolve) => remoteServer!.close(() => resolve()));
+    remoteServer = null;
+  }
+  const safePort = Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 0;
+  if (!safePort) throw new Error(`invalid remote port ${port}`);
+  remotePort = safePort;
+  // The URL shown in Settings carries this secret — only someone who can see
+  // the app's screen can drive the remote. A bare LAN scan of the port gets
+  // 403s (the endpoint used to accept any command from any LAN client).
+  remoteToken = crypto.randomBytes(6).toString("hex");
   remoteServer = http.createServer((req, res) => {
-    if (req.url === "/" || req.url === "/index.html") {
+    const reqUrl = new URL(req.url ?? "/", "http://local");
+    const okToken = reqUrl.searchParams.get("t") === remoteToken;
+    if (reqUrl.pathname === "/" || reqUrl.pathname === "/index.html") {
+      if (!okToken) {
+        res.writeHead(403, { "Content-Type": "text/plain" });
+        res.end("Open the exact remote URL shown in Kill-Chain's Settings.");
+        return;
+      }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(REMOTE_HTML);
+      res.end(REMOTE_HTML.replace("__REMOTE_TOKEN__", remoteToken));
       return;
     }
-    if (req.url?.startsWith("/cmd/")) {
-      const cmd = req.url.slice(5);
-      mainWindow?.webContents.send("remote:cmd", cmd);
+    if (reqUrl.pathname.startsWith("/cmd/")) {
+      const cmd = reqUrl.pathname.slice(5);
+      if (!okToken || !REMOTE_COMMANDS.has(cmd)) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("remote:cmd", cmd);
+      }
       res.writeHead(204);
       res.end();
       return;
@@ -1027,15 +1255,15 @@ ipcMain.handle("remote:start", async (_e, port: number) => {
     res.end("not found");
   });
   await new Promise<void>((resolve, reject) => {
-    if (!remoteServer) return reject();
+    if (!remoteServer) return reject(new Error("remote server torn down"));
     remoteServer.once("error", (err) => {
       console.error("[remote] failed to bind:", err);
       remoteServer = null;
       reject(err);
     });
-    remoteServer.listen(port, () => resolve());
+    remoteServer.listen(safePort, () => resolve());
   });
-  console.log(`[remote] listening on http://${pickLocalIp()}:${port}`);
+  console.log(`[remote] listening on port ${safePort}`);
   return remoteState();
 });
 
@@ -1092,9 +1320,10 @@ const REMOTE_HTML = `<!doctype html>
 </div>
 <footer>connected to Kill-Chain</footer>
 <script>
+  var KC_TOKEN = "__REMOTE_TOKEN__";
   document.querySelectorAll('button[data-c]').forEach(b=>{
     b.addEventListener('click',()=>{
-      fetch('/cmd/' + b.dataset.c, { method: 'POST' }).catch(()=>{});
+      fetch('/cmd/' + b.dataset.c + '?t=' + KC_TOKEN, { method: 'POST' }).catch(()=>{});
       if (window.navigator.vibrate) navigator.vibrate(8);
     });
   });
@@ -1186,7 +1415,9 @@ function installMidiPermissions(): void {
   if (typeof s.setDevicePermissionHandler === "function") {
     s.setDevicePermissionHandler((details) => {
       const t = String((details as { deviceType?: string }).deviceType ?? "");
-      return t === "midi" || t === "midiSysex" || t === "hid" || t === "serial" || t === "usb";
+      // MIDI only. HID/serial/USB were also granted, which no feature uses —
+      // an over-broad standing grant for any web content in the session.
+      return t === "midi" || t === "midiSysex";
     });
   }
 }
@@ -1375,7 +1606,9 @@ ipcMain.handle("headtrack:start", async (_e, port: number) => {
           roll: msg.readDoubleLE(40),
         };
         if (!Number.isFinite(data.yaw)) return;
-        mainWindow?.webContents.send("headtrack:data", data);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("headtrack:data", data);
+        }
       } catch { /* malformed packet */ }
     });
     sock.bind(p, () => {

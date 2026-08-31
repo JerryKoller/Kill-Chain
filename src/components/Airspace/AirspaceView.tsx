@@ -101,10 +101,19 @@ export function AirspaceView({ visible }: { visible: boolean }) {
   }, []);
 
   // Hand the (persistent) webview to the media bridge: the transport-bar deck
-  // and the source arbiter read/drive the page's video through it.
+  // and the source arbiter read/drive the page's video through it. Register
+  // on a microtask retry too — the <webview> ref can attach a tick after
+  // mount, and a one-shot null registration left the deck dead until remount.
   useEffect(() => {
     registerAirspaceWebview(webviewRef.current);
-    return () => registerAirspaceWebview(null);
+    let raf = 0;
+    if (!webviewRef.current) {
+      raf = requestAnimationFrame(() => registerAirspaceWebview(webviewRef.current));
+    }
+    return () => {
+      cancelAnimationFrame(raf);
+      registerAirspaceWebview(null);
+    };
   }, []);
   useEffect(() => {
     const api = window.playground?.airspace;

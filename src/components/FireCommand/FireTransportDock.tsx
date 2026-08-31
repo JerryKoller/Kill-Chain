@@ -178,6 +178,21 @@ export function FireTransportDock() {
         // Only hard-cut when transport is live — otherwise editors use Escape
         // to clear selection / close menus without silencing the session.
         if (!playing) return;
+        // …and even then, let the editors consume Escape FIRST. Panic used to
+        // win unconditionally during playback, so dismissing a note selection,
+        // a clip placement or an open menu killed the audio instead. Those
+        // handlers run on the same keydown and mark it handled; if none of
+        // them wanted it, we stop.
+        if (e.defaultPrevented) return;
+        const t = e.target instanceof Element ? e.target : null;
+        const inEditor = !!t?.closest("[data-fire-piano-roll], [data-fire-arrangement]");
+        const editorHot = !!document.querySelector(
+          "[data-fire-piano-roll]:hover, [data-fire-arrangement]:hover",
+        );
+        const editorFocused = !!document.activeElement?.closest?.(
+          "[data-fire-piano-roll], [data-fire-arrangement]",
+        );
+        if (inEditor || editorHot || editorFocused) return;
         e.preventDefault();
         stop();
         panic();

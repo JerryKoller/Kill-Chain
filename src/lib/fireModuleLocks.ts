@@ -136,7 +136,19 @@ export function patchCpuPressure(patch: FirePatch, activeVoices = 1): number {
  * Mutates `patch`. Returns true when anything was dialed back.
  * Ceilings leave room for musical scream-Q / drive — only true bombs get cut.
  */
-export function applyPerformanceSafety(patch: FirePatch): boolean {
+export function applyPerformanceSafety(
+  patch: FirePatch,
+  opts: {
+    /**
+     * Keep deliberately-risky-but-intentional settings (delay/reverb freeze,
+     * infinite cascade). Used when the patch comes from a project the USER
+     * saved: clearing them made saved sounds fail to round-trip. The engine
+     * still hard-bounds the feedback those modes ask for, so they can't run
+     * away. Presets, characters and Natural Selection output do NOT set this.
+     */
+    preserveIntent?: boolean;
+  } = {},
+): boolean {
   let softened = false;
   const cap = (cond: boolean, apply: () => void) => {
     if (cond) {
@@ -166,26 +178,37 @@ export function applyPerformanceSafety(patch: FirePatch): boolean {
   });
   const delayMode = patch.delayCascadeMode ?? "echo";
   if (delayMode !== "infinite" && delayMode !== "long" && !patch.delayFreeze) {
-    cap((patch.delayFeedback ?? 0) > 0.38, () => {
-      patch.delayFeedback = 0.38;
+    // Only intervene when the ENERGY (mix × feedback) is genuinely dangerous.
+    // The old blanket "echo feedback ≤ 0.38" silently rewrote every authored
+    // dub/echo preset on load (0.45–0.55 → 0.38) — tails died after one
+    // repeat and the patches read as flat and non-responsive. The engine
+    // hard-caps echo feedback at 0.72 and the bus limiter now catches
+    // recirculation cleanly, so let musical feedback through.
+    const fb = patch.delayFeedback ?? 0;
+    const mix = patch.delayMix ?? 0;
+    cap(fb > 0.62 && mix > 0.45, () => {
+      patch.delayFeedback = 0.62;
     });
   }
   cap((patch.delayFeedback ?? 0) > 0.78, () => {
     patch.delayFeedback = 0.78;
   });
   // Freeze / infinite modes force near-unity feedback in the engine — clear
-  // freeze on load so user patches can't leave a self-sustaining delay bomb.
-  if (patch.delayFreeze) {
-    patch.delayFreeze = false;
-    softened = true;
-  }
-  if (patch.reverbFreeze) {
-    patch.reverbFreeze = false;
-    softened = true;
-  }
-  if ((patch.delayCascadeMode ?? "echo") === "infinite") {
-    patch.delayCascadeMode = "long";
-    softened = true;
+  // freeze on load so untrusted patches can't leave a self-sustaining delay
+  // bomb. Skipped for user projects (see preserveIntent).
+  if (!opts.preserveIntent) {
+    if (patch.delayFreeze) {
+      patch.delayFreeze = false;
+      softened = true;
+    }
+    if (patch.reverbFreeze) {
+      patch.reverbFreeze = false;
+      softened = true;
+    }
+    if ((patch.delayCascadeMode ?? "echo") === "infinite") {
+      patch.delayCascadeMode = "long";
+      softened = true;
+    }
   }
   cap((patch.glueMakeup ?? 1) > 2, () => {
     patch.glueMakeup = 2;

@@ -185,6 +185,25 @@ const DEFAULTS: Omit<SettingsState, "set" | "toggle"> = {
   lastSeenVersion: "",
 };
 
+/** Clamp persisted / incoming numeric settings so corrupt storage (or a bad
+ *  write) can never produce an unusable UI — uiScale 0 was a bricked layout. */
+function sanitizeNumeric(s: typeof DEFAULTS): typeof DEFAULTS {
+  const num = (v: unknown, lo: number, hi: number, dflt: number): number =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : dflt;
+  s.uiGlow = num(s.uiGlow, 0, 2, DEFAULTS.uiGlow);
+  s.uiScale = num(s.uiScale, 0.7, 1.4, DEFAULTS.uiScale);
+  s.uiSoundVolume = num(s.uiSoundVolume, 0, 1, DEFAULTS.uiSoundVolume);
+  s.remotePort =
+    typeof s.remotePort === "number" && Number.isInteger(s.remotePort) &&
+    (s.remotePort === 0 || (s.remotePort >= 1024 && s.remotePort <= 65535))
+      ? s.remotePort
+      : DEFAULTS.remotePort;
+  if (s.lufsTargetDb !== null) {
+    s.lufsTargetDb = num(s.lufsTargetDb, -36, -6, -14);
+  }
+  return s;
+}
+
 function load(): typeof DEFAULTS {
   if (typeof window === "undefined") return { ...DEFAULTS };
   try {
@@ -203,7 +222,7 @@ function load(): typeof DEFAULTS {
     if (LEGACY_THEME_MAP[merged.theme as string]) {
       merged.theme = LEGACY_THEME_MAP[merged.theme as string];
     }
-    return merged;
+    return sanitizeNumeric(merged);
   } catch {
     return { ...DEFAULTS };
   }
@@ -238,7 +257,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   return {
     ...initial,
     set: (key, value) => {
-      set({ [key]: value } as Partial<SettingsState>);
+      // Numeric settings are clamped on the way IN (not just on load) so a
+      // runaway writer (MIDI map, remote command) can't wedge the UI.
+      let v = value;
+      if (
+        key === "uiGlow" || key === "uiScale" || key === "uiSoundVolume" ||
+        key === "remotePort" || key === "lufsTargetDb"
+      ) {
+        const scratch = { ...DEFAULTS, [key]: value } as typeof DEFAULTS;
+        sanitizeNumeric(scratch);
+        v = scratch[key as keyof typeof DEFAULTS] as typeof value;
+      }
+      set({ [key]: v } as Partial<SettingsState>);
       const snap = { ...DEFAULTS };
       const cur = get() as unknown as Record<string, unknown>;
       (Object.keys(DEFAULTS) as (keyof typeof DEFAULTS)[]).forEach((k) => {

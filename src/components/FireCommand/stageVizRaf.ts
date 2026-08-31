@@ -91,8 +91,10 @@ function isBusy(e: Entry): boolean {
 function pump(t: number) {
   pumpRaf = 0;
   if (entries.size === 0) return;
-  pumpRaf = requestAnimationFrame(pump);
+  // Hidden window: STOP scheduling instead of spinning no-op frames — the
+  // module-level visibilitychange listener below restarts the pump.
   if (document.hidden) return;
+  pumpRaf = requestAnimationFrame(pump);
 
   let pressure = 0;
   try {
@@ -136,7 +138,23 @@ function pump(t: number) {
 }
 
 function ensurePump() {
-  if (!pumpRaf) pumpRaf = requestAnimationFrame(pump);
+  if (!pumpRaf && !document.hidden) pumpRaf = requestAnimationFrame(pump);
+}
+
+// ONE module-level visibility listener (each entry used to add its own — a
+// full Fire Command view stacked ~40 identical document listeners).
+let visWired = false;
+function wireVisibility(): void {
+  if (visWired || typeof document === "undefined") return;
+  visWired = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    for (const e of entries) {
+      e.quiet = 0;
+      if (e.paused && isBusy(e)) e.paused = false;
+    }
+    ensurePump();
+  });
 }
 
 /**
@@ -160,18 +178,10 @@ export function startStageVizLoop(
   } as Entry;
 
   entries.add(entry);
+  wireVisibility();
   ensurePump();
 
-  const onVis = () => {
-    if (document.hidden) return;
-    entry.quiet = 0;
-    if (entry.paused && isBusy(entry)) entry.paused = false;
-    ensurePump();
-  };
-  document.addEventListener("visibilitychange", onVis);
-
   return () => {
-    document.removeEventListener("visibilitychange", onVis);
     entries.delete(entry);
     if (entries.size === 0 && pumpRaf) {
       cancelAnimationFrame(pumpRaf);

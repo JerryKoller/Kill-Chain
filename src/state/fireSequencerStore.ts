@@ -28,6 +28,8 @@ import { getEngine } from "@/audio/AudioEngine";
 import { DRUM_LANES, type DrumLane } from "@/audio/dsp/FireDrumKit";
 import { DEFAULT_FIRE_PATCH, cloneFirePatch, makeModMatrix, type FirePatch } from "@/audio/dsp/FireCommandSynth";
 import { audioUrlForPath } from "@/state/libraryStore";
+import * as NoteOps from "@/lib/fireNoteOps";
+import type { LengthMode, NoteOpResult, NoteOpScope } from "@/lib/fireNoteOps";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
 import { useFireCommandStore, slotsFromState, committedFireSlots, scheduleSequencerSynthNote, expandSequencerSynthVoices, silenceTransportAudio } from "@/state/fireCommandStore";
 import {
@@ -56,10 +58,16 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 // Decoded AudioBuffers are cached per file path; the persisted state only
 // carries paths, so projects stay small and buffers hydrate lazily.
 const sampleBuffers = new Map<string, AudioBuffer>();
+/** In-flight loads, so a miss on every step doesn't fan out N fetches. */
+const sampleLoadsInFlight = new Set<string>();
 
 export async function loadSampleBuffer(filePath: string): Promise<AudioBuffer | null> {
   const cached = sampleBuffers.get(filePath);
   if (cached) return cached;
+  // The look-ahead scheduler can ask for the same missing path many times per
+  // second; collapse those into one fetch/decode.
+  if (sampleLoadsInFlight.has(filePath)) return null;
+  sampleLoadsInFlight.add(filePath);
   try {
     const res = await fetch(audioUrlForPath(filePath));
     const raw = await res.arrayBuffer();
@@ -69,7 +77,31 @@ export async function loadSampleBuffer(filePath: string): Promise<AudioBuffer | 
   } catch (err) {
     console.warn("[fireSeq] sample decode failed:", filePath, err);
     return null;
+  } finally {
+    sampleLoadsInFlight.delete(filePath);
   }
+}
+
+/**
+ * Deterministic per-position randomness.
+ *
+ * Step probability and humanize used raw Math.random(), which made the SAME
+ * pattern render differently on every export (and never match a prior live
+ * pass). Hashing the position instead keeps the variation musical but
+ * reproducible: a pattern sounds the same each loop and each bounce.
+ * `salt` separates independent draws at one position (probability vs timing
+ * vs velocity) so they don't correlate.
+ */
+function stepRandom(step: number, laneKey: string, salt: number): number {
+  let h = 0x811c9dc5 ^ (Math.round(step * 4) + salt * 0x9e37);
+  for (let i = 0; i < laneKey.length; i++) {
+    h ^= laneKey.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2545f491);
+  h ^= h >>> 13;
+  return ((h >>> 0) % 100000) / 100000;
 }
 
 export function peekSampleBuffer(filePath: string): AudioBuffer | null {
@@ -129,6 +161,33 @@ export interface RollNote {
 
 export const STEPS_PER_BAR = 16;
 export const MAX_BARS = 96;
+
+/**
+ * Discriminated union of piano-roll edits, consumed by `applyNoteOp`.
+ *
+ * Modelled as data rather than a method per op so the roll's toolbar, the
+ * command palette and keyboard shortcuts can all describe an edit without
+ * each needing its own store action.
+ */
+export type FireNoteOp =
+  | { kind: "quantize"; grid: number; strength: number }
+  | { kind: "quantizeLength"; grid: number }
+  | { kind: "nudge"; steps: number }
+  | { kind: "humanize"; timing: number; velocity: number }
+  | { kind: "strum"; spread: number; down?: boolean }
+  | { kind: "length"; mode: LengthMode; grid?: number }
+  | { kind: "join" }
+  | { kind: "split"; pieces: number }
+  | { kind: "transpose"; semitones: number }
+  | { kind: "chord"; intervals: number[] }
+  | { kind: "invertChord"; times: number }
+  | { kind: "velScale"; mul: number }
+  | { kind: "velSet"; value: number }
+  | { kind: "velRamp"; from: number; to: number }
+  | { kind: "accent"; every: number; amount: number }
+  | { kind: "repeat"; times: number }
+  | { kind: "invertPitch" }
+  | { kind: "reverse" };
 
 // ── Arrangement (v1.6) ──
 
@@ -199,10 +258,62 @@ export interface ArrangementClip {
   local?: ClipLocalContent;
   /** Display instance suffix for UNIQUE badges (C1, C2…). */
   instanceLabel?: string;
+  /**
+   * Per-clip pitch offset in semitones.
+   *
+   * Reusing one pattern at a different pitch previously required cloning it
+   * into a UNIQUE clip and transposing every note — so a simple key change in
+   * the last chorus duplicated the whole pattern. Applied at schedule time,
+   * so the clip stays a reference to the bank pattern.
+   */
+  transpose?: number;
+  /** Per-clip gain in dB (-24..+6), applied to note velocity at schedule time. */
+  gainDb?: number;
 }
 
 let clipSeq = 0;
 const clipId = () => `clip${Date.now().toString(36)}${(clipSeq++).toString(36)}`;
+
+/**
+ * Song marker — a named position on the arrangement timeline.
+ *
+ * The playlist showed bar numbers and nothing else, so "the drop" or "second
+ * chorus" existed only in the user's head and navigating to it meant counting
+ * bars. Markers are labels + jump targets, and double as loop-region ends.
+ */
+export interface SongMarker {
+  id: string;
+  /** Absolute position in 16th steps. */
+  step: number;
+  label: string;
+  color?: string;
+}
+
+let markerSeq = 0;
+const markerId = () => `mk${Date.now().toString(36)}${(markerSeq++).toString(36)}`;
+
+/** Default palette cycled through as markers are added. */
+const MARKER_COLORS = ["#ff6a3d", "#62b6ff", "#9be564", "#ffd166", "#c98bff", "#7ce8d5"];
+
+function sanitizeMarkers(raw: unknown): SongMarker[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SongMarker[] = [];
+  const maxStep = MAX_ARRANGEMENT_BARS * STEPS_PER_BAR;
+  for (const m of raw) {
+    if (!m || typeof m !== "object") continue;
+    const step = Number((m as SongMarker).step);
+    if (!Number.isFinite(step)) continue;
+    const label = String((m as SongMarker).label ?? "").slice(0, 40);
+    out.push({
+      id: String((m as SongMarker).id ?? markerId()),
+      step: clamp(Math.round(step), 0, maxStep),
+      label: label || "Marker",
+      color: typeof (m as SongMarker).color === "string" ? (m as SongMarker).color : undefined,
+    });
+    if (out.length >= 64) break;
+  }
+  return out.sort((a, b) => a.step - b.step);
+}
 
 function snapToBar(step: number): number {
   return Math.max(0, Math.round(step / STEPS_PER_BAR) * STEPS_PER_BAR);
@@ -396,6 +507,16 @@ function sanitizeArrangement(raw: unknown, sections: Section[]): ArrangementClip
     const rawLen = (c as ArrangementClip).lengthSteps;
     const lengthSteps = rawLen == null ? undefined : clamp(snapToStep(Number(rawLen)), 1, full);
     const color = typeof (c as ArrangementClip).color === "string" ? (c as ArrangementClip).color : undefined;
+    // Clip pitch/level feed scheduling math; a non-finite value from an
+    // edited project would produce NaN midi / gain.
+    const rawTr = Number((c as ArrangementClip).transpose);
+    const transpose = Number.isFinite(rawTr) && rawTr !== 0
+      ? clamp(Math.round(rawTr), -24, 24)
+      : undefined;
+    const rawGain = Number((c as ArrangementClip).gainDb);
+    const gainDb = Number.isFinite(rawGain) && rawGain !== 0
+      ? clamp(rawGain, -24, 6)
+      : undefined;
     out.push({
       id: String((c as ArrangementClip).id ?? clipId()),
       patternId,
@@ -406,6 +527,8 @@ function sanitizeArrangement(raw: unknown, sections: Section[]): ArrangementClip
       unique: unique || undefined,
       local,
       instanceLabel,
+      transpose,
+      gainDb,
     });
     if (out.length >= MAX_CLIPS) break;
   }
@@ -1003,6 +1126,8 @@ interface PersistShape {
    * MAX_ARRANGEMENT_BARS (~350). Always at least long enough for clips.
    */
   arrangementBars: number;
+  /** Named positions on the arrangement timeline (see SongMarker). */
+  markers: SongMarker[];
 }
 
 /** Mirror of the active section — what the editors bind to and actions edit. */
@@ -1119,6 +1244,7 @@ function defaults(): PersistShape {
     selectedClipId: null,
     trackHeaderWidth: 168,
     arrangementBars: 32,
+    markers: [],
   };
 }
 
@@ -1184,6 +1310,46 @@ function sanitizeSampleLanes(raw: unknown, total: number): SampleLane[] {
       level: clamp(Number(l.level ?? 1) || 1, 0, 1.5),
       steps: sanitizeStepArray(l.steps, total),
     }));
+}
+
+/**
+ * Clamp persisted lane mixes into legal ranges.
+ *
+ * These values feed scheduling math directly (`when += swing * dur`), so a
+ * non-finite field from a hand-edited or truncated project file would produce
+ * a NaN AudioContext time and silently kill the lane. Previously the stored
+ * object was trusted verbatim.
+ */
+function sanitizeLaneMix(
+  raw: Partial<Record<DrumLane, DrumLaneMix>> | undefined,
+): Partial<Record<DrumLane, DrumLaneMix>> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Partial<Record<DrumLane, DrumLaneMix>> = {};
+  const num = (v: unknown, lo: number, hi: number, dflt: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? clamp(n, lo, hi) : dflt;
+  };
+  for (const lane of DRUM_LANES) {
+    const m = raw[lane.id];
+    if (!m || typeof m !== "object") continue;
+    out[lane.id] = {
+      level: num(m.level, 0, 2, 1),
+      pan: num(m.pan, -1, 1, 0),
+      muted: m.muted === true,
+      solo: m.solo === true,
+      length: Math.floor(num(m.length, 0, 128, 0)),
+      direction: m.direction === -1 ? -1 : 1,
+      rate: num(m.rate, 0.25, 4, 1),
+      offset: Math.floor(num(m.offset, -128, 128, 0)),
+      feel: (["grid", "pocket", "loose", "drunk", "custom"] as const).includes(m.feel)
+        ? m.feel
+        : "grid",
+      swing: num(m.swing, -0.3, 0.3, 0),
+      flam: num(m.flam, 0, 0.5, 0),
+      flamVel: num(m.flamVel, 0, 1, 0.55),
+    };
+  }
+  return out;
 }
 
 function sanitizeDrumSamples(
@@ -1419,7 +1585,7 @@ function mirrorOf(sec: Section, laneDefs: SampleLane[]): ActiveMirror & { sample
   };
 }
 
-function load(): PersistShape & ActiveMirror {
+function load(rawOverride?: string): PersistShape & ActiveMirror {
   const d = defaults();
   const finish = (p: PersistShape): PersistShape & ActiveMirror => {
     const active = p.sections.find((s) => s.id === p.activeSectionId) ?? p.sections[0];
@@ -1434,9 +1600,9 @@ function load(): PersistShape & ActiveMirror {
       automation: m.automation,
     };
   };
-  if (typeof window === "undefined") return finish(d);
+  if (typeof window === "undefined" && rawOverride === undefined) return finish(d);
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = rawOverride ?? window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return finish(d);
     const p = JSON.parse(raw) as Partial<PersistShape> & {
       // v1 (pre-arrangement) top-level pattern fields:
@@ -1510,7 +1676,9 @@ function load(): PersistShape & ActiveMirror {
       scaleSnap: p.scaleSnap !== false,
       drumSamples: sanitizeDrumSamples(p.drumSamples),
       drumLaneLocks: (p as { drumLaneLocks?: Partial<Record<DrumLane, boolean>> }).drumLaneLocks ?? {},
-      drumLaneMix: (p as { drumLaneMix?: Partial<Record<DrumLane, DrumLaneMix>> }).drumLaneMix ?? {},
+      drumLaneMix: sanitizeLaneMix(
+        (p as { drumLaneMix?: Partial<Record<DrumLane, DrumLaneMix>> }).drumLaneMix,
+      ),
       drumHatChoke: (p as { drumHatChoke?: boolean }).drumHatChoke !== false,
       drumKickPolarity: (p as { drumKickPolarity?: 1 | -1 }).drumKickPolarity === -1 ? -1 : 1,
       drumFollowPlayhead: (p as { drumFollowPlayhead?: boolean }).drumFollowPlayhead !== false,
@@ -1560,6 +1728,7 @@ function load(): PersistShape & ActiveMirror {
       metronome: (p as { metronome?: boolean }).metronome === true,
       selectedClipId: null,
       trackHeaderWidth: clamp(Math.round(Number((p as { trackHeaderWidth?: number }).trackHeaderWidth ?? 168) || 168), 120, 280),
+      markers: sanitizeMarkers((p as { markers?: unknown }).markers),
       arrangementBars: (() => {
         const clipEndBars = Math.max(
           1,
@@ -1700,6 +1869,7 @@ function persistShapeOf(s: FireSequencerState): PersistShape {
     selectedClipId: s.selectedClipId,
     trackHeaderWidth: s.trackHeaderWidth,
     arrangementBars: s.arrangementBars,
+    markers: s.markers,
   };
 }
 
@@ -1717,8 +1887,25 @@ function schedulePersist(get: () => FireSequencerState): void {
   const delay = get().playing ? 1600 : 400;
   persistTimer = setTimeout(() => {
     const data = persistShapeOf(get());
-    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { /* ignore */ }
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (err) {
+      // Storage quota — the project can no longer be saved. Surface it once
+      // instead of silently losing everything on the next reboot.
+      reportSequencerStorageFailure(err);
+    }
   }, delay);
+}
+
+/** Rate-limited quota warning so a stuck-full disk doesn't spam the HUD. */
+let lastStorageFailureAt = 0;
+function reportSequencerStorageFailure(err: unknown): void {
+  const now = Date.now();
+  if (now - lastStorageFailureAt < 60_000) return;
+  lastStorageFailureAt = now;
+  void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+    reportStorageFailure("Fire sequencer project", err),
+  );
 }
 
 /** Flush pending sequencer persistence immediately (crash / tab hide safety). */
@@ -1731,7 +1918,9 @@ export function flushFireSequencerPersist(): void {
   try {
     const data = persistShapeOf(useFireSequencerStore.getState());
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch { /* ignore */ }
+  } catch (err) {
+    reportSequencerStorageFailure(err);
+  }
 }
 
 // ── look-ahead scheduler (module scope: survives store re-renders) ──
@@ -1757,11 +1946,27 @@ interface SongSlot {
   start: number;
   len: number;
   track: number;
+  /** Per-clip pitch offset in semitones (ArrangementClip.transpose). */
+  transpose: number;
+  /** Per-clip linear gain derived from ArrangementClip.gainDb. */
+  gain: number;
 }
 let songMap: SongSlot[] = [];
 let songTotal = 0;
 /** Cue / scrub position when arrangement is stopped (absolute 16ths). */
 let arrangementCueStep = 0;
+
+/**
+ * Resolved song map, for verification harnesses.
+ *
+ * Per-clip transpose/gain are resolved here and read by the scheduler, so a
+ * test that only inspects `arrangement` can't tell whether those values
+ * actually reach playback. Recomputes rather than returning the cached map so
+ * it's correct even when the transport has never run.
+ */
+export function debugSongMap(): SongSlot[] {
+  return computeSongMap(useFireSequencerStore.getState()).map;
+}
 
 /** Peek / set arrangement scrub cue (used by export to force a from-start pass). */
 export function peekArrangementCueStep(): number {
@@ -1807,7 +2012,7 @@ function computeSongMap(s: FireSequencerState): { map: SongSlot[]; total: number
     const len = active ? sectionLenSteps(active) : STEPS_PER_BAR;
     return {
       map: active
-        ? [{ clipId: "_active", sectionId: active.id, start: 0, len, track: 0 }]
+        ? [{ clipId: "_active", sectionId: active.id, start: 0, len, track: 0, transpose: 0, gain: 1 }]
         : [],
       total: Math.max(len, 1),
     };
@@ -1824,6 +2029,11 @@ function computeSongMap(s: FireSequencerState): { map: SongSlot[]; total: number
       start: c.startStep,
       len,
       track: clamp(c.track ?? 0, 0, MAX_PLAYLIST_TRACKS - 1),
+      transpose: clamp(Math.round(Number(c.transpose) || 0), -24, 24),
+      // Resolved once here rather than per scheduled step.
+      gain: Number.isFinite(c.gainDb) && c.gainDb
+        ? Math.pow(10, clamp(c.gainDb, -24, 6) / 20)
+        : 1,
     });
     end = Math.max(end, c.startStep + len);
   }
@@ -2015,7 +2225,12 @@ function applyAutomationTick(s: FireSequencerState, now: number): void {
     // Prefer the active pattern's automation when layered; else first clip.
     const slot = slots.find((m) => m.sectionId === s.activeSectionId) ?? slots[0];
     if (!slot) return; // gap — silence, leave knobs alone this tick
-    maybeRestoreArrSound(slot.sectionId);
+    // NOTE: no maybeRestoreArrSound here. The SCHEDULER owns section sound
+    // swaps (it restores the patch for the section it is scheduling). This
+    // playhead-based tick used to swap BACK to the current section while the
+    // scheduler had already swapped ahead inside the 120 ms lookahead — each
+    // swap force-stops every live voice, so boundaries crackled and the first
+    // steps of the next section were killed and never rescheduled (gaps).
     pos = g - slot.start;
     // Unique clips carry automation in clip.local — same path as note/drum schedule.
     const content = contentFor(s, slot.sectionId, slot.clipId);
@@ -2075,6 +2290,13 @@ function schedulePatternAtStep(
   dur: number,
   /** When true, route Synth A notes through ARP / harmony / chord (live only). */
   bridgeLiveSynth = false,
+  /** Earliest legal hit time (live ctx.currentTime + ε; 0 for offline render).
+   *  Humanize/micro can pull times before "now", where nodes clamp them to
+   *  the SAME sample — a stall used to machine-gun the backlog as one spike. */
+  minWhenSec = 0,
+  /** Per-clip pitch/level offsets in ARRANGEMENT mode (see ArrangementClip). */
+  clipTranspose = 0,
+  clipGain = 1,
 ): void {
   const patternLen = Math.max(1, (content.drums.steps.kick?.length ?? STEPS_PER_BAR));
   const anySolo = DRUM_LANES.some((l) => s.drumLaneMix?.[l.id]?.solo);
@@ -2092,20 +2314,40 @@ function schedulePatternAtStep(
       const st = coerceDrumStep(cell);
       if (st.vel <= 0) continue;
       const prob = st.prob ?? 1;
-      if (prob < 1 && Math.random() > prob) continue;
+      if (prob < 1 && stepRandom(step, lane.id, 1) > prob) continue;
 
       const scales = feelScales(mix.feel);
       let when = whenDrums + (st.micro ?? 0) * dur * 0.45;
+      // Per-lane swing rides on top of the global drum swing, so hats can
+      // shuffle against a straight kick. Applied on odd 16ths only, matching
+      // the global swing definition.
+      const laneSwing = mix.swing ?? 0;
+      if (laneSwing !== 0 && (step & 1) === 1) when += laneSwing * dur * 0.5;
       let vel = effectiveVel(st) * (mix.level ?? 1);
       if (scales.timing > 0 || scales.velocity > 0) {
         const tj = (humanBaseOn ? (fpA.humanizeTiming ?? 0.25) : 0.25) * dur * 0.35 * scales.timing;
         const vj = (humanBaseOn ? (fpA.humanizeVelocity ?? 0.2) : 0.2) * 0.4 * scales.velocity;
-        when += (Math.random() * 2 - 1) * tj;
-        vel = Math.max(0.05, Math.min(1.2, vel * (1 + (Math.random() * 2 - 1) * vj)));
+        when += (stepRandom(step, lane.id, 2) * 2 - 1) * tj;
+        vel = Math.max(0.05, Math.min(1.2, vel * (1 + (stepRandom(step, lane.id, 3) * 2 - 1) * vj)));
       }
+      if (minWhenSec > 0) when = Math.max(minWhenSec, when);
 
       const ratchet = Math.max(1, Math.min(4, st.ratchet ?? 1));
       const pan = mix.pan ?? 0;
+      // Flam grace note. Scheduled before the main hit, so it needs the same
+      // `minWhenSec` floor or a seek can push it into the past (silent hit).
+      const flam = mix.flam ?? 0;
+      if (flam > 0) {
+        const graceAt = Math.max(minWhenSec > 0 ? minWhenSec : 0, when - flam * dur);
+        if (graceAt < when - 0.0005) {
+          engine.fireDrums.trigger(lane.id, graceAt, Math.max(0.05, vel * (mix.flamVel ?? 0.55)), {
+            pan,
+            polarity: lane.id === "kick" ? (s.drumKickPolarity ?? 1) : 1,
+            // A grace hit must not choke the hat it precedes.
+            chokeOpenHat: false,
+          });
+        }
+      }
       for (let r = 0; r < ratchet; r++) {
         const rt = when + (r * dur) / ratchet;
         engine.fireDrums.trigger(lane.id, rt, vel, {
@@ -2124,11 +2366,18 @@ function schedulePatternAtStep(
     const st = coerceDrumStep(cell);
     if (st.vel <= 0) continue;
     const prob = st.prob ?? 1;
-    if (prob < 1 && Math.random() > prob) continue;
+    if (prob < 1 && stepRandom(step, sl.id, 1) > prob) continue;
     const buf = sampleBuffers.get(sl.path);
-    if (!buf) { void loadSampleBuffer(sl.path); continue; }
+    if (!buf) {
+      // Not decoded yet. The next pass will pick it up (loadSampleBuffer
+      // de-dupes in-flight work), and startScheduler pre-warms every lane so
+      // the FIRST loop after pressing play isn't missing its sample hits.
+      void loadSampleBuffer(sl.path);
+      continue;
+    }
     const vel = effectiveVel(st);
-    const when = whenSamples + (st.micro ?? 0) * dur * 0.45;
+    let when = whenSamples + (st.micro ?? 0) * dur * 0.45;
+    if (minWhenSec > 0) when = Math.max(minWhenSec, when);
     const ratchet = Math.max(1, Math.min(4, st.ratchet ?? 1));
     for (let r = 0; r < ratchet; r++) {
       engine.fireDrums.playBuffer(buf, when + (r * dur) / ratchet, vel, sl.level, true);
@@ -2144,19 +2393,26 @@ function schedulePatternAtStep(
         const fp = isB ? fpB : fpA;
         const humanOn = fp.moduleEnable?.["human"] !== false && fp.humanizeOn;
         let when = whenSynth + offset;
-        let vel = n.vel;
+        let vel = clamp(n.vel * clipGain, 0.02, 1);
         if (humanOn) {
           const tj = (fp.humanizeTiming ?? 0.25) * dur * 0.35;
           const vj = (fp.humanizeVelocity ?? 0.2) * 0.4;
-          when += (Math.random() * 2 - 1) * tj;
-          vel = Math.max(0.05, Math.min(1, n.vel * (1 + (Math.random() * 2 - 1) * vj)));
+          when += (stepRandom(step, n.id, 4) * 2 - 1) * tj;
+          vel = Math.max(0.05, Math.min(1, vel * (1 + (stepRandom(step, n.id, 5) * 2 - 1) * vj)));
+          // Same clamp as the drum path — humanize must never land in the past.
+          if (minWhenSec > 0) when = Math.max(minWhenSec, when);
         }
+        // Clip transpose is applied here rather than by rewriting notes, so
+        // the clip stays a reference to its bank pattern.
+        const midi = clipTranspose === 0
+          ? n.midi
+          : clamp(Math.round(n.midi + clipTranspose), 0, 127);
         // Live: ARP / harmony / chord via bridge. Offline: harmony / chord
         // expansions without wall-clock arp timers.
         if (bridgeLiveSynth) {
           scheduleSequencerSynthNote(
             isB ? 1 : 0,
-            n.midi,
+            midi,
             vel,
             when,
             Math.max(0.03, n.len * dur * 0.98),
@@ -2164,7 +2420,7 @@ function schedulePatternAtStep(
         } else {
           const target = isB ? engine.fireCommandB : engine.fireCommand;
           const noteDur = Math.max(0.03, n.len * dur * 0.98);
-          for (const v of expandSequencerSynthVoices(isB ? 1 : 0, n.midi, vel)) {
+          for (const v of expandSequencerSynthVoices(isB ? 1 : 0, midi, vel)) {
             target.playNote(v.midi, v.vel, when, noteDur);
           }
         }
@@ -2280,7 +2536,7 @@ export function scheduleFirePass(
         const whenSynth = base + (odd ? s.swing * halfDur : 0);
         const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
         const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
-        schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur);
+        schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur, false, 0, slot.transpose, slot.gain);
       }
     } else {
       const step = sel ? selStart + globalStep : globalStep;
@@ -2314,6 +2570,30 @@ function startScheduler(get: () => FireSequencerState): void {
   }
   stopScheduler();
   const engine = getEngine();
+  // Pre-warm sample buffers: decoding happens off the scheduler thread, so
+  // without this the first loop after pressing play silently dropped every
+  // sample-deck / drum-override hit while the fetch+decode was still running.
+  {
+    const s0 = get();
+    for (const lane of s0.samples) void loadSampleBuffer(lane.path);
+    for (const path of Object.values(s0.drumSamples ?? {})) {
+      if (typeof path === "string" && path) void loadSampleBuffer(path);
+    }
+  }
+  // Mid-play restart (BPM nudge, bar change, undo, section switch): the old
+  // code only cleared the TIMER — the ~120 ms of already-scheduled drums,
+  // samples and synth voices kept sounding while the fresh scheduler
+  // re-scheduled the same musical steps. The doubled notes summed +6 dB and
+  // comb-filtered ("phasey corruption on tempo changes"). Flush scheduled
+  // audio first; the restart re-anchors on the same audible step anyway.
+  if (resumeCue != null) {
+    try {
+      engine.fireCommand.allNotesOff({ hard: true });
+      engine.peekFireCommandB()?.allNotesOff({ hard: true });
+      engine.fireDrums.silence();
+      engine.fireDrums.unsilence();
+    } catch { /* engine mid-teardown */ }
+  }
   engine.fireDrums.setLevel(get().drumLevel);
   const ctx = engine.ctx;
   const token = startToken;
@@ -2413,6 +2693,32 @@ function startScheduler(get: () => FireSequencerState): void {
       const now = ctx.currentTime;
       const horizon = now + LOOKAHEAD_S;
 
+      // CATCH-UP BOUND. After a long main-thread stall (GC pause, a heavy
+      // repaint, the OS suspending the window) the audio clock has moved on
+      // while `nextStep` has not, so this loop has to walk every step it
+      // missed. At 300 BPM a 20-second stall is ~1600 iterations, each doing
+      // per-step work — which extends the very stall it is recovering from and
+      // can cascade. If the backlog is bigger than a musically meaningful
+      // amount, re-anchor the clock to now and carry on from the correct
+      // musical position instead of grinding through the whole gap.
+      {
+        const behindSteps = (now - (loopStartTime + nextStep * dur)) / dur;
+        const MAX_CATCHUP_STEPS = 64; // 4 bars
+        if (behindSteps > MAX_CATCHUP_STEPS) {
+          // Land on a whole step so swing/accent phase stays intact, and keep
+          // the position musically correct (modulo the loop) rather than
+          // silently jumping to step 0.
+          const skip = Math.floor(behindSteps);
+          nextStep += skip;
+          // Voices/drums scheduled before the stall may still be pending in
+          // the past; clear them so the resume isn't a pile-up.
+          try {
+            engine.fireCommand.allNotesOff({ hard: true });
+            engine.peekFireCommandB()?.allNotesOff({ hard: true });
+          } catch { /* engine mid-teardown */ }
+        }
+      }
+
       // Schedule every whole step whose start time falls inside the window.
       while (loopStartTime + nextStep * dur < horizon) {
         const globalStep = song
@@ -2454,7 +2760,10 @@ function startScheduler(get: () => FireSequencerState): void {
             const whenSynth = base + (odd ? s.swing * halfDur : 0);
             const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
             const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
-            schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur, true);
+            schedulePatternAtStep(
+              s, engine, content, step, whenSynth, whenDrums, whenSamples, dur,
+              true, now + 0.002, slot.transpose, slot.gain,
+            );
           }
         } else {
           const step = globalStep;
@@ -2464,7 +2773,7 @@ function startScheduler(get: () => FireSequencerState): void {
           const whenSynth = base + (odd ? s.swing * halfDur : 0);
           const whenDrums = base + (odd ? (s.swingLinked ? s.swing : s.swingDrums) * halfDur : 0);
           const whenSamples = base + (odd ? (s.swingLinked ? s.swing : s.swingSamples) * halfDur : 0);
-          schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur, true);
+          schedulePatternAtStep(s, engine, content, step, whenSynth, whenDrums, whenSamples, dur, true, now + 0.002);
         }
 
         nextStep++;
@@ -2493,7 +2802,13 @@ function startScheduler(get: () => FireSequencerState): void {
     engine.resume().then(begin).catch(() => {
       if (token !== startToken) return; // stopped while resume() was pending
       const onState = () => {
+        // Only proceed once the context is genuinely RUNNING and this start
+        // hasn't been superseded — statechange also fires for "suspended"/
+        // "interrupted", which used to anchor the clock on a frozen context.
+        if (ctx.state !== "running") return;
         ctx.removeEventListener("statechange", onState);
+        if (resumeRetry?.fn === onState) resumeRetry = null;
+        if (token !== startToken) return;
         begin();
       };
       resumeRetry = { ctx, fn: onState };
@@ -2705,6 +3020,26 @@ export function getArrangementPlayheadStep(): number {
 let noteSeq = 0;
 const noteId = () => `n${Date.now().toString(36)}${(noteSeq++).toString(36)}`;
 
+/**
+ * Drum-lane clipboard, module-scoped (not React state, not persisted).
+ *
+ * Copying a groove between lanes or patterns previously meant re-drawing it:
+ * the lane transforms could rotate/reverse/invert a lane in place but never
+ * move one. Held outside the store so a paste doesn't churn subscribers and
+ * a copy never lands in undo history.
+ */
+let drumLaneClipboard: DrumStep[] | null = null;
+
+/**
+ * Arrangement clip clipboard.
+ *
+ * The playlist could duplicate a clip in place but had no copy/paste, so
+ * moving a chorus block to another position or track meant deleting and
+ * re-dragging every clip. Offsets are stored relative to the group origin so
+ * multi-clip pastes keep their internal layout.
+ */
+let clipClipboard: { clip: ArrangementClip; dStep: number; dTrack: number }[] | null = null;
+
 export interface FireSequencerState extends PersistShape, ActiveMirror {
   playing: boolean;
   /** REC armed: live notes (QWERTY / on-screen / MIDI) land in the roll. */
@@ -2718,6 +3053,28 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   setBars: (bars: number) => void;
   /** Arrangement timeline length (bars) — independent of pattern length. */
   setArrangementBars: (bars: number) => void;
+
+  // ── Song markers ──
+  /** Drop a marker at an absolute step. Returns its id. */
+  addMarker: (step: number, label?: string) => string;
+  removeMarker: (id: string) => void;
+  renameMarker: (id: string, label: string) => void;
+  moveMarker: (id: string, step: number) => void;
+  /** Nearest marker at or before `step` (for "jump to section"). */
+  markerBefore: (step: number) => SongMarker | null;
+  /** Nearest marker strictly after `step`. */
+  markerAfter: (step: number) => SongMarker | null;
+
+  // ── Clip clipboard + per-clip properties ──
+  /** Copy clips to the module clipboard. Returns how many were copied. */
+  copyClips: (ids: string[]) => number;
+  /** Paste the clipboard at `startStep` on `track`. Returns new clip ids. */
+  pasteClips: (startStep: number, track: number) => string[];
+  hasClipClipboard: () => boolean;
+  /** Per-clip pitch offset in semitones (-24..24). */
+  setClipTranspose: (id: string, semitones: number) => void;
+  /** Per-clip gain in dB (-24..6). */
+  setClipGain: (id: string, gainDb: number) => void;
   setSynthEnabled: (on: boolean) => void;
   setDrumsEnabled: (on: boolean) => void;
   setSynthBEnabled: (on: boolean) => void;
@@ -2744,6 +3101,15 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   transposeNotes: (ids: string[], semis: number) => void;
   /** Loose-groove pass: small velocity + micro-timing jitter. */
   humanizeNotes: () => void;
+  /**
+   * Piano-roll editing toolbox (quantize, length, chord, velocity, repeat).
+   *
+   * One entry point rather than ~18 near-identical actions: every op shares
+   * the same scope rules (selection else active channel), the same undo push
+   * and the same persist, and the UI only needs to name the op it wants.
+   * Returns how many notes changed so callers can report it.
+   */
+  applyNoteOp: (op: FireNoteOp, ids?: ReadonlySet<string>) => number;
   /** Drop an arp/held contour into the piano roll on the active channel. */
   paintArpCapture: (midis: number[]) => number;
   /** Double the pattern length, repeating notes + drums (up to MAX_BARS). */
@@ -2773,6 +3139,8 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   // ── automation lanes (v1.7) ──
   /** Set (or erase with null) one lane point in the ACTIVE section. */
   setAutomationPoint: (param: AutoParamId, step: number, value: number | null) => void;
+  /** Replace a whole lane (Smooth / Invert / Paste). Persists like its siblings. */
+  setAutomationLane: (param: AutoParamId, arr: (number | null)[]) => void;
   /** Wipe a whole lane in the active section. */
   clearAutomationLane: (param: AutoParamId) => void;
 
@@ -2795,6 +3163,13 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   setDrumFollowPlayhead: (on: boolean) => void;
   transformDrumLane: (lane: DrumLane, op: "rotate" | "reverse" | "invert" | "shiftLeft" | "shiftRight" | "copyHalf") => void;
   transformAllDrums: (op: "rotate" | "reverse" | "invert") => void;
+  /** Copy a drum lane's steps to the module clipboard. Returns step count. */
+  copyDrumLane: (lane: DrumLane) => number;
+  /** Paste the clipboard into a lane, tiling to fit. Returns steps written. */
+  pasteDrumLane: (lane: DrumLane) => number;
+  hasDrumLaneClipboard: () => boolean;
+  /** Linear velocity ramp across a lane's existing hits. Returns hits shaped. */
+  rampDrumLane: (lane: DrumLane, from: number, to: number) => number;
 
   /** Swap a drum lane's synthesized hit for the operator's own sample. */
   setDrumSample: (lane: DrumLane, path: string | null, name?: string) => Promise<boolean>;
@@ -3015,6 +3390,137 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       const wasPlaying = get().playing;
       set(resizeTo(b));
       if (wasPlaying) startScheduler(get);
+      persist();
+    },
+
+    addMarker: (step, label) => {
+      pushFireHistory("addMarker");
+      const s = get();
+      const id = markerId();
+      const bar = Math.floor(step / STEPS_PER_BAR) + 1;
+      const markers = [
+        ...s.markers,
+        {
+          id,
+          step: clamp(Math.round(step), 0, MAX_ARRANGEMENT_BARS * STEPS_PER_BAR),
+          label: label?.trim() || `Bar ${bar}`,
+          color: MARKER_COLORS[s.markers.length % MARKER_COLORS.length],
+        },
+      ].sort((a, b) => a.step - b.step);
+      set({ markers });
+      persist();
+      return id;
+    },
+
+    removeMarker: (id) => {
+      const s = get();
+      if (!s.markers.some((m) => m.id === id)) return;
+      pushFireHistory("removeMarker");
+      set({ markers: s.markers.filter((m) => m.id !== id) });
+      persist();
+    },
+
+    renameMarker: (id, label) => {
+      const s = get();
+      const trimmed = label.trim().slice(0, 40);
+      if (!trimmed) return;
+      pushFireHistory("renameMarker");
+      set({ markers: s.markers.map((m) => (m.id === id ? { ...m, label: trimmed } : m)) });
+      persist();
+    },
+
+    moveMarker: (id, step) => {
+      const s = get();
+      pushFireHistory(`moveMarker:${id}`);
+      const markers = s.markers
+        .map((m) => (m.id === id
+          ? { ...m, step: clamp(Math.round(step), 0, MAX_ARRANGEMENT_BARS * STEPS_PER_BAR) }
+          : m))
+        .sort((a, b) => a.step - b.step);
+      set({ markers });
+      persist();
+    },
+
+    markerBefore: (step) => {
+      const list = get().markers;
+      let best: SongMarker | null = null;
+      for (const m of list) {
+        // Small epsilon so "previous marker" from exactly on a marker goes to
+        // the one before it rather than sticking in place.
+        if (m.step < step - 0.5) best = m; else break;
+      }
+      return best;
+    },
+
+    markerAfter: (step) => get().markers.find((m) => m.step > step + 0.5) ?? null,
+
+    copyClips: (ids) => {
+      const want = new Set(ids);
+      const clips = arrangementWithActive(get()).filter((c) => want.has(c.id));
+      if (clips.length === 0) return 0;
+      // Store positions RELATIVE to the earliest clip so a paste preserves
+      // the group's internal layout wherever it lands.
+      const originStep = Math.min(...clips.map((c) => c.startStep));
+      const originTrack = Math.min(...clips.map((c) => c.track ?? 0));
+      clipClipboard = clips.map((c) => ({
+        clip: { ...c, local: c.local ? structuredClone(c.local) : undefined },
+        dStep: c.startStep - originStep,
+        dTrack: (c.track ?? 0) - originTrack,
+      }));
+      return clipClipboard.length;
+    },
+
+    pasteClips: (startStep, track) => {
+      if (!clipClipboard || clipClipboard.length === 0) return [];
+      const s = get();
+      const secs = sectionsWithActive(s);
+      const validIds = new Set(secs.map((x) => x.id));
+      const base = snapToStep(startStep);
+      const added: ArrangementClip[] = [];
+      for (const entry of clipClipboard) {
+        // A pattern deleted between copy and paste would otherwise create a
+        // clip pointing at nothing.
+        if (!validIds.has(entry.clip.patternId)) continue;
+        added.push({
+          ...entry.clip,
+          id: clipId(),
+          startStep: Math.max(0, base + entry.dStep),
+          track: clamp(track + entry.dTrack, 0, MAX_PLAYLIST_TRACKS - 1),
+          local: entry.clip.local ? structuredClone(entry.clip.local) : undefined,
+        });
+      }
+      if (added.length === 0) return [];
+      pushFireHistory("pasteClips");
+      const next = deoverlapArrangement([...arrangementWithActive(s), ...added], secs);
+      const keep = new Set(added.map((c) => c.id));
+      set({ arrangement: next, selectedClipId: added[added.length - 1]!.id });
+      persist();
+      return next.filter((c) => keep.has(c.id)).map((c) => c.id);
+    },
+
+    hasClipClipboard: () => clipClipboard !== null && clipClipboard.length > 0,
+
+    setClipTranspose: (id, semitones) => {
+      const s = get();
+      const t = clamp(Math.round(semitones), -24, 24);
+      if (!arrangementWithActive(s).some((c) => c.id === id)) return;
+      pushFireHistory(`clipTranspose:${id}`);
+      set({
+        arrangement: arrangementWithActive(s).map((c) =>
+          (c.id === id ? { ...c, transpose: t === 0 ? undefined : t } : c)),
+      });
+      persist();
+    },
+
+    setClipGain: (id, gainDb) => {
+      const s = get();
+      const g = clamp(gainDb, -24, 6);
+      if (!arrangementWithActive(s).some((c) => c.id === id)) return;
+      pushFireHistory(`clipGain:${id}`);
+      set({
+        arrangement: arrangementWithActive(s).map((c) =>
+          (c.id === id ? { ...c, gainDb: Math.abs(g) < 0.05 ? undefined : g } : c)),
+      });
       persist();
     },
 
@@ -3262,6 +3768,51 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
+    applyNoteOp: (op, ids) => {
+      const s = get();
+      const scope: NoteOpScope = {
+        // An empty selection means "everything on this channel" — matching how
+        // the existing Humanize / Snap-to-scale buttons already behave.
+        ids: ids && ids.size > 0 ? ids : undefined,
+        channel: s.activeChannel,
+        total: s.bars * STEPS_PER_BAR,
+      };
+      const p = useFireCommandStore.getState().patch;
+      const notes = s.notes;
+      let res: NoteOpResult;
+      switch (op.kind) {
+        case "quantize":       res = NoteOps.quantize(notes, scope, op.grid, op.strength); break;
+        case "quantizeLength": res = NoteOps.quantizeLength(notes, scope, op.grid); break;
+        case "nudge":          res = NoteOps.nudge(notes, scope, op.steps); break;
+        case "humanize":       res = NoteOps.humanize(notes, scope, op.timing, op.velocity, {
+          protectDownbeats: p.humanizeProtectDownbeats !== false,
+          seed: p.humanizeSeed,
+        }); break;
+        case "strum":          res = NoteOps.strum(notes, scope, op.spread, op.down); break;
+        case "length":         res = NoteOps.setLengths(notes, scope, op.mode, op.grid); break;
+        case "join":           res = NoteOps.joinNotes(notes, scope); break;
+        case "split":          res = NoteOps.splitNotes(notes, scope, op.pieces, noteId); break;
+        case "transpose":      res = NoteOps.transpose(notes, scope, op.semitones); break;
+        case "chord":          res = NoteOps.buildChord(notes, scope, op.intervals, noteId); break;
+        case "invertChord":    res = NoteOps.invertChord(notes, scope, op.times); break;
+        case "velScale":       res = NoteOps.scaleVelocity(notes, scope, op.mul); break;
+        case "velSet":         res = NoteOps.setVelocity(notes, scope, op.value); break;
+        case "velRamp":        res = NoteOps.velocityRamp(notes, scope, op.from, op.to); break;
+        case "accent":         res = NoteOps.accentEvery(notes, scope, op.every, op.amount); break;
+        case "repeat":         res = NoteOps.repeatBlock(notes, scope, op.times, noteId); break;
+        case "invertPitch":    res = NoteOps.invertPitch(notes, scope); break;
+        case "reverse":        res = NoteOps.reverseTime(notes, scope); break;
+        default:               return 0;
+      }
+      if (res.touched === 0) return 0;
+      // Only push history once we know something changed, so a no-op click
+      // doesn't burn an undo slot.
+      pushFireHistory(`noteOp:${op.kind}`);
+      set({ notes: res.notes });
+      persist();
+      return res.touched;
+    },
+
     paintArpCapture: (midis) => {
       const pitches = midis
         .map((m) => clamp(Math.round(m), 12, 108))
@@ -3462,6 +4013,15 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
+    setAutomationLane: (param, arr) => {
+      const s = get();
+      pushFireHistory(`auto:${param}`);
+      const automation: AutomationMap = { ...s.automation, [param]: arr };
+      if (arr.every((v) => v == null)) delete automation[param];
+      set({ automation });
+      persist();
+    },
+
     clearAutomationLane: (param) => {
       const s = get();
       if (!s.automation[param]) return;
@@ -3621,6 +4181,49 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
+    copyDrumLane: (lane) => {
+      // Module-scoped clipboard rather than the system one: drum steps carry
+      // velocity/prob/ratchet/micro, which don't survive a text round-trip.
+      drumLaneClipboard = get().drums.steps[lane].map((x) => ({ ...x }));
+      return drumLaneClipboard.length;
+    },
+
+    pasteDrumLane: (lane) => {
+      if (!drumLaneClipboard || get().drumLaneLocks?.[lane]) return 0;
+      pushFireHistory(`pasteLane:${lane}`);
+      const s = get();
+      const target = s.drums.steps[lane];
+      const src = drumLaneClipboard;
+      // Tile or truncate so pasting a 1-bar lane into a 4-bar pattern fills it
+      // instead of leaving three empty bars.
+      const next = target.map((_, i) => ({ ...src[i % src.length]! }));
+      set({ drums: { steps: { ...s.drums.steps, [lane]: next } } });
+      persist();
+      return next.length;
+    },
+
+    hasDrumLaneClipboard: () => drumLaneClipboard !== null,
+
+    rampDrumLane: (lane, from, to) => {
+      if (get().drumLaneLocks?.[lane]) return 0;
+      const s = get();
+      const arr = s.drums.steps[lane];
+      const hits: number[] = [];
+      arr.forEach((st, i) => { if (st.vel > 0) hits.push(i); });
+      if (hits.length === 0) return 0;
+      pushFireHistory(`rampLane:${lane}`);
+      const lo = hits[0]!;
+      const span = hits[hits.length - 1]! - lo;
+      const next = arr.map((st, i) => {
+        if (st.vel <= 0) return st;
+        const t = span === 0 ? 0 : (i - lo) / span;
+        return { ...st, vel: clamp(from + (to - from) * t, 0.05, 1) };
+      });
+      set({ drums: { steps: { ...s.drums.steps, [lane]: next } } });
+      persist();
+      return hits.length;
+    },
+
     transformAllDrums: (op) => {
       pushFireHistory();
       const s = get();
@@ -3776,9 +4379,16 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       // Flush unique local (if any) before switching bank section.
       const arrangement = arrangementWithActive(s);
       const wasUnique = !!editingUniqueClip(s);
-      // Always snapshot live A/B into the leaving section — including when
+      // FOLD THE LIVE MIRROR BACK FIRST. `notes` / `drums` / `automation` /
+      // sample steps live at the top of the store while a pattern is active;
+      // only sectionsWithActive writes them into sections[]. This used to run
+      // withLivePatchSnapshots alone, which stamps patchA/patchB and nothing
+      // else — so editing pattern A's drums and switching to B silently threw
+      // those edits away with no error and nothing on the undo stack.
+      const foldedLeave = sectionsWithActive({ ...s, arrangement });
+      // Then snapshot live A/B into the leaving section — including when
       // leaving UNIQUE edit (Cave must not die on Edit Source / pattern switch).
-      const stampedLeave = s.sections.map((sec) =>
+      const stampedLeave = foldedLeave.map((sec) =>
         sec.id === s.activeSectionId ? withLivePatchSnapshots(sec) : sec,
       );
       const target = stampedLeave.find((x) => x.id === id);
@@ -4528,6 +5138,12 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
         const engine = getEngine();
         engine.fireCommand.allNotesOff();
         engine.peekFireCommandB()?.allNotesOff();
+        // Drums and sample one-shots were left running, so open hats, crashes
+        // and long samples rang straight through a playhead jump.
+        try {
+          engine.fireDrums.silence();
+          engine.fireDrums.unsilence();
+        } catch { /* engine mid-teardown */ }
       }
     },
 
@@ -4712,7 +5328,14 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       if (recArmedAt > 0 && ctx.currentTime < recArmedAt) return;
       const target = resolveRecordTarget(s);
       if (!target) return; // gap under playhead / not ready
-      let step = s.recordQuantize ? Math.round(target.localStep) % target.total : target.localStep;
+      // Quantize toward the NEAREST step, but a note played just before the
+      // loop point must not wrap to the top: `round(15.6) % 16` was 0, so the
+      // last sixteenth of every pattern recorded onto beat 1.
+      let step = target.localStep;
+      if (s.recordQuantize) {
+        const rounded = Math.round(target.localStep);
+        step = rounded >= target.total ? target.total - 1 : rounded;
+      }
       step = clamp(step, 0, target.total - 0.25);
       // The whole pass is ONE undo entry — capture state before its first note.
       if (!recPassPushed) {
@@ -4828,21 +5451,64 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
     importPattern: (data) => {
       if (!data || typeof data !== "object") return false;
-      pushFireHistory();
-      const wasPlaying = get().playing;
-      if (wasPlaying) get().stop();
+      // Normalize + migrate ENTIRELY in memory first — the old flow wrote the
+      // raw payload to localStorage before validating, so a parseable-but-
+      // garbage file would destroy the user's saved project even when the
+      // import "failed".
+      let next: ReturnType<typeof load>;
+      let raw: string;
       try {
-        // Round-trip the import through the same normalization + v1→v2
-        // migration the loader uses — write to storage, re-load, apply.
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        arrangementCueStep = 0;
-        set({ ...load(), playing: false, recording: false });
-        void get().hydrateSamples();
-        applyMixerToEngine(get());
-        return true;
+        raw = JSON.stringify(data);
+        next = load(raw);
       } catch {
         return false;
       }
+      // Reject imports that normalize to nothing meaningful (no real content
+      // in any section) — that's a wrong/foreign file, not a project.
+      const hasContent = next.sections.some(
+        (sec) =>
+          sec.notes.length > 0 ||
+          Object.values(sec.drums.steps).some((lane) => lane.some((st) => st.vel > 0)) ||
+          Object.values(sec.sampleSteps).some((steps) => steps.some((st) => st.vel > 0)),
+      );
+      if (!hasContent) return false;
+      pushFireHistory();
+      if (get().playing) get().stop();
+      arrangementCueStep = 0;
+      set({ ...next, playing: false, recording: false });
+      try {
+        window.localStorage.setItem(STORAGE_KEY, raw);
+      } catch { /* keep previous stored value; state is applied in memory */ }
+      void get().hydrateSamples();
+      // FULL engine sync, matching what the undo-restore path already does.
+      // Opening a project used to push only the mixer, leaving three settings
+      // in the store but not in the engine until something unrelated happened
+      // to re-assert them:
+      //   · drumLevel — drums played at the PREVIOUS project's level until the
+      //     transport started (startScheduler is the only other caller),
+      //   · host BPM — any delaySync patch kept the old tempo, so tempo-locked
+      //     delays were in the wrong time signature relative to the sequence,
+      //   · Synth B — its engine was never engaged, so a project whose pattern
+      //     has channel-1 notes could open with the B layer inert.
+      // Each of those "fixes itself later", which is exactly how a load-time
+      // desync presents to the user.
+      {
+        const ns = get();
+        const eng = getEngine();
+        eng.fireDrums.setLevel(ns.drumLevel);
+        try {
+          eng.fireCommand.setHostBpm(ns.bpm);
+          eng.fireCommandB.setHostBpm(ns.bpm);
+        } catch { /* engine mid-teardown */ }
+        // Drum-lane sample overrides absent from this project must be cleared
+        // or the previous project's kit bleeds through.
+        for (const lane of DRUM_LANES) {
+          if (!ns.drumSamples[lane.id]) eng.fireDrums.setSample(lane.id, null);
+        }
+        if (ns.synthBEnabled) syncSynthBEngine();
+        applyMixerToEngine(ns);
+      }
+      return true;
     },
   };
 });
@@ -4886,6 +5552,7 @@ registerFireHistoryProvider("fireSequencer", {
       selectionEnd: s.selectionEnd,
       arrangementBars: s.arrangementBars,
       trackHeaderWidth: s.trackHeaderWidth,
+      markers: s.markers,
       mixer: s.mixer,
       fireLimiterOn: s.fireLimiterOn,
       duckEnabled: s.duckEnabled,

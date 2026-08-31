@@ -150,12 +150,15 @@ function resolveKnobIndex(cc: number, locked: number[] | null): number {
   return idx;
 }
 
-export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => ({
+export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => {
+  // One localStorage read, not two.
+  const learned = typeof window !== "undefined" ? loadLearnedKnobCcs() : null;
+  return ({
   enabled: true,
   index: 0,
   bankPage: 0,
-  knobSet: typeof window !== "undefined" ? loadLearnedKnobCcs() : null,
-  knobsBound: typeof window !== "undefined" ? (loadLearnedKnobCcs()?.length ?? 0) : 0,
+  knobSet: learned,
+  knobsBound: learned?.length ?? 0,
   lastKnobLabel: null,
   lastKnobAt: 0,
   lastCc: null,
@@ -253,7 +256,8 @@ export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => ({
     void _program;
     get().cycleNext();
   },
-}));
+  });
+});
 
 export function getFocusHud(): {
   enabled: boolean;

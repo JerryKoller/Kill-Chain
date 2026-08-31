@@ -391,6 +391,29 @@ button.kc-chip:hover { color: var(--c-text); border-color: rgba(255, 255, 255, 0
   100% { opacity: 0; transform: scale(1.12); }
 }
 
+/* Undo/redo timeline ticks — CSS-only pop-in (replaces per-tick framer). */
+.kc-hist-tick {
+  animation: kc-hist-tick 0.18s var(--kc-ease);
+  transform-origin: bottom;
+}
+@keyframes kc-hist-tick {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+/* Card entrance — cheap CSS fade/rise for grids (presets, libraries). */
+.kc-card-in {
+  animation: kc-card-in 0.22s var(--kc-ease);
+}
+@keyframes kc-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.kc-reduced .kc-card-in,
+.kc-reduced .kc-hist-tick {
+  animation: none;
+}
+
 /* ── Optional texture layers (Settings → Appearance, off by default) ──── */
 .kc-fx-scanlines {
   position: fixed;

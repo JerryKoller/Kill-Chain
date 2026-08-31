@@ -43,18 +43,25 @@ const DRUM_TRIM = 0.62;
 
 /**
  * Knee-style safety clip transfer, shared by the drum kit's output and the
- * engine's Fire-Command bus (see AudioEngine): EXACT identity up to ±0.7,
+ * engine's Fire-Command bus (see AudioEngine): EXACT identity up to ±0.85,
  * then a C1-smooth tanh shoulder that lands on a hard 0.98 (-0.18 dBFS)
  * ceiling. Evaluated over ±`range` — pair it with a 1/range pad gain going
  * into the WaveShaper so hot material is absorbed smoothly instead of
  * hard-clamping at the shaper's ±1 input boundary. Unity makeup: normal
  * program passes bit-exact, only genuine overs get rounded.
+ *
+ * Knee raised 0.7 → 0.85: the Fire bus is now guarded by a true lookahead
+ * limiter (ceiling 0.84) IN FRONT of this stage, so under normal operation
+ * the clipper sits entirely in its identity region — it exists purely as a
+ * last-resort ceiling for limiter-bypass / inter-sample overshoot. The old
+ * 0.7 knee meant any healthy signal above −3.1 dBFS picked up tanh
+ * coloration — one of the "always slightly crunchy" contributors.
  */
 export const SAFETY_CLIP_RANGE = 2;
 export function makeSafetyClipCurve(range = SAFETY_CLIP_RANGE): Float32Array<ArrayBuffer> {
   const n = 8192;
   const curve = new Float32Array(n);
-  const knee = 0.7;
+  const knee = 0.85;
   const span = 0.98 - knee;
   for (let i = 0; i < n; i++) {
     const x = ((i / (n - 1)) * 2 - 1) * range;
@@ -280,6 +287,9 @@ export class FireDrumKit {
     const polarity = opts?.polarity === -1 ? -1 : 1;
     const pan = opts?.pan ?? 0;
     const dest = this.panned(pan);
+    // Hand the per-hit panner (if any) to disposeOnEnd via pendingPanner —
+    // the voice below calls it synchronously.
+    this.pendingPanner = dest === this.output ? null : dest;
     switch (lane) {
       case "kick": this.kick(t, Math.abs(v) * (polarity < 0 ? -1 : 1), dest); break;
       case "snare": this.snare(t, v, dest); break;
@@ -292,8 +302,20 @@ export class FireDrumKit {
     }
   }
 
+  /**
+   * Per-hit panner created by `panned()` for the CURRENT trigger. The
+   * synthesized voices receive it as `dest` but never listed it for cleanup,
+   * so every panned hit left a live StereoPanner attached to the output bus
+   * for the rest of the session. disposeOnEnd now sweeps it up.
+   */
+  private pendingPanner: AudioNode | null = null;
+
   /** Disconnect synth-hit nodes after they finish to cut GC pressure. */
   private disposeOnEnd(last: AudioScheduledSourceNode, nodes: AudioNode[]): void {
+    if (this.pendingPanner) {
+      nodes = [...nodes, this.pendingPanner];
+      this.pendingPanner = null;
+    }
     for (const n of nodes) {
       if ("stop" in n && typeof (n as AudioScheduledSourceNode).stop === "function") {
         this.liveSources.add(n as AudioScheduledSourceNode);
@@ -303,6 +325,12 @@ export class FireDrumKit {
       for (const n of nodes) {
         if ("stop" in n) this.liveSources.delete(n as AudioScheduledSourceNode);
         try { n.disconnect(); } catch { /* ignore */ }
+      }
+      // The synth open-hat parks its gain in ohatGain for choking — clear the
+      // pointer when that gain was ours, or a later choke targets a
+      // disconnected node and the REAL ringing hat never gets choked.
+      for (const n of nodes) {
+        if (n === this.ohatGain) this.ohatGain = null;
       }
     };
   }

@@ -144,9 +144,14 @@ export async function exportFireToLibrary(
       copy.set(bytes);
       const blob = new Blob([copy], { type: meta.artwork.mime || "image/jpeg" });
       const url = URL.createObjectURL(blob);
-      useCoverStore.setState((s) => ({
-        covers: { ...s.covers, [path]: url },
-      }));
+      useCoverStore.setState((s) => {
+        // Repeated exports of the same path leaked the previous cover blob.
+        const prev = s.covers[path];
+        if (prev && prev.startsWith("blob:")) {
+          try { URL.revokeObjectURL(prev); } catch { /* ignore */ }
+        }
+        return { covers: { ...s.covers, [path]: url } };
+      });
     } catch { /* ignore */ }
   } else if (format === "mp3") {
     useCoverStore.getState().requestCover(path);

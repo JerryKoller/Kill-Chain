@@ -1,7 +1,7 @@
 /**
  * firePresetBank — Fire Command factory preset types + curated library export.
  *
- * 220 hand-authored curated presets (20 per category × 11 categories):
+ * 420 hand-authored curated presets (Wave 1: 20 × 11 categories, Wave 2: +200):
  *   - fireCuratedBank.ts — authored for the current synth (absolute Q, ladder/svf, ops4, warp, LPG)
  */
 
@@ -21,7 +21,12 @@ export const PRESET_CATEGORIES: PresetCategory[] = [
 /** Loose arp shape (matches the store's ArpSettings without importing it — avoids a cycle). */
 export interface PresetArp {
   enabled?: boolean;
-  mode?: "up" | "down" | "updown" | "random" | "asplayed";
+  /** Mirrors the engine's ArpMode — factory presets may use any mode the
+   *  arpeggiator supports, not just the original four. */
+  mode?:
+    | "up" | "down" | "updown" | "downup"
+    | "converge" | "diverge" | "pedal"
+    | "random" | "walk" | "asplayed";
   bpm?: number;
   division?: "1/4" | "1/8" | "1/8T" | "1/16" | "1/16T" | "1/32";
   octaves?: number;

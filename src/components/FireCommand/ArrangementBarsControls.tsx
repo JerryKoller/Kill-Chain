@@ -30,6 +30,11 @@ export function ArrangementBarsControls({
   };
 
   const commitDraft = () => {
+    // Empty field = cancel (Number("") is 0 → used to collapse to 1 bar).
+    if (!draft.trim()) {
+      setDraft(String(arrangementBars));
+      return;
+    }
     const n = Number(draft);
     if (!Number.isFinite(n)) {
       setDraft(String(arrangementBars));

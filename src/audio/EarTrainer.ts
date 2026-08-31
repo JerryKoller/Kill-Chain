@@ -78,6 +78,8 @@ export class EarTrainer {
   private src: AudioBufferSourceNode | null = null;
   private boostDb = 6;
   private running = false;
+  /** Deferred stop from stop()'s fade-out — cancelled by a fresh start(). */
+  private stopTimer: number | null = null;
   /** User-loaded track, used when the "custom" source is selected. */
   private customBuffer: AudioBuffer | null = null;
   private customName: string | null = null;
@@ -136,6 +138,12 @@ export class EarTrainer {
   async start(clip: ClipId | "custom" = "pink-noise"): Promise<void> {
     const engine = getEngine();
     await engine.resume();
+    // A pending fade-out stop from a recent stop() must not fire after this
+    // start — it would kill the NEW source ~160 ms in (silent trainer).
+    if (this.stopTimer !== null) {
+      window.clearTimeout(this.stopTimer);
+      this.stopTimer = null;
+    }
     this.stopSource();
 
     const buf = this.seamlessFor(clip);
@@ -160,8 +168,12 @@ export class EarTrainer {
     this.gain.gain.cancelScheduledValues(t);
     this.gain.gain.setValueAtTime(this.gain.gain.value, t);
     this.gain.gain.linearRampToValueAtTime(0, t + 0.12);
-    // Stop the source slightly after the fade.
-    window.setTimeout(() => this.stopSource(), 160);
+    // Stop the source slightly after the fade (tracked so start() can cancel).
+    if (this.stopTimer !== null) window.clearTimeout(this.stopTimer);
+    this.stopTimer = window.setTimeout(() => {
+      this.stopTimer = null;
+      this.stopSource();
+    }, 160);
     this.running = false;
   }
 

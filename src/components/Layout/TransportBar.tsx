@@ -186,7 +186,13 @@ export function TransportBar() {
               const a = useAudioStore.getState();
               const restore = a.outputGainDb;
               a.setOutputGain(-60);
-              setTimeout(() => a.setOutputGain(restore), 1500);
+              setTimeout(() => {
+                // Only restore if nothing else moved the gain in the window —
+                // a stale restore used to stomp loopback teardown's own gain.
+                if (useAudioStore.getState().outputGainDb === -60) {
+                  useAudioStore.getState().setOutputGain(restore);
+                }
+              }, 1500);
               toast("Feedback cut — output muted for 1.5 s");
             }}
             title="Hard mute the output for 1.5 seconds to kill a feedback ring"
@@ -379,6 +385,10 @@ function ScrubBar({
 }) {
   const barRef = useRef<HTMLDivElement>(null);
   const [hoverX, setHoverX] = useState<number | null>(null);
+  // Ref mirrors the scrub flag: setState is async, so the pointermoves that
+  // arrive before the re-render were dropped and drag-scrub felt dead until
+  // the first repaint.
+  const scrubbingRef = useRef(false);
   const [scrubbing, setScrubbing] = useState(false);
 
   const frac = (clientX: number) => {
@@ -397,19 +407,21 @@ function ScrubBar({
       onPointerDown={(e) => {
         if (duration <= 0) return;
         (e.currentTarget as Element).setPointerCapture(e.pointerId);
+        scrubbingRef.current = true;
         setScrubbing(true);
         onSeek(frac(e.clientX) * duration);
       }}
       onPointerMove={(e) => {
         setHoverX(e.clientX);
-        if (scrubbing && duration > 0) onSeek(frac(e.clientX) * duration);
+        if (scrubbingRef.current && duration > 0) onSeek(frac(e.clientX) * duration);
       }}
       onPointerUp={(e) => {
         try { (e.currentTarget as Element).releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        scrubbingRef.current = false;
         setScrubbing(false);
       }}
-      onPointerCancel={() => setScrubbing(false)}
-      onPointerLeave={() => { if (!scrubbing) setHoverX(null); }}
+      onPointerCancel={() => { scrubbingRef.current = false; setScrubbing(false); }}
+      onPointerLeave={() => { if (!scrubbingRef.current) setHoverX(null); }}
     >
       <div className="absolute inset-0 rounded-full overflow-hidden">
         <motion.div

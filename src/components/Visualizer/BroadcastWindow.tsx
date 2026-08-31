@@ -244,6 +244,9 @@ export function BroadcastWindow() {
       if (!frame || binCount !== p.freq.length) {
         binCount = p.freq.length;
         sampleRate = p.sampleRate || 48000;
+        for (const s of slots.values()) {
+          try { s.r.dispose?.(); } catch { /* ignore */ }
+        }
         slots.clear();
         frame = {
           g: ctx2d,
@@ -338,6 +341,11 @@ export function BroadcastWindow() {
       unsub?.();
       window.clearInterval(staleTimer);
       ro.disconnect();
+      for (const s of slots.values()) {
+        try { s.r.dispose?.(); } catch { /* ignore */ }
+      }
+      slots.clear();
+      luma?.dispose();
     };
   }, []);
 

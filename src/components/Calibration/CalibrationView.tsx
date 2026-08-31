@@ -8,6 +8,8 @@ import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
 import { usePlayerStore } from "@/state/playerStore";
 import { SOUND_PARAM_META, type SoundParams } from "@/audio/types";
+import { usePreviewSession } from "@/hooks/usePreviewSession";
+import { onPreviewCommitRequest } from "@/lib/previewCommitBus";
 import { SignatureSliders } from "./SignatureSliders";
 import { CalibrationToolbar } from "./CalibrationToolbar";
 import { PureTonePanel } from "./PureTonePanel";
@@ -30,7 +32,6 @@ export function CalibrationView() {
   const blindSwap = useCalibrationStore((s) => s.blindSwap);
   const mode = useCalibrationStore((s) => s.mode);
 
-  const previewParams = useAudioStore((s) => s.previewParams);
   const replaceParams = useAudioStore((s) => s.replaceParams);
   const params = useAudioStore((s) => s.params);
   const ensureReady = useAudioStore((s) => s.ensureReady);
@@ -39,6 +40,7 @@ export function CalibrationView() {
   const play = usePlayerStore((s) => s.play);
   const pause = usePlayerStore((s) => s.pause);
   const toast = useUIStore((s) => s.toast);
+  const session = usePreviewSession();
 
   const [hearingOpen, setHearingOpen] = useState(false);
 
@@ -46,20 +48,16 @@ export function CalibrationView() {
     if (!current && !done) start(mode);
   }, [current, done, start, mode]);
 
-  // When the user leaves the Calibration tab, drop any transient A/B preview
-  // back to the in-progress profile so the next tab doesn't sound subtly off.
-  // If they weren't mid-preview we leave the live engine alone — that way
-  // direct edits made here (sliders, Pure Tone Calibration) carry over instead
-  // of being clobbered.
+  // Nested tools (Deadflat, Genre Load) request commit before permanent writes.
+  useEffect(() => onPreviewCommitRequest(() => session.commit()), [session]);
+
+  // Clear A/B audition labels on leave; actual sound restore is owned by
+  // usePreviewSession (only keys this tab touched, and only if uncommitted).
   useEffect(() => {
     return () => {
-      const cs = useCalibrationStore.getState();
-      if (cs.preview !== "none") {
-        previewParams(cs.state.profile);
-      }
-      cs.setPreview("none");
+      useCalibrationStore.getState().setPreview("none");
     };
-  }, [previewParams]);
+  }, []);
 
   // Determine whether THIS step is blind-swapped; if so, "A" the user sees
   // is actually internal B. We invert the preview lookup so what the user
@@ -68,24 +66,27 @@ export function CalibrationView() {
   const variantForLabel = (label: "A" | "B"): "A" | "B" =>
     stepSwap ? (label === "A" ? "B" : "A") : label;
 
-  // Push the previewed variant — or the running profile — into the engine so
-  // the user instantly hears the difference without committing to a choice.
+  // Push A/B variants (or the running profile once the session has started).
+  // Merely opening the tab is SILENT — Sculptor work stays intact until the
+  // user auditions a variant, drags a slider, or applies.
   useEffect(() => {
-    if (!current) {
-      previewParams(state.profile);
+    if (preview === "A" && current) {
+      const v = variantForLabel("A");
+      session.push(v === "A" ? current.variantA : current.variantB);
       return;
     }
-    if (preview === "A") {
-      const v = variantForLabel("A");
-      previewParams(v === "A" ? current.variantA : current.variantB);
-    } else if (preview === "B") {
+    if (preview === "B" && current) {
       const v = variantForLabel("B");
-      previewParams(v === "A" ? current.variantA : current.variantB);
-    } else {
-      previewParams(state.profile);
+      session.push(v === "A" ? current.variantA : current.variantB);
+      return;
+    }
+    // Idle: only keep the engine on the running profile AFTER the user has
+    // started auditioning (so answering a question lands the updated profile).
+    if (session.startedRef.current) {
+      session.push(state.profile);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preview, current, state.profile, previewParams, blind, stepSwap]);
+  }, [preview, current, state.profile, blind, stepSwap]);
 
   const progress = current ? state.step / state.totalSteps : done ? 1 : 0;
 
@@ -113,7 +114,13 @@ export function CalibrationView() {
     value: SoundParams[K],
   ) => {
     setProfileAxis(key, value);
-    previewParams({ [key]: value } as Partial<SoundParams>);
+    session.push({ [key]: value } as Partial<SoundParams>);
+  };
+
+  const applyProfile = (label: string) => {
+    session.commit();
+    replaceParams(state.profile);
+    toast(label);
   };
 
   const confidence = state.confidence as Partial<Record<keyof SoundParams, number>>;
@@ -243,10 +250,7 @@ export function CalibrationView() {
               </p>
               <div className="flex gap-3 mt-8 flex-wrap justify-center">
                 <NeonButton
-                  onClick={() => {
-                    replaceParams(state.profile);
-                    toast("Applied your signature");
-                  }}
+                  onClick={() => applyProfile("Applied your signature")}
                 >
                   Apply Signature
                 </NeonButton>
@@ -303,10 +307,7 @@ export function CalibrationView() {
 
         <div className="mt-4 flex items-center gap-2">
           <NeonButton
-            onClick={() => {
-              replaceParams(state.profile);
-              toast("Applied current profile");
-            }}
+            onClick={() => applyProfile("Applied current profile")}
             className="flex-1 justify-center"
           >
             Apply profile

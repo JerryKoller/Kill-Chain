@@ -20,7 +20,7 @@
 import { getEngine, type FireMixPart } from "@/audio/AudioEngine";
 import { FireCommandSynth } from "@/audio/dsp/FireCommandSynth";
 import { FireDrumKit, makeSafetyClipCurve, SAFETY_CLIP_RANGE, DRUM_LANES } from "@/audio/dsp/FireDrumKit";
-import { useFireCommandStore, slotsFromState } from "@/state/fireCommandStore";
+import { useFireCommandStore, slotsFromState, SCENE_SLOTS } from "@/state/fireCommandStore";
 import { useAudioStore } from "@/state/audioStore";
 import {
   useFireSequencerStore,
@@ -118,8 +118,18 @@ export async function fireExportPreflight(): Promise<ExportPreflight> {
 
 // ── WAV encode ──────────────────────────────────────────────────────────────
 
+/** Float sample → PCM16 with symmetric rounding: −1.0 maps to −32768 and
+ *  values round to nearest instead of truncating toward zero (truncation put
+ *  a subtle DC/quantization bias on every export). */
+function toPcm16(v: number): number {
+  const x = Math.max(-1, Math.min(1, v));
+  const s = Math.round(x < 0 ? x * 32768 : x * 32767);
+  return Math.max(-32768, Math.min(32767, s));
+}
+
 export function encodeWav(left: Float32Array, right: Float32Array, sampleRate: number): Uint8Array {
-  const frames = left.length;
+  // Mismatched channel lengths would read undefined → NaN → encode garbage.
+  const frames = Math.min(left.length, right.length);
   const bytesPerSample = 2;
   const blockAlign = 2 * bytesPerSample;
   const dataSize = frames * blockAlign;
@@ -143,10 +153,8 @@ export function encodeWav(left: Float32Array, right: Float32Array, sampleRate: n
   view.setUint32(40, dataSize, true);
   let o = 44;
   for (let i = 0; i < frames; i++) {
-    const l = Math.max(-1, Math.min(1, left[i]));
-    const r = Math.max(-1, Math.min(1, right[i]));
-    view.setInt16(o, (l * 32767) | 0, true);
-    view.setInt16(o + 2, (r * 32767) | 0, true);
+    view.setInt16(o, toPcm16(left[i]), true);
+    view.setInt16(o + 2, toPcm16(right[i]), true);
     o += 4;
   }
   return new Uint8Array(buf);
@@ -157,8 +165,7 @@ export function encodeWav(left: Float32Array, right: Float32Array, sampleRate: n
 function f32ToI16(src: Float32Array): Int16Array {
   const out = new Int16Array(src.length);
   for (let i = 0; i < src.length; i++) {
-    const v = Math.max(-1, Math.min(1, src[i]));
-    out[i] = (v * 32767) | 0;
+    out[i] = toPcm16(src[i]);
   }
   return out;
 }
@@ -170,12 +177,18 @@ export async function encodeMp3(
 ): Promise<Uint8Array> {
   const { Mp3Encoder } = await import("@breezystack/lamejs");
   const enc = new Mp3Encoder(2, sampleRate, 320);
-  const l16 = f32ToI16(left);
-  const r16 = f32ToI16(right);
+  // Encode only the frames BOTH channels have, exactly like encodeWav. This
+  // used to iterate on the left channel alone, so a realtime capture whose
+  // taps ended a few frames apart fed the encoder a short/undefined right
+  // block and produced channel-skewed audio at the tail.
+  const frames = Math.min(left.length, right.length);
+  const l16 = f32ToI16(left.subarray(0, frames));
+  const r16 = f32ToI16(right.subarray(0, frames));
   const BLOCK = 1152;
   const chunks: Uint8Array[] = [];
-  for (let i = 0; i < l16.length; i += BLOCK) {
-    const part = enc.encodeBuffer(l16.subarray(i, i + BLOCK), r16.subarray(i, i + BLOCK));
+  for (let i = 0; i < frames; i += BLOCK) {
+    const end = Math.min(i + BLOCK, frames);
+    const part = enc.encodeBuffer(l16.subarray(i, end), r16.subarray(i, end));
     if (part.length > 0) chunks.push(part);
   }
   const tail = enc.flush();
@@ -362,21 +375,57 @@ async function offlineDryBounce(
   const octx = new OfflineAudioContext(2, frames, sr);
 
   const fireBus = octx.createGain();
+  // Mirror the LIVE bus exactly (AudioEngine): same −1.4 dB summing pad —
+  // the offline graph used to leave this at unity, so exports ran ~4.7 dB
+  // hotter into the limiter than live playback and sounded crunchier than
+  // what the user had dialed in.
+  fireBus.gain.value = 0.85;
   const fireMasterGain = octx.createGain();
-  const fireLimiter = octx.createDynamicsCompressor();
-  fireLimiter.threshold.value = -3.0;
-  fireLimiter.knee.value = 0;
-  fireLimiter.ratio.value = 20;
-  fireLimiter.attack.value = 0.002;
-  fireLimiter.release.value = 0.08;
   const fireBusPad = octx.createGain();
   fireBusPad.gain.value = 1 / SAFETY_CLIP_RANGE;
   const fireBusClip = octx.createWaveShaper();
   fireBusClip.curve = makeSafetyClipCurve();
   fireBusClip.oversample = "2x";
   fireBus.connect(fireMasterGain);
-  fireMasterGain.connect(fireLimiter);
-  fireLimiter.connect(fireBusPad);
+  // Same kc-limiter worklet as live (lookahead, no auto-makeup). Fall back
+  // to a DynamicsCompressor only if the module fails to load offline.
+  let limiterIn: AudioNode;
+  let limiterOut: AudioNode;
+  let setLimiterBypassed: (b: boolean) => void;
+  try {
+    const url = new URL("worklets/limiter-processor.js", document.baseURI).toString();
+    await octx.audioWorklet.addModule(url);
+    const worklet = new AudioWorkletNode(octx, "kc-limiter", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      channelCount: 2,
+      channelCountMode: "explicit",
+      channelInterpretation: "speakers",
+    });
+    limiterIn = worklet;
+    limiterOut = worklet;
+    setLimiterBypassed = (b) => worklet.parameters.get("bypass")?.setValueAtTime(b ? 1 : 0, 0);
+  } catch (err) {
+    console.warn("[fireStudio] offline limiter worklet failed — DynComp fallback:", err);
+    // Settings match AudioEngine's live stand-in exactly (−2.8 / knee 10 /
+    // ratio 10 / 0.1 release). They used to differ (−3.0 / knee 0 / ratio 20),
+    // so a worklet load failure exported noticeably harsher than it sounded.
+    const dyn = octx.createDynamicsCompressor();
+    dyn.threshold.value = -2.8;
+    dyn.knee.value = 10;
+    dyn.ratio.value = 10;
+    dyn.attack.value = 0.002;
+    dyn.release.value = 0.1;
+    limiterIn = dyn;
+    limiterOut = dyn;
+    setLimiterBypassed = (b) => {
+      dyn.threshold.value = b ? 0 : -2.8;
+      dyn.ratio.value = b ? 1 : 20;
+    };
+  }
+  fireMasterGain.connect(limiterIn);
+  limiterOut.connect(fireBusPad);
   fireBusPad.connect(fireBusClip).connect(octx.destination);
 
   const mkPart = () => {
@@ -387,7 +436,32 @@ async function offlineDryBounce(
   };
   const parts = { a: mkPart(), b: mkPart(), drums: mkPart(), samples: mkPart() };
   const fireDuck = octx.createGain();
-  parts.a.pan.connect(fireDuck);
+  // Duck HPF split — mirrors AudioEngine's wiring. Without it the bounce
+  // ducked Synth A full-band while live let the highs bypass the duck, so any
+  // patch with a duck HPF exported with the wrong sidechain character.
+  {
+    const duckHpfHz = Math.max(0, Math.min(500, seq.duckHpfHz ?? 0));
+    const split = duckHpfHz > 20;
+    if (split) {
+      const mkLr2 = (type: "lowpass" | "highpass") => {
+        const a = octx.createBiquadFilter();
+        const b = octx.createBiquadFilter();
+        a.type = type; b.type = type;
+        a.frequency.value = duckHpfHz; b.frequency.value = duckHpfHz;
+        a.Q.value = 0.7071; b.Q.value = 0.7071;
+        a.connect(b);
+        return { in: a, out: b };
+      };
+      const duckLp = mkLr2("lowpass");
+      const duckHp = mkLr2("highpass");
+      parts.a.pan.connect(duckLp.in);
+      duckLp.out.connect(fireDuck);      // lows are ducked
+      parts.a.pan.connect(duckHp.in);
+      duckHp.out.connect(fireBus);       // highs bypass the duck
+    } else {
+      parts.a.pan.connect(fireDuck);
+    }
+  }
   fireDuck.connect(fireBus);
   parts.b.pan.connect(fireBus);
   parts.drums.pan.connect(fireBus);
@@ -403,6 +477,14 @@ async function offlineDryBounce(
   const { patchA, patchB } = slotsFromState(fire);
   fireCommand.setPatch(patchA);
   fireCommandB.setPatch(patchB);
+  // Await the async worklets BEFORE any note is scheduled: an offline render
+  // starts immediately, so ladder/SVF voices were being built while the filter
+  // worklet was still loading and silently fell back to the biquad path (and
+  // spectral FX could miss the render window outright).
+  await Promise.all([
+    fireCommand.prewarmWorkletsForRender(),
+    fireCommandB.prewarmWorkletsForRender(),
+  ]);
   fireCommand.setMaxVoices(fire.maxVoices);
   fireCommandB.setMaxVoices(fire.maxVoices);
   fireCommand.setHostBpm(seq.bpm);
@@ -435,11 +517,7 @@ async function offlineDryBounce(
   fireMasterGain.gain.value = seq.mixer.master.mute
     ? 0
     : Math.max(0, Math.min(1.5, seq.mixer.master.level * masterTrim * dim));
-  if (!seq.fireLimiterOn) {
-    // Bypass: wire master gain straight to pad (keep graph simple — zero the compressor by high threshold).
-    fireLimiter.threshold.value = 0;
-    fireLimiter.ratio.value = 1;
-  }
+  if (!seq.fireLimiterOn) setLimiterBypassed(true);
   fireDrums.setLevel(seq.drumLevel);
 
   // Copy drum overrides + sample-deck buffers into the offline kit.
@@ -520,11 +598,65 @@ async function offlineDryBounce(
   );
 
   onProgress?.({ stage: "Rendering…", fraction: 0.45 });
-  const rendered = await octx.startRendering();
+
+  // ── Drive the 60 Hz modulation loop through the render ──
+  // The live engine shapes the trance gate, sample-hold LFOs, matrix routes
+  // and analog drift from a wall-clock timer that deliberately does not run
+  // offline — so every bounce used to export with the gate wide open and
+  // those modulators frozen at their initial value. OfflineAudioContext
+  // suspends at a given render time, which lets us run the REAL tick (same
+  // code as live) and resume, instead of reimplementing four subsystems.
+  const MOD_STEP_SEC = 1 / 60;
+  const quantum = 128 / sr; // suspend times must land on a render quantum
+  const tickMods = () => {
+    fireCommand.tickModulationForRender();
+    fireCommandB.tickModulationForRender();
+  };
+  tickMods();
+  const quantizeUp = (t: number) => Math.ceil(t / quantum) * quantum;
+  // The FIRST suspension must be primed BEFORE startRendering: an offline
+  // render runs as fast as the CPU allows, so a suspend requested afterwards
+  // is already in the past and rejects (which silently disabled all of this).
+  // Every subsequent suspension is scheduled while still paused, so it is
+  // always ahead of the render head.
+  let at = quantizeUp(MOD_STEP_SEC);
+  let pending: Promise<void> | null = null;
+  try {
+    pending = at < totalSec ? octx.suspend(at) : null;
+  } catch {
+    pending = null;
+  }
+  const renderPromise = octx.startRendering();
+  try {
+    let lastReport = 0;
+    while (pending) {
+      await pending;
+      tickMods();
+      if (onProgress && at - lastReport > 1) {
+        lastReport = at;
+        onProgress({ stage: "Rendering…", fraction: 0.45 + 0.4 * (at / totalSec) });
+      }
+      const nextAt = quantizeUp(at + MOD_STEP_SEC);
+      pending = nextAt < totalSec ? octx.suspend(nextAt) : null;
+      at = nextAt;
+      await octx.resume();
+    }
+  } catch {
+    // suspend/resume unavailable in this runtime — let the render finish.
+    // Worst case the bounce reverts to the old static-modulation behavior.
+  }
+  const rendered = await renderPromise;
   const left = rendered.getChannelData(0).slice();
   const right = rendered.numberOfChannels > 1
     ? rendered.getChannelData(1).slice()
     : left.slice();
+  // Release the two throwaway synths built for this render. Each is a full
+  // ~150-node graph with a generated reverb impulse response and its own
+  // rendered wavetable banks, so every export (and every stem, since stems
+  // bounce once per part) used to strand two of them for the rest of the
+  // session. Measured at ~0.4 MB retained per synth.
+  try { fireCommand.dispose(); } catch { /* best effort */ }
+  try { fireCommandB.dispose(); } catch { /* best effort */ }
   return { left, right, sampleRate: sr, totalSec, song };
 }
 
@@ -659,9 +791,16 @@ export async function exportStems(
     totalSec: number,
     index: number,
     total: number,
+    /**
+     * Shared leading-silence trim, in frames. Every stem MUST use the same
+     * offset or the files drift apart when imported together — each stem used
+     * to run firstAudibleFrame on itself, so a part that entered late got its
+     * own silence trimmed and started early relative to the others.
+     */
+    trimFrom?: number,
   ) => {
     if (left.length === 0) return;
-    const first = firstAudibleFrame(left, right, sampleRate);
+    const first = trimFrom ?? firstAudibleFrame(left, right, sampleRate);
     const want = Math.min(left.length - first, Math.round(totalSec * sampleRate));
     if (want < sampleRate * 0.05) return; // allow near-silent soloed stems
     onProgress?.({
@@ -681,18 +820,28 @@ export async function exportStems(
 
   // ── Offline dry stems (preferred) ───────────────────────────────────────
   try {
+    // master-dry runs FIRST on purpose: it contains every part, so its first
+    // audible frame is the earliest onset in the song and makes a safe shared
+    // trim for the individual stems (it can never cut into one of them).
     const jobs: { name: string; solo: FireMixPart | "master" }[] = [
-      ...STEM_PARTS.map(({ part, file }) => ({ name: file, solo: part as FireMixPart })),
       { name: "master-dry", solo: "master" as const },
+      ...STEM_PARTS.map(({ part, file }) => ({ name: file, solo: part as FireMixPart })),
     ];
     let i = 0;
+    let sharedTrim: number | undefined;
     for (const job of jobs) {
       onProgress?.({
         stage: `Offline ${job.name}…`,
         fraction: 0.05 + (i / jobs.length) * 0.7,
       });
       const audio = await offlineDryBounce(undefined, job.solo);
-      await writeStem(job.name, audio.left, audio.right, audio.sampleRate, audio.totalSec, i, jobs.length);
+      if (sharedTrim === undefined) {
+        sharedTrim = firstAudibleFrame(audio.left, audio.right, audio.sampleRate);
+      }
+      await writeStem(
+        job.name, audio.left, audio.right, audio.sampleRate, audio.totalSec,
+        i, jobs.length, sharedTrim,
+      );
       i++;
     }
 
@@ -702,6 +851,15 @@ export async function exportStems(
     return { dir, written, method: "offline" };
   } catch (err) {
     console.warn("[fireStudio] offline stems failed, falling back to realtime:", err);
+    // Only fall back if NOTHING landed on disk. Otherwise the realtime pass
+    // would write into the same folder alongside the offline files already
+    // there — a silent mix of two rendering methods with different gain
+    // staging, limiter behavior and alignment. A partial offline set is at
+    // least internally consistent.
+    if (written.length > 0) {
+      onProgress?.({ stage: "Done (partial)", fraction: 1 });
+      return { dir, written, method: "offline" };
+    }
   }
 
   // ── Realtime fallback (all six taps) ────────────────────────────────────
@@ -788,6 +946,13 @@ export async function saveProject(): Promise<string | null> {
     sceneMeta: fire.sceneMeta,
     sceneTransition: fire.sceneTransition,
     sceneMorphMs: fire.sceneMorphMs,
+    // These were missing, so a save → open cycle quietly dropped the user's
+    // Random Armory / mutation locks, their scene recall guards, and which
+    // scene slot was active.
+    activeSceneSlot: fire.activeSceneSlot,
+    sceneProtect: fire.sceneProtect,
+    moduleLocks: fire.moduleLocks,
+    pinnedModules: fire.pinnedModules,
     // Full arrangement: sections (with the live edits folded in), clips,
     // play mode, lanes, scale — everything the loader needs.
     pattern: serializePattern(),
@@ -813,7 +978,26 @@ export async function openProject(): Promise<{
   ]);
   if (!res) return { ok: false };
   try {
-    const data = JSON.parse(res.text) as {
+    return await applyProjectText(res.text);
+  } catch {
+    return { ok: false, error: "Project file is corrupted." };
+  }
+}
+
+/**
+ * Apply a project payload that has already been read off disk.
+ *
+ * Split out of `openProject` so the load path can be exercised without a file
+ * dialog — a project that only misbehaves on open is otherwise impossible to
+ * reproduce in a harness.
+ */
+export async function applyProjectText(text: string): Promise<{
+  ok: boolean;
+  error?: string;
+  missingSamples?: string[];
+}> {
+  {
+    const data = JSON.parse(text) as {
       kind?: string;
       patch?: unknown;
       patchB?: unknown;
@@ -828,14 +1012,21 @@ export async function openProject(): Promise<{
       sceneMeta?: unknown;
       sceneTransition?: string;
       sceneMorphMs?: number;
+      activeSceneSlot?: number;
+      sceneProtect?: unknown;
+      moduleLocks?: unknown;
+      pinnedModules?: unknown;
       pattern?: unknown;
     };
     if (data.kind !== "kill-chain-project") {
       return { ok: false, error: "Not a Kill-Chain project file." };
     }
-    if (data.patch) useFireCommandStore.getState().importPatch(data.patch, data.arp);
+    // fromUserProject: this is a sound the user deliberately saved, so keep
+    // their freeze / infinite-delay choices instead of softening them away.
+    const asProject = { fromUserProject: true } as const;
+    if (data.patch) useFireCommandStore.getState().importPatch(data.patch, data.arp, asProject);
     if (data.patchB) {
-      useFireCommandStore.getState().importPatchB(data.patchB, data.presetIdB);
+      useFireCommandStore.getState().importPatchB(data.patchB, data.presetIdB, asProject);
     } else if (data.pattern && typeof data.pattern === "object") {
       const pid = (data.pattern as { synthBPresetId?: string }).synthBPresetId;
       if (typeof pid === "string") {
@@ -864,6 +1055,20 @@ export async function openProject(): Promise<{
     if (Array.isArray(data.sceneMeta)) fireExtra.sceneMeta = data.sceneMeta;
     if (typeof data.sceneTransition === "string") fireExtra.sceneTransition = data.sceneTransition;
     if (typeof data.sceneMorphMs === "number") fireExtra.sceneMorphMs = data.sceneMorphMs;
+    // Counterparts of the fields added to saveProject — clamped / shape-checked
+    // because a project file is user-editable on disk.
+    if (typeof data.activeSceneSlot === "number" && Number.isFinite(data.activeSceneSlot)) {
+      fireExtra.activeSceneSlot = Math.max(0, Math.min(SCENE_SLOTS - 1, Math.floor(data.activeSceneSlot)));
+    }
+    if (data.sceneProtect && typeof data.sceneProtect === "object" && !Array.isArray(data.sceneProtect)) {
+      fireExtra.sceneProtect = data.sceneProtect;
+    }
+    if (data.moduleLocks && typeof data.moduleLocks === "object" && !Array.isArray(data.moduleLocks)) {
+      fireExtra.moduleLocks = data.moduleLocks;
+    }
+    if (Array.isArray(data.pinnedModules)) {
+      fireExtra.pinnedModules = data.pinnedModules.filter((m): m is string => typeof m === "string");
+    }
     if (Object.keys(fireExtra).length) useFireCommandStore.setState(fireExtra);
     if (data.editTarget === "a" || data.editTarget === "b") {
       useFireCommandStore.getState().setEditTarget(data.editTarget);
@@ -871,8 +1076,6 @@ export async function openProject(): Promise<{
     if (data.pattern) useFireSequencerStore.getState().importPattern(data.pattern);
     const { missing } = await useFireSequencerStore.getState().hydrateSamples();
     return { ok: true, missingSamples: missing };
-  } catch {
-    return { ok: false, error: "Project file is corrupted." };
   }
 }
 

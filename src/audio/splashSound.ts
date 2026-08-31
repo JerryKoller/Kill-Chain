@@ -511,12 +511,19 @@ export async function playSplashSound(volume = 1, onStart?: () => void): Promise
   }
 
   // Autoplay blocked: start on the first gesture, but only while it can still
-  // plausibly read as part of the boot sequence.
+  // plausibly read as part of the boot sequence. A hard timeout tears the
+  // listeners down if no gesture ever comes, so the promise (and its buffer
+  // capture) can't dangle for the whole session.
   const armedAt = performance.now();
   await new Promise<void>((resolve) => {
-    const once = () => {
+    let timeoutId = 0;
+    const done = () => {
+      window.clearTimeout(timeoutId);
       window.removeEventListener("pointerdown", once);
       window.removeEventListener("keydown", once);
+    };
+    const once = () => {
+      done();
       if (performance.now() - armedAt > GESTURE_RETRY_WINDOW_MS) {
         onStart?.();
         resolve();
@@ -527,6 +534,11 @@ export async function playSplashSound(volume = 1, onStart?: () => void): Promise
         () => { onStart?.(); resolve(); },
       );
     };
+    timeoutId = window.setTimeout(() => {
+      done();
+      onStart?.();
+      resolve();
+    }, GESTURE_RETRY_WINDOW_MS);
     window.addEventListener("pointerdown", once, { once: true });
     window.addEventListener("keydown", once, { once: true });
   });

@@ -51,7 +51,16 @@ function loadMappings(): MidiMapping[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as MidiMapping[]) : [];
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(parsed)) return [];
+    // Drop structurally-broken entries — corrupt storage fed straight into
+    // the message dispatcher otherwise.
+    return (parsed as MidiMapping[]).filter(
+      (m) =>
+        !!m && typeof m === "object" &&
+        typeof m.id === "string" &&
+        !!m.target && typeof m.target === "object",
+    );
   } catch { return []; }
 }
 
@@ -59,6 +68,26 @@ function saveMappings(maps: MidiMapping[]): void {
   if (typeof window === "undefined") return;
   try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(maps)); }
   catch { /* ignore */ }
+}
+
+/** Record a UI-flash timestamp, pruning stale ids so a controller sweep
+ *  across many CCs doesn't accumulate hundreds of dead entries forever. */
+function touchActivity(
+  cur: Record<string, number>,
+  id: string,
+): Record<string, number> {
+  const now = Date.now();
+  const next: Record<string, number> = {};
+  const keys = Object.keys(cur);
+  if (keys.length > 48) {
+    for (const k of keys) {
+      if (now - cur[k] < 5000) next[k] = cur[k];
+    }
+  } else {
+    Object.assign(next, cur);
+  }
+  next[id] = now;
+  return next;
 }
 
 /** One Web MIDI access for the session — avoid stacking listeners on remount. */
@@ -339,7 +368,7 @@ function handleMessage(deviceId: string, data: ArrayLike<number>): void {
       if (useFireMidiFocusStore.getState().handleCc(data1, value, data2)) {
         useMidiStore.setState({
           lastMessage: { id, label, value },
-          lastActiveAt: { ...useMidiStore.getState().lastActiveAt, [id]: Date.now() },
+          lastActiveAt: touchActivity(useMidiStore.getState().lastActiveAt, id),
         });
         return;
       }
@@ -355,7 +384,7 @@ function handleMessage(deviceId: string, data: ArrayLike<number>): void {
   const store = useMidiStore.getState();
   useMidiStore.setState({
     lastMessage: { id, label, value },
-    lastActiveAt: { ...store.lastActiveAt, [id]: Date.now() },
+    lastActiveAt: touchActivity(store.lastActiveAt, id),
   });
 
   // Learn mode: create a new mapping for the active target.

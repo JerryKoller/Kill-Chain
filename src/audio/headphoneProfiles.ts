@@ -1163,15 +1163,24 @@ export const HEADPHONES: Record<HeadphoneId, HeadphoneProfile> = {
 /**
  * Try to guess which headphone profile to use based on the active output
  * device name. Returns null if no match found.
+ *
+ * Longest match wins: first-hit-wins let short generic tokens ("aria",
+ * "xm5", "stealth") shadow more specific model strings and pick the wrong
+ * correction curve. Ties keep catalog order (headphones before devices).
  */
 export function matchHeadphoneByDeviceName(name: string): HeadphoneId | null {
   const lower = name.toLowerCase();
+  let bestId: HeadphoneId | null = null;
+  let bestLen = 0;
   for (const profile of Object.values(HEADPHONES)) {
-    if (profile.match.some((m) => lower.includes(m))) {
-      return profile.id;
+    for (const m of profile.match) {
+      if (m.length > bestLen && lower.includes(m)) {
+        bestId = profile.id;
+        bestLen = m.length;
+      }
     }
   }
-  return null;
+  return bestId;
 }
 
 /** All distinct brand names in the catalog (sorted). */

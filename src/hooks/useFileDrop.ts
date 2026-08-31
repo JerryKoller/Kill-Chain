@@ -86,11 +86,16 @@ async function walkEntry(entry: FileSystemEntry, out: QueueItem[]): Promise<void
   if (entry.isFile) {
     const fileEntry = entry as FileSystemFileEntry;
     return new Promise((resolve) => {
-      fileEntry.file(async (f) => {
-        const item = await fileToItem(f);
-        if (item) out.push(item);
-        resolve();
-      });
+      fileEntry.file(
+        async (f) => {
+          const item = await fileToItem(f);
+          if (item) out.push(item);
+          resolve();
+        },
+        // Unreadable file (permissions / removed mid-drop): skip it rather
+        // than leaving the whole drop hanging on a promise that never settles.
+        () => resolve(),
+      );
     });
   }
   if (entry.isDirectory) {
@@ -99,15 +104,22 @@ async function walkEntry(entry: FileSystemEntry, out: QueueItem[]): Promise<void
     return new Promise((resolve) => {
       const collected: FileSystemEntry[] = [];
       const read = () => {
-        reader.readEntries(async (batch) => {
-          if (batch.length === 0) {
+        reader.readEntries(
+          async (batch) => {
+            if (batch.length === 0) {
+              for (const e of collected) await walkEntry(e, out);
+              resolve();
+              return;
+            }
+            collected.push(...batch);
+            read();
+          },
+          // Unreadable directory: return whatever we already collected.
+          async () => {
             for (const e of collected) await walkEntry(e, out);
             resolve();
-            return;
-          }
-          collected.push(...batch);
-          read();
-        });
+          },
+        );
       };
       read();
     });
@@ -139,13 +151,21 @@ async function enrichMetadataFor(items: QueueItem[]): Promise<void> {
       const resp = await fetch(item.src);
       const blob = await resp.blob();
       const meta = await extractMetadata(blob);
-      item.metadata = meta;
+      // Update the queue IMMUTABLY so queue UIs actually re-render with the
+      // new titles/covers (in-place mutation kept the old names on screen),
+      // and skip items that were dequeued while we were reading tags.
       const player = usePlayerStore.getState();
-      const cur = player.queue.find((q) => q.id === item.id);
-      if (cur) cur.metadata = meta;
+      if (!player.queue.some((q) => q.id === item.id)) {
+        if (meta.coverUrl) URL.revokeObjectURL(meta.coverUrl);
+        continue;
+      }
+      usePlayerStore.setState((s) => ({
+        queue: s.queue.map((q) => (q.id === item.id ? { ...q, metadata: meta } : q)),
+      }));
       // If this is the currently-loaded item, push metadata immediately.
-      if (player.queue[player.currentIndex]?.id === item.id) {
-        player.setMetadata(meta);
+      const now = usePlayerStore.getState();
+      if (now.queue[now.currentIndex]?.id === item.id) {
+        now.setMetadata(meta);
       }
     } catch (err) {
       console.warn("[metadata] enrich failed for", item.name, err);

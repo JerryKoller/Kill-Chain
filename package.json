@@ -1,6 +1,6 @@
 {
   "name": "audio-playground",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "Kill Chain — a universal Windows audio engine for headphones, speakers, and home theater.",
   "author": "Jerry",
   "private": true,
@@ -15,7 +15,12 @@
     "dist": "npm run build && node scripts/patch-electron-builder-sac.mjs && electron-builder --win nsis --publish never",
     "lint": "tsc -b --noEmit",
     "typecheck": "tsc -b --noEmit",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "distort-hunt": "node scripts/fire-distort-hunt.mjs",
+    "leak-check": "node scripts/fire-leak-check.mjs",
+    "project-repro": "node scripts/fire-project-repro.mjs",
+    "soak": "node scripts/fire-soak-probe.mjs",
+    "heap-diff": "node --max-old-space-size=8192 scripts/fire-heap-diff.mjs"
   },
   "dependencies": {
     "@breezystack/lamejs": "^1.2.7",

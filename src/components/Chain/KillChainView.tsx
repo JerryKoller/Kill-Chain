@@ -7,7 +7,7 @@ import { usePlayerStore } from "@/state/playerStore";
 import { useEqStore, eqIsActive } from "@/state/eqStore";
 import { useDimensionStore } from "@/state/dimensionStore";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
-import { getEngine, peekEngine } from "@/audio/AudioEngine";
+import { peekEngine } from "@/audio/AudioEngine";
 import { restoreActive } from "@/audio/dsp/Reconstructor";
 import { useAppliedTractor } from "@/lib/tractorApplied";
 import type { SoundParams } from "@/audio/types";
@@ -130,7 +130,10 @@ export function KillChainView() {
   }, []);
 
   // ── live meters + engine stats (~10 Hz) ──
-  const [meters, setMeters] = useState({ in: 0, out: 0 });
+  // Meter fills are driven straight through DOM refs — pushing RMS through
+  // setState re-rendered the ENTIRE chain map (40+ cards) ten times a second
+  // whenever audio was playing.
+  const meterFills = useRef<Record<string, HTMLDivElement | null>>({});
   const [engineInfo, setEngineInfo] = useState<{
     sampleRate: number | null;
     latencyMs: number | null;
@@ -141,6 +144,16 @@ export function KillChainView() {
   useEffect(() => {
     let raf = 0;
     let last = 0;
+    const paintFill = (key: string, v: number) => {
+      const el = meterFills.current[key];
+      if (!el) return;
+      const pct = Math.min(100, v * 260);
+      el.style.width = `${pct}%`;
+      el.style.background =
+        pct > 88
+          ? "rgb(255 96 96)"
+          : "linear-gradient(90deg, rgb(var(--c-cyan)), rgb(var(--c-violet)))";
+    };
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       if (document.hidden || now - last < 100) return;
@@ -152,13 +165,20 @@ export function KillChainView() {
         const latency = (ctx.baseLatency ?? 0) + (ctx.outputLatency ?? 0);
         let voices = e.fireCommand.getActiveVoiceCount();
         voices += e.peekFireCommandB()?.getActiveVoiceCount() ?? 0;
-        setMeters({ in: e.getInputRms(), out: e.getOutputRms() });
-        setEngineInfo({
-          sampleRate: ctx.sampleRate,
-          latencyMs: latency > 0 ? latency * 1000 : null,
-          voices,
-          state: ctx.state,
-        });
+        const outRms = e.getOutputRms();
+        paintFill("in", e.getInputRms());
+        paintFill("out", outRms);
+        paintFill("outCard", outRms);
+        const latencyMs = latency > 0 ? Math.round(latency * 10000) / 10 : null;
+        // Rare-change stats only re-render when a value actually moved.
+        setEngineInfo((prev) =>
+          prev.sampleRate === ctx.sampleRate &&
+          prev.latencyMs === latencyMs &&
+          prev.voices === voices &&
+          prev.state === ctx.state
+            ? prev
+            : { sampleRate: ctx.sampleRate, latencyMs, voices, state: ctx.state },
+        );
       } catch { /* engine mid-teardown */ }
     };
     raf = requestAnimationFrame(loop);
@@ -227,8 +247,8 @@ export function KillChainView() {
             {bypass ? "○ Chain bypassed" : "● Chain engaged"}
           </button>
 
-          <Meter label="IN" value={meters.in} />
-          <Meter label="OUT" value={meters.out} />
+          <Meter label="IN" fillRef={(el) => { meterFills.current.in = el; }} />
+          <Meter label="OUT" fillRef={(el) => { meterFills.current.out = el; }} />
 
           <TractorLockStat />
 
@@ -380,9 +400,10 @@ export function KillChainView() {
                 <div className="mt-0.5 text-[9px] text-dim">Final limiter · DAC</div>
                 <div className="mt-1.5 h-1.5 rounded-full bg-white/10 overflow-hidden">
                   <div
+                    ref={(el) => { meterFills.current.outCard = el; }}
                     className="h-full rounded-full transition-[width] duration-100"
                     style={{
-                      width: `${Math.min(100, meters.out * 260)}%`,
+                      width: "0%",
                       background: "linear-gradient(90deg, rgb(var(--c-cyan)), rgb(var(--c-violet)))",
                     }}
                   />
@@ -421,19 +442,17 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Meter({ label, value }: { label: string; value: number }) {
+function Meter({ label, fillRef }: { label: string; fillRef: (el: HTMLDivElement | null) => void }) {
   return (
     <div className="flex items-center gap-2">
       <span className="text-[9px] uppercase tracking-widest text-white/40 w-7">{label}</span>
       <div className="relative h-2 w-28 rounded-full bg-white/10 overflow-hidden">
         <div
+          ref={fillRef}
           className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-100"
           style={{
-            width: `${Math.min(100, value * 260)}%`,
-            background:
-              value * 260 > 88
-                ? "rgb(255 96 96)"
-                : "linear-gradient(90deg, rgb(var(--c-cyan)), rgb(var(--c-violet)))",
+            width: "0%",
+            background: "linear-gradient(90deg, rgb(var(--c-cyan)), rgb(var(--c-violet)))",
           }}
         />
       </div>

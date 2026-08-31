@@ -162,6 +162,10 @@ export function useUiSounds() {
       // Reactor-driven flips (live pad strikes / stand-down) are marked quiet
       // — a growl mid-performance ruins the effect (issue #3).
       if (engageSoundsSuppressed()) return;
+      // User-initiated only (see doc comment): automation-driven flips
+      // (mission-state restores, LUFS pipeline, remote pipelines) shouldn't
+      // growl. `lastInputAt` was tracked for exactly this but never read.
+      if (now - lastInputAt > 400) return;
       // ONE sound per flip: the bass growl IS the engage/disengage voice.
       if (!s.bypass) {
         playEngageGrowl();

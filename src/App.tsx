@@ -197,7 +197,11 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-ink relative">
+    // kc-app-root: in "snap sequencer right" mode this box is padded to the
+    // left display's width so the title bar, sidebar, synth, keyboard and
+    // transport all stay on the left monitor while the sequencer is portalled
+    // into the right one. See fireChrome.css / useDualMonitor.
+    <div className="kc-app-root h-screen w-screen flex flex-col overflow-hidden bg-ink relative">
       {/* Animated background field (Settings → Ambient backdrop) */}
       {bgFx && (
         <>

@@ -46,11 +46,20 @@ export class Saturator {
     this.setAmount(0);
   }
 
+  /** Drive value the current curve was baked for (quantized). */
+  private curveKey = -1;
+
   setAmount(value: number): void {
     // Bipolar input — negative half is "off" (no reverse-saturation makes sense).
     const a = Math.max(0, Math.min(1, value));
     this._amount = a;
-    this.shaper.curve = Saturator.makeCurve(a);
+    // Rebaking a 4096-point curve every pointermove is the hot path of a
+    // knob drag — quantize drive to 1/128 steps and skip identical bakes.
+    const key = Math.round(a * 128);
+    if (key !== this.curveKey) {
+      this.curveKey = key;
+      this.shaper.curve = Saturator.makeCurve(key / 128);
+    }
     // Conservative gain staging: at 0 → unity in & out. At 1 → +3dB drive,
     // automatically compensated by post-gain to maintain perceived loudness.
     const preGain = 1 + a * 0.4;

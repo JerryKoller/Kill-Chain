@@ -10,6 +10,8 @@
 export interface LumaKey {
   resize(w: number, h: number): void;
   blit(src: HTMLCanvasElement): void;
+  /** Release the GL program/texture/buffer and the context. */
+  dispose(): void;
 }
 
 const VS = `#version 300 es
@@ -90,6 +92,14 @@ export function createLumaKey(canvas: HTMLCanvasElement): LumaKey | null {
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+    },
+    dispose() {
+      try { gl.deleteTexture(tex); } catch { /* ignore */ }
+      try { gl.deleteBuffer(quad); } catch { /* ignore */ }
+      try { gl.deleteProgram(prog); } catch { /* ignore */ }
+      try { gl.deleteShader(v); } catch { /* ignore */ }
+      try { gl.deleteShader(f); } catch { /* ignore */ }
+      try { gl.getExtension("WEBGL_lose_context")?.loseContext(); } catch { /* ignore */ }
     },
   };
 }

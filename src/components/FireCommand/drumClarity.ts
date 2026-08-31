@@ -41,6 +41,24 @@ export type DrumLaneMix = {
   rate: number;
   offset: number;
   feel: DrumFeel;
+  /**
+   * Per-lane swing offset added to the global drum swing, -0.3..+0.3 of a
+   * half-step.
+   *
+   * Global swing moved every lane together, so the classic move of swinging
+   * hats while the kick stays dead straight was impossible — the whole kit
+   * had to lean or none of it did. Negative values pull the off-beats EARLY
+   * (pushed feel), positive values lay them back.
+   */
+  swing?: number;
+  /**
+   * Flam: a grace hit `flam` × step-duration before each hit (0 = off).
+   * Classic snare/tom articulation that step grids normally can't express
+   * without hand-placing a second lane.
+   */
+  flam?: number;
+  /** Grace-hit level relative to the main hit (0..1, default 0.55). */
+  flamVel?: number;
 };
 
 export const DEFAULT_LANE_MIX = (): DrumLaneMix => ({
@@ -53,6 +71,9 @@ export const DEFAULT_LANE_MIX = (): DrumLaneMix => ({
   rate: 1,
   offset: 0,
   feel: "grid",
+  swing: 0,
+  flam: 0,
+  flamVel: 0.55,
 });
 
 export function clamp01(v: number) {

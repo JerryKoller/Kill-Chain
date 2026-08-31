@@ -20,7 +20,6 @@ function isUser(p: AnyPreset): p is UserPreset {
 
 export function EnhancedPresetsView() {
   const replaceParams = useAudioStore((s) => s.replaceParams);
-  const previewParams = useAudioStore((s) => s.previewParams);
   const toast = useUIStore((s) => s.toast);
   const preview = usePreviewSession();
 
@@ -74,8 +73,8 @@ export function EnhancedPresetsView() {
   // silent, and leaving without committing restores the previous sound.
   useEffect(() => {
     if (!preview.startedRef.current) return;
-    previewParams(blended);
-  }, [blended, previewParams, preview.startedRef]);
+    preview.push(blended);
+  }, [blended, preview]);
 
   const handleApplyPreset = (preset: AnyPreset) => {
     preview.commit();
@@ -117,7 +116,7 @@ export function EnhancedPresetsView() {
 
           <div className="space-y-1 max-h-[500px] overflow-y-auto">
             {collections.map((coll) => (
-              <motion.button
+              <button
                 key={coll.id}
                 onClick={() => setActiveCollectionId(coll.id)}
                 className={`w-full text-left px-3 py-2 rounded-lg transition text-sm ${
@@ -139,7 +138,7 @@ export function EnhancedPresetsView() {
                 {coll.description && (
                   <div className="text-xs text-white/40 mt-1">{coll.description}</div>
                 )}
-              </motion.button>
+              </button>
             ))}
           </div>
 
@@ -198,46 +197,46 @@ export function EnhancedPresetsView() {
           )}
 
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <AnimatePresence>
-              {presetsInActive.map((preset: AnyPreset | undefined) => {
-                if (!preset) return null;
-                const isFav = favoritesMetadata[preset.id]?.isFavorite;
-                return (
-                  <motion.div
-                    key={preset.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    className="group kc-lift p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/8 flex flex-col gap-2"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="font-semibold text-sm text-white">
-                          {preset.name}
-                        </div>
-                        {!isUser(preset) && (
-                          <div className="text-xs text-white/50 mt-0.5">{preset.blurb}</div>
-                        )}
+            {/* CSS pop-in instead of per-card framer enter/exit: switching
+                collections used to run a full AnimatePresence pass over
+                every card, which visibly hitched on large banks. */}
+            {presetsInActive.map((preset: AnyPreset | undefined) => {
+              if (!preset) return null;
+              const isFav = favoritesMetadata[preset.id]?.isFavorite;
+              return (
+                <div
+                  key={preset.id}
+                  className="group kc-lift kc-card-in p-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/8 flex flex-col gap-2"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="font-semibold text-sm text-white">
+                        {preset.name}
                       </div>
-                      <button
-                        onClick={() => toggleFavorite(preset.id)}
-                        className="text-lg group-hover:scale-125 transition"
-                      >
-                        {isFav ? "❤️" : "🤍"}
-                      </button>
+                      {!isUser(preset) && (
+                        <div className="text-xs text-white/50 mt-0.5">{preset.blurb}</div>
+                      )}
                     </div>
-
                     <button
-                      onClick={() => handleApplyPreset(preset)}
-                      data-ui-sound="none" // voiced centrally: preset apply plays the latch clack
-                      className="kc-btn kc-btn--sm kc-btn--accent w-full"
+                      onClick={() => toggleFavorite(preset.id)}
+                      className="text-lg group-hover:scale-125 transition"
+                      title={isFav ? "Remove from favorites" : "Add to favorites"}
+                      aria-label={isFav ? "Remove from favorites" : "Add to favorites"}
                     >
-                      Apply
+                      {isFav ? "❤️" : "🤍"}
                     </button>
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
+                  </div>
+
+                  <button
+                    onClick={() => handleApplyPreset(preset)}
+                    data-ui-sound="none" // voiced centrally: preset apply plays the latch clack
+                    className="kc-btn kc-btn--sm kc-btn--accent w-full"
+                  >
+                    Apply
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
           {presetsInActive.length === 0 && (

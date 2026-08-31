@@ -141,6 +141,26 @@ function newId(): string {
 }
 
 /**
+ * Release a blob: object URL (and a queue item's cover blob) once nothing
+ * references it anymore. Dropped files used to stay pinned in memory for the
+ * whole session because their object URLs were never revoked.
+ */
+function revokeIfBlob(url: string | null | undefined): void {
+  if (url && url.startsWith("blob:")) {
+    try { URL.revokeObjectURL(url); } catch { /* already revoked */ }
+  }
+}
+
+function releaseQueueItem(
+  item: QueueItem,
+  inUse: { src: string | null; coverUrl: string | null },
+): void {
+  if (item.src !== inUse.src) revokeIfBlob(item.src);
+  const cover = item.metadata?.coverUrl;
+  if (cover && cover !== inUse.coverUrl) revokeIfBlob(cover);
+}
+
+/**
  * True when it's safe to capture with "loopbackWithMute" (which mutes the
  * WINDOWS DEFAULT output endpoint): the app must be outputting to a
  * *different physical device*, otherwise the mute silences our own processed
@@ -296,11 +316,14 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const el = get().element;
     if (!el) return;
     if (get().loopbackActive) get().stopLoopback();
+    const prevSrc = get().src;
     el.src = src;
     el.load();
-    // Revoke any old cover art object URL.
+    // Revoke any old cover art object URL. Covers referenced by a queue item
+    // stay alive (releaseQueueItem frees them when the item leaves the queue).
     const m = get().metadata;
-    if (m.coverUrl) URL.revokeObjectURL(m.coverUrl);
+    const coverInQueue = m.coverUrl && get().queue.some((q) => q.metadata?.coverUrl === m.coverUrl);
+    if (m.coverUrl && !coverInQueue) revokeIfBlob(m.coverUrl);
     set({
       src,
       fileName: fileName ?? null,
@@ -309,17 +332,23 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentTime: 0,
       metadata: { title: fileName ?? null, artist: null, album: null, coverUrl: null },
     });
+    // Free the replaced track's blob unless a queue item still references it.
+    if (prevSrc && prevSrc !== src && !get().queue.some((q) => q.src === prevSrc)) {
+      revokeIfBlob(prevSrc);
+    }
   },
 
   loadBlob: async (blob, fileName) => {
     const el = get().element;
     if (!el) return;
     if (get().loopbackActive) get().stopLoopback();
+    const prevSrc = get().src;
     const url = URL.createObjectURL(blob);
     el.src = url;
     el.load();
     const m = get().metadata;
-    if (m.coverUrl) URL.revokeObjectURL(m.coverUrl);
+    const coverInQueue = m.coverUrl && get().queue.some((q) => q.metadata?.coverUrl === m.coverUrl);
+    if (m.coverUrl && !coverInQueue) revokeIfBlob(m.coverUrl);
     set({
       src: url,
       fileName: fileName ?? null,
@@ -328,6 +357,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       currentTime: 0,
       metadata: { title: fileName ?? null, artist: null, album: null, coverUrl: null },
     });
+    if (prevSrc && prevSrc !== url && !get().queue.some((q) => q.src === prevSrc)) {
+      revokeIfBlob(prevSrc);
+    }
   },
 
   setQueue: async (items, startIndex = 0) => {
@@ -362,16 +394,41 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const cur = get().queue;
     const idx = cur.findIndex((q) => q.id === id);
     if (idx < 0) return;
+    const removed = cur[idx];
     const next = cur.filter((q) => q.id !== id);
     let curIdx = get().currentIndex;
     if (idx < curIdx) curIdx -= 1;
     else if (idx === curIdx) curIdx = -1;
     set({ queue: next, currentIndex: curIdx });
+    // Free the removed item's blob memory unless it's still loaded/playing.
+    const s = get();
+    releaseQueueItem(removed, { src: s.src, coverUrl: s.metadata.coverUrl });
   },
 
   clearQueue: () => {
     get().pause();
-    set({ queue: [], currentIndex: -1, status: "empty", src: null, fileName: null });
+    const items = get().queue;
+    const el = get().element;
+    const prevSrc = get().src;
+    const prevCover = get().metadata.coverUrl;
+    set({
+      queue: [],
+      currentIndex: -1,
+      status: "empty",
+      src: null,
+      fileName: null,
+      metadata: { title: null, artist: null, album: null, coverUrl: null },
+    });
+    // Detach the element from the last blob and release everything —
+    // the transport used to keep showing the stale title after a clear.
+    if (el) {
+      try { el.removeAttribute("src"); el.load(); } catch { /* ignore */ }
+    }
+    revokeIfBlob(prevSrc);
+    revokeIfBlob(prevCover);
+    for (const item of items) {
+      releaseQueueItem(item, { src: null, coverUrl: null });
+    }
   },
 
   jumpTo: async (index) => {
@@ -416,7 +473,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setMetadata: (m) => {
     const cur = get().metadata;
     if (m.coverUrl !== undefined && cur.coverUrl && cur.coverUrl !== m.coverUrl) {
-      URL.revokeObjectURL(cur.coverUrl);
+      // Covers can be shared with a queue item's metadata — only revoke when
+      // nothing in the queue still references this URL.
+      const shared = get().queue.some((q) => q.metadata?.coverUrl === cur.coverUrl);
+      if (!shared) revokeIfBlob(cur.coverUrl);
     }
     set({ metadata: { ...cur, ...m } });
   },

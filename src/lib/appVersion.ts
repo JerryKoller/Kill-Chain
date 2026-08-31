@@ -1,5 +1,5 @@
 /** Displayed app version — keep in sync with package.json on release. */
-export const APP_VERSION = "3.4.0";
+export const APP_VERSION = "3.5.0";
 
 /** Primary product line — use in onboarding, About, and marketing copy. */
 export const PRODUCT_TAGLINE =
@@ -15,15 +15,15 @@ export const PRODUCT_BOOT_SUBTITLE = "Play & reshape audio";
 /** Headline changes shown in the "What's new" panel for this version. */
 export const WHATS_NEW: { title: string; body: string }[] = [
   {
-    title: "Clean first launch",
-    body: "Fresh installs start silent — Init patches only, empty sequencer, blank Airspace (no preset hum, no YouTube), and boot sound off by default.",
+    title: "Fire Command stays up",
+    body: "Long sessions no longer collapse into distortion or silence. Natural Selection auditions no longer leak memory. Sequencer project load stays in sync with the engine.",
   },
   {
-    title: "New Fire Command factory library",
-    body: "All old factory presets wiped. 220 newly curated patches (20 × 11 categories) authored for the current synth — absolute Q, ladder/SVF, ops4 FM, warp, LPG, chip duty.",
+    title: "Sequencer on the other screen",
+    body: "Expand puts the sequencer on the right display and the synth on the left. Arrangement and piano roll heights drag-resize and persist.",
   },
   {
-    title: "Session storage bump",
-    body: "Fire Command, Sequencer, and Airspace use new storage keys so dirty v3.3 sessions do not reopen humming or mid-stream.",
+    title: "Studio editing + 420 presets",
+    body: "Piano-roll toolbox, arrangement markers and clip clipboard, preset favorites/recents, and 200 new factory patches on top of the v3.4 library.",
   },
 ];

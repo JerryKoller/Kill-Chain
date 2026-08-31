@@ -71,7 +71,11 @@ export function FireSaveTiers() {
     setBusy(true);
     try {
       if (mode === "save") {
-        await saveProject();
+        const path = await saveProject();
+        // Feedback either way — a silent save left users unsure it worked
+        // (and re-saving "just in case").
+        if (path) toast(`Project saved — ${path}`, "success");
+        else toast("Save cancelled");
       } else {
         const res = await openProject();
         if (!res.ok && res.error) toast(res.error);

@@ -93,7 +93,13 @@ export function ModPatchGrid() {
     setModRoute(d.slot, { amount: Math.round(amount * 100) / 100 });
   };
 
-  const onCellUp = () => {
+  const onCellUp = (e: React.PointerEvent) => {
+    // Release the capture taken in onCellDown. Without this the cell kept
+    // ownership of the pointer after the drag, so later clicks anywhere else
+    // in Fire Command were delivered here and appeared to do nothing.
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch { /* already released */ }
     dragRef.current = null;
   };
 

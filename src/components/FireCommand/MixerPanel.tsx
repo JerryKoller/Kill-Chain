@@ -573,7 +573,7 @@ function SidechainRack() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const sync = () => {
-      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
       const cssW = Math.max(1, Math.floor(wrap.clientWidth) || 1);
       const cssH = 48;
       sizeRef.current = { w: cssW, h: cssH };
@@ -785,7 +785,15 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
     if (isFocused("mixer") && collapsed) ensureExpanded("mixer");
   }, [collapsed, isFocused]);
   const fireLimiterOn = useFireSequencerStore((s) => s.fireLimiterOn);
-  const mixer = useFireSequencerStore((s) => s.mixer);
+  // Narrow slices, not the whole mixer object: every strip already subscribes
+  // to its own `s.mixer[id]` (see MixerStrip), so a whole-object subscription
+  // here only meant one fader move re-rendered the panel and all five strips.
+  // These two derive to primitives, so they change far less often.
+  const live = useFireSequencerStore((s) =>
+    MIXER_PARTS.some((id) => !s.mixer[id].mute && s.mixer[id].level > 0.02)
+    || (!s.mixer.master.mute && s.mixer.master.level > 0.02),
+  );
+  const masterLevel = useFireSequencerStore((s) => s.mixer.master.level);
   const duckEnabled = useFireSequencerStore((s) => s.duckEnabled);
 
   const liveRef = useRef<Record<MixerStripId, number>>({
@@ -816,7 +824,11 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
     let raf = 0;
     const loop = () => {
       raf = requestAnimationFrame(loop);
-      if (document.hidden) return;
+      // Skip the analyser reads when there are no meter elements to paint.
+      // The panel returns null while collapsed to a band chip, but its hooks
+      // keep running — so five analysers were being read every frame to
+      // update nothing. registerMeter empties on unmount of the strips.
+      if (document.hidden || meterEls.current.size === 0) return;
       for (const [id, an] of analysers) {
         const els = meterEls.current.get(id);
         an.getFloatTimeDomainData(buf);
@@ -854,10 +866,6 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
 
   if (focusActive && focusId !== "mixer") return null;
   if (chipHosted && collapsed && !isFocused("mixer")) return null;
-
-  const live =
-    MIXER_PARTS.some((id) => !mixer[id].mute && mixer[id].level > 0.02) ||
-    (!mixer.master.mute && mixer.master.level > 0.02);
 
   return (
     <GlassPanel intense className="p-3" data-fire-module="mixer">
@@ -899,7 +907,7 @@ export function MixerPanel({ chipHosted = false }: { chipHosted?: boolean } = {}
                 Sum Deck
                 <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
                   {live
-                    ? `${fireLimiterOn ? "lim" : "open"}${duckEnabled ? " · duck" : ""} · MST ${fmtDb(mixer.master.level)}`
+                    ? `${fireLimiterOn ? "lim" : "open"}${duckEnabled ? " · duck" : ""} · MST ${fmtDb(masterLevel)}`
                     : "idle"}
                 </span>
               </div>
