@@ -338,7 +338,7 @@ const ENTRIES: Entry[] = [
     category: "Calibration",
     short: "A/B questions that build a personal tuning.",
     long:
-      "Pick which of two samples sounds better and the engine narrows in on a profile shaped to your ears and headphones. You can also drag the sliders directly.",
+      "Pick which of two samples sounds better and the engine narrows in on a profile shaped to your ears and headphones. You can also drag the sliders directly. Apply writes those knobs onto the live chain (parametric EQ is unchanged); leaving without Apply restores unapplied tweaks.",
   },
   {
     term: "Live Signature",
@@ -352,7 +352,7 @@ const ENTRIES: Entry[] = [
     category: "Calibration",
     short: "Audition each band with a clean test tone.",
     long:
-      "Plays a pure sine at each band's exact frequency — solo, swept, or all at once (unison) — so you can balance levels by ear and hear precisely what each band does.",
+      "Plays a pure sine at each band's exact frequency — solo, swept, or all at once (unison) — so you can balance levels by ear. Tones go straight to the output (not through Sculptor or the headphone/speaker profile); the sliders still write those bands on the live chain. This is a tone probe, not the guided A/B questionnaire.",
   },
   {
     term: "A/B Compare",
@@ -364,9 +364,9 @@ const ENTRIES: Entry[] = [
   {
     term: "Headphone Correction",
     category: "Calibration",
-    short: "Counteracts your headphone's tonal signature.",
+    short: "The headphone/speaker profile — not a full-chain bypass.",
     long:
-      "Every headphone colours sound. The correction layer flattens your model's stock bumps and dips so the rest of the chain starts from an accurate reference. Toggle off for a raw A/B with Windows.",
+      "Every output colours sound. The correction layer is the headphone/speaker profile only — it flattens your model's stock bumps and dips so the rest of the chain starts from an accurate reference. Tone, EQ, and repair still apply. Toggle off for a raw A/B with Windows.",
   },
   {
     term: "Golden Ears",
@@ -374,6 +374,13 @@ const ENTRIES: Entry[] = [
     short: "Ear-training drills that sharpen your listening.",
     long:
       "Practice spotting EQ boosts, level differences and distortion against varied sounds (or your own track) to train your hearing over time.",
+  },
+  {
+    term: "Hearing Test",
+    category: "Calibration",
+    short: "Relative quietest-audible tones per ear — not a clinical audiogram.",
+    long:
+      "A method-of-adjustment sweep at 10 frequencies per ear. Levels are dBFS on this rig, not dB HL. Tones bypass the sculpt chain. Apply replaces those EQ sliders with half the relative loss (capped); Keep current EQ leaves the chain alone. Not a medical test.",
   },
 
   // ── Tools (features) ───────────────────────────────────────────────────────
@@ -513,9 +520,9 @@ const ENTRIES: Entry[] = [
   {
     term: "Deadflat",
     category: "Calibration",
-    short: "One button that drives the whole chain toward flat.",
+    short: "Zero knobs and retune parametric EQ gains toward a measured flat.",
     long:
-      "Engages headphone correction, zeroes every colour control, listens to what's playing for 12 seconds and retunes the Sculptor so every third-octave band sits dead even against a pink-noise reference. Reports the measured deviation before and after.",
+      "Turns on the headphone/speaker profile, zeroes every colour control, listens to what's playing for 12 seconds and retunes parametric EQ gains so every third-octave band sits dead even against a pink-noise reference. Reports the measured deviation before and after. Cancel during the listen restores the knobs that were playing before Deadflat started.",
   },
   {
     term: "Fire Command",

@@ -7,6 +7,7 @@ import { useUIStore } from "@/state/uiStore";
 import { SOUND_PARAM_META, type SoundParams } from "@/audio/types";
 import { FRIENDLY_TO_EQ, type FriendlyKey } from "@/audio/AudioEngine";
 import { getPureToneCalibrator, type ToneSpec } from "@/audio/PureToneCalibrator";
+import { requestPreviewCommit } from "@/lib/previewCommitBus";
 
 interface BandDef {
   key: FriendlyKey;
@@ -40,9 +41,11 @@ export function PureTonePanel() {
 
   // Mirror every band edit into the calibration profile as well as the live
   // engine. The Calibration view re-pushes its profile whenever an A/B preview
-  // ends or a reference clip plays — without this, pure-tone edits would be
-  // wiped back to flat the moment the user auditioned anything.
+  // ends — without this, pure-tone edits would be wiped back the moment the
+  // user auditioned a variant. Commit the preview session so leaving the tab
+  // does not restore the pre-Calibration knobs over these writes.
   const setParam = (key: FriendlyKey, value: number) => {
+    requestPreviewCommit();
     setParamRaw(key, value);
     useCalibrationStore.getState().setProfileAxis(key, value);
   };
@@ -109,6 +112,7 @@ export function PureTonePanel() {
       setActive(false);
       setSweep(false);
       cal.stop();
+      toast("Tones off");
     } else {
       startCalibration();
       toast(mode === "unison" ? "Unison tones on" : "Pure tone on");
@@ -171,6 +175,7 @@ export function PureTonePanel() {
   return (
     <GlassPanel className="p-0 overflow-hidden">
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-white/[0.02] transition"
       >
@@ -206,6 +211,7 @@ export function PureTonePanel() {
               {/* Controls */}
               <div className="flex items-center gap-2 flex-wrap mb-3">
                 <button
+                  type="button"
                   onClick={toggleActive}
                   className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
                     active
@@ -213,13 +219,14 @@ export function PureTonePanel() {
                       : "border-white/15 bg-white/[0.03] text-white/80 hover:border-white/30"
                   }`}
                 >
-                  {active ? "■ Stop tones" : "▶ Start calibration"}
+                  {active ? "■ Stop tones" : "▶ Start tones"}
                 </button>
 
                 {/* Mode segmented control */}
                 <div className="flex rounded-xl border border-white/12 overflow-hidden">
                   {(["single", "unison"] as ToneMode[]).map((m) => (
                     <button
+                      type="button"
                       key={m}
                       onClick={() => switchMode(m)}
                       className={`px-3 py-2 text-xs font-semibold capitalize transition ${
@@ -232,6 +239,7 @@ export function PureTonePanel() {
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => setSweep((v) => !v)}
                   disabled={!active || mode !== "single"}
                   className={`rounded-xl border px-3 py-2 text-xs uppercase tracking-widest transition ${
@@ -243,16 +251,20 @@ export function PureTonePanel() {
                   ↻ Auto-sweep
                 </button>
                 <div className="flex-1" />
-                <button onClick={allOn} className="text-[11px] text-white/55 hover:text-white/85 underline-offset-2 hover:underline">
+                <button type="button" onClick={allOn} className="text-[11px] text-white/55 hover:text-white/85 underline-offset-2 hover:underline">
                   All on
                 </button>
                 <span className="text-white/20">·</span>
-                <button onClick={allOff} className="text-[11px] text-white/55 hover:text-white/85 underline-offset-2 hover:underline">
+                <button type="button" onClick={allOff} className="text-[11px] text-white/55 hover:text-white/85 underline-offset-2 hover:underline">
                   All off
                 </button>
               </div>
 
               <p className="text-[11px] text-dim leading-relaxed mb-3">
+                Tones go straight to the output — not through Sculptor or the
+                headphone/speaker profile. The sliders still write those bands
+                on the live chain.
+                {" "}
                 {mode === "unison" ? (
                   <>
                     <span className="text-white/70">Unison</span> plays every enabled band together
@@ -289,6 +301,7 @@ export function PureTonePanel() {
                     >
                       {/* Enable toggle */}
                       <button
+                        type="button"
                         onClick={() => toggleEnabled(band.key)}
                         title={on ? "Disable band" : "Enable band"}
                         className={`shrink-0 w-9 h-5 rounded-full border transition relative ${
@@ -306,6 +319,7 @@ export function PureTonePanel() {
 
                       {/* Band name + freq */}
                       <button
+                        type="button"
                         onClick={() => listen(band.key)}
                         disabled={!on}
                         className="shrink-0 w-32 text-left"

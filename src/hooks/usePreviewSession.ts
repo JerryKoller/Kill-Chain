@@ -6,6 +6,8 @@ import type { SoundParams } from "@/audio/types";
 export interface PreviewSession {
   /** Gate for the live-preview effect — only preview once the user interacts. */
   startedRef: MutableRefObject<boolean>;
+  /** True after Apply / Deadflat / Genre Load / hearing Apply — leave will not restore. */
+  committedRef: MutableRefObject<boolean>;
   /** Begin previewing — call from the first real user interaction. */
   start: () => void;
   /** Keep the current sound when leaving — call from Apply / Commit actions. */
@@ -62,6 +64,7 @@ export function usePreviewSession(): PreviewSession {
 
   return {
     startedRef,
+    committedRef,
     start: () => {
       startedRef.current = true;
     },

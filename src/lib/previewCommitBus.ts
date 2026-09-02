@@ -1,7 +1,7 @@
 /**
- * Tiny bus so nested Calibration tools (Deadflat, Genre Load) can mark the
- * parent tab's preview session as committed before they permanently rewrite
- * the chain — without prop-drilling through every panel.
+ * Tiny bus so nested Calibration tools (Deadflat, Genre Load, hearing Apply,
+ * Pure Tone edits) can mark the parent tab's preview session as committed
+ * before they permanently rewrite the chain — without prop-drilling.
  */
 
 type Listener = () => void;
@@ -14,7 +14,7 @@ export function onPreviewCommitRequest(fn: Listener): () => void {
   };
 }
 
-/** Call before intentional replaceParams / Deadflat / Genre Load. */
+/** Call before intentional replaceParams / Deadflat / Genre Load / hearing Apply / Pure Tone. */
 export function requestPreviewCommit(): void {
   for (const fn of listeners) fn();
 }

@@ -37,10 +37,12 @@ export function CalibrationView() {
   const ensureReady = useAudioStore((s) => s.ensureReady);
   const playerStatus = usePlayerStore((s) => s.status);
   const playerSrc = usePlayerStore((s) => s.src);
+  const loopbackActive = usePlayerStore((s) => s.loopbackActive);
   const play = usePlayerStore((s) => s.play);
   const pause = usePlayerStore((s) => s.pause);
   const toast = useUIStore((s) => s.toast);
   const session = usePreviewSession();
+  const canPlaySample = playerStatus === "playing" || Boolean(playerSrc) || loopbackActive;
 
   const [hearingOpen, setHearingOpen] = useState(false);
 
@@ -48,7 +50,8 @@ export function CalibrationView() {
     if (!current && !done) start(mode);
   }, [current, done, start, mode]);
 
-  // Nested tools (Deadflat, Genre Load) request commit before permanent writes.
+  // Nested tools (Deadflat, Genre Load, hearing Apply, Pure Tone) request
+  // commit before permanent writes.
   useEffect(() => onPreviewCommitRequest(() => session.commit()), [session]);
 
   // Clear A/B audition labels on leave; actual sound restore is owned by
@@ -56,7 +59,11 @@ export function CalibrationView() {
   useEffect(() => {
     return () => {
       useCalibrationStore.getState().setPreview("none");
+      if (session.startedRef.current && !session.committedRef.current) {
+        toast("Left Calibration — unapplied tweaks were restored");
+      }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Determine whether THIS step is blind-swapped; if so, "A" the user sees
@@ -101,6 +108,10 @@ export function CalibrationView() {
   };
 
   const handlePlayToggle = async () => {
+    if (playerStatus !== "playing" && !playerSrc && !loopbackActive) {
+      toast("Load a track first — Calibration A/B needs something playing");
+      return;
+    }
     await ensureReady();
     if (playerStatus === "playing") pause();
     else await play();
@@ -130,7 +141,7 @@ export function CalibrationView() {
       <ActionBar
         title="Calibration"
         code="KC-04"
-        subtitle="Zero in your hearing — A/B your way to a personal tuning, or drive the sliders direct"
+        subtitle="Zero in your hearing — A/B a personal tuning (Apply to keep it), or drive the sliders direct"
       />
       <CalibrationToolbar />
       <div className="grid grid-cols-12 gap-3">
@@ -207,13 +218,24 @@ export function CalibrationView() {
                   </NeonButton>
                   <NeonButton
                     variant="ghost"
+                    title="Discard answers and restart from the live knobs"
                     onClick={() => { reset(); start(mode); toast("Restarted"); }}
                   >
                     ↺ Restart
                   </NeonButton>
                 </div>
                 <div className="flex items-center gap-2">
-                  <NeonButton variant="ghost" onClick={handlePlayToggle}>
+                  <NeonButton
+                    type="button"
+                    variant="ghost"
+                    onClick={handlePlayToggle}
+                    disabled={!canPlaySample}
+                    title={
+                      canPlaySample
+                        ? undefined
+                        : "Load a track first — Calibration A/B needs something playing"
+                    }
+                  >
                     {playerStatus === "playing" ? "❚❚ Pause" : "▶ Play sample"}
                   </NeonButton>
                   <div className="text-[10px] uppercase tracking-widest text-dim">
@@ -222,7 +244,7 @@ export function CalibrationView() {
                 </div>
               </div>
 
-              {!playerSrc && (
+              {!playerSrc && !loopbackActive && (
                 <p className="text-[11px] text-amber-300/70 mt-3 text-center">
                   Tip: load a track from the transport bar first so the
                   calibration can actually use your ears.
@@ -245,19 +267,26 @@ export function CalibrationView() {
                 Your personal tuning
               </h2>
               <p className="text-sm text-dim mt-3 max-w-md">
-                Based on your choices we shaped a custom profile. Apply it now,
-                tweak it on the right, or run the calibration again.
+                Based on your choices we shaped a custom profile. Apply it now
+                to keep the knobs (parametric EQ is unchanged), tweak it on the
+                right, or run the calibration again.
               </p>
               <div className="flex gap-3 mt-8 flex-wrap justify-center">
                 <NeonButton
-                  onClick={() => applyProfile("Applied your signature")}
+                  type="button"
+                  title="Write the guided profile knobs onto the live chain — parametric EQ stays as-is"
+                  onClick={() => applyProfile("Applied your signature (knobs — EQ unchanged)")}
                 >
                   Apply Signature
                 </NeonButton>
-                <NeonButton variant="ghost" onClick={() => { reset(); start(mode); }}>
+                <NeonButton
+                  variant="ghost"
+                  title="Discard this signature and restart from the live knobs"
+                  onClick={() => { reset(); start(mode); toast("Restarted"); }}
+                >
                   Run again
                 </NeonButton>
-                <NeonButton variant="ghost" onClick={() => back()}>
+                <NeonButton variant="ghost" onClick={() => { back(); toast("Stepped back"); }}>
                   ← Tweak last answer
                 </NeonButton>
               </div>
@@ -278,7 +307,9 @@ export function CalibrationView() {
         <div className="text-xs uppercase tracking-[0.3em] text-dim">
           Live signature
         </div>
-        <div className="text-lg font-semibold mt-1">Profile in progress</div>
+        <div className="text-lg font-semibold mt-1">
+          {done ? "Your signature" : "Profile in progress"}
+        </div>
 
         <SignatureRadar profile={state.profile} live={params} />
 
@@ -289,9 +320,10 @@ export function CalibrationView() {
           <Legend swatch="rgba(120,255,240,0.8)" label="Live - (cut)" dashed />
         </div>
         <p className="text-[11px] text-dim mt-3 leading-relaxed">
-          Drag any slider below to tweak the profile directly - the engine
-          reacts instantly. Negative values bloom in the warmer / lighter
-          colours so a +50 sub-bass looks different from a -50.
+          Drag any slider below to tweak the profile directly — the engine
+          reacts instantly. Apply profile to keep these knobs when you leave.
+          Negative values bloom in the warmer / lighter colours so a +50
+          sub-bass looks different from a -50.
         </p>
 
         <div className="mt-4 pt-4 border-t border-white/8">
@@ -307,14 +339,17 @@ export function CalibrationView() {
 
         <div className="mt-4 flex items-center gap-2">
           <NeonButton
-            onClick={() => applyProfile("Applied current profile")}
+            type="button"
+            title="Write these profile knobs onto the live chain — parametric EQ stays as-is"
+            onClick={() => applyProfile("Applied current profile (knobs — EQ unchanged)")}
             className="flex-1 justify-center"
           >
             Apply profile
           </NeonButton>
           <NeonButton
             variant="ghost"
-            onClick={() => { reset(); start(mode); }}
+            title="Discard answers and restart from the live knobs"
+            onClick={() => { reset(); start(mode); toast("Restarted"); }}
           >
             {"\u21BA"} Reset
           </NeonButton>
@@ -331,6 +366,7 @@ function HearingTestCard({ onOpen }: { onOpen: () => void }) {
   const lastTest = useCalibrationStore((s) => s.hearingTest);
   return (
     <button
+      type="button"
       onClick={onOpen}
       className="w-full kc-lift rounded-2xl border border-cyan/30 bg-cyan/[0.04] hover:border-cyan/60 hover:bg-cyan/[0.08] px-4 py-3.5 text-left flex items-center gap-3"
     >
@@ -349,7 +385,8 @@ function HearingTestCard({ onOpen }: { onOpen: () => void }) {
         </div>
         <div className="text-[11px] text-dim mt-0.5">
           Find the quietest tone you can hear in each ear across 10 frequencies,
-          then fold a gentle compensating EQ into your tuning.
+          then optionally set those EQ sliders to a gentle compensation
+          (half the relative loss, capped).
         </div>
       </div>
       <span className="text-cyan/80 text-sm font-semibold shrink-0">Start →</span>
@@ -398,6 +435,7 @@ function Variant({
       }}
     >
       <button
+        type="button"
         onClick={onTogglePreview}
         className="w-full flex items-center gap-3 px-3 py-2.5 text-left"
       >
@@ -415,6 +453,7 @@ function Variant({
         </div>
       </button>
       <button
+        type="button"
         onClick={onPick}
         className="w-full py-1.5 text-xs font-semibold border-t transition"
         style={{

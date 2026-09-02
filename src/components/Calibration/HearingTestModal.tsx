@@ -5,6 +5,7 @@ import { useAudioStore } from "@/state/audioStore";
 import { useCalibrationStore } from "@/state/calibrationStore";
 import { useUIStore } from "@/state/uiStore";
 import { SOUND_PARAM_META, type SoundParams } from "@/audio/types";
+import { requestPreviewCommit } from "@/lib/previewCommitBus";
 
 /**
  * Test frequencies: the standard audiometric octaves (250 Hz – 8 kHz) plus
@@ -123,6 +124,9 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
 
   const toneRef = useRef<{ osc: OscillatorNode; gain: GainNode; pan: StereoPannerNode } | null>(null);
   const baselineRef = useRef<SoundParams | null>(null);
+  const lastCompRef = useRef<CompResult | null>(null);
+  const previewingRef = useRef(false);
+  const stageRef = useRef(stage);
 
   const setParams = useAudioStore((s) => s.setParams);
   const previewParams = useAudioStore((s) => s.previewParams);
@@ -133,6 +137,9 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
     () => (stage === "done" ? computeCompensation(left, right) : null),
     [stage, left, right],
   );
+  lastCompRef.current = comp;
+  previewingRef.current = compPreview;
+  stageRef.current = stage;
 
   const stopTone = () => {
     const t = toneRef.current;
@@ -165,15 +172,38 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
 
   const handleClose = () => {
     if (compPreview) restoreBaseline();
+    if (stage === "test") toast("Hearing test discarded");
+    else if (stage === "done") toast("Kept current EQ");
     onClose();
   };
 
-  useEffect(() => () => stopTone(), []);
+  useEffect(
+    () => () => {
+      stopTone();
+      const base = baselineRef.current;
+      const c = lastCompRef.current;
+      if (previewingRef.current && base && c) {
+        const restore: Partial<SoundParams> = {};
+        for (const k of Object.keys(c.partial) as (keyof SoundParams)[]) {
+          restore[k] = base[k];
+        }
+        useAudioStore.getState().previewParams(restore);
+      }
+      if (stageRef.current === "test") {
+        useUIStore.getState().toast("Hearing test discarded");
+      }
+    },
+    [],
+  );
 
   // Escape closes the modal, like every other overlay in the app.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && handleClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      handleClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -271,6 +301,9 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
     // Commit to the live engine AND fold into the calibration profile — the
     // Calibration view re-pushes `state.profile` whenever an A/B preview
     // ends, so compensation living only in `params` would get clobbered.
+    // Also mark the preview session committed so leaving Calibration does
+    // not restore the pre-test knobs over this Apply.
+    requestPreviewCommit();
     const setProfileAxis = useCalibrationStore.getState().setProfileAxis;
     for (const [band, value] of Object.entries(comp.partial)) {
       setProfileAxis(band as keyof SoundParams, value as number);
@@ -278,7 +311,7 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
     setParams(comp.partial);
     setCompPreview(false);
     baselineRef.current = null;
-    toast("Applied hearing compensation");
+    toast("Applied hearing compensation to those EQ bands");
     onClose();
   };
 
@@ -312,6 +345,7 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
               <div className="text-2xl font-semibold neon-text">Hearing Test</div>
             </div>
             <button
+              type="button"
               onClick={handleClose}
               className="w-8 h-8 rounded-lg border border-white/15 text-white/60 hover:text-white"
             >
@@ -338,12 +372,14 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
               </p>
               <div className="mt-5 flex gap-3 justify-end">
                 <button
+                  type="button"
                   onClick={handleClose}
                   className="rounded-lg border border-white/12 px-4 py-2 text-sm"
                 >
                   Cancel
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     setStage("test");
                     setStep(0);
@@ -385,19 +421,21 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
                   className="w-full accent-cyan h-8"
                 />
                 <div className="flex items-center justify-between text-[11px] font-mono text-dim mt-1">
-                  <span>{START_DB} dB (silent)</span>
-                  <span className="text-cyan">{dbLevel} dB</span>
-                  <span>{MAX_DB} dB (loud)</span>
+                  <span>{START_DB} dBFS (silent)</span>
+                  <span className="text-cyan">{dbLevel} dBFS</span>
+                  <span>{MAX_DB} dBFS (loud)</span>
                 </div>
               </div>
               <div className="mt-5 grid grid-cols-2 gap-3">
                 <button
+                  type="button"
                   onClick={() => record(null)}
                   className="rounded-lg border border-white/15 text-white/75 px-3 py-2.5 text-sm hover:bg-white/5"
                 >
                   Can't hear it — skip
                 </button>
                 <button
+                  type="button"
                   onClick={() => record(dbLevel)}
                   className="rounded-lg border border-cyan/60 bg-cyan/15 text-cyan px-3 py-2.5 text-sm font-semibold"
                 >
@@ -420,10 +458,12 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
               {comp ? (
                 <div className="mt-4">
                   <div className="text-[11px] text-dim leading-relaxed">
-                    Suggested compensation boosts the bands you were less
-                    sensitive to by <span className="text-white/75">half</span> the
-                    measured difference (capped at +{MAX_BOOST_DB} dB) — full
-                    correction tends to sound harsh and costs headroom.
+                    Suggested compensation moves bands by{" "}
+                    <span className="text-white/75">half</span> the measured
+                    relative difference — boosts capped at +{MAX_BOOST_DB} dB,
+                    cuts at −{MAX_CUT_DB} dB. Full correction tends to sound harsh
+                    and costs headroom. Apply replaces those EQ sliders; other
+                    knobs stay.
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {(Object.keys(comp.bandDb) as FriendlyKey[])
@@ -454,6 +494,7 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
               <div className="mt-5 flex flex-wrap gap-3 justify-end items-center">
                 {comp && (
                   <button
+                    type="button"
                     onClick={toggleCompPreview}
                     className={`rounded-lg border px-4 py-2 text-sm transition ${
                       compPreview
@@ -466,14 +507,17 @@ export function HearingTestModal({ open, onClose }: { open: boolean; onClose: ()
                   </button>
                 )}
                 <button
+                  type="button"
                   onClick={handleClose}
                   className="rounded-lg border border-white/12 px-4 py-2 text-sm"
                 >
                   Keep current EQ
                 </button>
                 <button
+                  type="button"
                   onClick={onApplyCompensation}
                   disabled={!comp}
+                  title="Replace those EQ sliders with the suggested compensation — other knobs stay"
                   className="rounded-lg border border-cyan/60 bg-cyan/15 text-cyan px-4 py-2 text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Apply as EQ

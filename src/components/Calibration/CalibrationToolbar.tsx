@@ -23,6 +23,7 @@ export function CalibrationToolbar() {
   const replaceParams = useAudioStore((s) => s.replaceParams);
   const params = useAudioStore((s) => s.params);
   const toast = useUIStore((s) => s.toast);
+  const activeSlotName = slots.find((s) => s.id === activeGenre)?.name ?? activeGenre;
 
   return (
     <GlassPanel intense className="p-4 space-y-4">
@@ -31,11 +32,13 @@ export function CalibrationToolbar() {
           <div className="flex gap-2 flex-wrap">
             {(Object.keys(MODE_STEPS) as CalibMode[]).map((m) => (
               <button
+                type="button"
                 key={m}
                 onClick={() => {
                   start(m);
                   toast(`Started ${MODE_BLURBS[m].label} calibration`);
                 }}
+                title={`Start ${MODE_BLURBS[m].label} — restarts the questionnaire from the live knobs`}
                 className={`text-left rounded-xl border px-3 py-2 transition ${
                   mode === m
                     ? "border-cyan/60 bg-cyan/10 text-cyan"
@@ -52,7 +55,11 @@ export function CalibrationToolbar() {
               label="Blind A/B"
               sub="Hide which side is which"
               on={blind}
-              onClick={() => setBlind(!blind)}
+              onClick={() => {
+                const next = !blind;
+                setBlind(next);
+                toast(next ? "Blind A/B on — labels are shuffled" : "Blind A/B off");
+              }}
             />
           </div>
         </div>
@@ -68,8 +75,10 @@ export function CalibrationToolbar() {
           <div className="flex flex-wrap gap-2">
             {slots.map((slot) => (
               <button
+                type="button"
                 key={slot.id}
                 onClick={() => setActiveGenre(slot.id as GenreId)}
+                title="Select this slot — tap Load to apply it to the live chain"
                 className={`rounded-lg border px-3 py-1.5 text-left transition ${
                   activeGenre === slot.id
                     ? "border-cyan/60 bg-cyan/10 text-cyan"
@@ -82,22 +91,26 @@ export function CalibrationToolbar() {
             ))}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-dim">
-            <span>Slot {`"${activeGenre}"`} actions:</span>
+            <span>Slot {`"${activeSlotName}"`} actions:</span>
             <button
+              type="button"
+              title="Save the live Sculptor knobs into this genre slot"
               onClick={() => {
                 saveToActiveGenre(params);
-                toast(`Saved current tuning into "${activeGenre}"`);
+                toast(`Saved live knobs into "${activeSlotName}"`);
               }}
               className="rounded-md border border-white/12 px-2 py-1 hover:border-cyan/40 hover:text-cyan"
             >
               Save current
             </button>
             <button
+              type="button"
+              title="Load this slot onto the live chain (Sculptor knobs)"
               onClick={() => {
                 void import("@/lib/previewCommitBus").then(({ requestPreviewCommit }) => {
                   requestPreviewCommit();
                   replaceParams(loadActiveGenre());
-                  toast(`Loaded "${activeGenre}"`);
+                  toast(`Loaded "${activeSlotName}" onto the live chain`);
                 });
               }}
               className="rounded-md border border-white/12 px-2 py-1 hover:border-cyan/40 hover:text-cyan"
@@ -123,6 +136,7 @@ function ToggleBtn({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`rounded-xl border px-3 py-2 text-left transition ${
         on

@@ -1,10 +1,11 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useAudioStore } from "@/state/audioStore";
 import { useEqStore } from "@/state/eqStore";
 import { useUIStore } from "@/state/uiStore";
 import { usePlayerStore } from "@/state/playerStore";
-import { NEUTRAL_PARAMS } from "@/audio/types";
+import { NEUTRAL_PARAMS, type SoundParams } from "@/audio/types";
+import type { RoomId } from "@/audio/dsp/HRTFRooms";
 import { deriveDeadflat, sampleCurveDb, type DeadflatResult } from "@/lib/tractorBeam";
 import { measureLive } from "@/lib/tractorLive";
 
@@ -12,7 +13,7 @@ import { measureLive } from "@/lib/tractorLive";
  * DEADFLAT — the Calibration hammer. One button that drives the whole chain
  * toward dead-level frequency response for whatever is playing:
  *
- *   1. Engages the headphone correction profile (flattens the TRANSDUCER),
+ *   1. Engages the headphone/speaker profile (flattens the TRANSDUCER),
  *   2. Zeroes every creative tone control and room effect,
  *   3. Listens to the live signal for 12 s,
  *   4. Retunes the Sculptor bands so every 1/3-octave lands on one flat,
@@ -21,6 +22,23 @@ import { measureLive } from "@/lib/tractorLive";
  * Reports the measured deviation before → after so the flattening is a
  * number, not a feeling.
  */
+
+interface DeadflatSnap {
+  params: SoundParams;
+  correction: boolean;
+  room: RoomId;
+  roomMix: number;
+  clarity: number;
+}
+
+function restoreSnap(snap: DeadflatSnap): void {
+  const audio = useAudioStore.getState();
+  audio.replaceParams(snap.params);
+  audio.setCorrectionEnabled(snap.correction);
+  audio.setRoom(snap.room, snap.roomMix);
+  audio.setClarity(snap.clarity);
+}
+
 export function DeadflatPanel() {
   const toast = useUIStore((s) => s.toast);
   const [busy, setBusy] = useState(false);
@@ -28,10 +46,45 @@ export function DeadflatPanel() {
   const [status, setStatus] = useState("");
   const [result, setResult] = useState<DeadflatResult | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const userCancelRef = useRef(false);
+  const snapshotRef = useRef<DeadflatSnap | null>(null);
+
+  // Drop the ref so an in-flight catch does not toast "cancelled" after we
+  // leave Calibration. Click-to-cancel keeps the ref and still toasts.
+  // Flatten already landed before the 12 s listen, so abort also restores
+  // the pre-Deadflat knobs / profile / room / clarity.
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    },
+    [],
+  );
+
+  const cancelRun = useCallback(() => {
+    const ac = abortRef.current;
+    if (!ac || ac.signal.aborted) return;
+    userCancelRef.current = true;
+    ac.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!busy) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      cancelRun();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, cancelRun]);
 
   const run = async () => {
     if (busy) {
-      abortRef.current?.abort();
+      cancelRun();
       return;
     }
     const p = usePlayerStore.getState();
@@ -43,20 +96,30 @@ export function DeadflatPanel() {
     setBusy(true);
     setProgress(0);
     setResult(null);
+    userCancelRef.current = false;
     const ac = new AbortController();
     abortRef.current = ac;
     try {
       const audio = useAudioStore.getState();
       await audio.ensureReady();
+      if (ac.signal.aborted) throw new DOMException("cancelled", "AbortError");
+      const live = useAudioStore.getState();
+      snapshotRef.current = {
+        params: { ...live.params },
+        correction: live.correctionEnabled,
+        room: live.room,
+        roomMix: live.roomMix,
+        clarity: live.clarity,
+      };
       // Step 1+2: flatten the transducer, zero the colour.
-      audio.setCorrectionEnabled(true);
+      live.setCorrectionEnabled(true);
       // Commit any open Calibration preview session so leave-restore doesn't
       // undo this intentional flatten.
       const { requestPreviewCommit } = await import("@/lib/previewCommitBus");
       requestPreviewCommit();
-      audio.replaceParams({ ...NEUTRAL_PARAMS });
-      audio.setRoom("off", 0);
-      audio.setClarity(0);
+      live.replaceParams({ ...NEUTRAL_PARAMS });
+      live.setRoom("off", 0);
+      live.setClarity(0);
       setStatus("Listening — keep it playing…");
       // Step 3: measure the live signal.
       const m = await measureLive({
@@ -70,20 +133,36 @@ export function DeadflatPanel() {
       });
       if (ac.signal.aborted) throw new DOMException("cancelled", "AbortError");
       if (m.silent) {
-        toast("Heard nothing — start playback and run Deadflat again");
-        setStatus("");
+        const snap = snapshotRef.current;
+        snapshotRef.current = null;
+        if (snap) restoreSnap(snap);
+        if (abortRef.current === ac) {
+          toast("Heard nothing — start playback and run Deadflat again");
+          setStatus("");
+        }
         return;
       }
       // Step 4: drive every band to the flat line.
       const flat = deriveDeadflat(m, 1);
       useEqStore.getState().applyGainCurve((f) => sampleCurveDb(flat.curve, f));
+      snapshotRef.current = null;
+      if (abortRef.current !== ac) return;
       setResult(flat);
       setStatus("");
       toast(`Deadflat locked — deviation ${flat.flatnessBeforeDb.toFixed(1)} → ${flat.flatnessAfterDb.toFixed(1)} dB`);
     } catch (err) {
-      if ((err as DOMException)?.name === "AbortError") toast("Deadflat cancelled");
-      else toast("Deadflat failed — engine tap unavailable");
-      setStatus("");
+      const snap = snapshotRef.current;
+      snapshotRef.current = null;
+      if (snap) restoreSnap(snap);
+      const stillMine = abortRef.current === ac;
+      if ((err as DOMException)?.name === "AbortError") {
+        if (userCancelRef.current) {
+          toast(snap ? "Deadflat cancelled — previous knobs restored" : "Deadflat cancelled");
+        }
+      } else if (stillMine) {
+        toast("Deadflat failed — engine tap unavailable");
+      }
+      if (stillMine) setStatus("");
     } finally {
       if (abortRef.current === ac) {
         setBusy(false);
@@ -98,12 +177,13 @@ export function DeadflatPanel() {
         <div className="flex-1 min-w-[240px]">
           <div className="text-xs uppercase tracking-[0.3em] text-dim">Deadflat</div>
           <div className="text-base font-semibold mb-1">
-            Level every frequency — the whole chain, one flat line
+            Zero knobs, retune EQ gains — one flat line
           </div>
           <div className="text-[12px] text-dim leading-relaxed">
-            Engages headphone correction, zeroes every colour control, listens to what's
-            playing for 12 seconds, then retunes the Sculptor so every band sits dead even
-            (pink reference). The result is as flat as this rig can measure without a mic.
+            Turns on the headphone/speaker profile, zeroes every colour control,
+            listens to what's playing for 12 seconds, then retunes parametric EQ
+            gains so every band sits dead even (pink reference). The result is as
+            flat as this rig can measure without a mic.
           </div>
           {result && !result.silent && (
             <div className="mt-2 flex gap-2 flex-wrap text-[11px] tabular-nums">
@@ -120,6 +200,7 @@ export function DeadflatPanel() {
         </div>
         <div className="shrink-0 flex flex-col items-stretch gap-2 w-[200px]">
           <button
+            type="button"
             onClick={() => void run()}
             className={`rounded-xl border px-4 py-3 text-sm font-semibold transition ${
               busy

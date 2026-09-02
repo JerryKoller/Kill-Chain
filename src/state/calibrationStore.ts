@@ -86,7 +86,11 @@ function savePersist(shape: PersistShape): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(shape));
-  } catch { /* ignore */ }
+  } catch (err) {
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Calibration", err),
+    );
+  }
 }
 
 interface CalibrationState {
