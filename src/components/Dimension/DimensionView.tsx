@@ -4,6 +4,7 @@ import { GlassPanel } from "@/components/shared/GlassPanel";
 import { Room3DCanvas } from "./Room3DCanvas";
 import {
   useDimensionStore,
+  flushDimensionPersist,
   SPEAKER_META,
   LAYOUTS,
   ROOM_LIMITS,
@@ -14,7 +15,8 @@ import {
   MOTION_PRESETS,
   SCENE_PRESETS,
   MISSION_PROFILES,
-  motionBandCentre,
+  bandPlacementFor,
+  speakersMatchLayout,
   type SpeakerType,
   type DimMode,
   type DimSignal,
@@ -47,7 +49,6 @@ export function DimensionView() {
   const listenerYaw = useDimensionStore((s) => s.listenerYaw);
   const speakers = useDimensionStore((s) => s.speakers);
   const selectedId = useDimensionStore((s) => s.selectedId);
-  const layout = useDimensionStore((s) => s.layout);
   const paletteType = useDimensionStore((s) => s.paletteType);
 
   const bands = useEqStore((s) => s.bands);
@@ -73,22 +74,84 @@ export function DimensionView() {
   const resetDimension = useDimensionStore((s) => s.reset);
 
   const [confirmReset, setConfirmReset] = useState(false);
+  const resetTimer = useRef<number | null>(null);
+  const toast = useUIStore((s) => s.toast);
 
-  // Push current scene into the engine whenever the view mounts.
+  // Push current scene into the engine whenever the view mounts. Opening is
+  // silent: engagement is off until Enter 3D Space.
   useEffect(() => {
     useDimensionStore.getState().syncStructure();
   }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      if (confirmReset) {
+        e.preventDefault();
+        if (resetTimer.current != null) {
+          window.clearTimeout(resetTimer.current);
+          resetTimer.current = null;
+        }
+        setConfirmReset(false);
+        return;
+      }
+      // Browser Esc already leaves the cockpit; don't steal it.
+      if (document.fullscreenElement) return;
+      if (useDimensionStore.getState().walkMode) {
+        e.preventDefault();
+        useDimensionStore.getState().setWalkMode(false);
+        toast("Walk Mode off");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmReset, toast]);
+
+  useEffect(
+    () => () => {
+      if (resetTimer.current != null) window.clearTimeout(resetTimer.current);
+      flushDimensionPersist();
+    },
+    [],
+  );
 
   // Band mode tracks the live Sculptor bands — resync when they change.
   useEffect(() => {
     if (mode === "band") useDimensionStore.getState().syncStructure();
   }, [bands, mode]);
 
+  const deployScene = (id: string, label: string) => {
+    applyScenePreset(id);
+    toast(
+      useDimensionStore.getState().active
+        ? `${label} deployed`
+        : `${label} set — Enter 3D Space to hear it`,
+    );
+  };
+
   const selectedSpeaker = speakers.find((s) => s.id === selectedId) ?? null;
+  const headTracking = useDimensionStore((s) => s.headTracking);
+  const rt60 = computeRT60(room.width, room.height, room.depth, absorption);
 
   return (
     <div className="space-y-4 pb-6">
-      <ActionBar title="3rd Dimension" code="KC-09" subtitle="Deploy sound anywhere in a virtual room — position every source in space" />
+      <ActionBar
+        title="3rd Dimension"
+        code="KC-09"
+        subtitle="Place sources in a virtual room — silent until you Enter 3D Space"
+        showActions={false}
+      />
 
       {/* v2.0 — Mission Profiles: complete one-click spatial deployments. */}
       <div>
@@ -100,7 +163,7 @@ export function DimensionView() {
           {MISSION_PROFILES.map((p) => (
             <button
               key={p.id}
-              onClick={() => applyScenePreset(p.id)}
+              onClick={() => deployScene(p.id, p.label)}
               title={p.desc}
               className={`flex-1 min-w-[150px] rounded-xl border px-3 py-2 text-left transition ${
                 scene === p.id
@@ -125,7 +188,7 @@ export function DimensionView() {
         {SCENE_PRESETS.map((p) => (
           <button
             key={p.id}
-            onClick={() => applyScenePreset(p.id)}
+            onClick={() => deployScene(p.id, p.label)}
             title={p.desc}
             className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
               scene === p.id
@@ -142,6 +205,11 @@ export function DimensionView() {
       <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={() => setActive(!active)}
+          title={
+            active
+              ? "Return to the stereo output (Sculptor bypass / chain as they were)"
+              : "Replace the stereo output with this binaural room. 3D is the output even if the chain is bypassed."
+          }
           className={`rounded-xl px-5 py-3 text-sm font-bold tracking-wide uppercase border transition ${
             active
               ? "border-cyan/70 bg-cyan/20 text-cyan shadow-[0_0_24px_rgb(var(--c-cyan)/0.35)]"
@@ -183,24 +251,30 @@ export function DimensionView() {
 
         {active && <HoldToCompare />}
 
-        {active && (
-          <span className="text-[11px] text-dim">
-            {signal === "eqd"
+        <span className="text-[11px] text-dim">
+          {active
+            ? signal === "eqd"
               ? "Spatializing your sculpted sound"
-              : "Spatializing the untouched source"}
-          </span>
-        )}
+              : "Spatializing the source before Sculptor"
+            : "Opening this tab is silent until you Enter 3D Space."}
+        </span>
 
         <div className="flex-1" />
 
         <button
           onClick={() => {
             if (confirmReset) {
+              if (resetTimer.current != null) {
+                window.clearTimeout(resetTimer.current);
+                resetTimer.current = null;
+              }
               setConfirmReset(false);
               resetDimension();
+              toast("Room restored — 3D off");
             } else {
               setConfirmReset(true);
-              window.setTimeout(() => setConfirmReset(false), 2400);
+              if (resetTimer.current != null) window.clearTimeout(resetTimer.current);
+              resetTimer.current = window.setTimeout(() => setConfirmReset(false), 2400);
             }
           }}
           className={`rounded-lg border px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] font-semibold transition ${
@@ -208,7 +282,7 @@ export function DimensionView() {
               ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
               : "border-white/10 text-white/40 hover:text-rose-200/80 hover:border-rose-400/30"
           }`}
-          title="Delete every placed speaker and restore the default room + layout"
+          title="Restore the default room, 2.0 layout, Walk Mode off, and 3D off. Sculptor knobs are unchanged."
         >
           {confirmReset ? "CONFIRM RESET" : "✕ Reset room"}
         </button>
@@ -293,7 +367,7 @@ export function DimensionView() {
               <div className="flex justify-between text-[11px]">
                 <span className="text-dim">Reverb time (Sabine RT60)</span>
                 <span className="text-cyan/90 font-semibold tabular-nums">
-                  {Math.min(2.5, computeRT60(room.width, room.height, room.depth, absorption)).toFixed(2)} s
+                  {Math.min(2.5, rt60).toFixed(2)} s{rt60 > 2.5 ? " · capped" : ""}
                 </span>
               </div>
               <div>
@@ -330,6 +404,11 @@ export function DimensionView() {
                     setListenerYaw((Number(e.target.value) * Math.PI) / 180)
                   }
                   className="w-full accent-cyan"
+                  title={
+                    headTracking
+                      ? "Base facing — head tracking adds on top"
+                      : "Listener facing in the room"
+                  }
                 />
               </div>
             </div>
@@ -349,7 +428,7 @@ export function DimensionView() {
                       key={l.id}
                       onClick={() => applyLayout(l.id)}
                       className={`text-left rounded-lg px-3 py-2 border transition ${
-                        layout === l.id
+                        speakersMatchLayout(speakers, l.id)
                           ? "border-cyan/60 bg-cyan/10"
                           : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"
                       }`}
@@ -584,7 +663,7 @@ function PanelTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** v2.0 — save / load the whole spatial scene as a `.kdim` Armory file. */
+/** v2.0 — save / load the whole spatial scene as a `.kdim` file. */
 function SceneFileButtons() {
   const exportScene = useDimensionStore((s) => s.exportScene);
   const importScene = useDimensionStore((s) => s.importScene);
@@ -597,7 +676,7 @@ function SceneFileButtons() {
       <button
         onClick={() => {
           void exportScene().then((ok) => {
-            if (ok) toast("Scene saved to the Armory (.kdim)");
+            if (ok) toast("Scene saved as .kdim");
           });
         }}
         className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-semibold text-white/70 hover:bg-white/[0.08] transition"
@@ -607,8 +686,16 @@ function SceneFileButtons() {
       </button>
       <button
         onClick={() => {
-          void importScene().then((name) => {
-            toast(name ? `Scene "${name}" deployed` : "Couldn't read that .kdim file");
+          void importScene().then((res) => {
+            if (!res.ok) {
+              if (res.reason === "invalid") toast("Couldn't read that .kdim file");
+              return;
+            }
+            toast(
+              useDimensionStore.getState().active
+                ? `Scene "${res.name}" deployed`
+                : `Scene "${res.name}" set — Enter 3D Space to hear it`,
+            );
           });
         }}
         className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-semibold text-white/70 hover:bg-white/[0.08] transition"
@@ -801,7 +888,8 @@ function HeadTrackingPanel() {
         (Tobii, AITrack webcam, phone/headphone IMU) via &ldquo;UDP over network&rdquo; →
         <span className="font-mono text-white/70"> 127.0.0.1:{port}</span>.
         Full 6DOF: turn, tilt or lean and the room stays put — trackers that
-        send position move you through it.
+        send position move you through it. Tracking keeps steering if you
+        switch tabs.
       </div>
 
       {!desktop && (
@@ -822,7 +910,14 @@ function HeadTrackingPanel() {
               setPortText(String(p));
               setHeadTrackPort(p);
             }}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setPortText(String(port));
+              }
+            }}
             className="w-[64px] bg-black/50 border border-white/10 rounded-lg px-2 py-1 text-xs font-mono text-white/90 outline-none focus:border-cyan/50"
             inputMode="numeric"
           />
@@ -858,37 +953,50 @@ function HeadTrackingPanel() {
 }
 
 /**
- * Momentary A/B: hold to hear the untouched stereo path, release to return to
- * the binaural render. Uses the engine's smoothed rewire so it's click-free.
+ * Momentary A/B: hold to hear stereo without 3D, release to return to the
+ * binaural render. That stereo path is the chain as it currently is
+ * (sculpted, or bypassed) — not a second "untouched" render. Uses the
+ * engine's smoothed rewire so it's click-free.
  */
 function HoldToCompare() {
   const [holding, setHolding] = useState(false);
+  const holdingRef = useRef(false);
 
-  const release = () => {
+  const release = (e?: React.PointerEvent<HTMLButtonElement>) => {
+    if (!holdingRef.current) return;
+    holdingRef.current = false;
     setHolding(false);
+    if (e) {
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    }
     if (useDimensionStore.getState().active) getEngine().setDimensionActive(true);
   };
 
   // Never leave the engine bypassed if the button unmounts mid-hold.
   useEffect(() => () => {
-    if (useDimensionStore.getState().active) getEngine().setDimensionActive(true);
+    if (holdingRef.current && useDimensionStore.getState().active) {
+      getEngine().setDimensionActive(true);
+    }
   }, []);
 
   return (
     <button
-      onPointerDown={() => {
+      onPointerDown={(e) => {
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+        holdingRef.current = true;
         setHolding(true);
         getEngine().setDimensionActive(false);
       }}
       onPointerUp={release}
-      onPointerLeave={() => holding && release()}
+      onPointerCancel={release}
+      onLostPointerCapture={release}
       className={`rounded-xl px-4 py-3 text-xs font-bold tracking-wide uppercase border transition select-none ${
         holding
           ? "border-amber-400/70 bg-amber-400/20 text-amber-200"
           : "border-white/15 bg-white/5 text-white/80 hover:bg-white/10"
       }`}
     >
-      {holding ? "Hearing flat stereo" : "Hold to compare A/B"}
+      {holding ? "Hearing stereo (no 3D)" : "Hold to hear stereo"}
     </button>
   );
 }
@@ -962,6 +1070,8 @@ function SpeakerInspector({
   const moveSpeaker = useDimensionStore((s) => s.moveSpeaker);
   const room = useDimensionStore((s) => s.room);
   const listenerYaw = useDimensionStore((s) => s.listenerYaw);
+  const listenerPos = useDimensionStore((s) => s.listenerPos);
+  const headTrackPose = useDimensionStore((s) => s.headTrackPose);
 
   if (!speaker) {
     return (
@@ -974,16 +1084,29 @@ function SpeakerInspector({
     );
   }
 
-  // Acoustic truth for the selected speaker — same math the audio graph uses.
+  // Acoustic truth for the selected speaker — same math the audio graph uses,
+  // measured from the live listener (Walk Mode + head tracking), not room origin.
   const wx = speaker.nx * (room.width / 2);
   const wy = speaker.ny * (room.height / 2);
   const wz = speaker.nz * (room.depth / 2);
-  const dist = Math.hypot(wx, wy, wz);
+  let lx = listenerPos.x;
+  let ly = listenerPos.y;
+  let lz = listenerPos.z;
+  let yaw = listenerYaw;
+  void headTrackPose; // re-render when the tracker pose ticks
+  try {
+    const pose = getEngine().dimension.getListenerPose();
+    lx = pose.x;
+    ly = pose.y;
+    lz = pose.z;
+    yaw = pose.yaw;
+  } catch { /* engine not built yet */ }
+  const dist = Math.hypot(wx - lx, wy - ly, wz - lz);
   // Azimuth relative to the listener's facing: 0° = ahead, + = to the right.
-  let azimuth = Math.atan2(wx, -wz) - listenerYaw;
+  let azimuth = Math.atan2(wx - lx, -(wz - lz)) - yaw;
   while (azimuth > Math.PI) azimuth -= 2 * Math.PI;
   while (azimuth < -Math.PI) azimuth += 2 * Math.PI;
-  const elevation = Math.atan2(wy, Math.hypot(wx, wz));
+  const elevation = Math.atan2(wy - ly, Math.hypot(wx - lx, wz - lz));
   const attenDb = distanceGainDb(dist);
   const itdUs = itdSeconds(azimuth) * 1e6;
 
@@ -1125,8 +1248,9 @@ function BandPanel({
             No active bands. Enable bands in the Sculptor first.
           </div>
         )}
-        {list.map((b) => {
+        {list.map((b, i) => {
           const sel = selectedId === b.id;
+          const auto = bandPlacementFor(i, list.length);
           const pl = bandPlacements[b.id];
           return (
             <div
@@ -1152,7 +1276,7 @@ function BandPanel({
                     min={-1}
                     max={1}
                     step={0.02}
-                    value={pl?.ny ?? 0}
+                    value={pl?.ny ?? auto.ny}
                     onChange={(e) => placeBand(b.id, { ny: Number(e.target.value) })}
                     onClick={(e) => e.stopPropagation()}
                     className="w-full accent-cyan"

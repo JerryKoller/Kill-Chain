@@ -211,7 +211,7 @@ const ENTRIES: Entry[] = [
     category: "Space",
     short: "Place sound anywhere in a virtual 3D room.",
     long:
-      "A room where the character at centre is you — their ears are your ears. Drop speakers (soundbar up to 7.2/Atmos) or scatter your active EQ bands around the space and hear each one from exactly where it sits. Room size sets the soundstage; everything is rendered binaurally for headphones.",
+      "A room where the character at centre is you — their ears are your ears. Drop speakers (soundbar up to 7.2/Atmos), scatter Sculptor bands, or let Motion Mode fly frequency bands around your head. Room size sets the soundstage; output is binaural (headphones). Opening the tab is silent until you Enter 3D Space. Layout persists on this machine; engagement does not survive a restart.",
   },
   {
     term: "HRTF",
@@ -239,7 +239,7 @@ const ENTRIES: Entry[] = [
     category: "Space",
     short: "Low-Frequency Effects — the dedicated bass channel.",
     long:
-      "The '.1' in 5.1 / 7.1. A subwoofer voice is fed a mono signal low-passed around 120 Hz, so it only reproduces the deep bass. Placement matters less than for full-range speakers because low frequencies are hard to localise.",
+      "The '.1' in 5.1 / 7.1. A subwoofer voice is fed a mono signal low-passed around 120 Hz. When a sub is in the layout, satellites are high-passed at 80 Hz so the lows live on one anchored voice. Placement matters less than for full-range speakers because low frequencies are hard to localise.",
   },
   {
     term: "Surround / Height (Atmos)",
@@ -494,7 +494,7 @@ const ENTRIES: Entry[] = [
     category: "Tools",
     short: "The spatial audio deck — rooms, height, and Motion mode.",
     long:
-      "Places virtual sources around your head with distance, height and room ambience. Motion mode splits the signal into frequency bands that physically orbit you — anchored lows, flying highs.",
+      "Places virtual sources around your head with distance, height and room ambience. Speaker, Band, and Motion modes. Opening the tab is silent until Enter 3D Space. Layout persists on this machine; engagement does not survive a restart. Hold-to-hear-stereo is the chain without 3D, not a second untouched render.",
   },
   {
     term: "Headphone Stage",

@@ -164,9 +164,13 @@ export interface ScenePreset {
   motion?: MotionConfig;
 }
 
-/** File format for exported `.kdim` spatial scenes (Armory). */
+/** File format for exported `.kdim` spatial scenes (desktop file, not Armory). */
 export const KDIM_KIND = "kill-chain-dimension";
 export const KDIM_VERSION = 1;
+
+export type DimImportResult =
+  | { ok: true; name: string }
+  | { ok: false; reason: "cancelled" | "invalid" };
 
 export interface Vec3n {
   nx: number;
@@ -315,6 +319,24 @@ export function layoutSpeakers(id: LayoutId): Speaker[] {
         spk("height", 0.5, 0.92, -0.4),
       ];
   }
+}
+
+/** True when the live speakers still match a layout preset (ignore generated ids). */
+export function speakersMatchLayout(speakers: Speaker[], id: LayoutId): boolean {
+  const want = layoutSpeakers(id);
+  if (speakers.length !== want.length) return false;
+  const eps = 0.02;
+  return want.every((w, i) => {
+    const s = speakers[i];
+    return (
+      s.type === w.type &&
+      s.enabled === w.enabled &&
+      Math.abs(s.gainDb - w.gainDb) < 0.05 &&
+      Math.abs(s.nx - w.nx) < eps &&
+      Math.abs(s.ny - w.ny) < eps &&
+      Math.abs(s.nz - w.nz) < eps
+    );
+  });
 }
 
 export const SCENE_PRESETS: ScenePreset[] = [
@@ -480,6 +502,13 @@ export function feedForSpeaker(s: Speaker): VoiceFeed {
   }
 }
 
+/** Default placement for a Sculptor band by its live rank (not “band 0 of 1”). */
+export function autoBandPlacement(bandId: string): Vec3n {
+  const bands = useEqStore.getState().bands.filter((b) => b.enabled);
+  const i = bands.findIndex((b) => b.id === bandId);
+  return bandPlacementFor(i < 0 ? 0 : i, Math.max(1, bands.length));
+}
+
 /** Default placement for the Nth (of total) band, spread across a front arc. */
 export function bandPlacementFor(rank: number, total: number): Vec3n {
   const t = total <= 1 ? 0.5 : rank / (total - 1);
@@ -567,54 +596,88 @@ function sanitizeMotion(m: Partial<MotionConfig> | undefined): MotionConfig {
  * Validate + backfill a persisted / imported scene. Shared by the
  * localStorage load, `.kdim` import and Mission Log spatial memory.
  */
+function clampAxis(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(-1, Math.min(1, n)) : 0;
+}
+
+function clampListenerMetres(
+  lp: { x?: unknown; y?: unknown; z?: unknown } | undefined,
+  room: { width: number; height: number; depth: number },
+): { x: number; y: number; z: number } {
+  const cl = (v: unknown, half: number) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 0;
+    const lim = Math.max(0, half - 0.25);
+    return Math.max(-lim, Math.min(lim, n));
+  };
+  return {
+    x: cl(lp?.x, room.width / 2),
+    y: cl(lp?.y, room.height / 2),
+    z: cl(lp?.z, room.depth / 2),
+  };
+}
+
+function sanitizeBandPlacements(raw: unknown): Record<string, Vec3n> {
+  const out: Record<string, Vec3n> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [id, p] of Object.entries(raw as Record<string, unknown>)) {
+    if (!p || typeof p !== "object") continue;
+    const o = p as { nx?: unknown; ny?: unknown; nz?: unknown };
+    out[id] = { nx: clampAxis(o.nx), ny: clampAxis(o.ny), nz: clampAxis(o.nz) };
+  }
+  return out;
+}
+
 export function sanitizePersistShape(parsed: Partial<PersistShape> | null | undefined): PersistShape {
   const d = defaults();
   if (!parsed || typeof parsed !== "object") return d;
-  const lp = parsed.listenerPos;
   // Numeric clamps mirror the runtime setters — a hand-edited .kdim file or
   // corrupt storage must never feed NaN / extremes into the spatial engine.
   const roomDim = (v: unknown, lim: { min: number; max: number; default: number }): number =>
     Number.isFinite(Number(v)) ? Math.max(lim.min, Math.min(lim.max, Number(v))) : lim.default;
-  const norm = (v: unknown): number =>
-    Number.isFinite(Number(v)) ? Math.max(-1, Math.min(1, Number(v))) : 0;
-  const rawRoom = parsed.room ?? {};
+  const rawRoom = (parsed.room ?? {}) as { width?: unknown; height?: unknown; depth?: unknown };
+  const room = {
+    width: roomDim(rawRoom.width, ROOM_LIMITS.width),
+    height: roomDim(rawRoom.height, ROOM_LIMITS.height),
+    depth: roomDim(rawRoom.depth, ROOM_LIMITS.depth),
+  };
+  const layout = LAYOUTS.find((l) => l.id === parsed.layout)?.id ?? d.layout;
+  const paletteType =
+    parsed.paletteType && parsed.paletteType in SPEAKER_META
+      ? parsed.paletteType
+      : d.paletteType;
+  const speakers: Speaker[] =
+    Array.isArray(parsed.speakers) && parsed.speakers.length > 0
+      ? parsed.speakers.map((s) => ({
+          id: typeof s?.id === "string" && s.id ? s.id : sid(),
+          type: s?.type && s.type in SPEAKER_META ? s.type : "tower",
+          nx: clampAxis(s?.nx),
+          ny: clampAxis(s?.ny),
+          nz: clampAxis(s?.nz),
+          gainDb: Number.isFinite(Number(s?.gainDb))
+            ? Math.max(-12, Math.min(12, Number(s.gainDb)))
+            : 0,
+          enabled: s?.enabled !== false,
+        }))
+      : d.speakers;
+  // Explicit fields only — never spread unknown .kdim keys into the store.
   return {
-    ...d,
-    ...parsed,
     mode: parsed.mode === "band" || parsed.mode === "motion" ? parsed.mode : "speaker",
     signal: parsed.signal === "raw" ? "raw" : "eqd",
-    room: {
-      width: roomDim((rawRoom as { width?: unknown }).width, ROOM_LIMITS.width),
-      height: roomDim((rawRoom as { height?: unknown }).height, ROOM_LIMITS.height),
-      depth: roomDim((rawRoom as { depth?: unknown }).depth, ROOM_LIMITS.depth),
-    },
+    room,
     absorption: Number.isFinite(Number(parsed.absorption))
       ? Math.max(ABSORPTION_LIMITS.min, Math.min(ABSORPTION_LIMITS.max, Number(parsed.absorption)))
       : ABSORPTION_LIMITS.default,
     listenerYaw: Number.isFinite(Number(parsed.listenerYaw)) ? Number(parsed.listenerYaw) : 0,
-    listenerPos: {
-      x: norm(lp?.x),
-      y: norm(lp?.y),
-      z: norm(lp?.z),
-    },
-    speakers:
-      Array.isArray(parsed.speakers) && parsed.speakers.length > 0
-        ? parsed.speakers.map((s) => ({
-            ...s,
-            id: s.id || sid(),
-            nx: norm(s.nx),
-            ny: norm(s.ny),
-            nz: norm(s.nz),
-            gainDb: Number.isFinite(Number(s.gainDb))
-              ? Math.max(-12, Math.min(12, Number(s.gainDb)))
-              : 0,
-            enabled: s.enabled !== false,
-          }))
-        : d.speakers,
-    bandPlacements: parsed.bandPlacements ?? {},
+    listenerPos: clampListenerMetres(parsed.listenerPos, room),
+    layout,
+    speakers,
+    bandPlacements: sanitizeBandPlacements(parsed.bandPlacements),
+    paletteType,
     motion: sanitizeMotion(parsed.motion),
     stage: parsed.stage === "room" ? "room" : "head",
-    space: clamp01(Number(parsed.space ?? d.space)),
+    space: clamp01(Number.isFinite(Number(parsed.space)) ? Number(parsed.space) : d.space),
   };
 }
 
@@ -624,24 +687,52 @@ function load(): PersistShape {
     const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return defaults();
     return sanitizePersistShape(JSON.parse(raw) as Partial<PersistShape>);
-  } catch {
+  } catch (err) {
+    console.warn("[dimension] failed to load scene:", err);
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("3rd Dimension scene", err),
+    );
     return defaults();
   }
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistPending: PersistShape | null = null;
+
+function persistImmediate(shape: PersistShape): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(shape));
+  } catch (err) {
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("3rd Dimension scene", err),
+    );
+  }
+}
+
 function schedulePersist(state: DimensionState): void {
   if (typeof window === "undefined") return;
+  persistPending = persistShapeOf(state);
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persistShapeOf(state)));
-    } catch (err) {
-      void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
-        reportStorageFailure("3rd Dimension scene", err),
-      );
-    }
+    persistTimer = null;
+    const payload = persistPending;
+    persistPending = null;
+    if (payload) persistImmediate(payload);
   }, 350);
+}
+
+/** Write a pending scene-edit debounce now (leave / refresh). */
+export function flushDimensionPersist(): void {
+  if (typeof window === "undefined") return;
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (!persistPending) return;
+  const payload = persistPending;
+  persistPending = null;
+  persistImmediate(payload);
 }
 
 function persistShapeOf(state: PersistShape): PersistShape {
@@ -705,10 +796,10 @@ export interface DimensionState extends PersistShape {
   nudgeListener: (fwd: number, strafe: number, up: number) => void;
   resetListenerPos: () => void;
 
-  /** v2.0 — save the current scene as a `.kdim` file (Armory). */
+  /** v2.0 — save the current scene as a `.kdim` desktop file (not Armory). */
   exportScene: (name?: string) => Promise<boolean>;
-  /** v2.0 — load a `.kdim` scene file. Resolves to its name, or null. */
-  importScene: () => Promise<string | null>;
+  /** v2.0 — load a `.kdim` scene file. Cancel vs unreadable are distinct. */
+  importScene: () => Promise<DimImportResult>;
 
   /** Motion Mode: live-update pattern / speed / intensity / reactivity… */
   setMotion: (patch: Partial<MotionConfig>) => void;
@@ -935,7 +1026,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
     },
 
     setMode: (mode) => {
-      set({ mode, selectedId: null });
+      set({ mode, selectedId: null, scene: null });
       pushStructure();
       persist();
     },
@@ -951,14 +1042,14 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       room.width = Math.max(ROOM_LIMITS.width.min, Math.min(ROOM_LIMITS.width.max, room.width));
       room.height = Math.max(ROOM_LIMITS.height.min, Math.min(ROOM_LIMITS.height.max, room.height));
       room.depth = Math.max(ROOM_LIMITS.depth.min, Math.min(ROOM_LIMITS.depth.max, room.depth));
-      set({ room });
+      set({ room, scene: null });
       pushStructure();
       persist();
     },
 
     setAbsorption: (absorption) => {
       const a = Math.max(ABSORPTION_LIMITS.min, Math.min(ABSORPTION_LIMITS.max, absorption));
-      set({ absorption: a });
+      set({ absorption: a, scene: null });
       const s = get();
       getEngine().dimension.setRoom(s.room.width, s.room.height, s.room.depth, a);
       persist();
@@ -970,6 +1061,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       set({
         room: { width: p.width, height: p.height, depth: p.depth },
         absorption: p.absorption,
+        scene: null,
       });
       pushStructure();
       persist();
@@ -1105,32 +1197,35 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
 
     importScene: async () => {
       const files = window.playground?.files;
-      if (!files) return null;
+      if (!files) return { ok: false, reason: "cancelled" as const };
       const res = await files.openText([
         { name: "Kill-Chain 3D scene", extensions: ["kdim", "json"] },
       ]);
-      if (!res) return null;
+      if (!res) return { ok: false, reason: "cancelled" as const };
       try {
         const data = JSON.parse(res.text) as {
           kind?: string;
           name?: string;
           scene?: Partial<PersistShape>;
         };
-        if (data.kind !== KDIM_KIND || !data.scene) return null;
+        if (data.kind !== KDIM_KIND || !data.scene) return { ok: false, reason: "invalid" as const };
         const scene = sanitizePersistShape(data.scene);
         set({ ...scene, selectedId: null, scene: null });
         pushStructure();
         if (get().active) getEngine().setDimensionSignal(scene.signal);
         persist();
-        return typeof data.name === "string" && data.name ? data.name : "scene";
+        return {
+          ok: true as const,
+          name: typeof data.name === "string" && data.name ? data.name : "scene",
+        };
       } catch {
-        return null;
+        return { ok: false, reason: "invalid" as const };
       }
     },
 
     setMotion: (patch) => {
       const motion = sanitizeMotion({ ...get().motion, ...patch });
-      set({ motion });
+      set({ motion, scene: null });
       const s = get();
       if (s.mode === "motion" && s.active) {
         getEngine().dimension.setMotionConfig(motion);
@@ -1166,7 +1261,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       const preset = MOTION_PRESETS.find((p) => p.id === id);
       if (!preset) return;
       const motion = sanitizeMotion(preset.motion);
-      set({ motion, ...(preset.stage ? { stage: preset.stage } : {}) });
+      set({ motion, scene: null, ...(preset.stage ? { stage: preset.stage } : {}) });
       const s = get();
       const engine = getEngine();
       engine.dimension.setStageProfile(s.stage);
@@ -1177,14 +1272,14 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
     },
 
     setStage: (stage) => {
-      set({ stage });
+      set({ stage, scene: null });
       getEngine().dimension.setStageProfile(stage);
       persist();
     },
 
     setSpace: (space) => {
       const v = clamp01(space);
-      set({ space: v });
+      set({ space: v, scene: null });
       getEngine().dimension.setSpace(v);
       persist();
     },
@@ -1207,7 +1302,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
         type === "height" ? 0.9 : type === "subwoofer" ? -0.85 : 0,
         at ? clampN(at.nz) : -0.5,
       );
-      set({ speakers: [...get().speakers, s], selectedId: s.id });
+      set({ speakers: [...get().speakers, s], selectedId: s.id, scene: null });
       pushStructure();
       persist();
       return s.id;
@@ -1217,6 +1312,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       set({
         speakers: get().speakers.filter((s) => s.id !== id),
         selectedId: get().selectedId === id ? null : get().selectedId,
+        scene: null,
       });
       pushStructure();
       persist();
@@ -1225,6 +1321,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
     setSpeakerType: (id, type) => {
       set({
         speakers: get().speakers.map((s) => (s.id === id ? { ...s, type } : s)),
+        scene: null,
       });
       pushStructure();
       persist();
@@ -1234,6 +1331,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       const g = Math.max(-12, Math.min(12, gainDb));
       set({
         speakers: get().speakers.map((s) => (s.id === id ? { ...s, gainDb: g } : s)),
+        scene: null,
       });
       // Gain is a cheap live param.
       getEngine().dimension.updateVoice(id, { gainDb: g });
@@ -1245,6 +1343,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
         speakers: get().speakers.map((s) =>
           s.id === id ? { ...s, enabled: !s.enabled } : s,
         ),
+        scene: null,
       });
       pushStructure();
       persist();
@@ -1260,6 +1359,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
         speakers: get().speakers.map((sp) =>
           sp.id === id ? { ...sp, nx, ny, nz } : sp,
         ),
+        scene: null,
       });
       const st = get();
       // Side-derived surrounds can flip channel when crossing centre — a
@@ -1279,14 +1379,13 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
     },
 
     placeBand: (bandId, pos) => {
-      const cur = get().bandPlacements[bandId] ??
-        bandPlacementFor(0, 1);
+      const cur = get().bandPlacements[bandId] ?? autoBandPlacement(bandId);
       const next: Vec3n = {
         nx: pos.nx !== undefined ? clampN(pos.nx) : cur.nx,
         ny: pos.ny !== undefined ? clampN(pos.ny) : cur.ny,
         nz: pos.nz !== undefined ? clampN(pos.nz) : cur.nz,
       };
-      set({ bandPlacements: { ...get().bandPlacements, [bandId]: next } });
+      set({ bandPlacements: { ...get().bandPlacements, [bandId]: next }, scene: null });
       const st = get();
       getEngine().dimension.updateVoice(bandId, {
         x: next.nx * (st.room.width / 2),
@@ -1302,7 +1401,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       bands.forEach((b, i) => {
         placements[b.id] = bandPlacementFor(i, bands.length);
       });
-      set({ bandPlacements: placements });
+      set({ bandPlacements: placements, scene: null });
       pushStructure();
       persist();
     },
@@ -1325,7 +1424,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
 
     reset: () => {
       const d = defaults();
-      set({ ...d, selectedId: null, scene: null });
+      set({ ...d, selectedId: null, scene: null, walkMode: false });
       const engine = getEngine();
       engine.dimension.stopMotion();
       engine.setDimensionActive(false);
@@ -1333,6 +1432,7 @@ export const useDimensionStore = create<DimensionState>((set, get) => {
       syncTempoProvider(get());
       pushStructure();
       persist();
+      flushDimensionPersist();
     },
   };
 });
@@ -1378,4 +1478,10 @@ export function applyDimensionScene(snap: DimensionSceneSnapshot): void {
   store.syncStructure();
   if (store.active !== snap.active) store.setActive(snap.active);
   else if (snap.active) getEngine().setDimensionSignal(scene.signal);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    flushDimensionPersist();
+  });
 }

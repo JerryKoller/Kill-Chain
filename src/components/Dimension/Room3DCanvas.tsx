@@ -526,7 +526,7 @@ export function Room3DCanvas() {
           const lvl = s.enabled ? levels[s.id] ?? 0 : 0;
           const sel = sc.selectedId === s.id;
           const big = s.type === "subwoofer" || s.type === "tower";
-          const dist = Math.hypot(world.x, world.y, world.z);
+          const dist = Math.hypot(world.x - pose.x, world.y - pose.y, world.z - pose.z);
           const sub = !s.enabled
             ? "MUTED"
             : sel
@@ -695,7 +695,7 @@ export function Room3DCanvas() {
             startNy: lh.worldY,
             planeY: lh.worldY,
           };
-          canvas.setPointerCapture(e.pointerId);
+          try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
           dirtyRef.current = true;
           return;
         }
@@ -720,7 +720,7 @@ export function Room3DCanvas() {
           startNy: 0, planeY: 0,
         };
       }
-      canvas.setPointerCapture(e.pointerId);
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
       dirtyRef.current = true;
     };
 
@@ -832,7 +832,12 @@ export function Room3DCanvas() {
   useEffect(() => {
     const onChange = () => setFullscreen(document.fullscreenElement === wrapRef.current);
     document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      if (document.fullscreenElement === wrapRef.current) {
+        void document.exitFullscreen();
+      }
+    };
   }, []);
 
   const toggleFullscreen = () => {
