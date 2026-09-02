@@ -258,6 +258,35 @@ Investigate instead of guessing.
 
 
 
+\## ENVIRONMENT AND EDITING DISCIPLINE
+
+
+This project is developed on Windows. Shell commands must be compatible with Windows PowerShell.
+
+Prefer PowerShell-native commands such as Get-ChildItem, Select-String, Get-Content, Test-Path, and Get-Item.
+
+Do not assume Unix commands such as grep, find, head, tail, sed, awk, or bash are available.
+
+If a shell command fails because of platform differences, adapt to PowerShell instead of changing the environment or installing tools.
+
+Before editing a suspected bug, verify the hypothesis by rereading the exact failure path and relevant surrounding state transitions or callers.
+
+Actively try to disprove the initial diagnosis before modifying code.
+
+Clearly distinguish confirmed behavior from speculation.
+
+Make the smallest possible diff.
+
+Do not reformat, re-indent, rename, or otherwise alter unrelated code during a focused fix.
+
+Preserve existing async semantics such as void, await, promise chaining, and error handling unless changing them is required by the task.
+
+After every code edit, reread the changed block and inspect the Git diff before considering the edit complete.
+
+Explicitly check for duplicate function calls, duplicated blocks, accidental formatting changes, removed operators or keywords, and unrelated modifications.
+
+If a conversation has spent significant time under read-only or investigation-only instructions and the task changes to editing code, prefer starting a fresh OpenCode conversation before making the edit.
+
 \## PROJECT REFERENCES
 
 
