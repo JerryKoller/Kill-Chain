@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RestoreParams } from "@/audio/dsp/Reconstructor";
 import { restoreActive } from "@/audio/dsp/Reconstructor";
 import { runBatchRestore, type BatchProgress } from "@/lib/offlineRestore";
@@ -18,6 +18,7 @@ export function BatchRestorePanel({ liveParams }: { liveParams: RestoreParams })
   const [progress, setProgress] = useState<BatchProgress | null>(null);
   const [doneCount, setDoneCount] = useState<{ ok: number; failed: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   const api = window.playground?.files;
   const available = !!api?.openAudioMulti && !!api?.writeIn;
@@ -38,6 +39,7 @@ export function BatchRestorePanel({ liveParams }: { liveParams: RestoreParams })
   const run = async () => {
     if (running) {
       abortRef.current?.abort();
+      toast("Batch restore cancelled");
       return;
     }
     if (!restoreActive(liveParams)) {
@@ -54,12 +56,14 @@ export function BatchRestorePanel({ liveParams }: { liveParams: RestoreParams })
       const ok = results.filter((r) => r.outPath).length;
       const failed = results.filter((r) => r.error).length;
       setDoneCount({ ok, failed });
+      if (ac.signal.aborted) return;
       toast(
         failed === 0
           ? `Batch restore complete — ${ok} file${ok === 1 ? "" : "s"} written`
           : `Batch restore: ${ok} ok, ${failed} failed`,
       );
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       toast(`Batch restore failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRunning(false);
@@ -68,7 +72,13 @@ export function BatchRestorePanel({ liveParams }: { liveParams: RestoreParams })
     }
   };
 
-  if (!available) return null;
+  if (!available) {
+    return (
+      <div className="mt-6 rounded-xl border border-amber-400/25 bg-amber-500/[0.06] px-3 py-2.5 text-sm text-amber-100/85">
+        Batch restore needs the desktop app — pick files and write restored WAVs there.
+      </div>
+    );
+  }
 
   const fileName = (p: string) => p.split(/[\\/]/).pop() ?? p;
 
@@ -100,14 +110,25 @@ export function BatchRestorePanel({ liveParams }: { liveParams: RestoreParams })
           </button>
           <button
             onClick={() => void run()}
-            disabled={!running && (files.length === 0 || !outDir)}
+            disabled={!running && (files.length === 0 || !outDir || !restoreActive(liveParams))}
+            title={
+              running
+                ? "Click to cancel"
+                : !restoreActive(liveParams)
+                  ? "Set the restoration knobs first — the batch uses the live settings"
+                  : files.length === 0
+                    ? "Add files first"
+                    : !outDir
+                      ? "Choose an output folder"
+                      : undefined
+            }
             className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
               running
                 ? "border-amber-400/60 bg-amber-400/10 text-amber-300"
                 : "border-emerald-400/50 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 disabled:opacity-40"
             }`}
           >
-            {running ? "◉ Processing… (click to cancel)" : `⚙ Process ${files.length || ""} file${files.length === 1 ? "" : "s"}`}
+            {running ? "◉ Processing… (click to cancel)" : `⚙ Process ${files.length} file${files.length === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>

@@ -7,6 +7,7 @@ import { useAirspaceStore } from "@/state/airspaceStore";
 import { useDimensionStore } from "@/state/dimensionStore";
 import { actionForKey, useHotkeyStore, type HotkeyActionId } from "@/state/hotkeyStore";
 import type { AirspaceMediaSnapshot } from "@/lib/airspaceMedia";
+import { claimSource } from "@/lib/sourceArbiter";
 import { isLegalAccepted } from "@/lib/legal";
 
 /** Keys owned by 3rd Dimension Walk Mode while it is engaged. */
@@ -34,7 +35,7 @@ export function getHotkeyCheatSheet(
   const K = (id: HotkeyActionId) => bindings[id].toUpperCase();
   return [
     { keys: ["?"], label: "Open this cheat sheet" },
-    { keys: ["Space"], label: "Play / pause" },
+    { keys: ["Space"], label: "Play / pause (Airspace deck when live)" },
     { keys: ["Left", "Right"], label: "Seek -/+ 5 seconds" },
     { keys: ["Shift+Left", "Shift+Right"], label: "Seek -/+ 30 seconds" },
     { keys: [K("nextTrack"), K("prevTrack")], label: "Next / previous track in queue" },
@@ -119,7 +120,11 @@ export function useGlobalHotkeys(): void {
       if (key === " " || key === "Spacebar") {
         e.preventDefault();
         if (airMedia) {
-          void import("@/lib/airspaceMedia").then((m) => void m.toggleAirspaceMedia());
+          if (airMedia.paused) claimSource("airspace");
+          void import("@/lib/airspaceMedia").then(async (m) => {
+            const acted = await m.toggleAirspaceMedia();
+            if (!acted) ui.toast("No media on this page to play");
+          });
         } else if (player.status === "playing") {
           player.pause();
         } else {
@@ -226,7 +231,7 @@ export function useGlobalHotkeys(): void {
           audio.toggleCorrection();
           ui.toast(
             audio.correctionEnabled
-              ? "Correction OFF (raw)"
+              ? "Correction OFF — chain still runs"
               : "Correction ON",
           );
           return;

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useUIStore } from "@/state/uiStore";
@@ -29,16 +29,23 @@ export function BouncePanel() {
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState<{ stage: string; fraction: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   const avail = bounceAvailability();
+  const desktopBounce = typeof window.playground?.files?.pickOutputFolder === "function";
 
   const run = async () => {
     if (busy) {
       abortRef.current?.abort();
+      toast("Bounce cancelled");
       return;
     }
     if (!avail.ok) {
       toast(avail.reason ?? "Bounce unavailable");
+      return;
+    }
+    if (typeof window.playground?.files?.pickOutputFolder !== "function") {
+      toast("Bounce needs the desktop app");
       return;
     }
     setBusy(true);
@@ -93,6 +100,11 @@ export function BouncePanel() {
             className="overflow-hidden border-t border-white/10"
           >
             <div className="p-5">
+              {!desktopBounce && (
+                <div className="rounded-xl border border-amber-400/25 bg-amber-500/[0.06] px-3 py-2.5 text-sm text-amber-100/85 mb-3">
+                  Bounce needs the desktop app — this browser preview can&apos;t pick a folder or write files.
+                </div>
+              )}
               {!avail.ok ? (
                 <div className="rounded-xl border border-amber-400/25 bg-amber-500/[0.06] px-3 py-2.5 text-sm text-amber-100/85">
                   {avail.reason}
@@ -114,6 +126,7 @@ export function BouncePanel() {
                   checked={normalized && processed}
                   onChange={setNormalized}
                   disabled={!processed}
+                  title={!processed ? "Turn Processed on first" : undefined}
                 />
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] uppercase tracking-widest text-dim">Format</span>
@@ -134,12 +147,22 @@ export function BouncePanel() {
               </div>
 
               <button
+                type="button"
                 onClick={() => void run()}
-                disabled={!avail.ok || (!processed && !dry)}
+                disabled={!busy && (!avail.ok || (!processed && !dry) || !desktopBounce)}
+                title={
+                  !avail.ok
+                    ? (avail.reason ?? "Bounce unavailable")
+                    : !processed && !dry
+                      ? "Pick Processed, Dry, or both"
+                      : !desktopBounce
+                        ? "Bounce needs the desktop app"
+                        : undefined
+                }
                 className={`w-full rounded-xl border px-4 py-2.5 text-sm font-bold tracking-wide transition ${
                   busy
                     ? "border-amber-400/60 bg-amber-400/10 text-amber-300"
-                    : avail.ok && (processed || dry)
+                    : avail.ok && (processed || dry) && desktopBounce
                       ? "border-amber-400/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300"
                       : "border-white/10 bg-white/[0.02] text-white/30 cursor-not-allowed"
                 }`}
@@ -167,14 +190,17 @@ function Check({
   checked,
   onChange,
   disabled,
+  title,
 }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
+  title?: string;
 }) {
   return (
     <label
+      title={title}
       className={`flex items-center gap-2 text-sm select-none ${
         disabled ? "text-white/30 cursor-not-allowed" : "text-white/80 cursor-pointer"
       }`}

@@ -69,10 +69,18 @@ export function AirspaceView({ visible }: { visible: boolean }) {
   const startLoopback = usePlayerStore((s) => s.startLoopback);
   const stopLoopback = usePlayerStore((s) => s.stopLoopback);
   const ensureReady = useAudioStore((s) => s.ensureReady);
+  const bypass = useAudioStore((s) => s.bypass);
   const setView = useUIStore((s) => s.setView);
   const toast = useUIStore((s) => s.toast);
 
   const webviewRef = useRef<WebviewElement | null>(null);
+  const crashReloadTimer = useRef<number | null>(null);
+  const [guestEl, setGuestEl] = useState<WebviewElement | null>(null);
+  const setWebviewNode = useCallback((node: WebviewElement | null) => {
+    webviewRef.current = node;
+    registerAirspaceWebview(node);
+    setGuestEl(node);
+  }, []);
   // Initial src is frozen so re-renders never re-navigate the guest.
   const initialUrl = useRef(lastUrl).current;
   const domReady = useRef(false);
@@ -100,20 +108,11 @@ export function AirspaceView({ visible }: { visible: boolean }) {
     useAirspaceStore.getState().applyAirModeNow();
   }, []);
 
-  // Hand the (persistent) webview to the media bridge: the transport-bar deck
-  // and the source arbiter read/drive the page's video through it. Register
-  // on a microtask retry too — the <webview> ref can attach a tick after
-  // mount, and a one-shot null registration left the deck dead until remount.
-  useEffect(() => {
-    registerAirspaceWebview(webviewRef.current);
-    let raf = 0;
-    if (!webviewRef.current) {
-      raf = requestAnimationFrame(() => registerAirspaceWebview(webviewRef.current));
-    }
-    return () => {
-      cancelAnimationFrame(raf);
-      registerAirspaceWebview(null);
-    };
+  // Hand the (persistent) webview to the media bridge. The ref callback
+  // registers as soon as the element exists; cleanup drops the poller.
+  useEffect(() => () => {
+    if (crashReloadTimer.current) window.clearTimeout(crashReloadTimer.current);
+    registerAirspaceWebview(null);
   }, []);
   useEffect(() => {
     const api = window.playground?.airspace;
@@ -140,7 +139,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
   }, []);
 
   useEffect(() => {
-    const el = webviewRef.current;
+    const el = guestEl;
     if (!el) return;
     const onDomReady = () => {
       domReady.current = true;
@@ -153,15 +152,20 @@ export function AirspaceView({ visible }: { visible: boolean }) {
     };
     const onNavigate = (e: Event) => {
       const url = (e as Event & { url?: string }).url;
-      if (url && /^https?:\/\//i.test(url)) {
+      if (url === "about:blank" || (url && /^https?:\/\//i.test(url))) {
         setUrlInput(url);
         setLastUrl(url);
+        if (url === "about:blank") setPageTitle("");
       }
       syncNav();
     };
     const onTitle = (e: Event) => {
       const title = (e as Event & { title?: string }).title;
-      if (title) setPageTitle(title);
+      if (!title || title === "about:blank") {
+        setPageTitle("");
+        return;
+      }
+      setPageTitle(title);
     };
     const onFailLoad = (e: Event) => {
       setLoading(false);
@@ -179,7 +183,9 @@ export function AirspaceView({ visible }: { visible: boolean }) {
       void import("@/lib/appHealth").then(({ reportWebviewCrash }) =>
         reportWebviewCrash(),
       );
-      window.setTimeout(() => {
+      if (crashReloadTimer.current) window.clearTimeout(crashReloadTimer.current);
+      crashReloadTimer.current = window.setTimeout(() => {
+        crashReloadTimer.current = null;
         try { el.reload(); } catch { /* element detached */ }
       }, 400);
     };
@@ -193,6 +199,10 @@ export function AirspaceView({ visible }: { visible: boolean }) {
     el.addEventListener("render-process-gone", onGuestGone);
     el.addEventListener("crashed", onGuestGone);
     return () => {
+      if (crashReloadTimer.current) {
+        window.clearTimeout(crashReloadTimer.current);
+        crashReloadTimer.current = null;
+      }
       el.removeEventListener("dom-ready", onDomReady);
       el.removeEventListener("did-start-loading", onStartLoading);
       el.removeEventListener("did-stop-loading", onStopLoading);
@@ -203,18 +213,30 @@ export function AirspaceView({ visible }: { visible: boolean }) {
       el.removeEventListener("render-process-gone", onGuestGone);
       el.removeEventListener("crashed", onGuestGone);
     };
-  }, [syncNav, setLastUrl, toast]);
+  }, [guestEl, syncNav, setLastUrl, toast]);
 
   const navigate = useCallback((raw: string) => {
     const url = normalizeInput(raw);
+    if (!url) {
+      toast("Enter a URL or search");
+      return;
+    }
     const el = webviewRef.current;
-    if (!url || !el) return;
+    if (!el || typeof el.loadURL !== "function") {
+      toast("Airspace browsing needs the desktop app");
+      return;
+    }
     el.loadURL(url).catch((err: unknown) => {
       console.warn("[airspace] loadURL failed:", err);
+      toast("Couldn't open that page");
     });
-  }, []);
+  }, [toast]);
 
   const engageRouting = useCallback(async () => {
+    if (typeof window.playground?.loopback?.setMode !== "function") {
+      toast("Airspace capture needs the desktop app");
+      return;
+    }
     await ensureReady();
     const source = useSettingsStore.getState().audioInputSource;
     // Prefer direct per-frame capture of THIS webview; startLoopback falls
@@ -246,7 +268,10 @@ export function AirspaceView({ visible }: { visible: boolean }) {
           ? "VIRTUAL CABLE - full quality, zero feedback"
           : "LAYERED - processed feed under direct audio";
 
+  const isBlank = !urlInput.trim() || urlInput === "about:blank";
   const isHttps = /^https:\/\//i.test(urlInput);
+  const isHttp = /^http:\/\//i.test(urlInput);
+  const pageBookmarked = bookmarks.some((b) => b.url === lastUrl);
 
   // Picture-in-picture (issue #6): when the user leaves the tab with PiP on,
   // the SAME mounted webview shrinks into a floating mini window instead of
@@ -309,26 +334,41 @@ export function AirspaceView({ visible }: { visible: boolean }) {
       {!pipMode && (
         <div className="glass rounded-2xl px-3 py-2 flex items-center gap-2 shrink-0">
           <button
-            className={`btn-ghost text-sm px-2 ${canBack ? "" : "opacity-30 pointer-events-none"}`}
+            type="button"
+            disabled={!canBack}
+            className={`btn-ghost text-sm px-2 ${canBack ? "" : "opacity-30"}`}
             onClick={() => webviewRef.current?.goBack()}
             title="Back"
+            aria-label="Back"
           >
             ←
           </button>
           <button
-            className={`btn-ghost text-sm px-2 ${canForward ? "" : "opacity-30 pointer-events-none"}`}
+            type="button"
+            disabled={!canForward}
+            className={`btn-ghost text-sm px-2 ${canForward ? "" : "opacity-30"}`}
             onClick={() => webviewRef.current?.goForward()}
             title="Forward"
+            aria-label="Forward"
           >
             →
           </button>
           <button
+            type="button"
             className="btn-ghost text-sm px-2"
             onClick={() => {
-              if (loading) webviewRef.current?.stop();
-              else webviewRef.current?.reload();
+              const el = webviewRef.current;
+              if (!el || typeof el.reload !== "function") {
+                toast("Airspace browsing needs the desktop app");
+                return;
+              }
+              try {
+                if (loading) el.stop();
+                else el.reload();
+              } catch { /* guest not ready */ }
             }}
             title={loading ? "Stop loading" : "Reload"}
+            aria-label={loading ? "Stop loading" : "Reload"}
           >
             {loading ? "✕" : "↻"}
           </button>
@@ -342,15 +382,29 @@ export function AirspaceView({ visible }: { visible: boolean }) {
           >
             <div className="flex-1 flex items-center gap-2 bg-white/[0.04] border border-white/10 rounded-xl px-3 py-1.5 focus-within:border-white/25 transition">
               <span
-                className={`text-[10px] ${isHttps ? "text-emerald-400" : "text-dim"}`}
-                title={isHttps ? "Secure connection" : "Not HTTPS"}
+                className={`text-[10px] ${isBlank ? "text-dim" : isHttps ? "text-emerald-400" : "text-dim"}`}
+                title={
+                  isBlank
+                    ? "Blank page"
+                    : isHttps
+                      ? "Secure connection"
+                      : isHttp
+                        ? "Not HTTPS"
+                        : "Search or URL"
+                }
               >
-                {isHttps ? "🔒" : "○"}
+                {isBlank ? "○" : isHttps ? "🔒" : "○"}
               </span>
               <input
                 value={urlInput}
                 onChange={(e) => setUrlInput(e.target.value)}
                 onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => {
+                  if (e.key !== "Escape") return;
+                  e.preventDefault();
+                  setUrlInput(lastUrl);
+                  e.currentTarget.blur();
+                }}
                 spellCheck={false}
                 placeholder="Enter URL or search…"
                 className="flex-1 bg-transparent outline-none text-xs text-white/90 placeholder:text-white/25"
@@ -373,8 +427,8 @@ export function AirspaceView({ visible }: { visible: boolean }) {
                     m === "off"
                       ? "Airspace voicing off — sound untouched"
                       : m === "cinema"
-                        ? "Cinema mode — dialog, impact and stage voiced for film"
-                        : "Music mode — punch, air and balance voiced for music",
+                        ? "Cinema mode — options below are off until you opt in"
+                        : "Music mode — options below are off until you opt in",
                   );
                 }}
                 className={`kc-seg-btn ${airMode === m ? "kc-on" : ""}`}
@@ -395,6 +449,14 @@ export function AirspaceView({ visible }: { visible: boolean }) {
           <button
             onClick={() => {
               setAdblock(!adblock);
+              if (typeof window.playground?.airspace?.setAdblock !== "function") {
+                toast(
+                  adblock
+                    ? "AdBlock will be off in the desktop app"
+                    : "AdBlock saved — it runs in the desktop app",
+                );
+                return;
+              }
               toast(adblock ? "AdBlock disengaged" : "AdBlock engaged — ads and trackers are intercepted");
             }}
             className={`kc-btn kc-btn--sm kc-btn--ghost ${adblock ? "kc-on" : ""}`}
@@ -410,10 +472,23 @@ export function AirspaceView({ visible }: { visible: boolean }) {
           {/* Mission Log: save the current chain for this video / stream */}
           <button
             onClick={() => {
+              const air = useAirspaceStore.getState().media;
+              if (!air) {
+                toast("Nothing playing in Airspace to log");
+                return;
+              }
+              if (air.paused) {
+                toast("Play the page first");
+                return;
+              }
+              if (!usePlayerStore.getState().loopbackActive) {
+                toast("Route through Kill-Chain first");
+                return;
+              }
               void import("@/state/missionLogStore").then(async (m) => {
-                const name = await m.logCurrentSource();
+                const name = await m.logAirspaceSource();
                 if (name) toast(`◎ Logged chain for "${name}"`);
-                else toast("Route audio through Kill-Chain and start playback first");
+                else toast("Couldn't identify this page for the Mission Log");
               });
             }}
             onContextMenu={(e) => {
@@ -439,19 +514,38 @@ export function AirspaceView({ visible }: { visible: boolean }) {
           </button>
 
           <button
+            type="button"
             className="btn-ghost text-sm px-2"
             onClick={() => {
+              if (pageBookmarked) {
+                const existing = bookmarks.find((b) => b.url === lastUrl);
+                if (existing) {
+                  removeBookmark(existing.id);
+                  toast("Bookmark removed");
+                }
+                return;
+              }
+              let url = lastUrl;
               const el = webviewRef.current;
-              if (!el) return;
               try {
-                const url = el.getURL();
-                addBookmark(pageTitle || url, url);
-                toast("Bookmarked");
-              } catch { /* guest not ready */ }
+                if (el && typeof el.getURL === "function") {
+                  url = el.getURL() || lastUrl;
+                }
+              } catch { /* guest busy — fall back to lastUrl */ }
+              if (!url || url === "about:blank" || !/^https?:\/\//i.test(url)) {
+                toast("Nothing to bookmark");
+                return;
+              }
+              if (!addBookmark(pageTitle || url, url)) {
+                toast("Already in bookmarks");
+                return;
+              }
+              toast("Bookmarked");
             }}
-            title="Bookmark current page"
+            title={pageBookmarked ? "Remove bookmark" : "Bookmark current page"}
+            aria-label={pageBookmarked ? "Remove bookmark" : "Bookmark current page"}
           >
-            ☆
+            {pageBookmarked ? "★" : "☆"}
           </button>
         </div>
       )}
@@ -482,25 +576,38 @@ export function AirspaceView({ visible }: { visible: boolean }) {
               Route through Kill-Chain to hear the voicing on this browser's audio.
             </span>
           )}
+          {loopbackActive && bypass && (
+            <span className="text-[10px] text-amber-300/80 ml-1">
+              Chain is bypassed — voicing won't be heard.
+            </span>
+          )}
         </div>
       )}
 
       {/* Quick-launch bookmarks (full view only) */}
       {!pipMode && (
         <div className="flex items-center gap-1.5 shrink-0 flex-wrap px-1">
+          {bookmarks.length === 0 && (
+            <span className="text-[10px] text-dim">
+              No bookmarks — ☆ the current page to pin it here
+            </span>
+          )}
           {bookmarks.map((b) => (
             <span key={b.id} className="group relative inline-flex">
               <button
+                type="button"
                 onClick={() => navigate(b.url)}
-                className="kc-chip"
-                title={b.url}
+                className="kc-chip max-w-[11rem] truncate"
+                title={`${b.label}\n${b.url}`}
               >
                 {b.label}
               </button>
               <button
+                type="button"
                 onClick={() => removeBookmark(b.id)}
                 className="absolute -top-1.5 -right-1.5 hidden group-hover:grid place-items-center w-3.5 h-3.5 rounded-full bg-black/80 border border-white/20 text-[8px] text-white/70 hover:text-red-300"
-                title="Remove bookmark"
+                title={`Remove ${b.label}`}
+                aria-label={`Remove ${b.label}`}
               >
                 ✕
               </button>
@@ -547,9 +654,7 @@ export function AirspaceView({ visible }: { visible: boolean }) {
         }
       >
         <webview
-          ref={(node) => {
-            webviewRef.current = node as WebviewElement | null;
-          }}
+          ref={setWebviewNode}
           src={initialUrl}
           partition="persist:airspace"
           allowpopups={true}

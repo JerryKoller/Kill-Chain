@@ -47,7 +47,8 @@ interface AirspaceState {
   media: AirspaceMediaSnapshot | null;
 
   setLastUrl: (url: string) => void;
-  addBookmark: (label: string, url: string) => void;
+  /** True if the bookmark was added; false if the URL is invalid or already saved. */
+  addBookmark: (label: string, url: string) => boolean;
   removeBookmark: (id: string) => void;
   setPip: (on: boolean) => void;
   setAdblock: (on: boolean) => void;
@@ -94,7 +95,9 @@ function load(): PersistedShape {
         (parsed.lastUrl === "about:blank" || /^https?:\/\//i.test(parsed.lastUrl))
           ? parsed.lastUrl
           : DEFAULT_URL,
-      bookmarks: Array.isArray(parsed.bookmarks) && parsed.bookmarks.length > 0
+      // An empty array is a real choice (user cleared the bar). Only fall
+      // back to the factory set when storage had no bookmarks key at all.
+      bookmarks: Array.isArray(parsed.bookmarks)
         ? parsed.bookmarks.filter(
             (b): b is AirspaceBookmark =>
               !!b && typeof b.id === "string" && typeof b.label === "string" &&
@@ -153,15 +156,16 @@ export const useAirspaceStore = create<AirspaceState>((set, get) => {
     },
 
     addBookmark: (label, url) => {
-      if (!/^https?:\/\//i.test(url)) return;
+      if (!/^https?:\/\//i.test(url)) return false;
       const cur = get().bookmarks;
-      if (cur.some((b) => b.url === url)) return;
+      if (cur.some((b) => b.url === url)) return false;
       const next = [
         ...cur,
         { id: Math.random().toString(36).slice(2, 10), label: label || url, url },
       ];
       set({ bookmarks: next });
       schedulePersist({ ...snapshot(), bookmarks: next });
+      return true;
     },
 
     removeBookmark: (id) => {
@@ -215,7 +219,9 @@ export const useAirspaceStore = create<AirspaceState>((set, get) => {
         prev.currentTime === m.currentTime &&
         prev.duration === m.duration &&
         prev.title === m.title &&
+        prev.artist === m.artist &&
         prev.artwork === m.artwork &&
+        prev.live === m.live &&
         prev.volume === m.volume &&
         prev.pageUrl === m.pageUrl
       ) {

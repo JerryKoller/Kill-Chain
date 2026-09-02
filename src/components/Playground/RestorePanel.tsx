@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { Knob } from "@/components/shared/Knob";
@@ -29,12 +29,14 @@ export function RestorePanel() {
   const [reading, setReading] = useState(false);
   const [readout, setReadout] = useState<string[] | null>(null);
   const readAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => { readAbort.current?.abort(); }, []);
 
   const active = restoreActive(restore);
 
   const autoRead = async () => {
     if (reading) {
       readAbort.current?.abort();
+      toast("Auto-read cancelled");
       return;
     }
     setReading(true);
@@ -52,8 +54,9 @@ export function RestorePanel() {
         if (res.cutoffHz !== null) useRepairStore.getState().setCutoffHz(res.cutoffHz);
         toast("Restoration Bay calibrated to the source");
       }
-    } catch {
-      /* cancelled */
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      toast(err instanceof Error ? err.message : "Auto-read failed");
     } finally {
       setReading(false);
     }
@@ -107,6 +110,7 @@ export function RestorePanel() {
                   onClick={() => {
                     setRestore({ ...RESTORE_OFF });
                     setReadout(null);
+                    toast("Restoration Bay reset");
                   }}
                   className="rounded-xl border border-white/15 bg-white/[0.03] hover:bg-white/[0.06] px-4 py-2.5 text-sm font-semibold transition"
                 >

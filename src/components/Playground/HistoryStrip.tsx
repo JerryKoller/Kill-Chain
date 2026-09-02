@@ -17,6 +17,11 @@ export function HistoryStrip() {
       <button
         onClick={undo}
         disabled={history.length === 0}
+        title={
+          history.length === 0
+            ? "Nothing to undo"
+            : "Undo last tone / dynamics / space / tape tweak — not EQ bands"
+        }
         className="btn-ghost text-xs disabled:opacity-40"
       >
         ⟲ Undo
@@ -38,6 +43,11 @@ export function HistoryStrip() {
       <button
         onClick={redo}
         disabled={future.length === 0}
+        title={
+          future.length === 0
+            ? "Nothing to redo"
+            : "Redo last tone / dynamics / space / tape tweak — not EQ bands"
+        }
         className="btn-ghost text-xs disabled:opacity-40"
       >
         ⟳ Redo

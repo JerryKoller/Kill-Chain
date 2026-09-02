@@ -29,7 +29,7 @@ export function ClarityPanel() {
         <div className="flex-1 min-w-[220px]">
           <div className="text-xs uppercase tracking-[0.3em] text-dim flex items-center gap-2">
             Clarity Engine
-            {clarity > 0.01 && (
+            {clarity > 0.001 && (
               <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8be9ff]/20 text-[#8be9ff] tracking-normal">
                 ON
               </span>

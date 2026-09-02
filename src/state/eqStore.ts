@@ -108,11 +108,18 @@ function cancelScheduledPersist(): void {
   }
 }
 
-export const clampFreq = (f: number) =>
-  Math.max(EQ_FREQ_MIN, Math.min(EQ_FREQ_MAX, Math.round(f)));
-export const clampGain = (g: number) =>
-  Math.max(-EQ_GAIN_LIMIT, Math.min(EQ_GAIN_LIMIT, g));
-export const clampQ = (q: number) => Math.max(0.3, Math.min(8, q));
+export const clampFreq = (f: number) => {
+  if (!Number.isFinite(f)) return EQ_FREQ_MIN;
+  return Math.max(EQ_FREQ_MIN, Math.min(EQ_FREQ_MAX, Math.round(f)));
+};
+export const clampGain = (g: number) => {
+  if (!Number.isFinite(g)) return 0;
+  return Math.max(-EQ_GAIN_LIMIT, Math.min(EQ_GAIN_LIMIT, g));
+};
+export const clampQ = (q: number) => {
+  if (!Number.isFinite(q)) return 1.1;
+  return Math.max(0.3, Math.min(8, q));
+};
 
 /** Minimum frequency ratio kept between adjacent bands so they can't overlap. */
 const BAND_GAP = 1.02;

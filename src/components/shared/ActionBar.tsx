@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAudioStore } from "@/state/audioStore";
 import { useUIStore } from "@/state/uiStore";
 import { useUserPresetsStore } from "@/state/userPresetsStore";
@@ -49,6 +49,10 @@ export function ActionBar({
   const [saveName, setSaveName] = useState("");
   const [includeRepair, setIncludeRepair] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const purgeTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (purgeTimer.current) window.clearTimeout(purgeTimer.current);
+  }, []);
 
   const doSave = () => {
     const name = saveName.trim() || "Untitled tuning";
@@ -127,7 +131,11 @@ export function ActionBar({
               else {
                 playUi("press"); // arming tap — the confirm tap lands the purge thunk
                 setConfirmReset(true);
-                setTimeout(() => setConfirmReset(false), 2400);
+                if (purgeTimer.current) window.clearTimeout(purgeTimer.current);
+                purgeTimer.current = window.setTimeout(() => {
+                  purgeTimer.current = null;
+                  setConfirmReset(false);
+                }, 2400);
               }
             }}
             data-ui-sound="none"
@@ -136,7 +144,7 @@ export function ActionBar({
                 ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
                 : "border-rose-400/30 bg-rose-500/5 text-rose-200/80 hover:bg-rose-500/10"
             }`}
-            title="Resets every slider and snapshot; restores the active output profile's default gain"
+            title="Resets sliders, EQ bands, rooms, repair, and snapshot A; restores the output profile's default gain"
           >
             {confirmReset ? "CONFIRM PURGE" : "✕ Purge All"}
           </button>
@@ -152,9 +160,12 @@ export function ActionBar({
             onChange={(e) => setSaveName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") doSave();
-              if (e.key === "Escape") setSaveOpen(false);
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              setSaveOpen(false);
+              setSaveName("");
             }}
-            placeholder="Name this tuning (saves ALL current sliders & toggles)…"
+            placeholder="Name this tuning (tone, dynamics, space, tape, Pro Tools knobs)…"
             maxLength={60}
             className="flex-1 min-w-[260px] bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-cyan/60"
           />
@@ -193,7 +204,8 @@ export function ActionBar({
           </label>
           <div className="text-[10px] text-dim w-full">
             Correction layer:{" "}
-            {correctionEnabled ? `ON (${activeProfileName()})` : "OFF (raw)"} — toggle in Sculptor.
+            {correctionEnabled ? `ON (${activeProfileName()})` : "OFF (profile idle)"} — toggle in Sculptor.
+            Parametric EQ, HRTF rooms, and L/R live in Log Chain or a session snapshot — not this preset.
           </div>
         </div>
       )}

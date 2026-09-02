@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { Knob } from "@/components/shared/Knob";
 import { useAudioStore } from "@/state/audioStore";
+import { useUIStore } from "@/state/uiStore";
 import { getEngine } from "@/audio/AudioEngine";
 import type { RoomId } from "@/audio/dsp/HRTFRooms";
 import { SOUND_PARAM_META, type SoundParams } from "@/audio/types";
@@ -16,6 +17,8 @@ const PRO_DSP_KEYS: (keyof SoundParams)[] = [
   "mbCompMid",
   "mbCompHigh",
 ];
+
+const DEFAULT_ROOM_MIX = 0.15;
 
 const ROOM_OPTIONS: { id: RoomId; name: string; blurb: string }[] = [
   { id: "off", name: "Off", blurb: "Pure headphone stereo" },
@@ -36,14 +39,29 @@ export function ProToolsPanel() {
   const balanceRDb = useAudioStore((s) => s.balanceRDb);
   const balanceDelayMs = useAudioStore((s) => s.balanceDelayMs);
   const setBalance = useAudioStore((s) => s.setBalance);
+  const toast = useUIStore((s) => s.toast);
 
   const [lufs, setLufs] = useState({ momentary: -120, short: -120, integrated: -120 });
+
+  const proActive =
+    params.deEss > 0.001 ||
+    params.mbCompLow > 0.001 ||
+    params.mbCompMid > 0.001 ||
+    params.mbCompHigh > 0.001 ||
+    Math.abs(params.subWidth) > 0.02 ||
+    Math.abs(params.presenceWidth) > 0.02 ||
+    Math.abs(params.airWidth) > 0.02 ||
+    (room !== "off" && roomMix > 0.001) ||
+    Math.abs(balanceLDb) > 0.05 ||
+    Math.abs(balanceRDb) > 0.05 ||
+    Math.abs(balanceDelayMs) > 0.02;
 
   useEffect(() => {
     if (!open) return;
     const eng = getEngine();
     eng.ensureLufsMeter();
     const id = setInterval(() => {
+      if (document.hidden) return;
       setLufs({
         momentary: eng.lufs.momentaryLufs,
         short: eng.lufs.shortTermLufs,
@@ -63,7 +81,14 @@ export function ProToolsPanel() {
         className="w-full px-5 py-3 flex items-center justify-between hover:bg-white/[0.03] transition"
       >
         <div className="text-left">
-          <div className="text-xs uppercase tracking-[0.3em] text-dim">Pro Tools</div>
+          <div className="text-xs uppercase tracking-[0.3em] text-dim flex items-center gap-2">
+            Pro Tools
+            {proActive && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-cyan/20 text-cyan tracking-normal">
+                ON
+              </span>
+            )}
+          </div>
           <div className="text-base font-semibold">
             De-esser - Multiband - Per-band Width - HRTF Rooms - L/R - LUFS
           </div>
@@ -117,7 +142,16 @@ export function ProToolsPanel() {
                     {ROOM_OPTIONS.map((r) => (
                       <button
                         key={r.id}
-                        onClick={() => setRoom(r.id)}
+                        type="button"
+                        onClick={() => {
+                          if (r.id === "off") {
+                            setRoom("off");
+                            return;
+                          }
+                          // Mix boots at 0, so picking a room with a dry slider
+                          // would light ON and still pass silence. Give a small wet.
+                          setRoom(r.id, roomMix < 0.001 ? DEFAULT_ROOM_MIX : undefined);
+                        }}
                         className={`rounded-xl border px-3 py-2 text-left transition ${
                           room === r.id
                             ? "border-cyan/60 bg-cyan/10"
@@ -141,6 +175,7 @@ export function ProToolsPanel() {
                       value={roomMix}
                       onChange={(e) => setRoomMix(Number(e.target.value))}
                       disabled={room === "off"}
+                      title={room === "off" ? "Pick a room first" : "Wet / dry mix"}
                       className="w-full accent-plasma h-6"
                     />
                     <div className="text-[11px] text-dim text-right">
@@ -186,7 +221,11 @@ export function ProToolsPanel() {
                   />
                 </div>
                 <button
-                  onClick={() => setBalance(0, 0, 0)}
+                  type="button"
+                  onClick={() => {
+                    setBalance(0, 0, 0);
+                    toast("Balance & delay reset");
+                  }}
                   className="mt-2 text-[11px] text-dim hover:text-cyan transition"
                 >
                   Reset balance & delay
@@ -205,7 +244,11 @@ export function ProToolsPanel() {
                   <LufsCard label="Integrated" value={lufs.integrated} />
                 </div>
                 <button
-                  onClick={() => getEngine().lufs.reset()}
+                  type="button"
+                  onClick={() => {
+                    getEngine().lufs.reset();
+                    toast("Integrated loudness reset");
+                  }}
                   className="mt-2 text-[11px] text-dim hover:text-cyan transition"
                 >
                   Reset integrated

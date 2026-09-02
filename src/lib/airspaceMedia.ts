@@ -51,32 +51,56 @@ export function airspaceSourceId(snap: AirspaceMediaSnapshot): string | null {
   return null;
 }
 
+function youtubeVideoId(u: URL): string | null {
+  const host = u.hostname.replace(/^www\./, "");
+  if (host === "youtu.be") {
+    return u.pathname.split("/").filter(Boolean)[0] || null;
+  }
+  if (!/(^|\.)youtube\.com$/.test(u.hostname) && host !== "youtube-nocookie.com") {
+    return null;
+  }
+  const fromQuery = u.searchParams.get("v");
+  if (fromQuery) return fromQuery;
+  const parts = u.pathname.split("/").filter(Boolean);
+  if (
+    (parts[0] === "shorts" || parts[0] === "embed" || parts[0] === "live" || parts[0] === "v")
+    && parts[1]
+  ) {
+    return parts[1];
+  }
+  return null;
+}
+
 function mediaIdFromUrl(pageUrl: string): string | null {
   try {
     const u = new URL(pageUrl);
     const host = u.hostname.replace(/^www\./, "");
-    if (/(^|\.)youtube\.com$/.test(u.hostname)) {
-      const id =
-        u.searchParams.get("v") ??
-        (u.pathname.startsWith("/shorts/") ? u.pathname.split("/")[2] : null);
-      return id ? `air:yt:${id}` : null;
-    }
-    if (host === "youtu.be") {
-      const id = u.pathname.split("/")[1];
-      return id ? `air:yt:${id}` : null;
-    }
+    const yt = youtubeVideoId(u);
+    if (yt) return `air:yt:${yt}`;
     if (host === "open.spotify.com") {
-      // /track/ID, /episode/ID, /album/ID … — the path IS the identity.
-      const m = u.pathname.match(/^\/(track|episode|album|playlist)\/([A-Za-z0-9]+)/);
+      // /track/ID, /intl-en/track/ID, /embed/album/ID, /show/ID …
+      const m = u.pathname.match(
+        /\/(track|episode|album|playlist|show)\/([A-Za-z0-9]+)/,
+      );
       return m ? `air:sp:${m[1]}:${m[2]}` : null;
     }
-    if (host === "soundcloud.com") {
+    if (/(^|\.)soundcloud\.com$/.test(u.hostname)) {
       const parts = u.pathname.split("/").filter(Boolean);
       return parts.length >= 2 ? `air:sc:${parts.slice(0, 2).join("/")}` : null;
     }
-    if (host === "twitch.tv") {
-      const ch = u.pathname.split("/")[1];
-      return ch ? `air:tw:${ch}` : null;
+    if (host === "clips.twitch.tv") {
+      const slug = u.pathname.split("/").filter(Boolean)[0];
+      return slug ? `air:tw:clip:${slug}` : null;
+    }
+    if (host === "twitch.tv" || host === "m.twitch.tv") {
+      const parts = u.pathname.split("/").filter(Boolean);
+      if (parts[0] === "videos" && parts[1]) return `air:tw:vod:${parts[1]}`;
+      if (parts[0] === "clip" && parts[1]) return `air:tw:clip:${parts[1]}`;
+      if (parts[1] === "clip" && parts[2]) return `air:tw:clip:${parts[2]}`;
+      if (parts[0] && !["directory", "search", "p", "settings"].includes(parts[0])) {
+        return `air:tw:${parts[0]}`;
+      }
+      return null;
     }
     return null;
   } catch {
@@ -165,12 +189,10 @@ function controlScript(action: string): string {
   return `(() => { ${PICK_MEDIA} if (!media) return false; ${action} return true; })()`;
 }
 
-/** youtube.com/watch?v=ID → static thumbnail URL (Media-Session fallback). */
+/** youtube.com/watch?v=ID (and youtu.be / embed / shorts / live) → static thumb. */
 function youtubeThumb(pageUrl: string): string | null {
   try {
-    const u = new URL(pageUrl);
-    if (!/(^|\.)youtube\.com$/.test(u.hostname)) return null;
-    const id = u.searchParams.get("v") ?? (u.pathname.startsWith("/shorts/") ? u.pathname.split("/")[2] : null);
+    const id = youtubeVideoId(new URL(pageUrl));
     return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : null;
   } catch {
     return null;
@@ -190,7 +212,7 @@ async function pollOnce(): Promise<void> {
   }
   const { useAirspaceStore } = await import("@/state/airspaceStore");
   if (snap && !snap.artwork) {
-    try { snap.artwork = youtubeThumb(el.getURL()); } catch { /* guest busy */ }
+    snap.artwork = youtubeThumb(snap.pageUrl);
   }
   // "One source at a time": the instant Airspace media starts playing, the
   // file player and the synth stand down.
@@ -210,9 +232,9 @@ export function registerAirspaceWebview(el: HTMLElement | null): void {
     clearInterval(pollTimer);
     pollTimer = null;
   }
-  if (webview) {
+  if (webview && typeof webview.executeJavaScript === "function") {
     pollTimer = setInterval(() => void pollOnce(), 700);
-  } else {
+  } else if (!webview) {
     lastPaused = null;
     void import("@/state/airspaceStore").then(({ useAirspaceStore }) => {
       useAirspaceStore.getState().setMedia(null);

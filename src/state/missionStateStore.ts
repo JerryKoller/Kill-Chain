@@ -135,8 +135,11 @@ async function readSignal(): Promise<MissionSource | null> {
   const air = useAirspaceStore.getState().media;
   const p = usePlayerStore.getState();
   // Airspace media wins while it's routed (loopback active) and playing.
-  if (air && !air.paused && p.loopbackActive && air.title) {
-    return { sig: `air:${air.title}`, kind: "airspace", title: air.title };
+  // Identity matches Mission Log keys (video id, not the flickering tab title).
+  if (air && !air.paused && p.loopbackActive) {
+    const { airspaceSourceId } = await import("@/lib/airspaceMedia");
+    const id = airspaceSourceId(air);
+    if (id) return { sig: id, kind: "airspace", title: air.title || "Airspace" };
   }
   if (p.status === "playing" && p.src) {
     const title = p.metadata.title ?? p.fileName ?? "";

@@ -45,10 +45,12 @@ export function RepairStackPanel() {
   const [report, setReport] = useState<RepairReport | null>(null);
   const [accepted, setAccepted] = useState<Set<RepairReportItem["id"]>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   const runReadRepair = async () => {
     if (reading) {
       abortRef.current?.abort();
+      toast("Read & Repair cancelled");
       return;
     }
     setReading(true);
@@ -70,8 +72,9 @@ export function RepairStackPanel() {
           useRepairStore.getState().setCutoffHz(rep.cutoffHz);
         }
       }
-    } catch {
-      /* cancelled */
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      toast(err instanceof Error ? err.message : "Read & Repair failed");
     } finally {
       setReading(false);
       setProgress(null);
@@ -152,7 +155,11 @@ export function RepairStackPanel() {
                   ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
                   : "border-white/10 bg-white/[0.02] text-white/30 cursor-not-allowed"
             }`}
-            title="One-click A/B for the complete repair stack (Restoration + Clarity + Sculptor EQ). Crossfaded — safe to hammer."
+            title={
+              !anyOn && !repairBypass
+                ? "Nothing in the repair stack is on yet — Restoration, Clarity, or a Sculptor EQ band"
+                : "One-click A/B for the repair stack (Restoration + Clarity + Sculptor EQ). Tone, dynamics, and space still run. Crossfaded — safe to hammer."
+            }
           >
             {repairBypass ? "⊘ REPAIR BYPASSED" : "A/B REPAIR"}
           </button>
@@ -173,7 +180,7 @@ export function RepairStackPanel() {
         />
         {repairBypass && (
           <span className="text-[10px] uppercase tracking-widest text-rose-300/90">
-            — stack muted for compare, settings intact
+            — stack muted for compare; tone, dynamics, and space still run
           </span>
         )}
       </div>
@@ -241,8 +248,10 @@ export function RepairStackPanel() {
           </div>
           <div className="mt-3 flex items-center gap-2">
             <button
+              type="button"
               onClick={() => void applyReport()}
               disabled={accepted.size === 0}
+              title={accepted.size === 0 ? "Nothing selected — chain stays untouched" : undefined}
               className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
                 accepted.size > 0
                   ? "border-fuchsia-400/60 bg-fuchsia-500/20 text-fuchsia-200 hover:bg-fuchsia-500/30"
@@ -252,7 +261,11 @@ export function RepairStackPanel() {
               Apply {accepted.size} selected
             </button>
             <button
-              onClick={() => setReport(null)}
+              type="button"
+              onClick={() => {
+                setReport(null);
+                toast("Damage report discarded");
+              }}
               className="rounded-lg border border-white/15 hover:bg-white/5 px-4 py-2 text-sm text-white/70 transition"
             >
               Discard report

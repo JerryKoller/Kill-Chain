@@ -39,14 +39,20 @@ export function PlaygroundView() {
   const toast = useUIStore((s) => s.toast);
   const headphoneId = useSettingsStore((s) => s.headphone);
   const headphone = profileForId(headphoneId);
+  const bypass = useAudioStore((s) => s.bypass);
 
   return (
     <div className="flex flex-col gap-3 pb-4">
       <ActionBar
         title="Sculptor"
         code="KC-01"
-        subtitle="Shape the signal — every band, slider, and toggle locks into a savable loadout"
+        subtitle="Shape the signal — Save Preset stores knobs; Log Chain stores the full chain for what's playing"
       />
+      {bypass && (
+        <div className="rounded-xl border border-amber-400/25 bg-amber-500/[0.06] px-3 py-2 text-[11px] text-amber-100/85">
+          Chain is bypassed — a Sculptor move or Engage on the transport turns it on.
+        </div>
+      )}
 
       {/* ─── v2.1 Repair Stack: ordered stages, one A/B, warnings, spectrogram ─── */}
       <RepairStackPanel />
@@ -80,18 +86,21 @@ export function PlaygroundView() {
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => { storeAB(); toast("Snapshot A locked"); }}
+                type="button"
+                onClick={() => { storeAB(); toast("Snapshot A locked (full chain)"); }}
                 className="h-9 rounded-lg border border-white/12 hover:bg-white/5 hover:border-white/25 text-xs font-medium transition"
               >
                 Snapshot A
               </button>
               <button
+                type="button"
                 onClick={() => {
                   if (!abSnapshot) { toast("Snapshot A first"); return; }
                   swapAB();
-                  toast("Swapped A ↔ B");
+                  toast("Swapped A ↔ B (level-matched)");
                 }}
                 disabled={!abSnapshot}
+                title={abSnapshot ? "Swap the live chain with snapshot A, loudness-matched" : "Snapshot A first"}
                 className={`h-9 rounded-lg border text-xs font-medium transition ${
                   abSnapshot
                     ? "border-cyan/50 bg-cyan/10 text-cyan hover:bg-cyan/20"
@@ -121,7 +130,7 @@ export function PlaygroundView() {
                 toggleCorrection();
                 toast(
                   correctionEnabled
-                    ? `${headphone.name} correction OFF (raw)`
+                    ? `${headphone.name} correction OFF — chain still runs`
                     : `${headphone.name} correction ON`,
                 );
               }}
@@ -134,7 +143,7 @@ export function PlaygroundView() {
               {headphone.name} EQ · {correctionEnabled ? "ON" : "OFF"}
             </button>
             <p className="text-[11px] text-dim mt-2 leading-relaxed">
-              Turn off for a raw, unprocessed reference identical to Windows.
+              This is the headphone/speaker profile only — not a full-chain bypass. Tone, EQ, and repair still apply.
             </p>
           </div>
         </GlassPanel>
@@ -143,9 +152,12 @@ export function PlaygroundView() {
       {/* ─── EQ Response Curve + Advanced Metering Row ─── */}
       <div className="grid grid-cols-12 gap-3">
         <GlassPanel intense className="col-span-12 lg:col-span-8 p-4">
-          <div className="text-xs uppercase tracking-[0.3em] text-dim mb-2">
+          <div className="text-xs uppercase tracking-[0.3em] text-dim mb-1">
             Telemetry · Frequency Response
           </div>
+          <p className="text-[11px] text-dim mb-2 leading-relaxed">
+            Tone knobs + parametric EQ. Restoration, Clarity, and tape are not drawn here.
+          </p>
           <div className="h-[220px]">
             <EQResponseCurve />
           </div>
@@ -200,7 +212,7 @@ export function PlaygroundView() {
         </GlassPanel>
 
         <GlassPanel className="col-span-12 xl:col-span-5 p-4">
-          <SectionHeader title="Space" hint="Stereo image, ambience, and room" />
+          <SectionHeader title="Space" hint="Stereo image, ambience, and reverb size — not the HRTF rooms in Pro Tools" />
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
             {SPACE_KEYS.map((k) => {
               const m = metaFor(k);

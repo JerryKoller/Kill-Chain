@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { useUIStore } from "@/state/uiStore";
@@ -37,9 +37,14 @@ export function TargetLockPanel() {
   const [plan, setPlan] = useState<TargetLockPlan | null>(null);
   const [sel, setSel] = useState<TargetLockSelection>({ ...ALL_ON });
   const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   const loadRef = async () => {
     if (busy) return;
+    if (typeof window.playground?.files?.openAudioMulti !== "function") {
+      toast("Loading a reference needs the desktop app");
+      return;
+    }
     setBusy("ref");
     try {
       const ref = await loadReferenceFile((p) => setStage(p.stage));
@@ -59,6 +64,7 @@ export function TargetLockPanel() {
   const measureSource = async () => {
     if (busy === "src") {
       abortRef.current?.abort();
+      toast("Source measure cancelled");
       return;
     }
     if (busy) return;
@@ -77,8 +83,9 @@ export function TargetLockPanel() {
         setSource(m);
         toast("Source measured");
       }
-    } catch {
-      /* cancelled */
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      toast(err instanceof Error ? err.message : "Source measure failed");
     } finally {
       setBusy(null);
       setStage("");
@@ -149,11 +156,16 @@ export function TargetLockPanel() {
                     Source · damaged
                   </div>
                   <button
+                    type="button"
                     onClick={() => void measureSource()}
+                    disabled={busy === "ref"}
+                    title={busy === "ref" ? "Wait for the reference to finish loading" : undefined}
                     className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold transition ${
                       busy === "src"
                         ? "border-amber-400/60 bg-amber-400/10 text-amber-300"
-                        : "border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300"
+                        : busy === "ref"
+                          ? "border-white/10 bg-white/[0.02] text-white/30 cursor-not-allowed"
+                          : "border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300"
                     }`}
                   >
                     {busy === "src" ? `◉ ${stage || "Listening…"} (cancel)` : source ? "↻ Re-measure what's playing" : "◉ Measure what's playing (~9 s)"}
@@ -167,24 +179,45 @@ export function TargetLockPanel() {
                     Target · reference
                   </div>
                   <button
+                    type="button"
                     onClick={() => void loadRef()}
+                    disabled={busy === "src"}
+                    title={busy === "src" ? "Wait for the source measure to finish (or cancel it)" : undefined}
                     className={`w-full rounded-lg border px-3 py-2 text-sm font-semibold transition ${
                       busy === "ref"
                         ? "border-amber-400/60 bg-amber-400/10 text-amber-300"
-                        : "border-cyan/40 bg-cyan/10 hover:bg-cyan/20 text-cyan"
+                        : busy === "src"
+                          ? "border-white/10 bg-white/[0.02] text-white/30 cursor-not-allowed"
+                          : "border-cyan/40 bg-cyan/10 hover:bg-cyan/20 text-cyan"
                     }`}
                   >
                     {busy === "ref" ? `◉ ${stage || "Analyzing…"}` : reference ? `↻ ${reference.name}` : "⊕ Load a clean reference file"}
                   </button>
                   <div className="text-[10px] text-white/45 mt-1.5">
-                    {reference ? "Whole file scanned offline (Welch average)." : "A good master of the same (or similar) material."}
+                    {typeof window.playground?.files?.openAudioMulti !== "function"
+                      ? "Loading a reference needs the desktop app."
+                      : reference
+                        ? "Whole file scanned offline (Welch average)."
+                        : "A good master of the same (or similar) material."}
                   </div>
                 </div>
               </div>
 
               <button
+                type="button"
                 onClick={derive}
                 disabled={!source || !reference || busy !== null}
+                title={
+                  !source && !reference
+                    ? "Measure a source and load a reference first"
+                    : !source
+                      ? "Measure what's playing first"
+                      : !reference
+                        ? "Load a clean reference first"
+                        : busy
+                          ? "Wait for the current measure or load to finish"
+                          : undefined
+                }
                 className={`mt-3 w-full rounded-xl border px-4 py-2.5 text-sm font-bold tracking-wide transition ${
                   source && reference && !busy
                     ? "border-fuchsia-400/50 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 text-fuchsia-300"
@@ -235,9 +268,15 @@ export function TargetLockPanel() {
                         </label>
                       ))}
                       <button
+                        type="button"
                         onClick={() => void apply()}
                         disabled={!plan.moves.some((m) => sel[selKey(m.id)] && hasMove(m.id))}
-                        className="mt-1 rounded-xl border border-cyan/50 bg-cyan/10 hover:bg-cyan/20 px-4 py-2.5 text-sm font-bold text-cyan transition"
+                        title={
+                          !plan.moves.some((m) => sel[selKey(m.id)] && hasMove(m.id))
+                            ? "Tick at least one move"
+                            : undefined
+                        }
+                        className="mt-1 rounded-xl border border-cyan/50 bg-cyan/10 hover:bg-cyan/20 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-bold text-cyan transition"
                       >
                         ⌖ APPLY SELECTED MOVES
                       </button>

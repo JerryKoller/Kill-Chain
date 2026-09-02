@@ -104,7 +104,7 @@ export function TransportBar() {
     ? airMedia.title || "Airspace"
     : metadata.title || fileName || "No track loaded";
   const npSub = deck
-    ? `Airspace · ${airMedia.artist}`
+    ? (airMedia.artist ? `Airspace · ${airMedia.artist}` : "Airspace")
     : metadata.artist || (hasTrack ? "Unknown artist" : "Load a track to begin");
 
   return (
@@ -129,7 +129,9 @@ export function TransportBar() {
           }}
           title={
             deck
-              ? "Playing in Airspace — click to open the browser"
+              ? (airMedia.paused
+                ? "Airspace — click to open the browser"
+                : "Playing in Airspace — click to open the browser")
               : inLibrary
                 ? "Show this track in Library"
                 : undefined
@@ -139,7 +141,7 @@ export function TransportBar() {
             className="relative w-11 h-11 rounded-xl border border-white/10 bg-white/[0.04] shrink-0 grid place-items-center text-base text-dim overflow-hidden"
             style={{
               ...(cover
-                ? { background: `center/cover no-repeat url("${cover}")` }
+                ? { background: `center/cover no-repeat url("${String(cover).replace(/"/g, "%22")}")` }
                 : {}),
               ...(isPlaying
                 ? {
@@ -203,7 +205,11 @@ export function TransportBar() {
             await ensureReady();
             if (loopbackActive) {
               stopLoopback();
-              toast("Exterior audio disabled");
+              toast(
+                loopbackMode === "airspace"
+                  ? "Kill-Chain routing disengaged"
+                  : "Exterior audio disabled",
+              );
             } else {
               const source = useSettingsStore.getState().audioInputSource;
               const ok = await startLoopback(source || undefined);
@@ -252,12 +258,18 @@ export function TransportBar() {
           }}
           title={
             loopbackActive
-              ? "Stop processing system audio"
+              ? loopbackMode === "airspace"
+                ? "Stop routing Airspace through Kill-Chain"
+                : "Stop processing system audio"
               : "Pipe Windows / browser / game audio through the lab. " +
                 "Use a virtual cable (Settings → Audio Routing) for zero feedback."
           }
         >
-          {loopbackActive ? "Disable Exterior Audio" : "Enable Exterior Audio"}
+          {loopbackActive
+            ? loopbackMode === "airspace"
+              ? "Disengage Airspace"
+              : "Disable Exterior Audio"
+            : "Enable Exterior Audio"}
         </NeonButton>
 
         {/* Primary transport control — one round, accent-lit play/pause. */}
@@ -267,7 +279,8 @@ export function TransportBar() {
               playUi("press");
               // Starting Airspace playback stands the other sources down.
               if (airMedia.paused) claimSource("airspace");
-              await toggleAirspaceMedia();
+              const acted = await toggleAirspaceMedia();
+              if (!acted) toast("No media on this page to play");
               return;
             }
             if (!hasTrack) {

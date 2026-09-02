@@ -294,7 +294,7 @@ export function BandEQPanel() {
     <GlassPanel intense className="col-span-12 xl:col-span-8 p-4">
       <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
         <div>
-          <div className="text-[10px] uppercase tracking-[0.3em] text-dim">Fire Control</div>
+          <div className="text-[10px] uppercase tracking-[0.3em] text-dim">Sculptor EQ</div>
           <div className="text-lg font-semibold">Parametric EQ</div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -304,9 +304,15 @@ export function BandEQPanel() {
           <button
             onClick={() => {
               const id = addBand();
-              if (id) { setSelected(id); } else toast(`Max ${EQ_MAX_BANDS} bands`);
+              if (id) {
+                setSelected(id);
+                toast(`Added band (${bands.length + 1}/${EQ_MAX_BANDS})`);
+              } else {
+                toast(`Max ${EQ_MAX_BANDS} bands`);
+              }
             }}
             disabled={bands.length >= EQ_MAX_BANDS}
+            title={bands.length >= EQ_MAX_BANDS ? `Max ${EQ_MAX_BANDS} bands` : "Add a band in the widest gap"}
             className="rounded-lg border border-cyan/40 bg-cyan/10 hover:bg-cyan/20 disabled:opacity-40 px-2.5 py-1 text-xs font-semibold text-cyan transition"
           >
             + Band
@@ -326,18 +332,31 @@ export function BandEQPanel() {
               }
             }}
             disabled={bands.length <= EQ_MIN_BANDS}
+            title={
+              bands.length <= EQ_MIN_BANDS
+                ? `Keep at least ${EQ_MIN_BANDS} band`
+                : "Remove the selected band (or the highest if none is selected)"
+            }
             className="rounded-lg border border-plasma/40 bg-plasma/10 hover:bg-plasma/20 disabled:opacity-40 px-2.5 py-1 text-xs font-semibold text-plasma transition"
           >
             − Band
           </button>
           <button
-            onClick={() => { flatten(); toast("EQ flattened"); }}
+            onClick={() => {
+              const filterLive = bands.some(
+                (b) => b.enabled && (b.type === "lowpass" || b.type === "highpass" || b.type === "notch"),
+              );
+              flatten();
+              toast(filterLive ? "Gains flattened — LP / HP / notch still filter" : "EQ flattened");
+            }}
+            title="Zero every peaking/shelf gain. Lowpass, highpass, and notch still run."
             className="rounded-lg border border-white/12 hover:bg-white/5 px-2.5 py-1 text-xs text-white/75 transition"
           >
             Flatten
           </button>
           <button
-            onClick={() => { reset(); setSelected(null); toast("EQ reset"); }}
+            onClick={() => { reset(); setSelected(null); toast("EQ reset to 6 flat bands"); }}
+            title="Replace the current layout with the default 6-band flat EQ"
             className="rounded-lg border border-white/12 hover:bg-white/5 px-2.5 py-1 text-xs text-white/75 transition"
           >
             Reset
@@ -375,7 +394,13 @@ export function BandEQPanel() {
                   onDoubleClick={(e) => { e.stopPropagation(); updateBand(b.id, { gain: 0 }); }}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    if (bands.length > EQ_MIN_BANDS) { removeBand(b.id); setSelected(null); }
+                    if (bands.length > EQ_MIN_BANDS) {
+                      removeBand(b.id);
+                      setSelected(null);
+                      toast("Removed band");
+                    } else {
+                      toast(`Min ${EQ_MIN_BANDS} band`);
+                    }
                   }}
                   className="group relative grid place-items-center rounded-full cursor-grab active:cursor-grabbing transition"
                   style={{
@@ -407,15 +432,19 @@ export function BandEQPanel() {
             canRemove={bands.length > EQ_MIN_BANDS}
             onChange={(patch) => updateBand(selectedBand.id, patch)}
             onToggle={() => toggleBand(selectedBand.id)}
-            onRemove={() => { removeBand(selectedBand.id); setSelected(null); }}
+            onRemove={() => {
+              removeBand(selectedBand.id);
+              setSelected(null);
+              toast("Removed band");
+            }}
           />
         ) : (
           <div className="text-[11px] text-dim">
             Drag a node to bend the curve (left/right = frequency, up/down =
             gain). Scroll a node for Q. Double-click empty space to add a band, a
-            node to flatten it, right-click to remove. This curve is the same one
-            shown under Frequency Response — every tool that shapes the sound
-            moves it.
+            node to flatten it, right-click to remove. Same curve as Frequency
+            Response: tone knobs plus these bands. Restoration, Clarity, and tape
+            are not drawn here.
           </div>
         )}
       </div>
@@ -438,6 +467,23 @@ function BandEditor({
   onToggle: () => void;
   onRemove: () => void;
 }) {
+  const [freqDraft, setFreqDraft] = useState(String(Math.round(band.freq)));
+  useEffect(() => {
+    setFreqDraft(String(Math.round(band.freq)));
+  }, [band.id, band.freq]);
+
+  const commitFreq = () => {
+    const n = Number(freqDraft);
+    if (!Number.isFinite(n)) {
+      setFreqDraft(String(Math.round(band.freq)));
+      return;
+    }
+    onChange({ freq: n });
+  };
+
+  const usesGain =
+    band.type === "peaking" || band.type === "lowshelf" || band.type === "highshelf";
+
   return (
     <div className="flex items-end gap-3 flex-wrap rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
       <div className="text-xs font-semibold text-cyan w-14 shrink-0">Band {index}</div>
@@ -447,9 +493,23 @@ function BandEditor({
           type="number"
           min={EQ_FREQ_MIN}
           max={EQ_FREQ_MAX}
-          value={Math.round(band.freq)}
-          onChange={(e) => onChange({ freq: Number(e.target.value) })}
+          value={freqDraft}
+          onChange={(e) => setFreqDraft(e.target.value)}
+          onBlur={commitFreq}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitFreq();
+              e.currentTarget.blur();
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setFreqDraft(String(Math.round(band.freq)));
+              e.currentTarget.blur();
+            }
+          }}
           className="w-20 bg-black/40 border border-white/10 rounded px-2 py-1 text-xs focus:outline-none focus:border-cyan/60"
+          aria-label="Band frequency in hertz"
         />
       </Field>
 
@@ -461,7 +521,9 @@ function BandEditor({
           step={0.5}
           value={band.gain}
           onChange={(e) => onChange({ gain: Number(e.target.value) })}
-          className="w-28 accent-cyan"
+          disabled={!usesGain}
+          title={usesGain ? "Band gain" : "Gain is unused on lowpass, highpass, and notch"}
+          className="w-28 accent-cyan disabled:opacity-40"
         />
       </Field>
 
@@ -490,7 +552,9 @@ function BandEditor({
       </Field>
 
       <button
+        type="button"
         onClick={onToggle}
+        title={band.enabled ? "Mute this band (it stays in the list)" : "Enable this band"}
         className={`rounded-lg border px-2.5 py-1 text-xs transition ${
           band.enabled
             ? "border-cyan/50 bg-cyan/10 text-cyan"
@@ -518,6 +582,7 @@ function BandEditor({
         onClick={onRemove}
         disabled={!canRemove}
         className="rounded-lg border border-rose-400/30 bg-rose-500/5 hover:bg-rose-500/15 disabled:opacity-30 px-2.5 py-1 text-xs text-rose-200/80 transition"
+        title={canRemove ? "Remove this band" : `Keep at least ${EQ_MIN_BANDS} band`}
       >
         Remove
       </button>
@@ -549,7 +614,7 @@ function VolumeControl() {
   return (
     <div
       className="flex items-center gap-1.5 rounded-lg border border-white/12 px-2 py-1"
-      title="Master volume — boost or cut the final output. Safe to push: the limiter prevents clipping."
+      title="Master volume — boost or cut the final output. Double-click for 0 dB. Safe to push: the limiter prevents clipping."
     >
       <span className="text-[10px] uppercase tracking-widest text-dim">Vol</span>
       <input

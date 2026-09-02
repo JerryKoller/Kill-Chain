@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { Knob } from "@/components/shared/Knob";
 import { useAudioStore } from "@/state/audioStore";
+import { useUIStore } from "@/state/uiStore";
 
 /**
  * Lo-Fi tape degradation — folded into the Playground as a collapsible
@@ -13,6 +14,8 @@ export function LoFiPanel() {
   const [open, setOpen] = useState(false);
   const params = useAudioStore((s) => s.params);
   const setParam = useAudioStore((s) => s.setParam);
+  const setParams = useAudioStore((s) => s.setParams);
+  const toast = useUIStore((s) => s.toast);
 
   const active = params.lofiAge > 0 || params.lofiWear > 0 || params.lofiWowFlutter > 0;
 
@@ -47,31 +50,47 @@ export function LoFiPanel() {
             transition={{ duration: 0.25 }}
             className="overflow-hidden border-t border-white/10"
           >
-            <div className="p-6 flex flex-wrap justify-around items-start gap-6">
-              <LoFiKnob
-                value={params.lofiAge}
-                onChange={(v) => setParam("lofiAge", v)}
-                color="#ffb648"
-                label="Age"
-                hint="Bandwidth reduction & filter wear"
-                blurb="Rolls off highs and thins the lows, mimicking old tape formulas."
-              />
-              <LoFiKnob
-                value={params.lofiWowFlutter}
-                onChange={(v) => setParam("lofiWowFlutter", v)}
-                color="#ff6f3c"
-                label="Wow & Flutter"
-                hint="Pitch instability"
-                blurb="Slow pitch drift (wow) plus fast mechanical wobble (flutter)."
-              />
-              <LoFiKnob
-                value={params.lofiWear}
-                onChange={(v) => setParam("lofiWear", v)}
-                color="#c87a3a"
-                label="Wear & Noise"
-                hint="Crackle and hiss"
-                blurb="Background hiss and random crackles from dust and wear."
-              />
+            <div className="p-6">
+              <div className="flex items-center justify-end mb-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setParams({ lofiAge: 0, lofiWear: 0, lofiWowFlutter: 0 });
+                    toast("Tape deck reset");
+                  }}
+                  disabled={!active}
+                  title={active ? "Zero Age, Wow & Flutter, and Wear" : "Tape deck is already dry"}
+                  className="rounded-xl border border-white/15 bg-white/[0.03] hover:bg-white/[0.06] disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2 text-sm font-semibold transition"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="flex flex-wrap justify-around items-start gap-6">
+                <LoFiKnob
+                  value={params.lofiAge}
+                  onChange={(v) => setParam("lofiAge", v)}
+                  color="#ffb648"
+                  label="Age"
+                  hint="Bandwidth reduction & filter wear"
+                  blurb="Rolls off highs and thins the lows, mimicking old tape formulas."
+                />
+                <LoFiKnob
+                  value={params.lofiWowFlutter}
+                  onChange={(v) => setParam("lofiWowFlutter", v)}
+                  color="#ff6f3c"
+                  label="Wow & Flutter"
+                  hint="Pitch instability"
+                  blurb="Slow pitch drift (wow) plus fast mechanical wobble (flutter)."
+                />
+                <LoFiKnob
+                  value={params.lofiWear}
+                  onChange={(v) => setParam("lofiWear", v)}
+                  color="#c87a3a"
+                  label="Wear & Noise"
+                  hint="Crackle and hiss"
+                  blurb="Background hiss and random crackles from dust and wear."
+                />
+              </div>
             </div>
           </motion.div>
         )}

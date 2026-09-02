@@ -510,6 +510,22 @@ export function missionLogHasChainFor(sig: { kind: "file" | "air"; ident: string
   return key !== null && !!s.entries[key];
 }
 
+/** Snapshot the live chain for the Airspace page only. Never falls through
+ *  to a Library track — the Airspace toolbar Log must not silently save the
+ *  file player. Returns the entry name, or null when nothing identifiable
+ *  is playing / routed. */
+export async function logAirspaceSource(): Promise<string | null> {
+  const { usePlayerStore } = await import("@/state/playerStore");
+  const p = usePlayerStore.getState();
+  const air = useAirspaceStore.getState().media;
+  if (!air || air.paused || !p.loopbackActive) return null;
+  const key = airspaceSourceId(air);
+  if (!key) return null;
+  const name = air.title || "Airspace source";
+  useMissionLogStore.getState().saveEntry(key, "airspace", name, air.artist);
+  return name;
+}
+
 /**
  * Snapshot the live chain under whatever is playing RIGHT NOW (Airspace
  * source wins while routed; else the current file). Returns the entry name,
