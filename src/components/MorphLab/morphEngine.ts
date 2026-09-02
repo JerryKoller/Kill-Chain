@@ -259,19 +259,43 @@ export function loadMorphConfig(): MorphLabConfig {
 }
 
 let saveTimer: number | null = null;
+let pendingCfg: MorphLabConfig | null = null;
+
+function writeMorphConfig(cfg: MorphLabConfig): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+  } catch (err) {
+    console.warn("[morphlab] failed to persist config:", err);
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Morph Lab", err),
+    );
+  }
+}
 
 /** Debounced write — call freely on every config change. */
 export function saveMorphConfig(cfg: MorphLabConfig): void {
   if (typeof window === "undefined") return;
+  pendingCfg = cfg;
   if (saveTimer != null) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     saveTimer = null;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
-    } catch (err) {
-      console.warn("[morphlab] failed to persist config:", err);
-    }
+    const next = pendingCfg;
+    pendingCfg = null;
+    if (next) writeMorphConfig(next);
   }, 400);
+}
+
+/** Flush a pending debounce (drag-end / unmount) so the last layout isn't lost. */
+export function flushMorphConfig(): void {
+  if (typeof window === "undefined") return;
+  if (saveTimer != null) {
+    window.clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (pendingCfg == null) return;
+  const next = pendingCfg;
+  pendingCfg = null;
+  writeMorphConfig(next);
 }
 
 /** Resolve a corner source to its params, falling back to the first preset. */

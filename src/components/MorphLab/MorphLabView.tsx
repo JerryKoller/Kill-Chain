@@ -33,6 +33,7 @@ import {
   resolveCornerParams,
   sampleGesture,
   saveMorphConfig,
+  flushMorphConfig,
   unlockKeys,
   type Corner,
   type CornerSource,
@@ -99,6 +100,8 @@ export function MorphLabView() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [confirmReset, setConfirmReset] = useState(false);
+  /** True once the 4-corner blend has actually started previewing. */
+  const [blendPreviewing, setBlendPreviewing] = useState(false);
 
   // ── Refs: everything the RAF loop touches lives outside React state ──
   const padRef = useRef<HTMLDivElement | null>(null);
@@ -148,8 +151,39 @@ export function MorphLabView() {
   motionRef.current = motionCfg;
   const gestureRef = useRef(gesture);
   gestureRef.current = gesture;
+  const persistCornersRef = useRef(corners);
+  persistCornersRef.current = corners;
+  const persistLocksRef = useRef(locks);
+  persistLocksRef.current = locks;
   const tickRef = useRef<(ts: number) => void>(() => {});
   const finishRecordingRef = useRef<(tsNow: number) => void>(() => {});
+  const discardRecordingRef = useRef<() => void>(() => {});
+  const persistLayoutRef = useRef<() => void>(() => {});
+  const confirmResetTimer = useRef<number | null>(null);
+
+  discardRecordingRef.current = () => {
+    recordingRef.current = false;
+    setRecording(false);
+    setRecArmed(false);
+    recBufRef.current = [];
+    recFirstTsRef.current = null;
+    recLastSampleRef.current = null;
+  };
+
+  persistLayoutRef.current = () => {
+    saveMorphConfig({
+      corners: persistCornersRef.current,
+      locks: persistLocksRef.current,
+      motion: motionRef.current,
+      gesture: gestureRef.current,
+      pos: { ...posRef.current },
+    });
+  };
+
+  const startBlendPreview = () => {
+    preview.start();
+    setBlendPreviewing(true);
+  };
 
   const runLoop = useCallback(() => {
     if (rafRef.current != null) return;
@@ -291,7 +325,7 @@ export function MorphLabView() {
     recFirstTsRef.current = null;
     recLastSampleRef.current = null;
     if (!g) {
-      toast("Gesture too short — hold REC and fly a longer pass");
+      toast("Gesture too short — arm REC, then drag a longer pass");
       return;
     }
     setGesture(g);
@@ -312,7 +346,7 @@ export function MorphLabView() {
       setMotionCfg((p) => ({ ...p, pattern: "off" }));
       return;
     }
-    preview.start();
+    startBlendPreview();
     runLoop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [motionCfg.pattern, runLoop]);
@@ -331,9 +365,65 @@ export function MorphLabView() {
     };
   }, []);
 
+  // Flush pending layout (including puck pos) on leave / refresh, and tell
+  // the truth if leave restores an uncommitted blend.
+  useEffect(() => {
+    const persist = () => {
+      persistLayoutRef.current();
+      flushMorphConfig();
+    };
+    window.addEventListener("pagehide", persist);
+    return () => {
+      window.removeEventListener("pagehide", persist);
+      persist();
+      if (preview.startedRef.current && !preview.committedRef.current) {
+        toast("Left Morph Lab — unapplied blend was restored");
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => () => {
+    if (confirmResetTimer.current != null) {
+      window.clearTimeout(confirmResetTimer.current);
+    }
+  }, []);
+
+  // Escape: close the save row, then stop REC / motion — same cascade as Tractor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (saveOpen) {
+        e.preventDefault();
+        setSaveOpen(false);
+        setSaveName("");
+        return;
+      }
+      if (t && t.tagName === "INPUT") return;
+      if (recordingRef.current || recArmed) {
+        e.preventDefault();
+        const wasTake = recordingRef.current;
+        discardRecordingRef.current();
+        toast(wasTake ? "Recording discarded" : "REC disarmed");
+        return;
+      }
+      if (motionCfg.pattern !== "off") {
+        e.preventDefault();
+        setMotionCfg((p) => ({ ...p, pattern: "off" }));
+        toast("Motion off");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [saveOpen, recArmed, motionCfg.pattern, toast]);
+
   // Persist lab configuration (debounced inside saveMorphConfig). The puck
   // position is read from the ref so continuous autopilot motion doesn't
-  // reset the debounce forever; drag-end flushes it explicitly.
+  // reset the debounce forever; drag-end, keyboard, and unmount/pagehide
+  // flush it explicitly.
   useEffect(() => {
     saveMorphConfig({
       corners,
@@ -355,8 +445,8 @@ export function MorphLabView() {
   const beginDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = padRef.current;
     if (!el) return;
-    el.setPointerCapture(e.pointerId);
-    preview.start();
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    startBlendPreview();
     draggingRef.current = true;
     setDragging(true);
     // Grabbing the puck takes manual control — autopilot disengages.
@@ -377,20 +467,28 @@ export function MorphLabView() {
     dragTo(e.clientX, e.clientY);
   };
 
-  const endDrag = () => {
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
     setDragging(false);
-    if (recordingRef.current) finishRecordingRef.current(performance.now());
+    try {
+      if (padRef.current?.hasPointerCapture(e.pointerId)) {
+        padRef.current.releasePointerCapture(e.pointerId);
+      }
+    } catch { /* ignore */ }
+    if (recordingRef.current) {
+      // Pointer cancel is the OS aborting the drag — don't keep that take.
+      if (e.type === "pointercancel") {
+        discardRecordingRef.current();
+        toast("Recording discarded");
+      } else {
+        finishRecordingRef.current(performance.now());
+      }
+    }
     // Snap the UI mirror so readouts land exactly where the puck stopped.
     setUiXy({ ...posRef.current });
-    saveMorphConfig({
-      corners,
-      locks,
-      motion: motionCfg,
-      gesture,
-      pos: { ...posRef.current },
-    });
+    persistLayoutRef.current();
+    flushMorphConfig();
   };
 
   // ── Keyboard nudging on the puck (role="slider" keeps global keys away) ──
@@ -404,29 +502,38 @@ export function MorphLabView() {
     else if (e.key === "ArrowDown") dy = step;
     else if (e.key === "Home") {
       e.preventDefault();
-      preview.start();
+      startBlendPreview();
       movePuck(0.5, 0.5);
       setUiXy({ x: 0.5, y: 0.5 });
+      persistLayoutRef.current();
       runLoop();
       return;
     } else return;
     e.preventDefault();
-    preview.start();
+    startBlendPreview();
     movePuck(posRef.current.x + dx, posRef.current.y + dy);
     setUiXy({ ...posRef.current });
+    persistLayoutRef.current();
     runLoop();
   };
 
   // ── Actions ──
-  const currentBlend = (): SoundParams => ({
-    ...useAudioStore.getState().params,
-    ...(targetRef.current?.partial ?? {}),
-  });
+  const currentBlend = (): SoundParams => {
+    const live = useAudioStore.getState().params;
+    // Opening the tab computes a target but does not preview it. Saving or
+    // committing that unheard mix would lie about "the sound as it plays now".
+    if (!preview.startedRef.current) return { ...live };
+    return { ...live, ...(targetRef.current?.partial ?? {}) };
+  };
 
   const commitBlend = () => {
+    if (!preview.startedRef.current) {
+      toast("Drag the puck first — nothing to commit yet");
+      return;
+    }
     preview.commit();
     replaceParams(currentBlend());
-    toast("Blend committed to the sculpt");
+    toast("Blend committed to the sculpt (knobs — EQ unchanged)");
   };
 
   const doSaveBlend = () => {
@@ -434,26 +541,27 @@ export function MorphLabView() {
     savePreset(name, currentBlend(), SNAPSHOT_ACCENT, "✛");
     setSaveOpen(false);
     setSaveName("");
-    toast(`Saved "${name}" — deployable from Presets`);
+    toast(`Saved "${name}" (Armory knobs — EQ unchanged)`);
   };
 
   const centerPuck = () => {
-    preview.start();
+    startBlendPreview();
     movePuck(0.5, 0.5);
     setUiXy({ x: 0.5, y: 0.5 });
+    persistLayoutRef.current();
     runLoop();
   };
 
   const setCornerPreset = (corner: Corner, id: string) => {
     if (id === "__snapshot") return;
-    preview.start();
+    startBlendPreview();
     setCorners((prevC) => ({ ...prevC, [corner]: { kind: "preset", id } }));
   };
 
   const snapCorner = (corner: Corner) => {
     const label = `SNAP ${new Date().toLocaleTimeString([], { hour12: false })}`;
     const params = { ...useAudioStore.getState().params };
-    preview.start();
+    startBlendPreview();
     setCorners((prevC) => ({
       ...prevC,
       [corner]: { kind: "snapshot", label, params },
@@ -486,15 +594,21 @@ export function MorphLabView() {
   };
 
   const resetLab = () => {
+    discardRecordingRef.current();
     setCorners({ ...DEFAULT_CORNERS });
     setLocks([]);
     setMotionCfg({ ...DEFAULT_MOTION });
     setGesture(null);
-    setRecArmed(false);
     movePuck(0.5, 0.5);
     setUiXy({ x: 0.5, y: 0.5 });
     setConfirmReset(false);
-    toast("Morph Lab reset to factory state");
+    toast(
+      !preview.startedRef.current
+        ? "Morph Lab reset to factory layout"
+        : preview.committedRef.current
+          ? "Lab reset — factory blend is live and already committed, so it stays"
+          : "Lab layout reset — factory blend is previewing; Commit to keep it",
+    );
   };
 
   // ── Quick Sculpts (unchanged behaviour — commit straight to the sculpt) ──
@@ -514,7 +628,7 @@ export function MorphLabView() {
     preview.commit();
     replaceParams(dip.params);
     useEqStore.getState().randomize();
-    toast(`Randomized: ${dip.name} — ${dip.tagline}`);
+    toast(`Randomized: ${dip.name} — ${dip.tagline} (EQ bands too)`);
   };
 
   // ── Derived display data ──
@@ -543,7 +657,8 @@ export function MorphLabView() {
       <ActionBar
         title="Morph Lab"
         code="KC-05"
-        subtitle="Four-corner blend terrain — drag the puck, fly patrol patterns, or loop a recorded pass"
+        subtitle="Four-corner blend terrain — drag the puck, then Commit to keep it. Quick Sculpts write immediately."
+        showActions={false}
       />
 
       <div className="grid grid-cols-12 gap-3">
@@ -554,30 +669,58 @@ export function MorphLabView() {
                 <span>2D Blend Surface</span>
                 <span
                   className={`text-[9px] px-2 py-0.5 rounded-full border tracking-[0.2em] ${
-                    motionEngaged || dragging
+                    motionEngaged || dragging || blendPreviewing
                       ? "border-lime/50 text-lime bg-lime/10"
                       : "border-white/15 text-white/45"
                   }`}
                 >
-                  {recording ? "RECORDING" : motionEngaged || dragging ? "ENGAGED" : "STANDBY"}
+                  {recording
+                    ? "RECORDING"
+                    : motionEngaged || dragging
+                      ? "ENGAGED"
+                      : blendPreviewing
+                        ? "PREVIEW"
+                        : "STANDBY"}
                 </span>
               </div>
               <div className="text-xl font-semibold">Preset Space Navigator</div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <NeonButton variant="ghost" onClick={centerPuck} className="text-xs">
+              <NeonButton
+                type="button"
+                variant="ghost"
+                onClick={centerPuck}
+                className="text-xs"
+                title="Move to center and preview that blend"
+              >
                 Center puck
               </NeonButton>
               <NeonButton
+                type="button"
                 variant="ghost"
                 onClick={() => setSaveOpen((v) => !v)}
                 className="text-xs"
+                title="Save tone knobs to Armory — parametric EQ is not included"
               >
                 ⊕ Save blend as preset
               </NeonButton>
-              <NeonButton onClick={commitBlend} className="text-xs">
-                Commit current blend
-              </NeonButton>
+              <span
+                className="inline-flex"
+                title={
+                  blendPreviewing
+                    ? "Write the blend knobs onto the live chain (parametric EQ unchanged)"
+                    : "Drag the puck or change a corner first — opening the tab is silent"
+                }
+              >
+                <NeonButton
+                  type="button"
+                  onClick={commitBlend}
+                  className="text-xs"
+                  disabled={!blendPreviewing}
+                >
+                  Commit current blend
+                </NeonButton>
+              </span>
             </div>
           </div>
 
@@ -590,26 +733,35 @@ export function MorphLabView() {
                 onChange={(e) => setSaveName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") doSaveBlend();
-                  if (e.key === "Escape") setSaveOpen(false);
+                  if (e.key !== "Escape") return;
+                  e.preventDefault();
+                  setSaveOpen(false);
+                  setSaveName("");
                 }}
                 placeholder="Name this morph position…"
                 maxLength={60}
                 className="flex-1 min-w-[220px] bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-cyan/60"
               />
               <button
+                type="button"
                 onClick={doSaveBlend}
                 className="kc-btn kc-btn--accent"
               >
                 Save
               </button>
               <button
-                onClick={() => setSaveOpen(false)}
+                type="button"
+                onClick={() => {
+                  setSaveOpen(false);
+                  setSaveName("");
+                }}
                 className="kc-btn kc-btn--ghost"
               >
                 Cancel
               </button>
               <div className="text-[10px] text-dim w-full">
-                Captures the sound exactly as it plays now (locked params included). Saving does not commit the preview.
+                Captures tone knobs as they play now (locked params included). Does
+                not include parametric EQ or repair. Saving does not commit the preview.
               </div>
             </div>
           )}
@@ -676,6 +828,7 @@ export function MorphLabView() {
             {/* The puck — keyboard-operable slider (X/Y) */}
             <motion.button
               ref={puckRef}
+              type="button"
               role="slider"
               aria-label="Morph position. Arrow keys nudge, Shift for coarse, Home to center."
               aria-valuemin={0}
@@ -704,13 +857,16 @@ export function MorphLabView() {
               ] as [MotionPattern, string][]
             ).map(([p, label]) => (
               <button
+                type="button"
                 key={p}
                 onClick={() => setPattern(p)}
                 disabled={p === "gesture" && !gesture}
                 title={
                   p === "gesture" && !gesture
                     ? "Record a gesture first (REC, then drag)"
-                    : undefined
+                    : motionCfg.pattern === p
+                      ? "Click again to stop motion"
+                      : `Fly a ${label} path — Escape also stops`
                 }
                 className={`kc-btn kc-btn--sm kc-btn--ghost ${motionCfg.pattern === p ? "kc-on" : ""}`}
               >
@@ -719,6 +875,7 @@ export function MorphLabView() {
             ))}
 
             <button
+              type="button"
               onClick={() => {
                 if (recording) {
                   finishRecordingRef.current(performance.now());
@@ -732,7 +889,7 @@ export function MorphLabView() {
               className={`kc-btn kc-btn--sm ${
                 recArmed || recording ? "kc-btn--danger" : "kc-btn--ghost"
               }`}
-              title="Arm, then drag the puck — the pass loops when you release"
+              title="Arm, then drag the puck. Stop keeps the pass; Escape discards an armed or in-progress take."
             >
               {recording ? "■ Stop" : recArmed ? "● Armed" : "● Rec"}
             </button>
@@ -747,7 +904,10 @@ export function MorphLabView() {
           </div>
 
           <div className="mt-3 flex items-center gap-4 flex-wrap">
-            <label className="flex items-center gap-2 min-w-[220px]">
+            <label
+              className="flex items-center gap-2 min-w-[220px]"
+              title="Used while a motion path is flying"
+            >
               <span className="text-[11px] uppercase tracking-widest text-dim w-10">
                 Rate
               </span>
@@ -769,7 +929,10 @@ export function MorphLabView() {
                 {rateLabel}
               </span>
             </label>
-            <label className="flex items-center gap-2 min-w-[220px]">
+            <label
+              className="flex items-center gap-2 min-w-[220px]"
+              title="Used while a motion path is flying"
+            >
               <span className="text-[11px] uppercase tracking-widest text-dim w-10">
                 Depth
               </span>
@@ -810,6 +973,7 @@ export function MorphLabView() {
                 <select
                   value={src.kind === "snapshot" ? "__snapshot" : src.id}
                   onChange={(e) => setCornerPreset(c, e.target.value)}
+                  aria-label={`${CORNER_TITLES[c]} preset`}
                   className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded-lg px-2 py-2 text-sm focus:outline-none focus:border-cyan/60"
                 >
                   {src.kind === "snapshot" && (
@@ -827,9 +991,10 @@ export function MorphLabView() {
                   ))}
                 </select>
                 <button
+                  type="button"
                   onClick={() => snapCorner(c)}
                   className="kc-btn kc-btn--sm kc-btn--ghost shrink-0"
-                  title="Freeze the current sound into this corner"
+                  title="Freeze the current sound into this corner and preview the new blend"
                 >
                   ◉ Snap
                 </button>
@@ -869,6 +1034,7 @@ export function MorphLabView() {
           {/* Param locks */}
           <div className="rounded-xl border border-white/10 bg-white/[0.02]">
             <button
+              type="button"
               onClick={() => setLocksOpen((v) => !v)}
               className="w-full flex items-center justify-between px-3 py-2.5 text-left"
             >
@@ -890,6 +1056,7 @@ export function MorphLabView() {
                     const locked = locksSet.has(meta.key);
                     return (
                       <button
+                        type="button"
                         key={meta.key}
                         onClick={() => toggleLock(meta.key)}
                         title={meta.hint}
@@ -903,6 +1070,7 @@ export function MorphLabView() {
                 </div>
                 {locks.length > 0 && (
                   <button
+                    type="button"
                     onClick={() => setLocks([])}
                     className="mt-2 text-[10px] uppercase tracking-wider text-dim hover:text-white/80 transition"
                   >
@@ -915,23 +1083,36 @@ export function MorphLabView() {
 
           <div className="text-[11px] text-dim leading-relaxed">
             Nothing changes until you interact — then the blend previews live.{" "}
-            <span className="text-cyan">Commit current blend</span> keeps it;
-            leaving without committing restores your previous sound.
+            <span className="text-cyan">Commit current blend</span> writes those
+            knobs onto the sculpt (parametric EQ is unchanged). Leaving without
+            committing restores your previous sound. Chain-wide Save / Purge
+            live on Sculptor — this tab’s Save blend is knobs only.
           </div>
 
           <div className="mt-auto flex justify-end">
             <button
+              type="button"
               onClick={() => {
                 if (confirmReset) {
+                  if (confirmResetTimer.current != null) {
+                    window.clearTimeout(confirmResetTimer.current);
+                  }
                   resetLab();
                 } else {
                   setConfirmReset(true);
-                  window.setTimeout(() => setConfirmReset(false), 2400);
+                  if (confirmResetTimer.current != null) {
+                    window.clearTimeout(confirmResetTimer.current);
+                  }
+                  confirmResetTimer.current = window.setTimeout(
+                    () => setConfirmReset(false),
+                    2400,
+                  );
                 }
               }}
               className={`kc-btn kc-btn--sm ${
                 confirmReset ? "kc-btn--danger" : "kc-btn--ghost"
               }`}
+              title="Reset corners, locks, motion, and puck — Commit to keep a previewing blend"
             >
               {confirmReset ? "CONFIRM PURGE" : "✕ Reset lab"}
             </button>
@@ -952,6 +1133,7 @@ export function MorphLabView() {
           <div className="text-[11px] text-dim max-w-xs sm:text-right">
             One-tap moves layer onto your current sound. The morph pad nudges
             tone &amp; space by feel — both commit straight to the sculpt.
+            Randomize also scrambles parametric EQ bands.
           </div>
         </div>
 
@@ -975,8 +1157,10 @@ export function MorphLabView() {
                 onClick={() => applyMacro("tighter", { subBass: -0.1, bass: -0.05, compression: 0.1, punch: 0.1 })} />
             </div>
             <button
+              type="button"
               onClick={randomizeSculpt}
               className="kc-btn kc-btn--danger mt-2 w-full h-11"
+              title="Replace tone knobs and randomize parametric EQ bands — this commits"
             >
               Randomize sculpt
             </button>
@@ -997,15 +1181,22 @@ function TwoTapButton({
   onConfirm: () => void;
 }) {
   const [armed, setArmed] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (timer.current != null) window.clearTimeout(timer.current);
+  }, []);
   return (
     <button
+      type="button"
       onClick={() => {
         if (armed) {
+          if (timer.current != null) window.clearTimeout(timer.current);
           setArmed(false);
           onConfirm();
         } else {
           setArmed(true);
-          window.setTimeout(() => setArmed(false), 2400);
+          if (timer.current != null) window.clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => setArmed(false), 2400);
         }
       }}
       className={`kc-btn kc-btn--sm ${armed ? "kc-btn--danger" : "kc-btn--ghost"}`}
@@ -1026,6 +1217,7 @@ function MacroButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className="kc-btn kc-btn--ghost h-11"
     >

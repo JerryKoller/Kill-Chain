@@ -417,14 +417,14 @@ const ENTRIES: Entry[] = [
     category: "Tools",
     short: "Blend four presets in 2D — plus Quick Sculpts.",
     long:
-      "Advanced morphing: drag the puck (or let autopilot orbit) between four corner presets, then Commit. Quick Sculpts (Make-it moves + morph pad) live here too. Optional depth after you are comfortable in Sculptor + Armory.",
+      "Advanced morphing: drag the puck (or let autopilot orbit) between four corner presets. The blend previews live; Commit writes those tone knobs onto the sculpt (parametric EQ is unchanged). Leaving without Commit restores the unapplied blend — unless a Quick Sculpt, Randomize, or Commit already kept the session. Opening the tab is silent; motion restores disarmed. Quick Sculpts (Make-it moves + morph pad) commit immediately. Optional depth after you are comfortable in Sculptor + Armory.",
   },
   {
     term: "Quick Sculpts",
     category: "Tools",
     short: "One-tap moves: Warmer, Cleaner, Punchier…",
     long:
-      "Fast nudges that layer onto your current sound, plus an XY morph pad for shaping tone and space by feel. Found in Morph Lab; they commit straight to the sculpt.",
+      "Fast nudges that layer onto your current sound, plus an XY morph pad for shaping tone and space by feel. Found in Morph Lab; they commit straight to the sculpt. Randomize also randomizes parametric EQ bands, not just tone knobs.",
   },
   {
     term: "Morphing Blend",
