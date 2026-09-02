@@ -27,7 +27,7 @@ import { useFireMidiFocusStore, bootFireMidiFocus } from "@/state/fireMidiFocusS
 import { focusPageKnobs, focusModuleAt, focusPageCount, FIRE_FOCUS_COUNT } from "./fireKnobFocus";
 import { setStageVizPressureSource } from "./stageVizRaf";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
-import { DEFAULT_FIRE_PATCH, SPECTRAL_FFT_SIZE, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode, type FilterModel, type WarpMode, type DelayCascadeMode } from "@/audio/dsp/FireCommandSynth";
+import { DEFAULT_FIRE_PATCH, SPECTRAL_FFT_SIZE, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode, type FilterModel, type WarpMode, type DelayCascadeMode, type UnisonDistribution, type UnisonPhaseMode, type UnisonTemporalMode } from "@/audio/dsp/FireCommandSynth";
 import { matrixArcsForParam, countRoutesFrom, MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
 import { fxTechState, fxTechBadge, FX_QUALITY_LABELS, type FxQuality, type LowProtect } from "@/audio/dsp/fxClarity";
 import {
@@ -290,7 +290,7 @@ import { FireCommandDeck } from "./FireCommandDeck";
 import { ensureExpanded, foldStorageKey, scrollFireCommandTop, writeFold } from "./fireNavigate";
 import { useFireWorkspace, type FireWorkspace } from "./useFireWorkspace";
 import { FireWorkspaceTabs } from "./FireWorkspaceTabs";
-import { FireCommandPalette, FIRE_PALETTE_EVENT } from "./FireCommandPalette";
+import { FireCommandPalette, FIRE_PALETTE_EVENT, FIRE_DUAL_TOGGLE_EVENT } from "./FireCommandPalette";
 import { FireShortcutsOverlay } from "./FireShortcutsOverlay";
 import { useDualMonitor } from "./useDualMonitor";
 import { FireSnapPanel } from "./FireSnapPanel";
@@ -628,6 +628,21 @@ export function FireCommandView() {
   // workspaces at once instead of switching between them.
   const dual = useDualMonitor();
   const dualSeamPx = dual.seamPx;
+  const dualRef = useRef(dual);
+  dualRef.current = dual;
+
+  // Expanded layout only shows Synth. Pin (and re-pin) the persisted
+  // workspace so Collapse cannot restore Sequencer — including if breadcrumb
+  // or the palette wrote "sequencer" while the sequencer tab was hidden.
+  useEffect(() => {
+    if (dual.active && workspace !== "synth") setWorkspaceRaw("synth");
+  }, [dual.active, workspace, setWorkspaceRaw]);
+
+  useEffect(() => {
+    const onDual = () => { void dualRef.current.toggle(); };
+    window.addEventListener(FIRE_DUAL_TOGGLE_EVENT, onDual);
+    return () => window.removeEventListener(FIRE_DUAL_TOGGLE_EVENT, onDual);
+  }, []);
 
   // The synth band stack, extracted so the single-workspace layout and the
   // dual-monitor split can both render it without duplicating the tree.
@@ -4364,7 +4379,7 @@ function UnisonPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <span className="text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>Distribution</span>
           <select
             value={unisonDistribution}
-            onChange={(e) => setParam("unisonDistribution", e.target.value as any)}
+            onChange={(e) => setParam("unisonDistribution", e.target.value as UnisonDistribution)}
             className="rounded border bg-black/40 px-1.5 py-0.5 text-[9px] font-bold transition"
             style={{ borderColor: `${c}55`, color: `${c}dd` }}
           >
@@ -4379,7 +4394,7 @@ function UnisonPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <span className="text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>Phase</span>
           <select
             value={unisonPhase}
-            onChange={(e) => setParam("unisonPhase", e.target.value as any)}
+            onChange={(e) => setParam("unisonPhase", e.target.value as UnisonPhaseMode)}
             className="rounded border bg-black/40 px-1.5 py-0.5 text-[9px] font-bold transition"
             style={{ borderColor: `${c}55`, color: `${c}dd` }}
           >
@@ -4406,7 +4421,7 @@ function UnisonPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <span className="text-[8px] font-black uppercase tracking-wider" style={{ color: `${c}88` }}>Temporal</span>
           <select
             value={unisonTemporalMode}
-            onChange={(e) => setParam("unisonTemporalMode", e.target.value as any)}
+            onChange={(e) => setParam("unisonTemporalMode", e.target.value as UnisonTemporalMode)}
             className="rounded border bg-black/40 px-1.5 py-0.5 text-[9px] font-bold transition"
             style={{ borderColor: `${c}55`, color: `${c}dd` }}
           >
@@ -13611,7 +13626,7 @@ function Keyboard({
                   ? "border-white/25 bg-white/15 text-white"
                   : "border-white/10 text-white/40 hover:text-white/70"
               }`}
-              title="MPK Focus — when on, controller knobs drive this Signal Path module and PROG/pads step through the ring"
+              title="MPK Focus — when on, controller knobs drive this Signal Path module and PROG/pads step through the ring. On/off and the last module/bank are remembered across launches."
             >
               MPK Focus {focusEnabled ? "On" : "Off"}
             </button>

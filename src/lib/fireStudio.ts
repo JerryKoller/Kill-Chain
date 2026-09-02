@@ -37,6 +37,7 @@ import {
   type FireSequencerState,
 } from "@/state/fireSequencerStore";
 import { coerceDrumStep } from "@/components/FireCommand/drumClarity";
+import { clearFireHistory } from "@/lib/fireHistory";
 
 const PROJECT_VERSION = 3;
 
@@ -74,6 +75,11 @@ export function hasFireAudibleContent(seq: FireSequencerState = useFireSequencer
   for (const clip of seq.arrangement) {
     if ((clip.local?.notes?.length ?? 0) > 0) return true;
     if (clip.local?.drums && drumGridHasHits(clip.local.drums)) return true;
+    for (const steps of Object.values(clip.local?.sampleSteps ?? {})) {
+      for (const cell of steps) {
+        if (coerceDrumStep(cell).vel > 0) return true;
+      }
+    }
   }
   return false;
 }
@@ -421,7 +427,7 @@ async function offlineDryBounce(
     limiterOut = dyn;
     setLimiterBypassed = (b) => {
       dyn.threshold.value = b ? 0 : -2.8;
-      dyn.ratio.value = b ? 1 : 20;
+      dyn.ratio.value = b ? 1 : 10;
     };
   }
   fireMasterGain.connect(limiterIn);
@@ -1075,6 +1081,9 @@ export async function applyProjectText(text: string): Promise<{
     }
     if (data.pattern) useFireSequencerStore.getState().importPattern(data.pattern);
     const { missing } = await useFireSequencerStore.getState().hydrateSamples();
+    // After a successful open, drop undo of the previous song (importPatch
+    // itself pushes a snapshot of whatever was loaded before).
+    clearFireHistory();
     return { ok: true, missingSamples: missing };
   }
 }

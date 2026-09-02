@@ -139,12 +139,10 @@ export function FireBreadcrumb({
             type="button"
             className="fc-crumb-link"
             onClick={() => {
-              writeFireWorkspace("synth");
               // Clicking the section returns to the band overview (Home shows
-              // the full 42-module map).
-              writeFireSynthBand(synthBand === "home" ? "home" : synthBand);
-              if (synthBand === "home") return;
-              writeFireSynthBand("home");
+              // the full 42-module map). Already on Home: stay there.
+              writeFireWorkspace("synth");
+              if (synthBand !== "home") writeFireSynthBand("home");
             }}
             title={synthBand === "home" ? "Synth home" : "Back to Home (all modules)"}
           >

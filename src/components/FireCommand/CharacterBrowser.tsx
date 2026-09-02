@@ -14,6 +14,9 @@ import {
 } from "@/audio/dsp/fireCharacters";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
+import {
+  FIRE_SHELF_EVENT, isFavorite, pushRecent, readFavorites, toggleFavorite,
+} from "@/lib/firePresetShelf";
 import { ensureExpanded, jumpToModule } from "./fireNavigate";
 
 export function CharacterBrowser({
@@ -27,7 +30,14 @@ export function CharacterBrowser({
   const toast = useUIStore((s) => s.toast);
   const [query, setQuery] = useState("");
   const [phaseFilter, setPhaseFilter] = useState<FireCharacterPhase | "all">("all");
+  const [favorites, setFavorites] = useState(() => readFavorites());
   const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const sync = () => setFavorites(readFavorites());
+    window.addEventListener(FIRE_SHELF_EVENT, sync);
+    return () => window.removeEventListener(FIRE_SHELF_EVENT, sync);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -68,6 +78,9 @@ export function CharacterBrowser({
   const deploy = (c: FireCharacter) => {
     const patch = resolveCharacterPatch(c);
     applyCharacterPatch(patch, c.arp);
+    const shelfId = `gen-${c.id}`;
+    pushRecent(shelfId);
+    if (!isFavorite(shelfId)) toggleFavorite(shelfId);
     toast(`Character · ${c.name}`);
     onClose();
     const first = c.focusModules[0];
@@ -200,8 +213,26 @@ export function CharacterBrowser({
                           >
                             {c.phase}
                           </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const now = toggleFavorite(`gen-${c.id}`);
+                              toast(now ? `Starred · ${c.name}` : `Unstarred · ${c.name}`);
+                            }}
+                            className={`ml-auto shrink-0 grid h-5 w-5 place-items-center rounded text-[11px] transition ${
+                              favorites.has(`gen-${c.id}`)
+                                ? "text-[#ffcf6a] opacity-100"
+                                : "text-white/30 opacity-0 group-hover:opacity-100 hover:text-white/70"
+                            }`}
+                            title={favorites.has(`gen-${c.id}`) ? "Remove star" : "Star this character"}
+                            aria-label={favorites.has(`gen-${c.id}`) ? "Remove star" : "Star this character"}
+                            aria-pressed={favorites.has(`gen-${c.id}`)}
+                          >
+                            {favorites.has(`gen-${c.id}`) ? "\u2605" : "\u2606"}
+                          </button>
                           <span
-                            className="ml-auto opacity-0 group-hover:opacity-100 text-[10px] font-bold uppercase tracking-[0.15em] transition"
+                            className="opacity-0 group-hover:opacity-100 text-[10px] font-bold uppercase tracking-[0.15em] transition"
                             style={{ color: c.color }}
                           >
                             Deploy ▸

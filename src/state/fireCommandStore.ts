@@ -307,7 +307,7 @@ function emitArpStep(
   spacingSec: number = stepSec,
 ): { midi: number; idx: number } | null {
   const s = get();
-  const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+  const arpModuleOn = s.patchA.moduleEnable?.["arp"] !== false;
   if (!s.arp.enabled || !arpModuleOn || seq.length === 0) return null;
 
   let idx: number;
@@ -379,7 +379,7 @@ function startArpScheduler(
   const worker = () => {
     if (gen !== arpGen) return;
     const s = get();
-    const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+    const arpModuleOn = s.patchA.moduleEnable?.["arp"] !== false;
     if (!s.arp.enabled || !arpModuleOn) {
       arpTimer = null;
       setArpKeepAlive(false);
@@ -2067,11 +2067,11 @@ export interface FireCommandState extends PersistShape {
   /** Deploy a random preset from the factory bank. Returns what it picked. */
   randomPreset: () => FirePreset;
   /**
-   * Random Armory deploy: pick from the factory bank (optionally one
-   * category) and load it, but keep locked modules exactly as they are.
-   * Returns null when the filtered pool is empty.
+   * Random Armory deploy: pick from the factory bank + user saves (optionally
+   * one factory category) and load it, but keep locked modules exactly as
+   * they are. Returns null when the filtered pool is empty.
    */
-  deployArmoryPreset: (category?: string) => FirePreset | null;
+  deployArmoryPreset: (category?: string) => { id: string; name: string; category: string } | null;
   /**
    * Morph pad (v1.6): push a blended patch into the synth. No history entry —
    * the pad takes ONE snapshot per gesture itself. commit=true also persists.
@@ -2564,7 +2564,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
         useFireSequencerStore.setState({ activeChannel: wantCh });
       }
       // Re-arm latch arp only when editing A (arp is A-only).
-      if (t === "a" && get().arp.enabled && get().patch.moduleEnable?.["arp"] !== false) {
+      if (t === "a" && get().arp.enabled && get().patchA.moduleEnable?.["arp"] !== false) {
         startArpScheduler(get, set);
       }
       persist();
@@ -3077,18 +3077,26 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
     },
 
     randomPreset: () => {
-      return get().deployArmoryPreset() ?? FIRE_PRESETS[0];
+      const hit = get().deployArmoryPreset();
+      return FIRE_PRESETS.find((p) => p.id === hit?.id) ?? FIRE_PRESETS[0];
     },
 
     deployArmoryPreset: (category) => {
       const s = get();
       const cur = s.editTarget === "b" ? s.presetIdB : s.presetId;
-      const pool = FIRE_PRESETS.filter(
+      const factory = FIRE_PRESETS.filter(
         (p) =>
           p.id !== cur &&
           p.id !== "init" &&
           (!category || category === "all" || p.category === category),
-      );
+      ).map((p) => ({ id: p.id, name: p.name, category: p.category as string }));
+      const users =
+        !category || category === "all"
+          ? s.userPresets
+              .filter((p) => p.id !== cur)
+              .map((p) => ({ id: p.id, name: p.name, category: "User" }))
+          : [];
+      const pool = [...factory, ...users];
       const preset = pool[Math.floor(Math.random() * pool.length)];
       if (!preset) return null;
       // Snapshot the pre-deploy patch so locked modules survive the load.
@@ -3253,7 +3261,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       }
       const shapedVel = shapeLiveVelocity(velocity, s.kbdVelGain, s.kbdVelCurve);
       // ARP is A-only. When editing B, skip the latch so keys audition B dry.
-      const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+      const arpModuleOn = s.patchA.moduleEnable?.["arp"] !== false;
       if (s.editTarget === "a" && s.arp.enabled && arpModuleOn) {
         useFireSequencerStore.getState().recordNoteOn(midi, shapedVel);
         const freshLatch = s.arp.hold && s.heldNotes.length === 0;
@@ -3374,7 +3382,7 @@ export const useFireCommandStore = create<FireCommandState>((set, get) => {
       // Match recordNoteOn pitch (scale fold/soft stores snapped MIDI).
       const recordedMidi = livePitchHeld.get(midi) ?? midi;
       useFireSequencerStore.getState().recordNoteOff(recordedMidi);
-      const arpModuleOn = s.patch.moduleEnable?.["arp"] !== false;
+      const arpModuleOn = s.patchA.moduleEnable?.["arp"] !== false;
       // Release by what the PRESS did, not by the arp's state now. Arming the
       // arp between press and release took the latch branch and left the
       // directly-sounded voice ringing until panic.
@@ -3850,6 +3858,7 @@ if (typeof window !== "undefined") {
     try { flushFireCommandPersist(); } catch { /* ignore */ }
   };
   window.addEventListener("beforeunload", flushOnLeave);
+  window.addEventListener("pagehide", flushOnLeave);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flushOnLeave();
   });

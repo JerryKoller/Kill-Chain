@@ -105,7 +105,9 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
         toast("Export cancelled", "warn");
         return;
       }
-      const how = res.method === "offline" ? "offline" : "realtime";
+      const how = res.method === "offline"
+        ? "Fire dry · offline, no live ARP"
+        : "Fire dry · realtime fallback";
       toast(`“${res.trackTitle}” → Library (${how})`, "success");
       onClose();
       setView("library");
@@ -128,8 +130,8 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
         >
           <motion.div
             role="dialog"
-            aria-modal
-            aria-label="Export to Library"
+            aria-modal="true"
+            aria-label="Export to Library (Fire dry)"
             className="w-full max-w-lg rounded-xl border border-white/12 bg-[#12151c] shadow-2xl"
             initial={{ opacity: 0, y: 12, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -142,7 +144,7 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
                 <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/45">
                   Fire Command
                 </div>
-                <h2 className="text-[15px] font-semibold text-white/90">Export to Library</h2>
+                <h2 className="text-[15px] font-semibold text-white/90">Export to Library (Fire dry)</h2>
               </div>
               <button
                 type="button"
@@ -156,8 +158,9 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
 
             <div className="space-y-4 px-5 py-4">
               <p className="text-[12px] leading-relaxed text-white/50">
-                Bounces the current {playMode === "arrangement" ? "arrangement" : "pattern"} into{" "}
-                <span className="text-white/70">Music / Kill-Chain / Fire Exports</span> and adds it to your Library.
+                Fire dry bounce of the current {playMode === "arrangement" ? "arrangement" : "pattern"} into{" "}
+                <span className="text-white/70">Music / Kill-Chain / Fire Exports</span>, then adds it to your Library.
+                Offline omits the live ARP; Kill-Chain master only runs on the realtime fallback.
                 {presetId && presetId !== "custom" && presetId !== "init" ? (
                   <span className="text-white/40"> · patch “{presetId}”</span>
                 ) : null}
@@ -262,7 +265,7 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
                 className="h-8 rounded-md px-3.5 text-[11px] font-bold uppercase tracking-wider text-black disabled:opacity-50"
                 style={{ background: FIRE }}
               >
-                {busy ? busy : "Export to Library"}
+                {busy ? busy : "Export Fire dry"}
               </button>
             </div>
           </motion.div>

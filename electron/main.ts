@@ -456,7 +456,7 @@ function isApprovedWriteDir(dir: string): boolean {
 ipcMain.handle("dialog:pickOutputFolder", async (): Promise<string | null> => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: "Choose an output folder for restored files",
+    title: "Choose an output folder",
     properties: ["openDirectory", "createDirectory"],
   });
   if (result.canceled || result.filePaths.length === 0) return null;

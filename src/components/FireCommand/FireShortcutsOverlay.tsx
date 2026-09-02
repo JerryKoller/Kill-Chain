@@ -7,7 +7,8 @@
  * from the Jump chip's sibling in the utility strip).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { trapTabKey } from "./fireUiKit";
 
 const GROUPS: { title: string; rows: [string, string][] }[] = [
   {
@@ -44,12 +45,23 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
       ["Pin (card header)", "Stay open when accordion folds others"],
       ["Lock (card header)", "Protect from Armory / mutation"],
       ["Wake all", "Un-sleep modules a preset slept"],
+      ["Shift + Expand all", "Expand pinned / soloed modules only"],
+    ],
+  },
+  {
+    title: "Workspace",
+    rows: [
+      ["Expand", "Put the sequencer on a second display"],
+      ["Density · Focus", "Essential chrome only"],
+      ["Ctrl / ⌘ + K", "Jump palette (also Wake all, Expand)"],
     ],
   },
 ];
 
 export function FireShortcutsOverlay() {
   const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -59,14 +71,23 @@ export function FireShortcutsOverlay() {
         && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)
       ) return;
       if (e.key === "?") {
+        // SequencerPanel owns "?" when focus is in the roll / drums / playlist.
+        const seq = document.querySelector("[data-fire-sequencer]");
+        const node = (t instanceof Node ? t : null) ?? document.activeElement;
+        if (seq && node instanceof Node && seq.contains(node)) return;
         e.preventDefault();
         setOpen((v) => !v);
         return;
       }
       if (e.key === "Escape" && open) setOpen(false);
+      if (open && panelRef.current) trapTabKey(panelRef.current, e);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  useEffect(() => {
+    if (open) requestAnimationFrame(() => closeRef.current?.focus());
   }, [open]);
 
   if (!open) return null;
@@ -80,6 +101,7 @@ export function FireShortcutsOverlay() {
       onClick={() => setOpen(false)}
     >
       <div
+        ref={panelRef}
         className="w-full max-w-2xl rounded-2xl border border-white/12 bg-[#0b0d13] p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -88,6 +110,7 @@ export function FireShortcutsOverlay() {
             Synth shortcuts
           </div>
           <button
+            ref={closeRef}
             type="button"
             className="rounded-md border border-white/15 px-2 py-0.5 text-[10px] text-white/60 hover:text-white"
             onClick={() => setOpen(false)}

@@ -21,21 +21,22 @@ export function FireDualMonitorButton({ dual }: { dual: DualMonitorState }) {
       if (!wrapRef.current?.contains(e.target as Node)) setMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setMenuOpen(false); }
+      if (e.key === "Escape") setMenuOpen(false);
     };
     window.addEventListener("pointerdown", onDown, true);
-    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keydown", onKey);
     };
   }, [menuOpen]);
 
   const expanded = dual.active;
   const blocked = !dual.available;
   const targets = dual.displays.filter((d) => !d.isCurrent);
-  // Only a genuine choice deserves a menu.
-  const showMenu = !expanded && targets.length > 1;
+  // A genuine choice deserves a menu — including while expanded, so 3+
+  // displays can re-target without collapsing first.
+  const showMenu = targets.length > 1;
 
   return (
     <div className="fc-dual-btn" ref={wrapRef} data-solo={showMenu ? undefined : "1"}>

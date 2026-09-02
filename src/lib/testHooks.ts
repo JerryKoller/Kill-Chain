@@ -46,6 +46,7 @@ export function installTestHooks(): void {
       fireNoteOps: await import("@/lib/fireNoteOps"),
       firePresetShelf: await import("@/lib/firePresetShelf"),
       fireHistory: await import("@/lib/fireHistory"),
+      fireClipboard: await import("@/lib/fireClipboard"),
     }),
   };
 }

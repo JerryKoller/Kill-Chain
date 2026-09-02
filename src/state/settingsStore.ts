@@ -240,13 +240,32 @@ function persist(state: typeof DEFAULTS): void {
   }
 }
 
+function snapshotSettings(get: () => SettingsState): typeof DEFAULTS {
+  const snap = { ...DEFAULTS };
+  const cur = get() as unknown as Record<string, unknown>;
+  (Object.keys(DEFAULTS) as (keyof typeof DEFAULTS)[]).forEach((k) => {
+    (snap as unknown as Record<string, unknown>)[k] = cur[k];
+  });
+  return snap;
+}
+
 // Debounced persist — dragging UI Glow / UI Scale fires set() per mousemove,
 // and a synchronous JSON.stringify + localStorage write per event janks the
 // slider. 300 ms after the last change is plenty durable.
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePersist(state: typeof DEFAULTS): void {
   if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => persist(state), 300);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    persist(state);
+  }, 300);
+}
+
+export function flushSettingsPersist(): void {
+  if (typeof window === "undefined" || !persistTimer) return;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  persist(snapshotSettings(() => useSettingsStore.getState()));
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => {
@@ -269,12 +288,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         v = scratch[key as keyof typeof DEFAULTS] as typeof value;
       }
       set({ [key]: v } as Partial<SettingsState>);
-      const snap = { ...DEFAULTS };
-      const cur = get() as unknown as Record<string, unknown>;
-      (Object.keys(DEFAULTS) as (keyof typeof DEFAULTS)[]).forEach((k) => {
-        (snap as unknown as Record<string, unknown>)[k] = cur[k];
-      });
-      schedulePersist(snap);
+      schedulePersist(snapshotSettings(get));
     },
     toggle: (key) => {
       const cur = get()[key];
@@ -282,3 +296,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     },
   };
 });
+
+if (typeof window !== "undefined") {
+  const flushOnLeave = () => {
+    try { flushSettingsPersist(); } catch { /* ignore */ }
+  };
+  window.addEventListener("beforeunload", flushOnLeave);
+  window.addEventListener("pagehide", flushOnLeave);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushOnLeave();
+  });
+}

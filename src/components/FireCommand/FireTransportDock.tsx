@@ -74,8 +74,8 @@ function SwingControls() {
         }
         title={
           swingLinked
-            ? "Linked: one groove for everything. Click to give drums and samples their own swing."
-            : "Unlinked: melody, drums and samples each swing on their own. Click to re-link."
+            ? "Linked: one groove for everything. Split copies this value to drums and samples so they don't jump."
+            : "Unlinked: melody, drums and samples each swing on their own. Link copies melody swing onto all groups."
         }
         aria-pressed={!swingLinked}
         aria-label={swingLinked ? "Unlink swing groups" : "Link swing groups"}

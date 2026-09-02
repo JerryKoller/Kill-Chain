@@ -31,6 +31,7 @@ import { audioUrlForPath } from "@/state/libraryStore";
 import * as NoteOps from "@/lib/fireNoteOps";
 import type { LengthMode, NoteOpResult, NoteOpScope } from "@/lib/fireNoteOps";
 import { pushFireHistory, registerFireHistoryProvider } from "@/lib/fireHistory";
+import { FIRE_CLIP_KIND, writeFireClipboard, peekFireClipboard, hasFireClipboard } from "@/lib/fireClipboard";
 import { useFireCommandStore, slotsFromState, committedFireSlots, scheduleSequencerSynthNote, expandSequencerSynthVoices, silenceTransportAudio } from "@/state/fireCommandStore";
 import {
   type DrumStep,
@@ -157,6 +158,12 @@ export interface RollNote {
   vel: number;
   /** Instrument channel (issue #11). Older saves default to Synth A. */
   ch: SynthChannel;
+  /** 0..1 skip chance — same model as drum `prob`. Omitted = always play. */
+  probability?: number;
+  /** −1..1 start nudge, in fractions of a 16th. Omitted = on grid. */
+  micro?: number;
+  /** 1..4 retriggers inside the note. Omitted = single hit. */
+  ratchet?: number;
 }
 
 export const STEPS_PER_BAR = 16;
@@ -1273,14 +1280,27 @@ function sanitizeNotes(raw: unknown, total: number): RollNote[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((n) => n && typeof n.midi === "number")
-    .map((n) => ({
-      id: String(n.id ?? Math.random().toString(36).slice(2)),
-      step: clamp(Number(n.step) || 0, 0, total - 0.25),
-      midi: clamp(Math.round(n.midi), 12, 108),
-      len: clamp(Number(n.len) || 1, 0.25, total),
-      vel: clamp(Number(n.vel) || 0.85, 0.05, 1),
-      ch: (n.ch === 1 ? 1 : 0) as SynthChannel,
-    }));
+    .map((n) => {
+      const note: RollNote = {
+        id: String(n.id ?? Math.random().toString(36).slice(2)),
+        step: clamp(Number(n.step) || 0, 0, total - 0.25),
+        midi: clamp(Math.round(n.midi), 12, 108),
+        len: clamp(Number(n.len) || 1, 0.25, total),
+        vel: clamp(Number(n.vel) || 0.85, 0.05, 1),
+        ch: (n.ch === 1 ? 1 : 0) as SynthChannel,
+      };
+      const rawProb = n.probability ?? n.prob;
+      if (typeof rawProb === "number" && Number.isFinite(rawProb)) {
+        note.probability = clamp(rawProb, 0, 1);
+      }
+      if (typeof n.micro === "number" && Number.isFinite(n.micro)) {
+        note.micro = clamp(n.micro, -1, 1);
+      }
+      if (typeof n.ratchet === "number" && Number.isFinite(n.ratchet)) {
+        note.ratchet = clamp(Math.round(n.ratchet), 1, 4);
+      }
+      return note;
+    });
 }
 
 function sanitizeDrums(raw: unknown, total: number): DrumPattern {
@@ -2323,7 +2343,7 @@ function schedulePatternAtStep(
       // the global swing definition.
       const laneSwing = mix.swing ?? 0;
       if (laneSwing !== 0 && (step & 1) === 1) when += laneSwing * dur * 0.5;
-      let vel = effectiveVel(st) * (mix.level ?? 1);
+      let vel = effectiveVel(st) * (mix.level ?? 1) * clipGain;
       if (scales.timing > 0 || scales.velocity > 0) {
         const tj = (humanBaseOn ? (fpA.humanizeTiming ?? 0.25) : 0.25) * dur * 0.35 * scales.timing;
         const vj = (humanBaseOn ? (fpA.humanizeVelocity ?? 0.2) : 0.2) * 0.4 * scales.velocity;
@@ -2375,7 +2395,7 @@ function schedulePatternAtStep(
       void loadSampleBuffer(sl.path);
       continue;
     }
-    const vel = effectiveVel(st);
+    const vel = clamp(effectiveVel(st) * clipGain, 0.02, 1.2);
     let when = whenSamples + (st.micro ?? 0) * dur * 0.45;
     if (minWhenSec > 0) when = Math.max(minWhenSec, when);
     const ratchet = Math.max(1, Math.min(4, st.ratchet ?? 1));
@@ -2389,39 +2409,39 @@ function schedulePatternAtStep(
       for (const n of bucket) {
         const isB = n.ch === 1;
         if (isB ? !s.synthBEnabled : !s.synthEnabled) continue;
+        const prob = n.probability ?? 1;
+        if (prob < 1 && stepRandom(step, n.id, 1) > prob) continue;
         const offset = (n.step - step) * dur;
         const fp = isB ? fpB : fpA;
         const humanOn = fp.moduleEnable?.["human"] !== false && fp.humanizeOn;
-        let when = whenSynth + offset;
+        let when = whenSynth + offset + (n.micro ?? 0) * dur * 0.45;
         let vel = clamp(n.vel * clipGain, 0.02, 1);
         if (humanOn) {
           const tj = (fp.humanizeTiming ?? 0.25) * dur * 0.35;
           const vj = (fp.humanizeVelocity ?? 0.2) * 0.4;
           when += (stepRandom(step, n.id, 4) * 2 - 1) * tj;
           vel = Math.max(0.05, Math.min(1, vel * (1 + (stepRandom(step, n.id, 5) * 2 - 1) * vj)));
-          // Same clamp as the drum path — humanize must never land in the past.
-          if (minWhenSec > 0) when = Math.max(minWhenSec, when);
         }
+        // Same clamp as the drum path — micro / humanize must never land in the past.
+        if (minWhenSec > 0) when = Math.max(minWhenSec, when);
         // Clip transpose is applied here rather than by rewriting notes, so
         // the clip stays a reference to its bank pattern.
         const midi = clipTranspose === 0
           ? n.midi
           : clamp(Math.round(n.midi + clipTranspose), 0, 127);
+        const ratchet = Math.max(1, Math.min(4, Math.round(n.ratchet ?? 1)));
+        const noteDur = Math.max(0.03, (n.len * dur * 0.98) / ratchet);
         // Live: ARP / harmony / chord via bridge. Offline: harmony / chord
         // expansions without wall-clock arp timers.
-        if (bridgeLiveSynth) {
-          scheduleSequencerSynthNote(
-            isB ? 1 : 0,
-            midi,
-            vel,
-            when,
-            Math.max(0.03, n.len * dur * 0.98),
-          );
-        } else {
-          const target = isB ? engine.fireCommandB : engine.fireCommand;
-          const noteDur = Math.max(0.03, n.len * dur * 0.98);
-          for (const v of expandSequencerSynthVoices(isB ? 1 : 0, midi, vel)) {
-            target.playNote(v.midi, v.vel, when, noteDur);
+        for (let r = 0; r < ratchet; r++) {
+          const rt = when + (r * dur) / ratchet;
+          if (bridgeLiveSynth) {
+            scheduleSequencerSynthNote(isB ? 1 : 0, midi, vel, rt, noteDur);
+          } else {
+            const target = isB ? engine.fireCommandB : engine.fireCommand;
+            for (const v of expandSequencerSynthVoices(isB ? 1 : 0, midi, vel)) {
+              target.playNote(v.midi, v.vel, rt, noteDur);
+            }
           }
         }
       }
@@ -2818,9 +2838,9 @@ function startScheduler(get: () => FireSequencerState): void {
 }
 
 /**
- * Current playhead in ACTIVE-PATTERN steps (fractional) — read from RAF, not
- * state. In arrangement mode it returns the local step while a clip of the
- * active pattern is sounding, and -1 while another pattern / gap plays.
+ * Current playhead in PATTERN-LOCAL steps (fractional) — read from RAF, not
+ * state. In arrangement mode it follows the sounding clip’s local step
+ * (first audible slot under the song cursor). −1 only in a true gap.
  */
 export function getPlayheadStep(bpm: number, bars: number): number {
   const ctx = getEngine().ctx;
@@ -2831,7 +2851,7 @@ export function getPlayheadStep(bpm: number, bars: number): number {
     if (t < 0) return 0;
     const g = t % songTotal;
     const slots = slotsCovering(g, s.playlistTracks);
-    const slot = slots.find((m) => m.sectionId === s.activeSectionId);
+    const slot = slots[0];
     if (!slot) return -1;
     return g - slot.start;
   }
@@ -3020,25 +3040,7 @@ export function getArrangementPlayheadStep(): number {
 let noteSeq = 0;
 const noteId = () => `n${Date.now().toString(36)}${(noteSeq++).toString(36)}`;
 
-/**
- * Drum-lane clipboard, module-scoped (not React state, not persisted).
- *
- * Copying a groove between lanes or patterns previously meant re-drawing it:
- * the lane transforms could rotate/reverse/invert a lane in place but never
- * move one. Held outside the store so a paste doesn't churn subscribers and
- * a copy never lands in undo history.
- */
-let drumLaneClipboard: DrumStep[] | null = null;
-
-/**
- * Arrangement clip clipboard.
- *
- * The playlist could duplicate a clip in place but had no copy/paste, so
- * moving a chorus block to another position or track meant deleting and
- * re-dragging every clip. Offsets are stored relative to the group origin so
- * multi-clip pastes keep their internal layout.
- */
-let clipClipboard: { clip: ArrangementClip; dStep: number; dTrack: number }[] | null = null;
+type ClipClipboardEntry = { clip: ArrangementClip; dStep: number; dTrack: number };
 
 export interface FireSequencerState extends PersistShape, ActiveMirror {
   playing: boolean;
@@ -3066,7 +3068,7 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   markerAfter: (step: number) => SongMarker | null;
 
   // ── Clip clipboard + per-clip properties ──
-  /** Copy clips to the module clipboard. Returns how many were copied. */
+  /** Copy clips to the Fire clipboard (OS JSON + in-app RAM). Returns how many were copied. */
   copyClips: (ids: string[]) => number;
   /** Paste the clipboard at `startStep` on `track`. Returns new clip ids. */
   pasteClips: (startStep: number, track: number) => string[];
@@ -3099,8 +3101,8 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   duplicateNotes: (ids: string[], offsetSteps: number) => string[];
   /** Shift notes by semitones (scale-snapped when snap is on). */
   transposeNotes: (ids: string[], semis: number) => void;
-  /** Loose-groove pass: small velocity + micro-timing jitter. */
-  humanizeNotes: () => void;
+  /** One-shot scatter (same path + amounts as Tools / Shift+H). Returns touched count. */
+  humanizeNotes: () => number;
   /**
    * Piano-roll editing toolbox (quantize, length, chord, velocity, repeat).
    *
@@ -3163,7 +3165,7 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   setDrumFollowPlayhead: (on: boolean) => void;
   transformDrumLane: (lane: DrumLane, op: "rotate" | "reverse" | "invert" | "shiftLeft" | "shiftRight" | "copyHalf") => void;
   transformAllDrums: (op: "rotate" | "reverse" | "invert") => void;
-  /** Copy a drum lane's steps to the module clipboard. Returns step count. */
+  /** Copy a drum lane's steps to the Fire clipboard. Returns step count. */
   copyDrumLane: (lane: DrumLane) => number;
   /** Paste the clipboard into a lane, tiling to fit. Returns steps written. */
   pasteDrumLane: (lane: DrumLane) => number;
@@ -3364,6 +3366,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
     setBpm: (bpm) => {
       const v = clamp(Math.round(bpm), 40, 240);
+      if (v === get().bpm) return;
       pushFireHistory("bpm");
       // Re-anchor so the tempo change applies cleanly from "now".
       const wasPlaying = get().playing;
@@ -3379,7 +3382,11 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
     setSwing: (swing) => {
       pushFireHistory("swing");
-      set({ swing: clamp(swing, 0, 0.6) });
+      const v = clamp(swing, 0, 0.6);
+      // While linked, keep the parked group values in lockstep so Split
+      // cannot resurrect a stale drum/sample swing from a previous unlink.
+      if (get().swingLinked) set({ swing: v, swingDrums: v, swingSamples: v });
+      else set({ swing: v });
       persist();
     },
 
@@ -3462,16 +3469,18 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       // the group's internal layout wherever it lands.
       const originStep = Math.min(...clips.map((c) => c.startStep));
       const originTrack = Math.min(...clips.map((c) => c.track ?? 0));
-      clipClipboard = clips.map((c) => ({
+      const payload: ClipClipboardEntry[] = clips.map((c) => ({
         clip: { ...c, local: c.local ? structuredClone(c.local) : undefined },
         dStep: c.startStep - originStep,
         dTrack: (c.track ?? 0) - originTrack,
       }));
-      return clipClipboard.length;
+      writeFireClipboard(FIRE_CLIP_KIND.arrangementClips, payload);
+      return payload.length;
     },
 
     pasteClips: (startStep, track) => {
-      if (!clipClipboard || clipClipboard.length === 0) return [];
+      const clipClipboard = peekFireClipboard<ClipClipboardEntry[]>(FIRE_CLIP_KIND.arrangementClips);
+      if (!Array.isArray(clipClipboard) || clipClipboard.length === 0) return [];
       const s = get();
       const secs = sectionsWithActive(s);
       const validIds = new Set(secs.map((x) => x.id));
@@ -3498,7 +3507,10 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       return next.filter((c) => keep.has(c.id)).map((c) => c.id);
     },
 
-    hasClipClipboard: () => clipClipboard !== null && clipClipboard.length > 0,
+    hasClipClipboard: () => {
+      const c = peekFireClipboard<ClipClipboardEntry[]>(FIRE_CLIP_KIND.arrangementClips);
+      return Array.isArray(c) && c.length > 0;
+    },
 
     setClipTranspose: (id, semitones) => {
       const s = get();
@@ -3740,33 +3752,12 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       persist();
     },
 
-    humanizeNotes: () => {
-      pushFireHistory();
-      const s = get();
-      const total = s.bars * STEPS_PER_BAR;
-      const p = useFireCommandStore.getState().patch;
-      const timing = p.humanizeTiming ?? 0.25;
-      const velAmt = p.humanizeVelocity ?? 0.2;
-      const protect = p.humanizeProtectDownbeats !== false;
-      let rng = (p.humanizeSeed ?? 0x4f1ce) >>> 0;
-      const rnd = () => {
-        rng = (Math.imul(rng ^ (rng >>> 15), rng | 1) >>> 0);
-        rng ^= rng + Math.imul(rng ^ (rng >>> 7), rng | 61);
-        return ((rng ^ (rng >>> 14)) >>> 0) / 4294967296;
-      };
-      set({
-        notes: s.notes.map((n) => {
-          if ((n.ch ?? 0) !== s.activeChannel) return n;
-          if (protect && Math.floor(n.step) % 16 === 0) return n;
-          return {
-            ...n,
-            vel: clamp(n.vel + (rnd() * 2 - 1) * velAmt * 0.35, 0.05, 1),
-            step: clamp(n.step + (rnd() * 2 - 1) * timing * 0.18, 0, total - 0.25),
-          };
-        }),
-      });
-      persist();
-    },
+    humanizeNotes: () =>
+      get().applyNoteOp({
+        kind: "humanize",
+        timing: NoteOps.NOTE_SCATTER_TIMING,
+        velocity: NoteOps.NOTE_SCATTER_VELOCITY,
+      }),
 
     applyNoteOp: (op, ids) => {
       const s = get();
@@ -3897,7 +3888,13 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       set({ swingSamples: clamp(v, 0, 0.6) });
       persist();
     },
-    setSwingLinked: (on) => { set({ swingLinked: on }); persist(); },
+    setSwingLinked: (on) => {
+      const swing = get().swing;
+      // Link and Split both seed drum/sample from the current melody swing so
+      // neither transition jumps to leftover unlinked values.
+      set({ swingLinked: on, swingDrums: swing, swingSamples: swing });
+      persist();
+    },
 
     generateDrumFill: (opts) => {
       const s = get();
@@ -4182,14 +4179,14 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
     },
 
     copyDrumLane: (lane) => {
-      // Module-scoped clipboard rather than the system one: drum steps carry
-      // velocity/prob/ratchet/micro, which don't survive a text round-trip.
-      drumLaneClipboard = get().drums.steps[lane].map((x) => ({ ...x }));
-      return drumLaneClipboard.length;
+      const steps = get().drums.steps[lane].map((x) => ({ ...x }));
+      writeFireClipboard(FIRE_CLIP_KIND.drumLane, steps);
+      return steps.length;
     },
 
     pasteDrumLane: (lane) => {
-      if (!drumLaneClipboard || get().drumLaneLocks?.[lane]) return 0;
+      const drumLaneClipboard = peekFireClipboard<DrumStep[]>(FIRE_CLIP_KIND.drumLane);
+      if (!Array.isArray(drumLaneClipboard) || drumLaneClipboard.length === 0 || get().drumLaneLocks?.[lane]) return 0;
       pushFireHistory(`pasteLane:${lane}`);
       const s = get();
       const target = s.drums.steps[lane];
@@ -4202,7 +4199,7 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
       return next.length;
     },
 
-    hasDrumLaneClipboard: () => drumLaneClipboard !== null,
+    hasDrumLaneClipboard: () => hasFireClipboard(FIRE_CLIP_KIND.drumLane),
 
     rampDrumLane: (lane, from, to) => {
       if (get().drumLaneLocks?.[lane]) return 0;
@@ -5641,6 +5638,7 @@ if (typeof window !== "undefined") {
     try { flushFireSequencerPersist(); } catch { /* ignore */ }
   };
   window.addEventListener("beforeunload", flushOnLeave);
+  window.addEventListener("pagehide", flushOnLeave);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flushOnLeave();
   });

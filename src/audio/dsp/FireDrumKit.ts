@@ -287,9 +287,6 @@ export class FireDrumKit {
     const polarity = opts?.polarity === -1 ? -1 : 1;
     const pan = opts?.pan ?? 0;
     const dest = this.panned(pan);
-    // Hand the per-hit panner (if any) to disposeOnEnd via pendingPanner —
-    // the voice below calls it synchronously.
-    this.pendingPanner = dest === this.output ? null : dest;
     switch (lane) {
       case "kick": this.kick(t, Math.abs(v) * (polarity < 0 ? -1 : 1), dest); break;
       case "snare": this.snare(t, v, dest); break;
@@ -303,19 +300,12 @@ export class FireDrumKit {
   }
 
   /**
-   * Per-hit panner created by `panned()` for the CURRENT trigger. The
-   * synthesized voices receive it as `dest` but never listed it for cleanup,
-   * so every panned hit left a live StereoPanner attached to the output bus
-   * for the rest of the session. disposeOnEnd now sweeps it up.
+   * Disconnect synth-hit nodes after they finish to cut GC pressure.
+   * Pass the per-hit dest so a StereoPanner created for this voice is
+   * swept up with it — a shared slot raced overlapping triggers.
    */
-  private pendingPanner: AudioNode | null = null;
-
-  /** Disconnect synth-hit nodes after they finish to cut GC pressure. */
-  private disposeOnEnd(last: AudioScheduledSourceNode, nodes: AudioNode[]): void {
-    if (this.pendingPanner) {
-      nodes = [...nodes, this.pendingPanner];
-      this.pendingPanner = null;
-    }
+  private disposeOnEnd(last: AudioScheduledSourceNode, nodes: AudioNode[], dest?: AudioNode): void {
+    if (dest && dest !== this.output) nodes = [...nodes, dest];
     for (const n of nodes) {
       if ("stop" in n && typeof (n as AudioScheduledSourceNode).stop === "function") {
         this.liveSources.add(n as AudioScheduledSourceNode);
@@ -374,7 +364,7 @@ export class FireDrumKit {
     osc.start(t); osc.stop(t + 0.65);
     sub.start(t); sub.stop(t + 0.55);
     click.start(t); click.stop(t + 0.04);
-    this.disposeOnEnd(osc, [osc, g, sub, sg, click, cg, polGain]);
+    this.disposeOnEnd(osc, [osc, g, sub, sg, click, cg, polGain], dest);
   }
 
   private snare(t: number, v: number, dest: AudioNode = this.output): void {
@@ -412,7 +402,7 @@ export class FireDrumKit {
     o1.start(t); o1.stop(t + 0.15);
     o2.start(t); o2.stop(t + 0.15);
     n.start(t); n.stop(t + 0.24);
-    this.disposeOnEnd(n, [body, bg, o1, o2, og, n, nf, ng]);
+    this.disposeOnEnd(n, [body, bg, o1, o2, og, n, nf, ng], dest);
   }
 
   private clap(t: number, v: number, dest: AudioNode = this.output): void {
@@ -436,7 +426,7 @@ export class FireDrumKit {
     g.gain.exponentialRampToValueAtTime(0.001, t + 3 * burst + 0.24);
     n.connect(f).connect(g).connect(dest);
     n.start(t); n.stop(t + 0.32);
-    this.disposeOnEnd(n, [n, f, g]);
+    this.disposeOnEnd(n, [n, f, g], dest);
   }
 
   private hat(t: number, v: number, open: boolean, dest: AudioNode = this.output): void {
@@ -459,7 +449,7 @@ export class FireDrumKit {
     if (open) this.ohatGain = g;
     n.connect(hp).connect(pk).connect(g).connect(dest);
     n.start(t); n.stop(t + dur + 0.03);
-    this.disposeOnEnd(n, [n, hp, pk, g]);
+    this.disposeOnEnd(n, [n, hp, pk, g], dest);
   }
 
   private tom(t: number, v: number, dest: AudioNode = this.output): void {
@@ -483,7 +473,7 @@ export class FireDrumKit {
     n.connect(nf).connect(ng).connect(dest);
     osc.start(t); osc.stop(t + 0.4);
     n.start(t); n.stop(t + 0.1);
-    this.disposeOnEnd(osc, [osc, g, n, nf, ng]);
+    this.disposeOnEnd(osc, [osc, g, n, nf, ng], dest);
   }
 
   private rim(t: number, v: number, dest: AudioNode = this.output): void {
@@ -501,7 +491,7 @@ export class FireDrumKit {
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
     osc.connect(f).connect(g).connect(dest);
     osc.start(t); osc.stop(t + 0.06);
-    this.disposeOnEnd(osc, [osc, f, g]);
+    this.disposeOnEnd(osc, [osc, f, g], dest);
   }
 
   private crash(t: number, v: number, dest: AudioNode = this.output): void {
@@ -522,6 +512,6 @@ export class FireDrumKit {
     g.gain.exponentialRampToValueAtTime(0.001, t + 1.4);
     n.connect(hp).connect(shimmer).connect(g).connect(dest);
     n.start(t); n.stop(t + 1.5);
-    this.disposeOnEnd(n, [n, hp, shimmer, g]);
+    this.disposeOnEnd(n, [n, hp, shimmer, g], dest);
   }
 }

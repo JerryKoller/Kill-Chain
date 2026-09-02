@@ -175,7 +175,7 @@ export function FireWorkspaceTabs({
                         boxShadow: `inset 0 0 0 1px ${mode.accent}55`,
                       }}
                     >
-                      Live
+                      Active
                     </span>
                   )}
                 </span>

@@ -175,7 +175,7 @@ export function HumanQuickActions() {
   const timing = useFireCommandStore((s) => s.patch.humanizeTiming) ?? 0.25;
   const vel = useFireCommandStore((s) => s.patch.humanizeVelocity) ?? 0.2;
   const setParam = useFireCommandStore((s) => s.setParam);
-  const humanizeNotes = useFireSequencerStore((s) => s.humanizeNotes);
+  const applyNoteOp = useFireSequencerStore((s) => s.applyNoteOp);
 
   const cycle = (dir: 1 | -1) => {
     let best = 0;
@@ -226,10 +226,17 @@ export function HumanQuickActions() {
       </button>
       <button
         type="button"
-        onClick={() => humanizeNotes()}
+        onClick={() => {
+          const p = useFireCommandStore.getState().patch;
+          applyNoteOp({
+            kind: "humanize",
+            timing: p.humanizeTiming ?? 0.25,
+            velocity: p.humanizeVelocity ?? 0.2,
+          });
+        }}
         className="rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider transition hover:brightness-125"
         style={{ borderColor: `${HUMAN_C}55`, color: HUMAN_C_GLOW, background: `${HUMAN_C}1c` }}
-        title="Bake humanize into pattern notes"
+        title="Bake Feel Grain amounts into pattern notes (same path as Scatter, using these knobs)"
       >
         Bake
       </button>

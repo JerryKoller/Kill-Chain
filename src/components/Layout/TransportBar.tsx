@@ -18,7 +18,6 @@ import { claimSource } from "@/lib/sourceArbiter";
 import { useAppliedTractor } from "@/lib/tractorApplied";
 
 export function TransportBar() {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const status = usePlayerStore((s) => s.status);
   const position = usePlayerStore((s) => s.position);
   const duration = usePlayerStore((s) => s.duration);
@@ -26,44 +25,23 @@ export function TransportBar() {
   const metadata = usePlayerStore((s) => s.metadata);
   const src = usePlayerStore((s) => s.src);
   const volume = usePlayerStore((s) => s.volume);
-  const loop = usePlayerStore((s) => s.loop);
+  const loopMode = usePlayerStore((s) => s.loopMode);
   const loopbackActive = usePlayerStore((s) => s.loopbackActive);
   const loopbackMode = usePlayerStore((s) => s.loopbackMode);
-  const attachElement = usePlayerStore((s) => s.attachElement);
   const toggle = usePlayerStore((s) => s.toggle);
   const seek = usePlayerStore((s) => s.seek);
   const setVolume = usePlayerStore((s) => s.setVolume);
-  const setLoop = usePlayerStore((s) => s.setLoop);
+  const toggleLoop = usePlayerStore((s) => s.toggleLoop);
   const loadBlob = usePlayerStore((s) => s.loadBlob);
   const loadPath = usePlayerStore((s) => s.loadDataUrlOrPath);
   const startLoopback = usePlayerStore((s) => s.startLoopback);
   const stopLoopback = usePlayerStore((s) => s.stopLoopback);
-  const tick = usePlayerStore((s) => s.tick);
   const ensureReady = useAudioStore((s) => s.ensureReady);
   const bypass = useAudioStore((s) => s.bypass);
   const toggleBypass = useAudioStore((s) => s.toggleBypass);
   const toast = useUIStore((s) => s.toast);
   const setView = useUIStore((s) => s.setView);
   const airMedia = useAirspaceStore((s) => s.media);
-
-  useEffect(() => {
-    if (audioRef.current) attachElement(audioRef.current);
-  }, [attachElement]);
-
-  // Use the audio element's native timeupdate (~4 Hz) instead of a 60 Hz
-  // rAF loop — enough for the transport bar and far cheaper at idle.
-  useEffect(() => {
-    const el = audioRef.current;
-    if (!el) return;
-    const onTimeUpdate = () => tick();
-    const onSeeked = () => tick();
-    el.addEventListener("timeupdate", onTimeUpdate);
-    el.addEventListener("seeked", onSeeked);
-    return () => {
-      el.removeEventListener("timeupdate", onTimeUpdate);
-      el.removeEventListener("seeked", onSeeked);
-    };
-  }, [tick, attachElement]);
 
   const openFile = async () => {
     await ensureReady();
@@ -130,8 +108,6 @@ export function TransportBar() {
 
   return (
     <div className="px-4 pb-4">
-      <audio ref={audioRef} className="hidden" />
-
       <div className="glass-strong rounded-2xl px-4 py-3 flex items-center gap-3 flex-wrap">
         {/* Now playing — always visible so you know what's loaded. The
             artwork wears an accent ring that breathes with the signal while
@@ -310,11 +286,17 @@ export function TransportBar() {
 
         {!deck && (
           <button
-            onClick={() => setLoop(!loop)}
-            className={`kc-btn kc-btn--ghost kc-btn--sm ${loop ? "kc-on" : ""}`}
-            title="Loop track"
+            onClick={() => toggleLoop()}
+            className={`kc-btn kc-btn--ghost kc-btn--sm ${loopMode !== "off" ? "kc-on" : ""}`}
+            title={
+              loopMode === "off"
+                ? "Loop off — click to loop the queue"
+                : loopMode === "queue"
+                  ? "Looping the queue — click to loop this track"
+                  : "Looping this track — click to turn off"
+            }
           >
-            ↻ Loop
+            {loopMode === "track" ? "↻ Track" : loopMode === "queue" ? "↻ Queue" : "↻ Loop"}
           </button>
         )}
 

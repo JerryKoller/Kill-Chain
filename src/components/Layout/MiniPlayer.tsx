@@ -20,9 +20,6 @@ export function MiniPlayer() {
   const previous = usePlayerStore((s) => s.previous);
   const setMini = useSettingsStore((s) => s.set);
 
-  const audioEl = usePlayerStore((s) => s.element);
-  const tick = usePlayerStore((s) => s.tick);
-
   // Spectrum canvas
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -35,12 +32,6 @@ export function MiniPlayer() {
       if (winApi?.setAlwaysOnTop) void winApi.setAlwaysOnTop(false);
     };
   }, []);
-
-  useEffect(() => {
-    if (!audioEl) return;
-    const id = setInterval(tick, 250);
-    return () => clearInterval(id);
-  }, [audioEl, tick]);
 
   useEffect(() => {
     const c = canvasRef.current;

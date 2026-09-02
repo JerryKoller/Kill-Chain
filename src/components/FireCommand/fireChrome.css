@@ -499,8 +499,9 @@ body[data-fc-snap="right"] .kc-app-root {
   filter: brightness(1.2);
   background: rgba(232, 184, 109, 0.2);
 }
-/* Focus density hides optional chrome — the budget is optional there. */
-[data-fire-root][data-fire-density="focus"] .fc-module-budget {
+/* Focus density hides the count, not Wake all — slept modules still need a one-click restore. */
+[data-fire-root][data-fire-density="focus"] .fc-module-budget__count,
+[data-fire-root][data-fire-density="focus"] .fc-module-budget__unit {
   display: none;
 }
 .fc-utility-strip__center {

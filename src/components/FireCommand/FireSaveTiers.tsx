@@ -24,11 +24,18 @@ export function FireSaveTiers() {
   const [busy, setBusy] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
+  const [sceneReuse, setSceneReuse] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (naming) requestAnimationFrame(() => inputRef.current?.focus());
   }, [naming]);
+
+  useEffect(() => {
+    if (!sceneReuse) return;
+    const t = window.setTimeout(() => setSceneReuse(false), 4000);
+    return () => window.clearTimeout(t);
+  }, [sceneReuse]);
 
   const commitPatch = () => {
     const trimmed = name.trim();
@@ -62,6 +69,12 @@ export function FireSaveTiers() {
   const saveScene = () => {
     const scenes = useFireCommandStore.getState().scenes;
     const empty = scenes.findIndex((sc) => sc == null);
+    if (empty < 0 && !sceneReuse) {
+      setSceneReuse(true);
+      toast("All 8 scenes full — click Scene again to replace slot 1");
+      return;
+    }
+    setSceneReuse(false);
     const slot = empty >= 0 ? empty : 0;
     captureScene(slot);
     toast(`Scene ${slot + 1} captured${empty < 0 ? " (slot 1 reused — all slots full)" : ""}`);
@@ -128,11 +141,20 @@ export function FireSaveTiers() {
             <button type="button" className={SAVE_BTN} onClick={() => setNaming(true)} title="Save the current synth patch as a user preset">
               Patch
             </button>
-            <button type="button" className={SAVE_BTN} onClick={savePattern} title="Export the pattern bank + arrangement (.kcpat)">
-              Patterns
+            <button type="button" className={SAVE_BTN} onClick={savePattern} title="Download the pattern bank + arrangement as a .kcpat file">
+              .kcpat
             </button>
-            <button type="button" className={SAVE_BTN} onClick={saveScene} title={`Capture a performance scene (next free of ${SCENE_SLOTS} slots)`}>
-              Scene
+            <button
+              type="button"
+              className={SAVE_BTN}
+              onClick={saveScene}
+              title={
+                sceneReuse
+                  ? "All slots full — click again to replace Scene 1"
+                  : `Capture a performance scene (next free of ${SCENE_SLOTS} slots)`
+              }
+            >
+              {sceneReuse ? "Replace 1?" : "Scene"}
             </button>
             <button type="button" className={SAVE_BTN} disabled={busy} onClick={() => void doProject("save")} title="Save full project (.kcproj)">
               Project

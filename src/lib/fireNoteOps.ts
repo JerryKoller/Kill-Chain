@@ -22,6 +22,15 @@ const MIDI_HI = 127;
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
+/** Keep a note inside the pattern: start in range, length not past `total`. */
+function fitNoteInPattern(n: RollNote, total: number): RollNote {
+  const step = clamp(n.step, 0, Math.max(0, total - MIN_LEN));
+  const maxLen = Math.max(MIN_LEN, total - step);
+  const len = clamp(n.len, MIN_LEN, maxLen);
+  if (step === n.step && len === n.len) return n;
+  return { ...n, step, len };
+}
+
 export interface NoteOpScope {
   /** Only touch these note ids. Omit to touch every note in `channel`. */
   ids?: ReadonlySet<string>;
@@ -79,8 +88,8 @@ export function quantize(
   if (amt === 0) return { notes, touched: 0 };
   return mapScoped(notes, scope, (n) => {
     const target = Math.round(n.step / g) * g;
-    const step = clamp(n.step + (target - n.step) * amt, 0, scope.total - MIN_LEN);
-    return Math.abs(step - n.step) < 1e-6 ? n : { ...n, step };
+    const step = n.step + (target - n.step) * amt;
+    return Math.abs(step - n.step) < 1e-6 ? n : fitNoteInPattern({ ...n, step }, scope.total);
   });
 }
 
@@ -100,11 +109,17 @@ export function quantizeLength(
 /** Shift notes in time by whole/fractional steps. */
 export function nudge(notes: RollNote[], scope: NoteOpScope, deltaSteps: number): NoteOpResult {
   if (deltaSteps === 0) return { notes, touched: 0 };
-  return mapScoped(notes, scope, (n) => ({
-    ...n,
-    step: clamp(n.step + deltaSteps, 0, scope.total - MIN_LEN),
-  }));
+  return mapScoped(notes, scope, (n) =>
+    fitNoteInPattern({ ...n, step: n.step + deltaSteps }, scope.total),
+  );
 }
+
+/**
+ * One-shot piano-roll scatter (Tools / Shift+H / roll Scatter). Independent of
+ * the live Feel Grain knobs — those stay a playback-time overlay until Bake.
+ */
+export const NOTE_SCATTER_TIMING = 0.12;
+export const NOTE_SCATTER_VELOCITY = 0.12;
 
 /**
  * Deterministic timing/velocity scatter, seeded by note position so the same
@@ -117,6 +132,7 @@ export function humanize(
   velocity: number,
   opts: { protectDownbeats?: boolean; seed?: number } = {},
 ): NoteOpResult {
+  if (!(timing > 0) && !(velocity > 0)) return { notes, touched: 0 };
   const protect = opts.protectDownbeats !== false;
   const seed = (opts.seed ?? 0x4f1ce) >>> 0;
   return mapScoped(notes, scope, (n) => {
@@ -127,11 +143,17 @@ export function humanize(
     const r1 = ((h ^ (h >>> 13)) >>> 0) / 4294967296;
     h = Math.imul(h ^ (h >>> 16), 0xc2b2ae35) >>> 0;
     const r2 = ((h ^ (h >>> 13)) >>> 0) / 4294967296;
-    return {
-      ...n,
-      step: clamp(n.step + (r1 * 2 - 1) * timing, 0, scope.total - MIN_LEN),
-      vel: clamp(n.vel + (r2 * 2 - 1) * velocity, 0.05, 1),
-    };
+    const dStep = (r1 * 2 - 1) * timing;
+    const dVel = (r2 * 2 - 1) * velocity;
+    if (dStep === 0 && dVel === 0) return n;
+    return fitNoteInPattern(
+      {
+        ...n,
+        step: n.step + dStep,
+        vel: clamp(n.vel + dVel, 0.05, 1),
+      },
+      scope.total,
+    );
   });
 }
 
@@ -166,7 +188,7 @@ export function strum(
   return mapScoped(notes, scope, (n) => {
     const off = offset.get(n.id);
     if (!off) return n;
-    return { ...n, step: clamp(n.step + off, 0, scope.total - MIN_LEN) };
+    return fitNoteInPattern({ ...n, step: n.step + off }, scope.total);
   });
 }
 

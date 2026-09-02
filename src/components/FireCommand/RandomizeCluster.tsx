@@ -46,6 +46,7 @@ const SCOPES = ["all", ...PRESET_CATEGORIES] as const;
 
 export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
   const presetId = useFireCommandStore((s) => s.presetId);
+  const userPresets = useFireCommandStore((s) => s.userPresets);
   const moduleLocks = useFireCommandStore((s) => s.moduleLocks);
   const lockedCount = lockedModuleCount(moduleLocks);
   const toast = useUIStore((s) => s.toast);
@@ -60,13 +61,15 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
   }, []);
 
   const poolSize = useMemo(() => {
-    return FIRE_PRESETS.filter(
+    const factory = FIRE_PRESETS.filter(
       (p) =>
         p.id !== presetId &&
         p.id !== "init" &&
         (scope === "all" || p.category === scope),
     ).length;
-  }, [presetId, scope]);
+    const users = scope === "all" ? userPresets.filter((p) => p.id !== presetId).length : 0;
+    return factory + users;
+  }, [presetId, scope, userPresets]);
 
   const deploy = () => {
     if (poolSize === 0) {
@@ -119,7 +122,7 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
             onClick={deploy}
             disabled={spinning}
             className="group relative h-8 flex-1 min-w-0 overflow-hidden rounded-md px-2.5 text-[10px] font-black uppercase tracking-[0.08em] text-[#ffe8dc] transition disabled:opacity-70 bg-[#ff6a3d]/22 hover:bg-[#ff6a3d]/35 ring-1 ring-[#ff6a3d]/45 shadow-[0_0_16px_rgb(255_106_61/0.3)] hover:shadow-[0_0_22px_rgb(255_106_61/0.48)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(255,106,61,0.65)]"
-            title="Deploy a random factory preset from the armory"
+            title="Deploy a random factory or user preset from the armory"
           >
             <span className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,217,201,0.35),transparent_55%)] opacity-70 group-hover:opacity-100 transition" />
             <span className="relative inline-flex items-center justify-center gap-1.5">
@@ -189,7 +192,7 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
           onClick={deploy}
           disabled={spinning}
           className="group relative h-8 overflow-hidden rounded-xl border border-[#ff6a3d]/65 bg-[#ff6a3d]/20 hover:bg-[#ff6a3d]/30 text-[11px] font-black uppercase tracking-[0.14em] text-[#ffe8dc] transition shadow-[0_0_16px_rgb(255_106_61/0.3)] disabled:opacity-70"
-          title="Deploy a random factory preset from the armory (optionally filtered by category)"
+          title="Deploy a random factory or user preset from the armory (optionally filtered by category)"
         >
           <span className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,217,201,0.35),transparent_55%)] opacity-70 group-hover:opacity-100 transition" />
           <span className="relative">{spinning ? "Deploying…" : "Randomize"}</span>
@@ -220,7 +223,7 @@ export function RandomizeCluster({ compact = false }: { compact?: boolean }) {
 
       <div className="relative z-10 hidden xl:flex flex-col justify-center max-w-[110px] pl-2 border-l border-[#ff6a3d]/20">
         <div className="text-[9px] leading-snug text-[#ffbfa0]/40">
-          Spin the chamber. Land on a factory voice. Instant armory strike.
+          Spin the chamber. Factory voices and your saves. Instant armory strike.
         </div>
         {last && (
           <div className="mt-1 text-[8px] uppercase tracking-[0.14em] text-[#ff9a6b]/70 truncate" title={last.category}>

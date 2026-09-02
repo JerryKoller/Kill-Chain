@@ -18,6 +18,7 @@ import {
   type ArrangementClip,
 } from "@/state/fireSequencerStore";
 import { useUIStore } from "@/state/uiStore";
+import { FIRE_CLIP_KIND, readFireClipboard } from "@/lib/fireClipboard";
 import { usePanelHeight } from "./usePanelHeight";
 import { PanelResizeHandle } from "./PanelResizeHandle";
 import { CollapseToggle } from "./CollapseToggle";
@@ -722,16 +723,19 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
       // instead of deleted and re-dragged.
       if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
-        const st = useFireSequencerStore.getState();
-        if (!st.hasClipClipboard()) { toast("No clips copied"); return; }
-        const anchor = selectedClip
-          ? st.arrangement.find((c) => c.id === selectedClip)
-          : undefined;
-        const newIds = st.pasteClips(playheadStepRef.current, anchor?.track ?? 0);
-        if (newIds.length === 0) { toast("Can't paste — no space on that track"); return; }
-        setSelectedClips(new Set(newIds));
-        setSelectedClip(newIds[newIds.length - 1]!);
-        toast(`Pasted ${newIds.length} clip${newIds.length === 1 ? "" : "s"}`);
+        void (async () => {
+          await readFireClipboard(FIRE_CLIP_KIND.arrangementClips);
+          const st = useFireSequencerStore.getState();
+          if (!st.hasClipClipboard()) { toast("No clips copied"); return; }
+          const anchor = selectedClip
+            ? st.arrangement.find((c) => c.id === selectedClip)
+            : undefined;
+          const newIds = st.pasteClips(playheadStepRef.current, anchor?.track ?? 0);
+          if (newIds.length === 0) { toast("Can't paste — no space on that track"); return; }
+          setSelectedClips(new Set(newIds));
+          setSelectedClip(newIds[newIds.length - 1]!);
+          toast(`Pasted ${newIds.length} clip${newIds.length === 1 ? "" : "s"}`);
+        })();
         return;
       }
 

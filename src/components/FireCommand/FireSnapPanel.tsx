@@ -63,6 +63,7 @@ export function FireSnapPanel({
           className="fc-snap-panel__close fc-focus"
           onClick={onUnsnap}
           title="Bring the sequencer back to one screen"
+          aria-label="Bring the sequencer back to this screen"
         >
           Undock
         </button>

@@ -76,11 +76,41 @@ function clampIndex(i: number): number {
   return ((i % FIRE_FOCUS_COUNT) + FIRE_FOCUS_COUNT) % FIRE_FOCUS_COUNT;
 }
 
+const FOCUS_PREFS_KEY = "killchain.firecmd.midiFocus.v1";
+
+function loadFocusPrefs(): { enabled: boolean; index: number; bankPage: number } {
+  const fallback = { enabled: true, index: 0, bankPage: 0 };
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(FOCUS_PREFS_KEY);
+    if (!raw) return fallback;
+    const p = JSON.parse(raw) as { enabled?: unknown; index?: unknown; bankPage?: unknown };
+    return {
+      enabled: typeof p.enabled === "boolean" ? p.enabled : true,
+      index: typeof p.index === "number" ? clampIndex(Math.floor(p.index)) : 0,
+      bankPage: typeof p.bankPage === "number" ? Math.max(0, Math.min(8, Math.floor(p.bankPage))) : 0,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function persistFocusPrefs(): void {
+  try {
+    const s = useFireMidiFocusStore.getState();
+    window.localStorage.setItem(
+      FOCUS_PREFS_KEY,
+      JSON.stringify({ enabled: s.enabled, index: s.index, bankPage: s.bankPage }),
+    );
+  } catch { /* storage blocked / quota */ }
+}
+
 function applyFocus(index: number, bankPage = 0, toast = true): void {
   const mod = focusModuleAt(index);
   const pages = focusPageCount(mod);
   const page = Math.max(0, Math.min(pages - 1, bankPage));
   useFireMidiFocusStore.setState({ index, bankPage: page });
+  persistFocusPrefs();
   bridge?.enterFocus(mod.id);
   if (toast) {
     useUIStore.getState().toast(
@@ -153,10 +183,11 @@ function resolveKnobIndex(cc: number, locked: number[] | null): number {
 export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => {
   // One localStorage read, not two.
   const learned = typeof window !== "undefined" ? loadLearnedKnobCcs() : null;
+  const prefs = loadFocusPrefs();
   return ({
-  enabled: true,
-  index: 0,
-  bankPage: 0,
+  enabled: prefs.enabled,
+  index: prefs.index,
+  bankPage: prefs.bankPage,
   knobSet: learned,
   knobsBound: learned?.length ?? 0,
   lastKnobLabel: null,
@@ -165,6 +196,7 @@ export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => {
 
   setEnabled: (on) => {
     set({ enabled: on });
+    persistFocusPrefs();
     if (on) applyFocus(get().index, get().bankPage);
     else bridge?.exitFocus();
   },
@@ -184,6 +216,7 @@ export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => {
     const pages = focusPageCount(mod);
     const p = Math.max(0, Math.min(pages - 1, page));
     set({ bankPage: p });
+    persistFocusPrefs();
     useUIStore.getState().toast(
       `${focusShort(mod.id)} · Bank ${String.fromCharCode(65 + p)}${pages > 1 ? ` (${p + 1}/${pages})` : ""}`,
     );
@@ -296,6 +329,8 @@ export function getFocusHud(): {
  * solo the ring module: auto-entering Focus on mount hid every other module
  * behind the MPK ring until the user toggled keyboard Focus — Solo should
  * only engage from an explicit action (PROG/pads/Solo buttons).
+ * On/off, module index and bank page are restored from localStorage in the
+ * store constructor (FOCUS_PREFS_KEY).
  */
 export function bootFireMidiFocus(): void {
   const s = useFireMidiFocusStore.getState();

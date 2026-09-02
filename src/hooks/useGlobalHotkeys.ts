@@ -7,6 +7,7 @@ import { useAirspaceStore } from "@/state/airspaceStore";
 import { useDimensionStore } from "@/state/dimensionStore";
 import { actionForKey, useHotkeyStore, type HotkeyActionId } from "@/state/hotkeyStore";
 import type { AirspaceMediaSnapshot } from "@/lib/airspaceMedia";
+import { isLegalAccepted } from "@/lib/legal";
 
 /** Keys owned by 3rd Dimension Walk Mode while it is engaged. */
 const WALK_KEYS = new Set(["w", "a", "s", "d", "r", "f"]);
@@ -79,17 +80,22 @@ export function useGlobalHotkeys(): void {
       }
 
       const ui = useUIStore.getState();
+      const settings = useSettingsStore.getState();
       // While the cheat-sheet overlay is up, it owns the keyboard: only "?"
       // (toggle) passes through — Space used to play/pause underneath it.
       if (ui.hotkeyOverlayOpen && e.key !== "?") return;
+      // Same gate for the legal modal and first-run tour: digits used to
+      // change ui.view underneath, and Space started playback.
+      if (!isLegalAccepted(settings.legalAcceptedVersion, settings.legalAcceptedAt)) return;
+      if (!settings.onboardingDone) return;
       const audio = useAudioStore.getState();
-      const settings = useSettingsStore.getState();
       const player = usePlayerStore.getState();
 
       // While Fire Command is open, the QWERTY keys are the instrument — let
-      // them play notes instead of firing app shortcuts. (The "?" cheat sheet
-      // still works.)
-      if (ui.view === "fire" && e.key !== "?") return;
+      // them play notes instead of firing app shortcuts. Fire's own "?"
+      // overlay (and the sequencer sheet when that panel is focused) own
+      // the cheat sheet here.
+      if (ui.view === "fire") return;
 
       // While Walk Mode is engaged in the 3rd Dimension view, W/A/S/D/R/F
       // belong to the legs — don't fire command hotkeys (mini-player,
@@ -226,7 +232,9 @@ export function useGlobalHotkeys(): void {
           return;
         case "bypass":
           audio.toggleBypass();
-          ui.toast(audio.bypass ? "FX bypass ON" : "FX bypass OFF");
+          ui.toast(
+            useAudioStore.getState().bypass ? "FX bypass ON" : "FX bypass OFF",
+          );
           return;
         case "savePreset": {
           if (isShift) {

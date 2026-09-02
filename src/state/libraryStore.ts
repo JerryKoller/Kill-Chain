@@ -216,6 +216,7 @@ interface PersistedMeta {
   playCounts: Record<string, number>;
   lastPlayed: Record<string, number>;
   playlists: Playlist[];
+  missingPaths: string[];
 }
 
 function loadMeta(): PersistedMeta {
@@ -224,6 +225,7 @@ function loadMeta(): PersistedMeta {
     playCounts: {},
     lastPlayed: {},
     playlists: [],
+    missingPaths: [],
   };
   try {
     const raw = localStorage.getItem(META_KEY);
@@ -242,6 +244,9 @@ function loadMeta(): PersistedMeta {
               createdAt: Number(pl.createdAt ?? Date.now()),
               paths: Array.isArray(pl.paths) ? pl.paths.filter((x: unknown) => typeof x === "string") : [],
             }))
+        : [],
+      missingPaths: Array.isArray(p.missingPaths)
+        ? p.missingPaths.filter((x: unknown) => typeof x === "string")
         : [],
     };
   } catch {
@@ -349,78 +354,114 @@ interface LibraryState {
   ) => void;
 }
 
+let lastLibQuotaToastAt = 0;
+function toastLibraryQuota(message: string): void {
+  const now = Date.now();
+  if (now - lastLibQuotaToastAt < 60_000) return;
+  lastLibQuotaToastAt = now;
+  void import("@/state/uiStore").then(({ useUIStore }) =>
+    useUIStore.getState().toast(message, "warn"),
+  );
+}
+
+let flushLibraryPersistImpl: (() => void) | null = null;
+/** Flush pending library writes (tab hide / crash safety). */
+export function flushLibraryPersist(): void {
+  flushLibraryPersistImpl?.();
+}
+
 export const useLibraryStore = create<LibraryState>((set, get) => {
   const initial = load();
   const initialMeta = loadMeta();
 
   let persistTimer: number | null = null;
+  const persistTracksNow = () => {
+    const s = get();
+    const shape = (tracks: LibraryTrack[]) =>
+      JSON.stringify({
+        folders: s.folders,
+        tracks,
+        sortKey: s.sortKey,
+        sortDir: s.sortDir,
+        groupBy: s.groupBy,
+        viewMode: s.viewMode,
+      });
+    try {
+      // Try the full list first; only degrade when it genuinely can't fit.
+      const full = shape(s.tracks);
+      if (full.length <= MAX_PERSIST_JSON_BYTES) {
+        localStorage.setItem(STORAGE_KEY, full);
+        return;
+      }
+      // Oversized library: keep folders + view prefs so the boot rescan can
+      // rebuild, and tell the user why the list re-scans on next launch.
+      localStorage.setItem(STORAGE_KEY, shape([]));
+      const quotaMsg =
+        `Track list too large to save (${s.tracks.length} tracks) — it will rescan on next launch`;
+      toastLibraryQuota(quotaMsg);
+      void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+        reportStorageFailure("Library", new Error(quotaMsg)),
+      );
+    } catch (err) {
+      console.warn("[library] persist failed:", err);
+      // Quota blown mid-write: retry with folders only so at least the
+      // roots survive; if even that fails, leave the last good payload.
+      try {
+        localStorage.setItem(STORAGE_KEY, shape([]));
+      } catch { /* keep previous stored value */ }
+      toastLibraryQuota("Library could not be saved — disk storage is full or blocked");
+      void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+        reportStorageFailure("Library", err),
+      );
+    }
+  };
   const schedulePersist = () => {
     if (persistTimer) window.clearTimeout(persistTimer);
     persistTimer = window.setTimeout(() => {
       persistTimer = null;
-      const s = get();
-      const shape = (tracks: LibraryTrack[]) =>
-        JSON.stringify({
-          folders: s.folders,
-          tracks,
-          sortKey: s.sortKey,
-          sortDir: s.sortDir,
-          groupBy: s.groupBy,
-          viewMode: s.viewMode,
-        });
-      try {
-        // Try the full list first; only degrade when it genuinely can't fit.
-        const full = shape(s.tracks);
-        if (full.length <= MAX_PERSIST_JSON_BYTES) {
-          localStorage.setItem(STORAGE_KEY, full);
-          return;
-        }
-        // Oversized library: keep folders + view prefs so the boot rescan can
-        // rebuild, and tell the user why the list re-scans on next launch.
-        localStorage.setItem(STORAGE_KEY, shape([]));
-        void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
-          reportStorageFailure(
-            "Library",
-            new Error(
-              `Track list too large to save (${s.tracks.length} tracks) — it will rescan on next launch`,
-            ),
-          ),
-        );
-      } catch (err) {
-        console.warn("[library] persist failed:", err);
-        // Quota blown mid-write: retry with folders only so at least the
-        // roots survive; if even that fails, leave the last good payload.
-        try {
-          localStorage.setItem(STORAGE_KEY, shape([]));
-        } catch { /* keep previous stored value */ }
-        void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
-          reportStorageFailure("Library", err),
-        );
-      }
+      persistTracksNow();
     }, 600);
   };
 
   let metaTimer: number | null = null;
+  const persistMetaNow = () => {
+    const s = get();
+    try {
+      const meta: PersistedMeta = {
+        favorites: Object.keys(s.favorites),
+        playCounts: s.playCounts,
+        lastPlayed: s.lastPlayed,
+        playlists: s.playlists,
+        missingPaths: Object.keys(s.missingPaths),
+      };
+      localStorage.setItem(META_KEY, JSON.stringify(meta));
+    } catch (err) {
+      console.warn("[library] meta persist failed:", err);
+      toastLibraryQuota("Library lists (playlists / favorites) could not be saved");
+      void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+        reportStorageFailure("Library meta", err),
+      );
+    }
+  };
   const schedulePersistMeta = () => {
     if (metaTimer) window.clearTimeout(metaTimer);
     metaTimer = window.setTimeout(() => {
       metaTimer = null;
-      const s = get();
-      try {
-        const meta: PersistedMeta = {
-          favorites: Object.keys(s.favorites),
-          playCounts: s.playCounts,
-          lastPlayed: s.lastPlayed,
-          playlists: s.playlists,
-        };
-        localStorage.setItem(META_KEY, JSON.stringify(meta));
-      } catch (err) {
-        console.warn("[library] meta persist failed:", err);
-        void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
-          reportStorageFailure("Library meta", err),
-        );
-      }
+      persistMetaNow();
     }, 400);
+  };
+
+  flushLibraryPersistImpl = () => {
+    if (persistTimer) {
+      window.clearTimeout(persistTimer);
+      persistTimer = null;
+      persistTracksNow();
+    }
+    if (metaTimer) {
+      window.clearTimeout(metaTimer);
+      metaTimer = null;
+      persistMetaNow();
+    }
   };
 
   let enriching = false;
@@ -507,7 +548,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     playCounts: initialMeta.playCounts,
     lastPlayed: initialMeta.lastPlayed,
     playlists: initialMeta.playlists,
-    missingPaths: {},
+    missingPaths: Object.fromEntries(initialMeta.missingPaths.map((p) => [p, true as const])),
     verifying: false,
 
     available: () => !!window.playground?.library,
@@ -611,6 +652,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         schedulePersist();
         // Rescan only returns files that still exist — clear all missing flags.
         set({ missingPaths: {} });
+        schedulePersistMeta();
         void runEnrichment();
       } catch (err) {
         console.error("[library] scan failed:", err);
@@ -627,8 +669,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     },
 
     clearAll: () => {
-      set({ folders: [], tracks: [] });
+      set({
+        folders: [],
+        tracks: [],
+        favorites: {},
+        playCounts: {},
+        lastPlayed: {},
+        playlists: [],
+        missingPaths: {},
+        collection: "all",
+        search: "",
+        genreFilter: null,
+      });
       schedulePersist();
+      schedulePersistMeta();
     },
 
     setSort: (key) => {
@@ -748,6 +802,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         if (s.missingPaths[path]) return s;
         return { missingPaths: { ...s.missingPaths, [path]: true as const } };
       });
+      schedulePersistMeta();
     },
 
     clearMissing: (path) => {
@@ -757,6 +812,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         delete missingPaths[path];
         return { missingPaths };
       });
+      schedulePersistMeta();
     },
 
     verifyMissing: async (paths) => {
@@ -765,6 +821,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       const targets = paths?.length ? paths : get().tracks.map((t) => t.path);
       if (targets.length === 0) {
         set({ missingPaths: {} });
+        schedulePersistMeta();
         return 0;
       }
       set({ verifying: true });
@@ -786,6 +843,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       };
       await Promise.all(Array.from({ length: CONCURRENCY }, worker));
       set({ missingPaths: missing, verifying: false });
+      schedulePersistMeta();
       return Object.keys(missing).length;
     },
 
@@ -896,6 +954,8 @@ export interface LibRowTrack {
   track: LibraryTrack;
   /** Index into the flattened ordered list (for queue playback). */
   playIndex: number;
+  /** Index into the playlist's `paths` array (playlist collections only). */
+  pathIndex?: number;
 }
 export type LibRow = LibRowHeader | LibRowTrack;
 
@@ -940,13 +1000,21 @@ export function buildLibraryView(
   if (s.collection.startsWith("pl:")) {
     const pl = s.playlists.find((p) => `pl:${p.id}` === s.collection);
     const byPath = new Map(s.tracks.map((t) => [t.path, t]));
-    const ordered = (pl?.paths ?? [])
-      .map((p) => byPath.get(p))
-      .filter((t): t is LibraryTrack => !!t && matches(t));
-    return {
-      orderedTracks: ordered,
-      rows: ordered.map((t, i) => ({ kind: "track", key: t.id, track: t, playIndex: i })),
-    };
+    const ordered: LibraryTrack[] = [];
+    const rows: LibRow[] = [];
+    (pl?.paths ?? []).forEach((p, pathIndex) => {
+      const t = byPath.get(p);
+      if (!t || !matches(t)) return;
+      rows.push({
+        kind: "track",
+        key: `${t.id}:${pathIndex}`,
+        track: t,
+        playIndex: ordered.length,
+        pathIndex,
+      });
+      ordered.push(t);
+    });
+    return { orderedTracks: ordered, rows };
   }
 
   let list = s.tracks.filter(matches);
@@ -1105,3 +1173,14 @@ usePlayerStore.subscribe((s) => {
   if (!path) return;
   useLibraryStore.getState().recordPlay(path);
 });
+
+if (typeof window !== "undefined") {
+  const flushOnLeave = () => {
+    try { flushLibraryPersist(); } catch { /* ignore */ }
+  };
+  window.addEventListener("beforeunload", flushOnLeave);
+  window.addEventListener("pagehide", flushOnLeave);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushOnLeave();
+  });
+}

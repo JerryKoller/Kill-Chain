@@ -226,3 +226,23 @@ export function Section({
 export function KnobRow({ children }: { children: ReactNode }) {
   return <div className="flex flex-wrap items-center justify-evenly gap-1">{children}</div>;
 }
+
+/** Keep Tab cycling inside a dialog. Call from a keydown handler on the panel. */
+export function trapTabKey(container: HTMLElement, e: KeyboardEvent): void {
+  if (e.key !== "Tab") return;
+  const sel =
+    'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  const nodes = [...container.querySelectorAll<HTMLElement>(sel)].filter(
+    (n) => n.getAttribute("aria-hidden") !== "true" && n.tabIndex !== -1,
+  );
+  if (nodes.length === 0) return;
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}

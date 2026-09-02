@@ -83,4 +83,5 @@ export function pruneShelves(validIds: Set<string>): void {
     window.localStorage.setItem(FAV_KEY, JSON.stringify(favs));
     window.localStorage.setItem(RECENT_KEY, JSON.stringify(recents));
   } catch { /* quota */ }
+  window.dispatchEvent(new CustomEvent(FIRE_SHELF_EVENT));
 }

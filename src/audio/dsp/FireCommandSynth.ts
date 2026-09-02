@@ -2511,6 +2511,20 @@ function loadFilterModule(ctx: AudioContext): Promise<boolean> {
   return p;
 }
 
+/** Cap is 40 nodes per synth — extra ladder/SVF voices fall back to biquad. */
+let lastFilterPoolToastAt = 0;
+function toastFilterPoolExhausted(): void {
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  if (now - lastFilterPoolToastAt < 10000) return;
+  lastFilterPoolToastAt = now;
+  void import("@/state/uiStore").then(({ useUIStore }) => {
+    useUIStore.getState().toast(
+      "Filter pool full — extra ladder voices using the analog filter",
+      "warn",
+    );
+  }).catch(() => { /* UI not ready */ });
+}
+
 export class FireCommandSynth {
   readonly output: GainNode;
   readonly lfo1: LfoBank;
@@ -2775,7 +2789,10 @@ export class FireCommandSynth {
     // maximum possible time to be applied.
     const pooled = this.filterWorkletPool.shift();
     if (pooled) return pooled;
-    if (this.filterWorkletCount >= FireCommandSynth.FILTER_WORKLET_CAP) return null;
+    if (this.filterWorkletCount >= FireCommandSynth.FILTER_WORKLET_CAP) {
+      toastFilterPoolExhausted();
+      return null;
+    }
     try {
       const node = new AudioWorkletNode(this.ctx, "kc-filter", {
         numberOfInputs: 1,
@@ -2854,12 +2871,10 @@ export class FireCommandSynth {
     // fallback is sufficient.
     if (!opts?.transient) void loadFilterModule(ctx).then((ok) => {
       this.filterWorkletReady = ok;
-      // If a ladder/SVF patch loaded before the worklet was ready, live voices
-      // are stuck on biquad — rebuild once so the intended filter engages.
-      const m = this.patch.filterModel ?? "biquad";
-      if (ok && (m === "ladder" || m === "svf") && (this.patch.fxQuality ?? "live") !== "eco") {
-        this.setPatch(this.patch);
-      }
+      // Do not setPatch here. setPatch force-stops every live voice (the
+      // worklet-ready race used to kill held notes / arp). New Voice()
+      // instances pick up the worklet via acquireFilterWorklet() now that
+      // ready is true; in-flight biquad voices finish as-is.
     });
 
     // Wave banks are built on demand (see baseBankFor / warmBanks): rendering

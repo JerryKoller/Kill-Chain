@@ -43,6 +43,13 @@ import { EditorToolbarGroup, EditorToolbarDivider } from "./EditorShell";
 import { NoteToolbar } from "./NoteToolbar";
 import { usePanelHeight } from "./usePanelHeight";
 import { PanelResizeHandle } from "./PanelResizeHandle";
+import { NOTE_SCATTER_TIMING, NOTE_SCATTER_VELOCITY } from "@/lib/fireNoteOps";
+import {
+  FIRE_CLIP_KIND,
+  writeFireClipboard,
+  readFireClipboard,
+  pasteAnchorStep,
+} from "@/lib/fireClipboard";
 
 export const PIANO_GUTTER = 46;
 
@@ -54,11 +61,30 @@ const ROWS = MIDI_TOP - MIDI_BOT + 1;
 
 const BLACK = new Set([1, 3, 6, 8, 10]);
 
-/** Roll clipboard — module scope so it survives pattern switches and
- *  remounts, enabling copy in one pattern → paste into another. */
-let rollClipboard: Array<Omit<RollNote, "id">> | null = null;
-
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+type RollClipNote = Omit<RollNote, "id">;
+
+function isRollClipNote(n: unknown): n is RollClipNote {
+  if (!n || typeof n !== "object") return false;
+  const o = n as Record<string, unknown>;
+  return (
+    typeof o.midi === "number" &&
+    typeof o.step === "number" &&
+    typeof o.len === "number" &&
+    typeof o.vel === "number"
+  );
+}
+
+function clipNoteFrom(n: RollNote): RollClipNote {
+  const out: RollClipNote = {
+    midi: n.midi, step: n.step, len: n.len, vel: n.vel, ch: n.ch,
+  };
+  if (n.probability != null) out.probability = n.probability;
+  if (n.micro != null) out.micro = n.micro;
+  if (n.ratchet != null) out.ratchet = n.ratchet;
+  return out;
+}
 
 type Tool = "draw" | "select" | "erase";
 type DragMode =
@@ -278,7 +304,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   const removeNotes = useFireSequencerStore((s) => s.removeNotes);
   const duplicateNotes = useFireSequencerStore((s) => s.duplicateNotes);
   const transposeNotes = useFireSequencerStore((s) => s.transposeNotes);
-  const humanizeNotes = useFireSequencerStore((s) => s.humanizeNotes);
+  const applyNoteOp = useFireSequencerStore((s) => s.applyNoteOp);
   const setScaleRoot = useFireSequencerStore((s) => s.setScaleRoot);
   const setScaleId = useFireSequencerStore((s) => s.setScaleId);
   const setScaleSnap = useFireSequencerStore((s) => s.setScaleSnap);
@@ -1593,26 +1619,39 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
 
       // Paste works with no selection — handle before the selection guard.
       if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
-        if (!rollClipboard || rollClipboard.length === 0) return;
         e.preventDefault();
-        const st = useFireSequencerStore.getState();
-        const ch = st.activeChannel;
-        const limit = st.bars * STEPS_PER_BAR;
-        const batch = rollClipboard
-          .filter((n) => n.step < limit)
-          .map((n) => ({
-            ...n,
-            ch,
-            len: Math.max(0.25, Math.min(n.len, limit - n.step)),
-          }));
-        if (batch.length === 0) {
-          useUIStore.getState().toast("Clipboard notes fall outside this pattern");
-          return;
-        }
-        const newIds = addNotes(batch);
-        setSelectedIds(new Set(newIds));
-        playUi("success");
-        useUIStore.getState().toast(`Pasted ${batch.length} note${batch.length === 1 ? "" : "s"}`);
+        void (async () => {
+          const raw = await readFireClipboard<unknown>(FIRE_CLIP_KIND.rollNotes);
+          const clip = Array.isArray(raw) ? raw.filter(isRollClipNote) : [];
+          if (clip.length === 0) return;
+          const st = useFireSequencerStore.getState();
+          const ch = st.activeChannel;
+          const limit = st.bars * STEPS_PER_BAR;
+          const origin = Math.min(...clip.map((n) => n.step));
+          const span = Math.max(...clip.map((n) => n.step + n.len)) - origin;
+          const playhead = getPlayheadStep(st.bpm, st.bars);
+          const dest = pasteAnchorStep(origin, span, playhead, limit);
+          const delta = dest - origin;
+          const batch = clip
+            .map((n) => {
+              const step = n.step + delta;
+              return {
+                ...n,
+                step,
+                ch,
+                len: Math.max(0.25, Math.min(n.len, limit - step)),
+              };
+            })
+            .filter((n) => n.step < limit && n.len > 0);
+          if (batch.length === 0) {
+            useUIStore.getState().toast("Clipboard notes fall outside this pattern");
+            return;
+          }
+          const newIds = addNotes(batch);
+          setSelectedIds(new Set(newIds));
+          playUi("success");
+          useUIStore.getState().toast(`Pasted ${batch.length} note${batch.length === 1 ? "" : "s"}`);
+        })();
         return;
       }
 
@@ -1628,11 +1667,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         const st = useFireSequencerStore.getState();
         const sel = st.notes.filter((n) => selectedIds.has(n.id));
         if (sel.length === 0) return;
-        // Absolute positions: paste lands at the same musical spot, which is
-        // the predictable behavior for cross-pattern copying.
-        rollClipboard = sel.map((n) => ({
-          midi: n.midi, step: n.step, len: n.len, vel: n.vel, ch: n.ch,
-        }));
+        writeFireClipboard(FIRE_CLIP_KIND.rollNotes, sel.map(clipNoteFrom));
         const cut = e.key === "x" || e.key === "X";
         if (cut) {
           removeNotes(ids);
@@ -1937,11 +1972,20 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
                 </button>
               )}
               <button
-                onClick={() => { humanizeNotes(); playUi("press"); }}
+                onClick={() => {
+                  const n = applyNoteOp(
+                    { kind: "humanize", timing: NOTE_SCATTER_TIMING, velocity: NOTE_SCATTER_VELOCITY },
+                    selectedIds,
+                  );
+                  playUi("press");
+                  useUIStore.getState().toast(
+                    n > 0 ? `Scattered · ${n} note${n === 1 ? "" : "s"}` : "Scatter · nothing to change",
+                  );
+                }}
                 className="h-8 px-2.5 rounded-lg border border-white/10 bg-white/[0.03] text-white/55 hover:text-white/90 text-[10px] uppercase tracking-[0.12em] transition"
-                title="Humanize velocity + micro-timing"
+                title="Scatter timing + velocity (same as Tools Scatter / Shift+H). Velocity lane 'Vel jitter' does not move starts."
               >
-                Humanize
+                Scatter
               </button>
             </div>
             {selectedIds.size > 0 && (
@@ -2055,11 +2099,11 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           ))}
           {(() => {
             const ext = selectedNote as RollNoteExt;
-            const prob = ext.probability ?? ext.prob;
-            const extras: Array<{ label: string; key: keyof RollNoteExt; val: number; min: number; max: number; step: number }> = [];
-            if (prob != null) extras.push({ label: "Prob", key: "probability", val: prob, min: 0, max: 1, step: 0.01 });
-            if (ext.micro != null) extras.push({ label: "Micro", key: "micro", val: ext.micro, min: -1, max: 1, step: 0.01 });
-            if (ext.ratchet != null) extras.push({ label: "Ratchet", key: "ratchet", val: ext.ratchet, min: 1, max: 4, step: 1 });
+            const extras: Array<{ label: string; key: keyof RollNoteExt; val: number; min: number; max: number; step: number }> = [
+              { label: "Prob", key: "probability", val: ext.probability ?? ext.prob ?? 1, min: 0, max: 1, step: 0.01 },
+              { label: "Ratchet", key: "ratchet", val: ext.ratchet ?? 1, min: 1, max: 4, step: 1 },
+              { label: "Micro", key: "micro", val: ext.micro ?? 0, min: -1, max: 1, step: 0.01 },
+            ];
             return extras.map((f) => (
               <label key={f.label} className="inline-flex items-center gap-1 text-[10px] text-white/55">
                 {f.label}
@@ -2081,7 +2125,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           })()}
           </>
         ) : (
-          <span className="text-[10px] text-white/30">Select or place a note to edit Start · Len · Pitch · Vel</span>
+          <span className="text-[10px] text-white/30">Select or place a note to edit Start · Len · Pitch · Vel · Prob · Ratchet · Micro</span>
         )}
       </div>
 
@@ -2149,7 +2193,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
                 ["randomize", "Rand", "Randomize velocities (selected if any)"],
                 ["compress", "Compress", "Pull velocities toward the mean"],
                 ["accents", "Accents", "Boost downbeats, soften the rest"],
-                ["humanize", "Vel human", "Jitter velocities only (toolbar Humanize also moves timing)"],
+                ["humanize", "Vel jitter", "Jitter velocities only — does not move note starts (Scatter / Shift+H also move timing)"],
               ] as const).map(([id, label, tip]) => (
                 <button
                   key={id}

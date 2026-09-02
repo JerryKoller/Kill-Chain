@@ -156,3 +156,12 @@ export function canUndoFire(): boolean {
 export function canRedoFire(): boolean {
   return future.length > 0;
 }
+
+/** Drop the undo/redo stacks (call on project open so Ctrl+Z cannot restore the previous song). */
+export function clearFireHistory(): void {
+  history = [];
+  future = [];
+  lastKey = null;
+  lastTs = 0;
+  syncUi();
+}

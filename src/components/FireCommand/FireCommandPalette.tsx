@@ -9,6 +9,7 @@ import { FIRE_BANDS, FIRE_MODULE_BY_ID } from "./fireModuleAtlas";
 import { FIRE_PARAM_INDEX } from "./fireParamIndex";
 import { jumpToModule } from "./fireNavigate";
 import { useFireLayout } from "./FireLayoutContext";
+import { trapTabKey } from "./fireUiKit";
 
 /**
  * Fired by chrome that wants to open the palette (the "Jump ⌘K" hint in the
@@ -16,6 +17,7 @@ import { useFireLayout } from "./FireLayoutContext";
  * palette's open state happens to live.
  */
 export const FIRE_PALETTE_EVENT = "killchain.fire.palette.open";
+export const FIRE_DUAL_TOGGLE_EVENT = "killchain.fire.dual.toggle";
 
 type Item = {
   id: string;
@@ -37,6 +39,7 @@ export function FireCommandPalette({
 }) {
   const [q, setQ] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const { exitFocus } = useFireLayout();
   const setDensity = useFireCommandStore((s) => s.setFireUiDensity);
   const cycleKeyboard = useFireCommandStore((s) => s.cycleKeyboardMode);
@@ -145,6 +148,20 @@ export function FireCommandPalette({
         hint: "Silence",
         run: () => panic(),
       },
+      {
+        id: "wake-all",
+        label: "Wake all modules",
+        hint: "Un-sleep every slept module",
+        keywords: "enable unmute asleep",
+        run: () => useFireCommandStore.getState().setParam("moduleEnable", {}),
+      },
+      {
+        id: "dual-expand",
+        label: "Expand sequencer to second display",
+        hint: "Dual monitor",
+        keywords: "span undock dual monitor second screen collapse",
+        run: () => window.dispatchEvent(new CustomEvent(FIRE_DUAL_TOGGLE_EVENT)),
+      },
     ];
     for (const band of FIRE_BANDS) {
       for (const mod of band.modules) {
@@ -228,6 +245,7 @@ export function FireCommandPalette({
         const it = filteredRef.current[activeRef.current];
         if (it) { it.run(); onClose(); }
       }
+      if (panelRef.current) trapTabKey(panelRef.current, e);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -239,9 +257,13 @@ export function FireCommandPalette({
     <div
       className="fixed inset-0 z-[80] flex items-start justify-center pt-[12vh] px-4"
       style={{ background: "rgba(0,0,0,0.55)" }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
+        ref={panelRef}
         className="w-full max-w-lg rounded-2xl border border-white/15 shadow-2xl overflow-hidden"
         style={{ background: "linear-gradient(180deg, #1a1618 0%, #0e0c10 100%)" }}
       >

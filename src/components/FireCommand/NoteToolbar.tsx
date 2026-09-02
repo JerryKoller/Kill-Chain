@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useFireSequencerStore, type FireNoteOp } from "@/state/fireSequencerStore";
-import { CHORD_RECIPES } from "@/lib/fireNoteOps";
+import { CHORD_RECIPES, NOTE_SCATTER_TIMING, NOTE_SCATTER_VELOCITY } from "@/lib/fireNoteOps";
 import { useUIStore } from "@/state/uiStore";
 
 type Group = "time" | "length" | "pitch" | "vel";
@@ -142,8 +142,9 @@ export function NoteToolbar({ selectedIds }: { selectedIds: ReadonlySet<string> 
                   onClick={() => run({ kind: "quantizeLength", grid }, "Quantize ends")}
                 >Ends</button>
                 <button type="button" className={btn}
-                  onClick={() => run({ kind: "humanize", timing: 0.12, velocity: 0.12 }, "Humanize")}
-                >Humanize</button>
+                  onClick={() => run({ kind: "humanize", timing: NOTE_SCATTER_TIMING, velocity: NOTE_SCATTER_VELOCITY }, "Scatter")}
+                  title="Nudge starts and velocities (same as Shift+H / roll Scatter). Velocity lane 'Vel jitter' does not move timing."
+                >Scatter</button>
               </Row>
               <Row>
                 <button type="button" className={btn}

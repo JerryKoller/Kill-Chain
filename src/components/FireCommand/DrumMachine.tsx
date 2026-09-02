@@ -26,6 +26,7 @@ import {
 } from "./drumClarity";
 import { getEngine } from "@/audio/AudioEngine";
 import { useUIStore } from "@/state/uiStore";
+import { FIRE_CLIP_KIND, readFireClipboard } from "@/lib/fireClipboard";
 import { PatternBarsControls } from "./PatternBarsControls";
 import { ScopedPlayButton } from "./ScopedPlayButton";
 import { PatternSelect } from "./PatternSelect";
@@ -963,8 +964,11 @@ const DrumRow = memo(function DrumRow({
                   useUIStore.getState().toast(`Copied ${n} steps`);
                 } },
                 { label: "Paste lane", run: () => {
-                  const n = useFireSequencerStore.getState().pasteDrumLane(laneId);
-                  useUIStore.getState().toast(n > 0 ? `Pasted ${n} steps` : "Nothing copied yet");
+                  void (async () => {
+                    await readFireClipboard(FIRE_CLIP_KIND.drumLane);
+                    const n = useFireSequencerStore.getState().pasteDrumLane(laneId);
+                    useUIStore.getState().toast(n > 0 ? `Pasted ${n} steps` : "Nothing copied yet");
+                  })();
                 } },
                 { label: "Ramp up", run: () => {
                   const n = useFireSequencerStore.getState().rampDrumLane(laneId, 0.35, 1);

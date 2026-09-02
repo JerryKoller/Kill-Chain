@@ -47,7 +47,7 @@ export interface FirePreset {
 export const P = (over: Partial<FirePatch>): FirePatch => cloneFirePatch(over);
 
 /**
- * Curated factory bank — 20 unique presets × 11 categories = 220 total.
+ * Curated factory bank — 420 presets across 11 categories (Wave 1 + Wave 2).
  * Authored directly for current engine ranges; no legacy remaster pass.
  */
 export const GENERATED_PRESETS: FirePreset[] = CURATED_PRESETS;

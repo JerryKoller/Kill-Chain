@@ -161,8 +161,8 @@ export const SequencerPanel = memo(function SequencerPanel({
       } else if ((e.key === "h" || e.key === "H") && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         e.stopPropagation();
-        humanizeNotes();
-        toast("Notes humanized");
+        const n = humanizeNotes();
+        toast(n > 0 ? `Scattered · ${n} note${n === 1 ? "" : "s"}` : "Scatter · nothing to change");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -189,7 +189,9 @@ export const SequencerPanel = memo(function SequencerPanel({
         toast(res ? "Export cancelled or silent" : "Export unavailable", "warn");
         return;
       }
-      const how = res.method === "offline" ? "offline bounce" : "realtime capture";
+      const how = res.method === "offline"
+        ? "Fire dry · offline (no live ARP)"
+        : "Fire dry · realtime (Kill-Chain master on this fallback)";
       toast(`Exported (${how}) → ${res.path.split(/[\\/]/).pop()}`, "success");
     } catch {
       toast("Export failed", "error");
@@ -359,7 +361,7 @@ export const SequencerPanel = memo(function SequencerPanel({
   }
 
   const body = (
-    <div ref={panelRef} tabIndex={-1} className="outline-none flex flex-col flex-1 min-h-0">
+    <div ref={panelRef} tabIndex={-1} data-fire-sequencer className="outline-none flex flex-col flex-1 min-h-0">
       <ArrangementPlaylist flush={flush} />
 
       {missingSamples.length > 0 && (
@@ -602,9 +604,9 @@ export const SequencerPanel = memo(function SequencerPanel({
                 ? "border-cyan/50 bg-cyan/10 text-cyan"
                 : "border-cyan/35 bg-cyan/10 text-cyan hover:border-cyan/55"
             }`}
-            title={playMode === "arrangement" ? "Export arrangement (dry Fire bounce)" : "Export pattern (dry Fire bounce)"}
+            title={playMode === "arrangement" ? "Export arrangement — Fire dry bounce (offline omits live ARP)" : "Export pattern — Fire dry bounce (offline omits live ARP)"}
           >
-            {exporting ?? (playMode === "arrangement" ? "Export song" : "Export")}
+            {exporting ?? (playMode === "arrangement" ? "Export song (dry)" : "Export dry")}
           </button>
           <div className="relative">
             <button
@@ -653,7 +655,7 @@ export const SequencerPanel = memo(function SequencerPanel({
                     onClick={() => { setFileMenuOpen(false); setLibraryExportOpen(true); }}
                     disabled={!!exporting}
                     className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-[#f5d9a8]/90 hover:bg-[rgba(232,184,109,0.1)] transition disabled:opacity-40"
-                  >Export to Library…</button>
+                  >Export to Library (Fire dry)…</button>
                 </div>
               </>
             )}
@@ -678,7 +680,7 @@ export const SequencerPanel = memo(function SequencerPanel({
             <span><kbd className="text-white/90">Space</kbd> Play / stop (count-in if REC armed)</span>
             <span><kbd className="text-white/90">R</kbd> Arm / disarm record</span>
             <span><kbd className="text-white/90">Q</kbd> Toggle 1/16 quantize</span>
-            <span><kbd className="text-white/90">Shift+H</kbd> Humanize notes</span>
+            <span><kbd className="text-white/90">Shift+H</kbd> Scatter notes (timing + velocity)</span>
             <span><kbd className="text-white/90">Loop</kbd> Selection loop scope</span>
             <span><kbd className="text-white/90">?</kbd> This overlay</span>
           </div>

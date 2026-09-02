@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import { TitleBar } from "@/components/Layout/TitleBar";
 import { MissionHUD } from "@/components/Layout/MissionHUD";
 import { Sidebar } from "@/components/Layout/Sidebar";
@@ -27,6 +27,7 @@ const SettingsView = lazy(() => import("@/components/Settings/SettingsView").the
 // embedded browser — and its audio — keeps running while other tools are open.
 const AirspaceView = lazy(() => import("@/components/Airspace/AirspaceView").then((m) => ({ default: m.AirspaceView })));
 import { MiniPlayer } from "@/components/Layout/MiniPlayer";
+import { SharedPlayerAudio } from "@/components/Layout/SharedPlayerAudio";
 import { KCToastHost } from "@/components/kcds";
 import { OnboardingTour } from "@/components/Onboarding/OnboardingTour";
 import { LegalGateModal } from "@/components/Onboarding/LegalGateModal";
@@ -162,21 +163,25 @@ export default function App() {
     };
   }, [ensureReady]);
 
+  // Shared <audio> + toast host sit outside mini/full so boot-into-mini can
+  // play and denied-play / MIDI-learn toasts still land. Early-return shells
+  // used to skip both.
+  let shell: ReactNode;
+
   if (miniMode) {
     // Mini-player still requires legal acceptance on this install.
     if (!legalOk) {
-      return (
+      shell = (
         <div className="h-screen w-screen bg-ink relative">
           <LegalGateModal />
         </div>
       );
+    } else {
+      shell = <MiniPlayer />;
     }
-    return <MiniPlayer />;
-  }
-
-  // Retail desktop: block the main chrome until legal is accepted.
-  if (!legalOk) {
-    return (
+  } else if (!legalOk) {
+    // Retail desktop: block the main chrome until legal is accepted.
+    shell = (
       <div className="h-screen w-screen flex flex-col overflow-hidden bg-ink relative">
         {bgFx && (
           <>
@@ -194,14 +199,13 @@ export default function App() {
         <LegalGateModal />
       </div>
     );
-  }
-
-  return (
-    // kc-app-root: in "snap sequencer right" mode this box is padded to the
-    // left display's width so the title bar, sidebar, synth, keyboard and
-    // transport all stay on the left monitor while the sequencer is portalled
-    // into the right one. See fireChrome.css / useDualMonitor.
-    <div className="kc-app-root h-screen w-screen flex flex-col overflow-hidden bg-ink relative">
+  } else {
+    shell = (
+      // kc-app-root: in "snap sequencer right" mode this box is padded to the
+      // left display's width so the title bar, sidebar, synth, keyboard and
+      // transport all stay on the left monitor while the sequencer is portalled
+      // into the right one. See fireChrome.css / useDualMonitor.
+      <div className="kc-app-root h-screen w-screen flex flex-col overflow-hidden bg-ink relative">
       {/* Animated background field (Settings → Ambient backdrop) */}
       {bgFx && (
         <>
@@ -298,10 +302,9 @@ export default function App() {
               </Suspense>
             )}
           </div>
-          {/* Keep TransportBar mounted while Fire is open. Swapping it out
-              destroyed the shared <audio> element and orphaned the
-              MediaElementSource — Library/Airspace play-bar resume then
-              failed after leaving Fire. Hide it and show the Fire dock. */}
+          {/* Keep TransportBar mounted while Fire is open so deck/volume
+              chrome isn't thrown away. The <audio> node lives on
+              SharedPlayerAudio. Hide the bar and show the Fire dock. */}
           {view === "fire" && <FireTransportDock />}
           <div
             className={view === "fire" ? "hidden" : undefined}
@@ -312,8 +315,6 @@ export default function App() {
         </main>
       </div>
 
-      <KCToastHost />
-
       {/* Optional texture layer (Settings → Appearance). Off by default. */}
       {fxOverlay === "scanlines" && <div className="kc-fx-scanlines" aria-hidden />}
       {fxOverlay === "grain" && <div className="kc-fx-grain" aria-hidden />}
@@ -322,6 +323,15 @@ export default function App() {
       <HeadphoneWizard />
       <WhatsNewPanel />
       {legalOk && !onboardingDone && <OnboardingTour />}
-    </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <SharedPlayerAudio />
+      {shell}
+      <KCToastHost />
+    </>
   );
 }

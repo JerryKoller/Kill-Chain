@@ -15,6 +15,7 @@ import { useUIStore } from "@/state/uiStore";
 import {
   FIRE_SHELF_EVENT, pushRecent, pruneShelves, readFavorites, readRecents, toggleFavorite,
 } from "@/lib/firePresetShelf";
+import { trapTabKey } from "./fireUiKit";
 
 const FIRE = "#ff6a3d";
 
@@ -99,6 +100,7 @@ export function PresetBrowser({
   const [renameText, setRenameText] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Refs so the window Escape handler always sees the CURRENT edit state
   // without re-binding on every keystroke.
@@ -109,6 +111,7 @@ export function PresetBrowser({
     if (!open) return;
     if (initialFilter) setFilter(initialFilter);
     const onKey = (e: KeyboardEvent) => {
+      if (panelRef.current) trapTabKey(panelRef.current, e);
       if (e.key !== "Escape") return;
       // Escape cascades: rename → confirm-delete → close. It used to cancel
       // the rename AND slam the whole library shut in the same press.
@@ -220,6 +223,10 @@ export function PresetBrowser({
           onClick={onClose}
         >
           <motion.div
+            ref={panelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="fc-preset-lib-title"
             initial={{ scale: 0.98, y: 10 }}
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.98, y: 10 }}
@@ -244,7 +251,7 @@ export function PresetBrowser({
                 >FC</div>
                 <div className="min-w-0">
                   <div className="text-[9px] uppercase tracking-[0.28em] text-white/40">Fire Command</div>
-                  <div className="text-base font-bold tracking-wide text-white">Patch Library</div>
+                  <div id="fc-preset-lib-title" className="text-base font-bold tracking-wide text-white">Patch Library</div>
                 </div>
                 <div className="hidden sm:flex items-center gap-2 ml-2 text-[10px] font-mono text-white/35 tabular-nums">
                   <span className="rounded border border-white/10 px-1.5 py-0.5">{FIRE_PRESETS.length} factory</span>

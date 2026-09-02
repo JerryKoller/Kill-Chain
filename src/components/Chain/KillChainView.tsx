@@ -213,6 +213,8 @@ export function KillChainView() {
   ];
 
   const stageState = (stage: Stage): "muted" | "active" | "neutral" => {
+    // Master bypass takes the clean wire — don't leave blocks "shaping".
+    if (bypass) return "neutral";
     if (muted[stage.id]) return "muted";
     if (stage.id === "correction") return correctionEnabled ? "active" : "neutral";
     if (stage.id === "restore") {

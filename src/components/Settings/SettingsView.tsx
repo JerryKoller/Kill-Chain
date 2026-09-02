@@ -688,7 +688,6 @@ function AutomationSection() {
 
 /** v2.4 ADVANCED — engine recovery. */
 function AdvancedActions() {
-  const toast = useUIStore((s) => s.toast);
   const [resetting, setResetting] = useState(false);
   return (
     <GlassPanel intense className="p-5">
@@ -715,8 +714,15 @@ function AdvancedActions() {
         </span>
         <button
           onClick={() => {
+            if (
+              !window.confirm(
+                "Factory reset wipes every saved setting, memory, preset and lock on this machine. The app will reload. Continue?",
+              )
+            ) {
+              return;
+            }
             localStorage.clear();
-            toast("Local storage cleared — restart the app", "warn");
+            window.location.reload();
           }}
           className="ml-auto rounded-lg border border-white/15 hover:bg-white/5 px-3 py-1.5 text-xs text-dim"
           title="Wipes every saved setting, memory, preset and lock on this machine"

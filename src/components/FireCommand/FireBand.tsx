@@ -89,12 +89,14 @@ export function useBandAnyExpanded(ids: readonly string[]): boolean {
 
 function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
   const moduleEnable = useFireCommandStore((s) => s.patch.moduleEnable);
+  const setModuleEnable = useFireCommandStore((s) => s.setModuleEnable);
   const labelMode = useFireCommandStore((s) => s.labelMode);
-  if (modules.length === 0) return null;
+  const shown = modules.filter((m) => m.collapsed || moduleEnable?.[m.id] === false);
+  if (shown.length === 0) return null;
   // Prefer even atlas-width grids (7 modules → 7 equal chips) so every band
   // reads as a symmetric row rather than a ragged 3× wrap. Below ~1100px that
   // crushes labels, so halve the row (7 → 4+3) and drop to 2-up when tiny.
-  const n = modules.length;
+  const n = shown.length;
   const cols = n <= 7 ? n : 4;
   return (
     <div
@@ -106,7 +108,7 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
         } as CSSProperties
       }
     >
-      {modules.map((m) => {
+      {shown.map((m) => {
         const awake = moduleEnable?.[m.id] !== false;
         // Both mode keeps the tight character label and parks the technical
         // name in the tooltip — a chip has no room for two names.
@@ -117,7 +119,14 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
           <button
             key={m.id}
             type="button"
-            onClick={m.toggle}
+            onClick={() => {
+              if (!awake) {
+                setModuleEnable(m.id, true);
+                if (m.collapsed) m.toggle();
+                return;
+              }
+              m.toggle();
+            }}
             className={`fc-focus relative flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-center transition hover:bg-white/[0.06] ${awake ? "" : "fc-asleep"}`}
             style={{
               borderColor: awake ? `${m.color}44` : "rgba(255,255,255,0.12)",
@@ -128,8 +137,8 @@ function ChipGrid({ modules }: { modules: BandModuleMeta[] }) {
                 ? `inset 0 1px 0 rgba(255,255,255,0.04), 0 0 12px ${m.color}14`
                 : undefined,
             }}
-            title={`${awake ? "Expand " : ""}${label}${alt}${sleepNote}`}
-            aria-label={`Expand ${label}${sleepNote}`}
+            title={awake ? `Expand ${label}${alt}` : `Wake ${label}${alt}${sleepNote}`}
+            aria-label={awake ? `Expand ${label}` : `Wake ${label}${sleepNote}`}
             aria-expanded={false}
           >
             <CollapseToggle collapsed color={awake ? m.color : "rgba(255,255,255,0.35)"} />
@@ -219,7 +228,6 @@ export function FireBand({
   const actions = useMemo(() => ({ register, unregister }), [register, unregister]);
 
   const list = Object.values(mods);
-  const collapsedList = list.filter((m) => m.collapsed);
   const openCount = list.filter((m) => !m.collapsed).length;
 
   if (hiddenByFocus) return null;
@@ -322,7 +330,7 @@ export function FireBand({
 
       {showBody && (
         <>
-          {!holdsFocus && <ChipGrid modules={collapsedList} />}
+          {!holdsFocus && <ChipGrid modules={list} />}
           <div className={openStackClass()}>
             {children}
           </div>

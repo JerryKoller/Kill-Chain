@@ -38,6 +38,7 @@ export function PerfMidiLearnButton({
             ? { borderColor: `${c}55`, background: `${c}18`, color: `${c}dd` }
             : { borderColor: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)" }
       }
+      aria-pressed={!!learningThis}
       title={
         learningThis
           ? "Waiting for MIDI CC / note…"

@@ -116,6 +116,8 @@ class ChannelState {
     this.rover = LATENCY;
     this.captured = false;
     this.avgMag.fill(0);
+    this.frozenRe.fill(0);
+    this.frozenIm.fill(0);
   }
 }
 

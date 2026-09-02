@@ -709,22 +709,23 @@ export function LibraryView() {
                         isSelected={selectedPath === row.track.path}
                         isFavorite={!!favorites[row.track.path]}
                         plays={playCounts[row.track.path] ?? 0}
-                        isDropTarget={canReorder && dropIndex === row.playIndex}
+                        isDropTarget={canReorder && dropIndex === (row.pathIndex ?? row.playIndex)}
                         draggable={canReorder}
                         onDragStart={() => {
-                          dragFrom.current = row.playIndex;
+                          dragFrom.current = row.pathIndex ?? row.playIndex;
                         }}
                         onDragOver={(e) => {
                           if (dragFrom.current == null) return;
                           e.preventDefault();
-                          setDropIndex(row.playIndex);
+                          setDropIndex(row.pathIndex ?? row.playIndex);
                         }}
                         onDrop={() => {
                           const from = dragFrom.current;
                           dragFrom.current = null;
                           setDropIndex(null);
-                          if (activePlaylist && from != null && from !== row.playIndex) {
-                            movePlaylistItem(activePlaylist.id, from, row.playIndex);
+                          const to = row.pathIndex ?? row.playIndex;
+                          if (activePlaylist && from != null && from !== to) {
+                            movePlaylistItem(activePlaylist.id, from, to);
                           }
                         }}
                         onDragEnd={() => {

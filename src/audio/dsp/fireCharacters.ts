@@ -4,7 +4,7 @@
  */
 
 import {
-  DEFAULT_FIRE_PATCH,
+  cloneFirePatch,
   makeModMatrix,
   type FirePatch,
   type ModRoute,
@@ -13,7 +13,7 @@ import {
 } from "./FireCommandSynth";
 import type { FirePreset, PresetArp, PresetCategory } from "./firePresetBank";
 
-const P = (over: Partial<FirePatch>): FirePatch => ({ ...DEFAULT_FIRE_PATCH, ...over });
+const P = (over: Partial<FirePatch>): FirePatch => cloneFirePatch(over);
 const MR = (source: ModSource, dest: ModDest, amount: number): ModRoute => ({ source, dest, amount });
 
 export type FireCharacterPhase = "vintage" | "chip" | "fm";
@@ -553,9 +553,7 @@ export const FIRE_CHARACTERS: FireCharacter[] = [
 
 /** Resolve a character into a full patch ready for the engine/store. */
 export function resolveCharacterPatch(character: FireCharacter): FirePatch {
-  const patch = { ...DEFAULT_FIRE_PATCH, ...character.patch };
-  patch.modMatrix = makeModMatrix(Array.isArray(patch.modMatrix) ? patch.modMatrix : []);
-  return patch;
+  return cloneFirePatch(character.patch);
 }
 
 const PHASE_CATEGORY: Record<FireCharacterPhase, PresetCategory> = {

@@ -22,6 +22,7 @@ import {
   type AutoParamId,
 } from "@/state/fireSequencerStore";
 import { useUIStore } from "@/state/uiStore";
+import { FIRE_CLIP_KIND, writeFireClipboard, readFireClipboard, peekFireClipboard } from "@/lib/fireClipboard";
 import { useRollFit, subscribeRollHScroll, setRollHScroll } from "./useRollFit";
 
 const DEFAULT_LANE_H = 92;
@@ -30,11 +31,16 @@ const MAX_LANE_H = 180;
 const LS_LANE_H = "killchain.fire.autoLaneH";
 const LS_RECENT = "killchain.fire.autoRecent";
 const LS_FAVS = "killchain.fire.autoFavorites";
-const CLIP_KEY = "killchain.fire.autoClip";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-let laneClipboard: { param: AutoParamId; points: (number | null)[] } | null = null;
+type AutoClip = { param: AutoParamId; points: (number | null)[] };
+
+function isAutoClip(v: unknown): v is AutoClip {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.param === "string" && Array.isArray(o.points);
+}
 
 function readLaneH(): number {
   if (typeof window === "undefined") return DEFAULT_LANE_H;
@@ -141,22 +147,13 @@ function invertLane(arr: (number | null)[]): (number | null)[] {
   return arr.map((v) => (v == null ? null : 1 - v));
 }
 
-function readClipboard(): { param: AutoParamId; points: (number | null)[] } | null {
-  if (laneClipboard) return laneClipboard;
-  try {
-    const raw = sessionStorage.getItem(CLIP_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { param?: AutoParamId; points?: (number | null)[] };
-    if (!parsed?.param || !Array.isArray(parsed.points)) return null;
-    return { param: parsed.param, points: parsed.points };
-  } catch {
-    return null;
-  }
+function readClipboard(): AutoClip | null {
+  const ram = peekFireClipboard<unknown>(FIRE_CLIP_KIND.automationLane);
+  return isAutoClip(ram) ? ram : null;
 }
 
-function writeClipboard(data: { param: AutoParamId; points: (number | null)[] }) {
-  laneClipboard = data;
-  try { sessionStorage.setItem(CLIP_KEY, JSON.stringify(data)); } catch { /* ignore */ }
+function writeClipboard(data: AutoClip) {
+  writeFireClipboard(FIRE_CLIP_KIND.automationLane, data);
 }
 
 function ParamChip({
@@ -332,18 +329,21 @@ export function AutomationLane() {
   };
 
   const doPaste = () => {
-    const clip = readClipboard();
-    if (!clip) {
-      toast("Clipboard empty — copy a lane first");
-      return;
-    }
-    const src = clip.points;
-    const arr = new Array<number | null>(totalSteps).fill(null);
-    for (let i = 0; i < totalSteps; i++) {
-      arr[i] = i < src.length ? src[i] ?? null : null;
-    }
-    replaceAutomationLane(param, arr);
-    toast(`Pasted ${AUTO_PARAMS.find((d) => d.id === clip.param)?.label ?? "lane"} → ${def.label}`);
+    void (async () => {
+      const fromOs = await readFireClipboard<unknown>(FIRE_CLIP_KIND.automationLane);
+      const clip = isAutoClip(fromOs) ? fromOs : readClipboard();
+      if (!clip) {
+        toast("Clipboard empty — copy a lane first");
+        return;
+      }
+      const src = clip.points;
+      const arr = new Array<number | null>(totalSteps).fill(null);
+      for (let i = 0; i < totalSteps; i++) {
+        arr[i] = i < src.length ? src[i] ?? null : null;
+      }
+      replaceAutomationLane(param, arr);
+      toast(`Pasted ${AUTO_PARAMS.find((d) => d.id === clip.param)?.label ?? "lane"} → ${def.label}`);
+    })();
   };
 
   // ── draw ──

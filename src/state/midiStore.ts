@@ -310,10 +310,13 @@ function handleMessage(deviceId: string, data: ArrayLike<number>): void {
 
   const status = statusByte & 0xf0;
   const channel = statusByte & 0x0f;
+  // Focus writes Fire knobs / pad nav / PC. Persist still remembers On, but
+  // do not mutate the Fire store after the user leaves the Fire view.
+  const fireView = useUIStore.getState().view === "fire";
 
   // Program Change → MPK Focus module jump (Prog Select / Prog Change pads).
   if (status === 0xc0) {
-    useFireMidiFocusStore.getState().handleProgramChange(data1);
+    if (fireView) useFireMidiFocusStore.getState().handleProgramChange(data1);
     useMidiStore.setState({
       lastMessage: { id: `${deviceId}:${channel}:pc:${data1}`, label: `PC ${data1}`, value: data1 / 127 },
     });
@@ -324,7 +327,7 @@ function handleMessage(deviceId: string, data: ArrayLike<number>): void {
   // Focus mode steals pad-range notes for PROG / BANK navigation.
   if (noteHandler) {
     if (status === 0x90 && data2 > 0) {
-      const stolen = useFireMidiFocusStore.getState().handleNoteOn(data1, data2 / 127);
+      const stolen = fireView && useFireMidiFocusStore.getState().handleNoteOn(data1, data2 / 127);
       if (!stolen) {
         noteHandler.noteOn(data1, data2 / 127);
         useMidiStore.setState({
@@ -364,7 +367,7 @@ function handleMessage(deviceId: string, data: ArrayLike<number>): void {
     // and never override CCs that already have a MIDI learn mapping.
     const midiSnap = useMidiStore.getState();
     const mapped = midiSnap.mappings.some((m) => m.id === id);
-    if (!midiSnap.learning && !mapped) {
+    if (fireView && !midiSnap.learning && !mapped) {
       if (useFireMidiFocusStore.getState().handleCc(data1, value, data2)) {
         useMidiStore.setState({
           lastMessage: { id, label, value },
@@ -420,7 +423,58 @@ function describeTarget(t: MidiTarget): string {
   return `transport:${t.action}`;
 }
 
+/**
+ * Map a 0..1 CC onto a Fire patch value. Mixes / macros stay 0–1; Hz, cents,
+ * voice counts, and octaves get the ranges the knobs actually use.
+ */
+export function mapFireMidiValue(key: string, n01: number): number {
+  const n = Math.max(0, Math.min(1, n01));
+  switch (key) {
+    case "filterCutoff":
+      return 20 * Math.pow(18000 / 20, n);
+    case "filterResonance":
+      return 0.1 + n * 27.9;
+    case "unison":
+      return Math.round(1 + n * 6);
+    case "unisonDetune":
+      return n * 50;
+    case "oscAOctave":
+    case "oscBOctave":
+    case "oscCOctave":
+    case "subOctave":
+      return Math.round(-2 + n * 4);
+    case "oscADetune":
+    case "oscBDetune":
+    case "oscCDetune":
+      return (n * 2 - 1) * 50;
+    case "lfo1Rate":
+    case "lfo2Rate":
+      return 0.05 + n * 29.95;
+    case "ampAttack":
+    case "ampDecay":
+    case "ampRelease":
+    case "filterAttack":
+    case "filterDecay":
+    case "filterRelease":
+      return 0.001 + n * 2.999;
+    case "delayTime":
+      return 0.01 + n * 1.49;
+    case "masterGain":
+      return n * 1.2;
+    default:
+      return n;
+  }
+}
+
 function applyMidi(target: MidiTarget, normalized: number): void {
+  // Focus CC/PC/pads already skip off Fire. Learned fireParam / fireScene
+  // used to keep writing the synth from Library, Sculptor, etc.
+  if (
+    (target.kind === "fireParam" || target.kind === "fireScene") &&
+    useUIStore.getState().view !== "fire"
+  ) {
+    return;
+  }
   const audio = useAudioStore.getState();
   if (target.kind === "param") {
     const v = isBipolar(target.key) ? normalized * 2 - 1 : normalized;
@@ -431,7 +485,8 @@ function applyMidi(target: MidiTarget, normalized: number): void {
   if (target.kind === "fireParam") {
     void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
       const key = target.key as keyof import("@/audio/dsp/FireCommandSynth").FirePatch;
-      useFireCommandStore.getState().setParam(key, normalized as never);
+      const value = mapFireMidiValue(target.key, normalized);
+      useFireCommandStore.getState().setParam(key, value as never);
     });
     return;
   }
