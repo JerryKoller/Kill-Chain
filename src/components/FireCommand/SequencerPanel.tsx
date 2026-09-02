@@ -119,14 +119,31 @@ export const SequencerPanel = memo(function SequencerPanel({
   const [editorFullscreen, setEditorFullscreen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Escape cascade for editor fullscreen — same rule as arrangement:
+  // menus / note selection / drum inspect each consume one press. Capture
+  // used to steal every Escape and drop fullscreen (and panic Open Fire)
+  // before Tools, File, or the roll could dismiss.
   useEffect(() => {
     if (!editorFullscreen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setEditorFullscreen(false);
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      const t = e.target;
+      if (
+        t instanceof HTMLInputElement
+        || t instanceof HTMLTextAreaElement
+        || t instanceof HTMLSelectElement
+        || (t instanceof HTMLElement && t.isContentEditable)
+      ) return;
+      if (fileMenuOpen || variationsOpen || showShortcuts) return;
+      if (document.querySelector("[data-fire-piano-roll][data-has-selection='1']")) return;
+      if (document.querySelector("[data-fire-drum-inspect]")) return;
+      e.preventDefault();
+      setEditorFullscreen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editorFullscreen]);
+  }, [editorFullscreen, fileMenuOpen, variationsOpen, showShortcuts]);
 
   useEffect(() => {
     if (asWorkspace && collapsed) setCollapsed(false);
@@ -141,6 +158,7 @@ export const SequencerPanel = memo(function SequencerPanel({
         || el instanceof HTMLSelectElement
         || (el instanceof HTMLElement && el.isContentEditable)
       ) return;
+      if (document.querySelector("[aria-modal='true']")) return;
       const panel = panelRef.current;
       if (!panel) return;
       const target = e.target instanceof Node ? e.target : null;
@@ -168,6 +186,33 @@ export const SequencerPanel = memo(function SequencerPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [recording, recordQuantize, setRecording, setRecordQuantize, humanizeNotes, toast]);
+
+  // Capture Escape so File / Variations / the shortcuts chip close without
+  // also panicking a live Open Fire (the dock's Esc handler is bubble-phase).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (fileMenuOpen) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setFileMenuOpen(false);
+        return;
+      }
+      if (variationsOpen) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setVariationsOpen(false);
+        return;
+      }
+      if (showShortcuts) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setShowShortcuts(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [fileMenuOpen, variationsOpen, showShortcuts]);
 
   const doExportWav = async () => {
     if (exporting) return;
@@ -322,7 +367,7 @@ export const SequencerPanel = memo(function SequencerPanel({
                 ? "border-[#ff6a3d] bg-[#ff6a3d]/25 text-[#ffd9c9] shadow-[0_0_18px_rgb(255_106_61/0.4)]"
                 : "border-[#ff6a3d]/50 bg-[#ff6a3d]/10 text-[#ffbfa0] hover:bg-[#ff6a3d]/20"
             }`}
-            title="Play / stop the pattern (sequencer)"
+            title="Open Fire / Hold Fire this pattern"
           >
             {playing ? "■ Hold Fire" : "▶ Open Fire"}
           </button>
@@ -487,11 +532,11 @@ export const SequencerPanel = memo(function SequencerPanel({
               <>
                 <button
                   type="button"
-                  className="fixed inset-0 z-20 cursor-default"
+                  className="fixed inset-0 z-[40] cursor-default"
                   aria-label="Close variations menu"
                   onClick={() => setVariationsOpen(false)}
                 />
-                <div className="absolute left-0 top-full z-30 mt-1 w-52 rounded-xl border border-white/12 bg-[#12151c] shadow-xl p-1 space-y-0.5">
+                <div className="absolute left-0 top-full z-50 mt-1 w-52 rounded-xl border border-white/12 bg-[#12151c] shadow-xl p-1 space-y-0.5">
                   {([
                     ["duplicate", "Duplicate"],
                     ["mutate", "Mutate"],
@@ -625,11 +670,11 @@ export const SequencerPanel = memo(function SequencerPanel({
               <>
                 <button
                   type="button"
-                  className="fixed inset-0 z-20 cursor-default"
+                  className="fixed inset-0 z-[40] cursor-default"
                   aria-label="Close file menu"
                   onClick={() => setFileMenuOpen(false)}
                 />
-                <div className="absolute right-0 top-full z-30 mt-1 w-48 rounded-xl border border-white/12 bg-[#12151c] shadow-xl p-1 space-y-0.5">
+                <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-xl border border-white/12 bg-[#12151c] shadow-xl p-1 space-y-0.5">
                   <button
                     onClick={() => { setFileMenuOpen(false); void doOpenProject(); }}
                     className="w-full text-left px-2.5 py-1.5 rounded-md text-[11px] text-white/70 hover:bg-white/8 hover:text-white transition"
@@ -677,11 +722,12 @@ export const SequencerPanel = memo(function SequencerPanel({
         <div className="mb-2 rounded-xl border border-cyan/25 bg-cyan/5 px-3 py-2 text-[10px] text-white/70">
           <div className="text-[9px] font-black uppercase tracking-[0.18em] text-cyan/80 mb-1.5">Sequencer shortcuts</div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 font-mono">
-            <span><kbd className="text-white/90">Space</kbd> Play / stop (count-in if REC armed)</span>
+            <span><kbd className="text-white/90">Space</kbd> Open Fire / Hold Fire (count-in if REC armed)</span>
             <span><kbd className="text-white/90">R</kbd> Arm / disarm record</span>
-            <span><kbd className="text-white/90">Q</kbd> Toggle 1/16 quantize</span>
+            <span><kbd className="text-white/90">Q</kbd> Toggle record quantize (follows piano-roll snap)</span>
             <span><kbd className="text-white/90">Shift+H</kbd> Scatter notes (timing + velocity)</span>
             <span><kbd className="text-white/90">Loop</kbd> Selection loop scope</span>
+            <span><kbd className="text-white/90">Esc</kbd> Close menus / clear selection (won't panic Open Fire)</span>
             <span><kbd className="text-white/90">?</kbd> This overlay</span>
           </div>
         </div>

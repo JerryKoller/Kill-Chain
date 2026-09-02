@@ -542,7 +542,7 @@ export function paintSpectral(
     W,
     Hh,
     "SPEC · BIN LATTICE",
-    !isLive ? "BYPASS" : `${p.mode} · A${amtLabel} · ${Math.round(lo * 100)}–${Math.round(hi * 100)}`,
+    !isLive ? "OFF" : `${p.mode} · A${amtLabel} · ${Math.round(lo * 100)}–${Math.round(hi * 100)}`,
     C_GLOW,
     isLive ? C_HOT : C_MID,
   );

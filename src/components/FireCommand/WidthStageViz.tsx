@@ -372,7 +372,7 @@ export function paintWidth(
   tel(`SIDE ${Math.round(side * 100)}`, C_SIDE, 0.68);
   tel(monoOn ? `MONO ${Math.round(monoHz)}Hz` : "MONO OFF", C_HOT, 0.62);
 
-  pill(ctx, W * 0.5, 2, on ? MECH_LABEL[mech] : "BYPASS", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
+  pill(ctx, W * 0.5, 2, on ? MECH_LABEL[mech] : "ASLEEP", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
 
   // ── width rail: the drag affordance, notched at the double-click cycle ──
   const railY = Hh - 26;
@@ -402,7 +402,7 @@ export function paintWidth(
     ctx,
     W,
     Hh,
-    on ? "SIDE HORIZON" : "SIDE HORIZON · BYPASS",
+    on ? "SIDE HORIZON" : "SIDE HORIZON · ASLEEP",
     `${widthLabel(w)} · ${Math.round(w * 100)}%`,
     C_GLOW,
     on ? C_HOT : C_MID,

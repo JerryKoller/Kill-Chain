@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMissionLogStore, type MissionLogEntry, type MissionSourceKind } from "@/state/missionLogStore";
 import { describeChain } from "@/lib/chainSnapshot";
@@ -43,6 +43,31 @@ export function MissionLogPanel({ onClose }: { onClose: () => void }) {
   const [search, setSearch] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const skipRenameCommit = useRef(false);
+  const renamingRef = useRef(renaming);
+  renamingRef.current = renaming;
+  const searchRef = useRef(search);
+  searchRef.current = search;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (renamingRef.current) {
+        skipRenameCommit.current = true;
+        setRenaming(null);
+        return;
+      }
+      if (searchRef.current) {
+        setSearch("");
+        return;
+      }
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
 
   const list = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -168,13 +193,21 @@ export function MissionLogPanel({ onClose }: { onClose: () => void }) {
                       onChange={(ev) => setRenameValue(ev.target.value)}
                       onKeyDown={(ev) => {
                         if (ev.key === "Enter") {
+                          ev.preventDefault();
                           renameEntry(e.key, renameValue);
                           setRenaming(null);
                         }
-                        // Escape = explicit cancel (blur commits below).
-                        if (ev.key === "Escape") setRenaming(null);
+                        if (ev.key === "Escape") {
+                          ev.preventDefault();
+                          skipRenameCommit.current = true;
+                          setRenaming(null);
+                        }
                       }}
                       onBlur={() => {
+                        if (skipRenameCommit.current) {
+                          skipRenameCommit.current = false;
+                          return;
+                        }
                         // Commit on blur — clicking away used to silently
                         // throw the typed name away.
                         if (renameValue.trim()) renameEntry(e.key, renameValue);

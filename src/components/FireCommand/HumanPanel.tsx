@@ -278,7 +278,7 @@ export function HumanQuickActions() {
 
 export function humanStageLabel(on: boolean, enabled: boolean, timing: number, vel: number): string {
   if (!enabled) return "Asleep — module offline";
-  if (!on || (timing < 0.03 && vel < 0.03)) return "Grid — humanize bypassed";
+  if (!on || (timing < 0.03 && vel < 0.03)) return "Grid — feel off";
   const hit = humanCharMatch(timing, vel, on);
   if (hit) return `${hit.label} — active under play`;
   if (timing > 0.55 && vel < 0.2) return "Time — active under play";

@@ -3,7 +3,7 @@
  * Piano Roll / Drums mount this — Arrangement uses ArrangementBarsControls instead.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFireSequencerStore, MAX_BARS } from "@/state/fireSequencerStore";
 
 const PRESETS = [1, 2, 4, 8, 16] as const;
@@ -19,6 +19,7 @@ export function PatternBarsControls({
   const setBars = useFireSequencerStore((s) => s.setBars);
   const [draft, setDraft] = useState(String(bars));
   const [focused, setFocused] = useState(false);
+  const skipBlurCommit = useRef(false);
 
   useEffect(() => {
     if (!focused) setDraft(String(bars));
@@ -80,12 +81,19 @@ export function PatternBarsControls({
         onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
         onFocus={() => setFocused(true)}
         onBlur={() => {
+          if (skipBlurCommit.current) {
+            skipBlurCommit.current = false;
+            setFocused(false);
+            return;
+          }
           setFocused(false);
           commitDraft();
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();
           if (e.key === "Escape") {
+            e.preventDefault();
+            skipBlurCommit.current = true;
             setDraft(String(bars));
             e.currentTarget.blur();
           }

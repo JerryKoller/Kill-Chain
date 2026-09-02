@@ -189,6 +189,23 @@ export function DrumMachine() {
     return () => window.removeEventListener("pointerdown", onDown);
   }, [fillOpen, laneMenu, grooveOpen]);
 
+  // Capture Escape so menus / inspect close without panicking Open Fire.
+  useEffect(() => {
+    if (!fillOpen && !laneMenu && !grooveOpen && !inspect && !expandedLane) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (fillOpen) { setFillOpen(false); return; }
+      if (laneMenu) { setLaneMenu(null); return; }
+      if (grooveOpen) { setGrooveOpen(false); return; }
+      if (inspect) { setInspect(null); return; }
+      setExpandedLane(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [fillOpen, laneMenu, grooveOpen, inspect, expandedLane]);
+
   const audition = (lane: DrumLane) => {
     const eng = getEngine();
     void eng.resume();
@@ -255,13 +272,17 @@ export function DrumMachine() {
     : `${Math.floor(playStep / STEPS_PER_BAR) + 1}.${Math.floor((playStep % STEPS_PER_BAR) / 4) + 1}.${(playStep % STEPS_PER_BAR) + 1}`;
 
   return (
-    <div className="select-none w-full min-w-0 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-[#12151c] via-[#0c0e14] to-[#090b10] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div
+      data-fire-drums
+      data-fire-drum-inspect={inspect || expandedLane ? "1" : undefined}
+      className="select-none w-full min-w-0 rounded-2xl border border-white/[0.09] bg-gradient-to-b from-[#12151c] via-[#0c0e14] to-[#090b10] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+    >
       <div className="editor-toolbar mb-2 rounded-xl border border-white/[0.06] bg-black/20 px-1 py-1">
         <EditorToolbarGroup>
           <ScopedPlayButton
             scope="pattern"
             accent="#fbbf24"
-            title="Play / pause this pattern only"
+            title="Open Fire / Hold Fire this pattern"
           />
           <PatternSelect accent="#fbbf24" />
           <div className="min-w-0 flex-1">
@@ -567,7 +588,7 @@ export function DrumMachine() {
       )}
 
       <div className="mt-2.5 text-[9px] text-white/45 leading-relaxed">
-        Click toggle · drag paint · Shift accent · Alt probability · Ctrl/Cmd micro · double-click inspect · right-click step · lane name expands inspector
+        Click toggle · drag paint · Shift accent · Alt chance · Ctrl/Cmd micro · double-click inspect · right-click step · lane name expands inspector
       </div>
 
       <SampleDeck
@@ -751,8 +772,8 @@ function StepInspector({ target, onClose }: { target: Exclude<StepInspect, null>
             onChange={(e) => apply({ vel: Number(e.target.value) })}
             className="mt-1 w-full accent-sky-400" />
         </label>
-        <label className="text-[8px] uppercase text-white/40">
-          Probability
+        <label className="text-[8px] uppercase text-white/40" title="Seeded step chance — the same step always plays or skips">
+          Chance
           <input type="range" min={0} max={1} step={0.01} value={cell.prob ?? 1}
             onChange={(e) => apply({ prob: Number(e.target.value) })}
             className="mt-1 w-full accent-sky-400" />
@@ -932,6 +953,7 @@ const DrumRow = memo(function DrumRow({
           </button>
           <button
             type="button"
+            data-drum-popover=""
             onClick={onToggleMenu}
             className="w-6 h-6 grid place-items-center rounded-md border border-white/15 text-[10px] text-white/55 hover:text-white/80"
             title="Lane menu"

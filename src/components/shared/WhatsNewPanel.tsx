@@ -45,9 +45,14 @@ export function WhatsNewPanel() {
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      close();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -70,6 +75,7 @@ export function WhatsNewPanel() {
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-label={`What's new in version ${APP_VERSION}`}
+            aria-modal="true"
           >
             <div className="text-[10px] uppercase tracking-[0.3em] text-cyan mb-1">
               Version {APP_VERSION}

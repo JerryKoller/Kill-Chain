@@ -5,7 +5,7 @@
 
 import type { FirePatch, ModDest } from "@/audio/dsp/FireCommandSynth";
 
-export type FxTechState = "enabled" | "dry" | "bypassed" | "suspended";
+export type FxTechState = "enabled" | "dry" | "bypassed" | "suspended" | "asleep" | "pathOff";
 export type FxQuality = "eco" | "live" | "high" | "render";
 export type LowProtect = "off" | "80" | "120" | "200" | "custom";
 
@@ -29,7 +29,7 @@ export function lowProtectHz(p: FirePatch): number {
   return LOW_PROTECT_HZ[mode] ?? 0;
 }
 
-/** Map moduleEnable + mix/path into Enabled / Dry / Bypassed / Suspended. */
+/** Map moduleEnable + mix/path into Enabled / Dry / Asleep / Path off. */
 export function fxTechState(
   moduleId: string,
   /** Only the module-enable map is read — accepting a narrow slice lets the
@@ -40,7 +40,8 @@ export function fxTechState(
   if (opts.suspended) return "suspended";
   const pathOn = opts.pathOn !== false;
   const enabled = patch.moduleEnable?.[moduleId] !== false;
-  if (!pathOn || !enabled) return "bypassed";
+  if (!pathOn) return "pathOff";
+  if (!enabled) return "asleep";
   const mix = opts.mix;
   if (typeof mix === "number" && mix < 0.02) return "dry";
   return "enabled";
@@ -52,11 +53,24 @@ export function fxTechBadge(state: FxTechState, thematic?: string): string {
       return thematic ?? "Enabled";
     case "dry":
       return thematic ?? "Dry";
+    case "asleep":
+      return "Asleep";
+    case "pathOff":
+      return "Path off";
     case "bypassed":
       return "Bypassed";
     case "suspended":
       return "Suspended";
   }
+}
+
+/** Subtitle next to the FX name — asleep/path-off beat a stale "bypass". */
+export function fxStatusHint(state: FxTechState, sounding: string, idle: string): string {
+  if (state === "pathOff") return "path off";
+  if (state === "asleep") return "asleep";
+  if (state === "suspended") return "suspended";
+  if (state === "enabled") return sounding;
+  return idle;
 }
 
 /** Oversampling factor from fxQuality (Drive). */

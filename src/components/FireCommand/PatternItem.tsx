@@ -65,13 +65,16 @@ function PatternOverflowMenu({
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
     };
     document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [open, onClose]);
 
@@ -150,6 +153,7 @@ export function PatternItem({
   const [menuOpen, setMenuOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const dragMoved = useRef(false);
+  const skipRenameCommit = useRef(false);
   const menuBtnId = useId();
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
@@ -160,10 +164,21 @@ export function PatternItem({
         autoFocus
         value={renameValue ?? ""}
         onChange={(e) => onRenameChange?.(e.target.value)}
-        onBlur={() => onRenameCommit?.()}
+        onBlur={() => {
+          if (skipRenameCommit.current) {
+            skipRenameCommit.current = false;
+            return;
+          }
+          onRenameCommit?.();
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") onRenameCommit?.();
-          if (e.key === "Escape") onRenameCancel?.();
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            skipRenameCommit.current = true;
+            onRenameCancel?.();
+          }
         }}
         className="pattern-item pattern-item--rename h-[30px] w-[7.5rem] max-w-[9rem] shrink-0 rounded-lg border border-[#ff6a3d]/60 bg-black/45 px-2 text-[11px] font-semibold text-white outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"
         aria-label={`Rename pattern ${name}`}

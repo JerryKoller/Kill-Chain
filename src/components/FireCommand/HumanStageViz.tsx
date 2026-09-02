@@ -287,7 +287,7 @@ export function paintHuman(
     VIZ_FONT_VALUE,
   );
 
-  pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : active ? p.label.toUpperCase() : "GRID", C_GLOW, { glow: flash });
+  pill(ctx, W * 0.5, 3, !p.enabled ? "ASLEEP" : active ? p.label.toUpperCase() : "GRID", C_GLOW, { glow: flash });
 
   // ── arm rail (bottom drag zone) ──
   const railY = Hh - 25;
@@ -304,7 +304,7 @@ export function paintHuman(
     ctx,
     W,
     Hh,
-    !p.enabled ? "FEEL GRAIN · BYPASS" : active ? `FEEL GRAIN · ${p.label.toUpperCase()}` : "FEEL GRAIN · GRID",
+    !p.enabled ? "FEEL GRAIN · ASLEEP" : active ? `FEEL GRAIN · ${p.label.toUpperCase()}` : "FEEL GRAIN · GRID",
     `T${Math.round(timing * 100)} · V${Math.round(vel * 100)}`,
     C_GLOW,
     C,

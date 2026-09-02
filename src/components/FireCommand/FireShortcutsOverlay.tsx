@@ -23,7 +23,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
   {
     title: "Play",
     rows: [
-      ["Space", "Play / stop transport"],
+      ["Space", "Open Fire / Hold Fire"],
       ["Z / X", "Octave down / up"],
       ["A W S E D …", "Play notes (QWERTY keyboard)"],
       ["Panic", "All notes off (header button)"],
@@ -79,11 +79,15 @@ export function FireShortcutsOverlay() {
         setOpen((v) => !v);
         return;
       }
-      if (e.key === "Escape" && open) setOpen(false);
+      if (e.key === "Escape" && open) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
       if (open && panelRef.current) trapTabKey(panelRef.current, e);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
 
   useEffect(() => {

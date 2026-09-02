@@ -251,7 +251,7 @@ export function paintHarmony(
     ctx.font = VIZ_FONT_LABEL;
     ctx.textAlign = "center";
     ctx.fillStyle = hexA(C_MID, 0.4 * dim);
-    ctx.fillText(p.enabled ? "NO COMPANIONS — ROOT ONLY" : "BYPASS", W * 0.5, axisY - 60);
+    ctx.fillText(p.enabled ? "NO COMPANIONS — ROOT ONLY" : "ASLEEP", W * 0.5, axisY - 60);
   }
 
   // ── telemetry ──
@@ -273,7 +273,7 @@ export function paintHarmony(
   tel(`KEY ${rootName.toUpperCase()} · ${scaleLabel.toUpperCase()}`, C_GLOW, 0.7 * dim, VIZ_FONT_LABEL);
   tel(`LEVEL ${Math.round(level * 100)} · ${meta.voices}v`, C_KIN, 0.72, VIZ_FONT_VALUE);
 
-  pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : meta.short.toUpperCase(), C_GLOW, { glow: flash });
+  pill(ctx, W * 0.5, 3, !p.enabled ? "ASLEEP" : meta.short.toUpperCase(), C_GLOW, { glow: flash });
 
   // ── level rail (bottom drag zone) ──
   const railY = Hh - 25;
@@ -289,7 +289,7 @@ export function paintHarmony(
     ctx,
     W,
     Hh,
-    !p.enabled ? "KIN HALO · BYPASS" : active ? `KIN HALO · ${meta.short.toUpperCase()}` : "KIN HALO · SILENT",
+    !p.enabled ? "KIN HALO · ASLEEP" : active ? `KIN HALO · ${meta.short.toUpperCase()}` : "KIN HALO · SILENT",
     `${rootName} ${scaleLabel} · ${Math.round(level * 100)}% · ${meta.voices}v`,
     C_GLOW,
     C,

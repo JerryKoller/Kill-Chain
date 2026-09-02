@@ -274,6 +274,7 @@ function MorphPresetSearch({
               if (hit) pick(hit.id);
             } else if (e.key === "Escape") {
               e.preventDefault();
+              e.stopPropagation();
               setOpen(false);
               setQuery("");
               inputRef.current?.blur();

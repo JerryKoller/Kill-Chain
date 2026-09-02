@@ -312,7 +312,7 @@ export function paintGate(
     ctx,
     W * 0.5,
     3,
-    !p.enabled ? "BYPASS" : active ? p.presetName.toUpperCase() : "ARMED",
+    !p.enabled ? "ASLEEP" : active ? p.presetName.toUpperCase() : "ARMED",
     C_GLOW,
     { glow: flash },
   );
@@ -331,7 +331,7 @@ export function paintGate(
     ctx,
     W,
     Hh,
-    !p.enabled ? "RHYTHM SHUTTER · BYPASS" : active ? "RHYTHM SHUTTER · LIVE" : "RHYTHM SHUTTER · ARMED",
+    !p.enabled ? "RHYTHM SHUTTER · ASLEEP" : active ? "RHYTHM SHUTTER · LIVE" : "RHYTHM SHUTTER · ARMED",
     `${n}st · ${p.rate.toFixed(1)}Hz · D${Math.round(p.depth * 100)} · S${Math.round(smooth * 100)}`,
     C_GLOW,
     C,

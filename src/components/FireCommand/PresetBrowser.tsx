@@ -113,6 +113,8 @@ export function PresetBrowser({
     const onKey = (e: KeyboardEvent) => {
       if (panelRef.current) trapTabKey(panelRef.current, e);
       if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
       // Escape cascades: rename → confirm-delete → close. It used to cancel
       // the rename AND slam the whole library shut in the same press.
       if (escGuardRef.current.renaming) {
@@ -125,9 +127,9 @@ export function PresetBrowser({
       }
       onClose();
     };
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     const t = setTimeout(() => searchRef.current?.focus(), 80);
-    return () => { window.removeEventListener("keydown", onKey); clearTimeout(t); };
+    return () => { window.removeEventListener("keydown", onKey, true); clearTimeout(t); };
   }, [open, onClose, initialFilter]);
 
   // Re-read shelves on open and whenever they change elsewhere.

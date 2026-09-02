@@ -4,14 +4,16 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { createPortal } from "react-dom";
 import { useFireSequencerStore } from "@/state/fireSequencerStore";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
 import { exportFireToLibrary } from "@/lib/libraryExport";
 import type { ExportFormat } from "@/lib/fireStudio";
+import { trapTabKey } from "./fireUiKit";
 
 const FIRE = "#ff6a3d";
+const GENRES = ["Electronic", "Bass", "Ambient", "Soundtrack", "Hip-Hop", "Experimental", "Other"] as const;
 
 interface Props {
   open: boolean;
@@ -34,16 +36,19 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
   const [title, setTitle] = useState(defaultTitle);
   const [artist, setArtist] = useState("Kill-Chain");
   const [album, setAlbum] = useState("Fire Command Exports");
+  const [genre, setGenre] = useState<(typeof GENRES)[number]>("Electronic");
   const [format, setFormat] = useState<ExportFormat>("mp3");
   const [artwork, setArtwork] = useState<{ base64: string; mime: string; previewUrl: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setTitle(defaultTitle);
     setArtist("Kill-Chain");
     setAlbum("Fire Command Exports");
+    setGenre("Electronic");
     setFormat("mp3");
     setArtwork(null);
     setBusy(null);
@@ -59,10 +64,14 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onClose();
+      if (panelRef.current) trapTabKey(panelRef.current, e);
+      if (e.key !== "Escape" || busy) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open, busy, onClose]);
 
   const pickArt = async () => {
@@ -97,7 +106,7 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
           album: album.trim() || "Fire Command Exports",
           format,
           artwork: artwork ? { base64: artwork.base64, mime: artwork.mime } : null,
-          genre: "Electronic",
+          genre,
         },
         (p) => setBusy(`${p.stage} ${Math.round(p.fraction * 100)}%`),
       );
@@ -118,27 +127,21 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
     }
   };
 
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={() => { if (!busy) onClose(); }}
-        >
-          <motion.div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Export to Library (Fire dry)"
-            className="w-full max-w-lg rounded-xl border border-white/12 bg-[#12151c] shadow-2xl"
-            initial={{ opacity: 0, y: 12, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.98 }}
-            transition={{ duration: 0.18 }}
-            onClick={(e) => e.stopPropagation()}
-          >
+  if (!open) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/85 p-4"
+      onClick={() => { if (!busy) onClose(); }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Export to Library (Fire dry)"
+        className="w-full max-w-lg rounded-xl border border-white/12 bg-[#12151c] shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
               <div>
                 <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/45">
@@ -211,6 +214,18 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
                       maxLength={80}
                     />
                   </Field>
+                  <Field label="Genre">
+                    <select
+                      value={genre}
+                      onChange={(e) => setGenre(e.target.value as (typeof GENRES)[number])}
+                      disabled={!!busy}
+                      className={inputCls}
+                    >
+                      {GENRES.map((g) => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
+                    </select>
+                  </Field>
                 </div>
               </div>
 
@@ -268,10 +283,9 @@ export function FireExportToLibraryModal({ open, onClose }: Props) {
                 {busy ? busy : "Export Fire dry"}
               </button>
             </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

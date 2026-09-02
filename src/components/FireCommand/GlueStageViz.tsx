@@ -387,7 +387,7 @@ export function paintGlue(
   tel(`KNEE ${knee.toFixed(0)}`, C_GR, 0.66);
   tel(`MIX ${Math.round(mix * 100)}`, C_VU, 0.62);
 
-  pill(ctx, W * 0.5, 2, on ? punchLabel(punch) : "BYPASS", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
+  pill(ctx, W * 0.5, 2, on ? punchLabel(punch) : "ASLEEP", on ? C_GLOW : C_MID, { glow: flash, height: 12 });
 
   // ── punch rail: drag affordance, cycle notches, and the ratio teeth ──
   const railPad = 14;
@@ -421,7 +421,7 @@ export function paintGlue(
     ctx,
     W,
     Hh,
-    on ? "PRESS ANVIL" : "PRESS ANVIL · BYPASS",
+    on ? "PRESS ANVIL" : "PRESS ANVIL · ASLEEP",
     `${punchLabel(punch)} · ${Math.round(punch * 100)}%`,
     C_GLOW,
     on ? C_HOT : C_MID,

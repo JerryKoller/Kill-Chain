@@ -270,7 +270,7 @@ export function paintScope(
       ctx.font = "700 11px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = hexA(C, 0.4);
       ctx.textAlign = "center";
-      ctx.fillText(on ? "WAITING FOR SPECTRUM" : "SCOPE BYPASSED", W / 2, centreY);
+      ctx.fillText(on ? "WAITING FOR SPECTRUM" : "SCOPE PATH OFF", W / 2, centreY);
     }
 
     const tel = topRow();
@@ -336,7 +336,7 @@ export function paintScope(
       ctx.font = "700 11px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = hexA(C, 0.4);
       ctx.textAlign = "center";
-      ctx.fillText(on ? "WAITING FOR STEREO" : "SCOPE BYPASSED", cx, cy);
+      ctx.fillText(on ? "WAITING FOR STEREO" : "SCOPE PATH OFF", cx, cy);
     }
 
     // Correlation scale across the full width: −1 … 0 … +1.
@@ -470,7 +470,7 @@ export function paintScope(
       ctx.font = "700 11px ui-sans-serif, system-ui, sans-serif";
       ctx.fillStyle = hexA(C, 0.4);
       ctx.textAlign = "center";
-      ctx.fillText(on ? "WAITING FOR SIGNAL" : "SCOPE BYPASSED", W / 2, centreY);
+      ctx.fillText(on ? "WAITING FOR SIGNAL" : "SCOPE PATH OFF", W / 2, centreY);
     }
 
     // ── right-edge level column ──
@@ -517,7 +517,7 @@ export function paintScope(
     ctx,
     W * 0.5,
     2,
-    !on ? "BYPASS" : p.freeze ? "FREEZE" : p.mode === "spectrum" ? "FFT" : p.mode === "vectorscope" ? "VECTOR" : "SWEEP",
+    !on ? "PATH OFF" : p.freeze ? "FREEZE" : p.mode === "spectrum" ? "FFT" : p.mode === "vectorscope" ? "VECTOR" : "SWEEP",
     on ? (p.freeze ? C_PEAK : C_GLOW) : C_MID,
     { glow: flash, height: 12 },
   );
@@ -530,7 +530,7 @@ export function paintScope(
     ctx,
     W,
     Hh,
-    on ? "LUMEN TRACE" : "LUMEN TRACE · BYPASS",
+    on ? "LUMEN TRACE" : "LUMEN TRACE · PATH OFF",
     `PK ${pkDb} dB`,
     C_GLOW,
     on ? C_HOT : C_MID,

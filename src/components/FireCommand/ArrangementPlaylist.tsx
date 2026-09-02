@@ -15,6 +15,7 @@ import {
   MAX_ARRANGEMENT_BARS,
   MAX_PLAYLIST_TRACKS,
   STEPS_PER_BAR,
+  recordQuantizeLabel,
   type ArrangementClip,
 } from "@/state/fireSequencerStore";
 import { useUIStore } from "@/state/uiStore";
@@ -59,7 +60,7 @@ const ARR_SNAP_OPTIONS = [
   { label: "1/8", steps: 2 },
   { label: "1/16", steps: 1 },
   { label: "1/32", steps: 0.5 },
-  { label: "T", steps: 2 / 3 }, // triplet 1/8
+  { label: "T", steps: 2 / 3 }, // triplet 1/16
   { label: "Off", steps: 0.25 },
   { label: "Auto", steps: -1 },
 ] as const;
@@ -169,6 +170,20 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
   const [renameValue, setRenameValue] = useState("");
   const [renamingTrack, setRenamingTrack] = useState<number | null>(null);
   const [trackRenameValue, setTrackRenameValue] = useState("");
+  const skipTrackRenameCommit = useRef(false);
+  const [renamingMarker, setRenamingMarker] = useState<string | null>(null);
+  const [markerRenameValue, setMarkerRenameValue] = useState("");
+  const skipMarkerRenameCommit = useRef(false);
+  const nudgeRepeatRef = useRef<{ delay: number; iv: number } | null>(null);
+  useEffect(
+    () => () => {
+      const n = nudgeRepeatRef.current;
+      if (!n) return;
+      window.clearTimeout(n.delay);
+      if (n.iv) window.clearInterval(n.iv);
+    },
+    [],
+  );
   const [playingPattern, setPlayingPattern] = useState<string | null>(null);
   const [playingClips, setPlayingClips] = useState<Set<string>>(() => new Set());
   const [playheadStep, setPlayheadStep] = useState(0);
@@ -188,17 +203,16 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        setAppendOpen(false);
-      }
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setAppendOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [appendOpen]);
   const [dropHover, setDropHover] = useState<{ step: number; track: number; bars: number } | null>(null);
@@ -214,8 +228,16 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
     if (!arrFullscreen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      const t = e.target;
+      if (
+        t instanceof HTMLInputElement
+        || t instanceof HTMLTextAreaElement
+        || t instanceof HTMLSelectElement
+        || (t instanceof HTMLElement && t.isContentEditable)
+      ) return;
       if (clipMenu || appendOpen || placeMode) return;
       if (selectedClip || selectedClips.size > 0) return;
+      e.preventDefault();
       setArrFullscreen(false);
     };
     window.addEventListener("keydown", onKey);
@@ -231,17 +253,16 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        setClipMenu(null);
-      }
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setClipMenu(null);
     };
     document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [clipMenu]);
 
@@ -695,11 +716,14 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
       if (e.key === "Escape") {
         if (placeMode) {
           e.preventDefault();
+          e.stopPropagation();
           setPlaceMode(null);
           setDropHover(null);
           return;
         }
         if (selectedClip || selectedClips.size > 0) {
+          e.preventDefault();
+          e.stopPropagation();
           setSelectedClip(null);
           setSelectedClips(new Set());
           clearSelectedClip();
@@ -885,7 +909,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
             <ExitFullscreenButton onClick={() => setArrFullscreen(false)} />
             <ScopedPlayButton
               scope="arrangement"
-              title="Play / pause arrangement only"
+              title="Open Fire / Hold Fire arrangement"
             />
             <div className="min-w-0 leading-tight">
               <div className="text-[12px] font-black uppercase tracking-[0.1em] text-white/80 truncate">
@@ -1170,7 +1194,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
             play={
               <ScopedPlayButton
                 scope="arrangement"
-                title="Play / pause arrangement only"
+                title="Open Fire / Hold Fire arrangement"
               />
             }
             tools={
@@ -1180,7 +1204,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
             <div className="inline-flex items-center gap-0.5 rounded-lg border border-white/12 bg-black/25 p-0.5 h-8">
               <span className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-white/50">
                 Snap {ARR_SNAP_OPTIONS.find((o) => o.steps === snapSteps)?.label ?? "?"}
-                {snapSteps === -1 ? `→${effectiveSnap === 16 ? "1" : effectiveSnap === 8 ? "1/2" : effectiveSnap === 4 ? "1/4" : effectiveSnap === 2 ? "1/8" : "1/16"}` : ""}
+                {snapSteps === -1 ? `→${recordQuantizeLabel(effectiveSnap)}` : ""}
               </span>
               {ARR_SNAP_OPTIONS.map((opt) => (
                 <button
@@ -1193,7 +1217,7 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       ? { background: "rgba(255,106,61,0.22)", color: "#ffbfa0", fontWeight: 700 }
                       : { color: "rgba(255,255,255,0.45)" }
                   }
-                  title={`ARRANGE SNAP: ${opt.label === "T" ? "TRIPLET 1/8" : opt.label === "Off" ? "OFF" : opt.label === "Auto" ? "ADAPTIVE" : `${opt.label} BAR`}`}
+                  title={`ARRANGE SNAP: ${opt.label === "T" ? "TRIPLET 1/16" : opt.label === "Off" ? "OFF" : opt.label === "Auto" ? "ADAPTIVE" : `${opt.label} BAR`}`}
                 >
                   {opt.label}
                 </button>
@@ -1272,13 +1296,20 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       if (!nudgeClip(selected.id, delta)) toast("Can't nudge — track occupied");
                     };
                     tick();
-                    let iv = 0;
-                    const delay = window.setTimeout(() => {
-                      iv = window.setInterval(tick, 55);
+                    const prev = nudgeRepeatRef.current;
+                    if (prev) {
+                      window.clearTimeout(prev.delay);
+                      if (prev.iv) window.clearInterval(prev.iv);
+                    }
+                    const rec = { delay: 0, iv: 0 };
+                    rec.delay = window.setTimeout(() => {
+                      rec.iv = window.setInterval(tick, 55);
                     }, 280);
+                    nudgeRepeatRef.current = rec;
                     const stop = () => {
-                      window.clearTimeout(delay);
-                      if (iv) window.clearInterval(iv);
+                      window.clearTimeout(rec.delay);
+                      if (rec.iv) window.clearInterval(rec.iv);
+                      if (nudgeRepeatRef.current === rec) nudgeRepeatRef.current = null;
                       window.removeEventListener("pointerup", stop);
                       window.removeEventListener("pointercancel", stop);
                     };
@@ -1298,13 +1329,20 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                       if (!nudgeClip(selected.id, delta)) toast("Can't nudge — track occupied");
                     };
                     tick();
-                    let iv = 0;
-                    const delay = window.setTimeout(() => {
-                      iv = window.setInterval(tick, 55);
+                    const prev = nudgeRepeatRef.current;
+                    if (prev) {
+                      window.clearTimeout(prev.delay);
+                      if (prev.iv) window.clearInterval(prev.iv);
+                    }
+                    const rec = { delay: 0, iv: 0 };
+                    rec.delay = window.setTimeout(() => {
+                      rec.iv = window.setInterval(tick, 55);
                     }, 280);
+                    nudgeRepeatRef.current = rec;
                     const stop = () => {
-                      window.clearTimeout(delay);
-                      if (iv) window.clearInterval(iv);
+                      window.clearTimeout(rec.delay);
+                      if (rec.iv) window.clearInterval(rec.iv);
+                      if (nudgeRepeatRef.current === rec) nudgeRepeatRef.current = null;
                       window.removeEventListener("pointerup", stop);
                       window.removeEventListener("pointercancel", stop);
                     };
@@ -1469,6 +1507,10 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     value={trackRenameValue}
                     onChange={(e) => setTrackRenameValue(e.target.value)}
                     onBlur={() => {
+                      if (skipTrackRenameCommit.current) {
+                        skipTrackRenameCommit.current = false;
+                        return;
+                      }
                       setPlaylistTrack(i, { name: trackRenameValue });
                       setRenamingTrack(null);
                     }}
@@ -1477,7 +1519,12 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                         setPlaylistTrack(i, { name: trackRenameValue });
                         setRenamingTrack(null);
                       }
-                      if (e.key === "Escape") setRenamingTrack(null);
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        skipTrackRenameCommit.current = true;
+                        setRenamingTrack(null);
+                      }
                     }}
                     className="flex-1 min-w-0 h-5 rounded border border-white/20 bg-black/50 px-1 text-[10px] text-white outline-none"
                   />
@@ -1608,20 +1655,60 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                 {/* Song markers. The ruler showed only bar numbers, so song
                     sections lived in the user's head. Click jumps, right-click
                     (or shift-click) removes. */}
-                {markers.map((mk) => (
+                {markers.map((mk) => {
+                  const markerStyle = {
+                    left: (mk.step / STEPS_PER_BAR) * pxPerBar,
+                    height: RULER_H,
+                    color: mk.color ?? "#ff6a3d",
+                    borderLeft: `2px solid ${mk.color ?? "#ff6a3d"}`,
+                    background: `linear-gradient(90deg, ${mk.color ?? "#ff6a3d"}33, transparent)`,
+                    paddingLeft: 3,
+                    maxWidth: 140,
+                  } as const;
+                  if (renamingMarker === mk.id) {
+                    return (
+                      <input
+                        key={mk.id}
+                        autoFocus
+                        value={markerRenameValue}
+                        onChange={(e) => setMarkerRenameValue(e.target.value)}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onBlur={() => {
+                          if (skipMarkerRenameCommit.current) {
+                            skipMarkerRenameCommit.current = false;
+                            setRenamingMarker(null);
+                            return;
+                          }
+                          const next = markerRenameValue.trim();
+                          if (next) renameMarker(mk.id, next);
+                          setRenamingMarker(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const next = markerRenameValue.trim();
+                            if (next) renameMarker(mk.id, next);
+                            setRenamingMarker(null);
+                          }
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            skipMarkerRenameCommit.current = true;
+                            setRenamingMarker(null);
+                          }
+                        }}
+                        className="absolute top-0 z-10 h-6 min-w-[4.5rem] rounded border border-white/25 bg-black/80 px-1 text-[9px] font-bold uppercase tracking-wider text-white outline-none"
+                        style={{ left: markerStyle.left, height: RULER_H }}
+                        aria-label="Rename marker"
+                      />
+                    );
+                  }
+                  return (
                   <button
                     key={mk.id}
                     type="button"
                     className="absolute top-0 z-10 flex items-center gap-1 pr-1 text-[9px] font-bold uppercase tracking-wider"
-                    style={{
-                      left: (mk.step / STEPS_PER_BAR) * pxPerBar,
-                      height: RULER_H,
-                      color: mk.color ?? "#ff6a3d",
-                      borderLeft: `2px solid ${mk.color ?? "#ff6a3d"}`,
-                      background: `linear-gradient(90deg, ${mk.color ?? "#ff6a3d"}33, transparent)`,
-                      paddingLeft: 3,
-                      maxWidth: 140,
-                    }}
+                    style={markerStyle}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -1636,14 +1723,15 @@ export function ArrangementPlaylist({ flush = false }: { flush?: boolean } = {})
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      const next = window.prompt("Marker name", mk.label);
-                      if (next != null) renameMarker(mk.id, next);
+                      setRenamingMarker(mk.id);
+                      setMarkerRenameValue(mk.label);
                     }}
                     title={`${mk.label} · bar ${Math.floor(mk.step / STEPS_PER_BAR) + 1} — click to jump, shift-click to remove, right-click to rename`}
                   >
                     <span className="truncate">{mk.label}</span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Lanes */}
@@ -2130,12 +2218,14 @@ function TimelineClip({
       </div>
       <button
         type="button"
+        data-fire-clip-menu=""
         onClick={(e) => { e.stopPropagation(); onMenu(); }}
         className="absolute top-0.5 right-0.5 flex items-center justify-center w-4 h-4 text-[9px] rounded bg-black/50 text-white/60 hover:text-white z-[2]"
         title="Clip actions"
       >⋯</button>
       {menuOpen && (
         <div
+          data-fire-clip-menu=""
           data-menu="1"
           className="absolute left-0 top-full z-50 mt-0.5 w-44 rounded-lg border border-white/18 bg-[#12121a] py-1 shadow-xl"
           onClick={(e) => e.stopPropagation()}

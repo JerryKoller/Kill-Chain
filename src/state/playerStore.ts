@@ -235,7 +235,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const src = el.currentSrc || el.src || get().src || "";
       let path: string | null = null;
       try {
-        if (src.includes("?p=")) path = decodeURIComponent(src.split("?p=")[1]);
+        if (src.includes("?p=")) {
+          const encoded = src.split("?p=")[1]?.split("&")[0];
+          path = encoded ? decodeURIComponent(encoded) : null;
+        }
       } catch {
         path = null;
       }
@@ -915,10 +918,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       const src = get().src;
       if (src?.includes("?p=")) {
         try {
-          const path = decodeURIComponent(src.split("?p=")[1]);
-          void import("@/state/libraryStore").then(({ useLibraryStore }) => {
-            useLibraryStore.getState().markMissing(path);
-          });
+          const encoded = src.split("?p=")[1]?.split("&")[0];
+          const path = encoded ? decodeURIComponent(encoded) : null;
+          if (path) {
+            void import("@/state/libraryStore").then(({ useLibraryStore }) => {
+              useLibraryStore.getState().markMissing(path);
+            });
+          }
         } catch {
           /* ignore */
         }

@@ -76,8 +76,8 @@ export function forgeState(forging: boolean, enabled = true): SourceStateInfo {
   }
   return {
     tech: "bypassed",
-    pill: "BYPASSED",
-    detail: "Bypassed — Passing through (Stretch / Tilt / Comb near zero)",
+    pill: "DRY",
+    detail: "Dry — passing through (Stretch / Tilt / Comb near zero)",
   };
 }
 

@@ -313,7 +313,7 @@ export function paintMacro(
   tel("ASSIGN FAN", C_GLOW, 0.66 * dim, VIZ_FONT_LABEL);
   tel(`${wired}/12 SLOTS · ${nDest} DEST`, C_MID, 0.7, VIZ_FONT_VALUE);
 
-  pill(ctx, W * 0.5, 3, !on ? "BYPASS" : wired === 0 ? "UNWIRED" : `${wired} WIRED`, C_GLOW, {
+  pill(ctx, W * 0.5, 3, !on ? "ASLEEP" : wired === 0 ? "UNWIRED" : `${wired} WIRED`, C_GLOW, {
     glow: flash,
   });
 
@@ -328,7 +328,7 @@ export function paintMacro(
     ctx,
     W,
     Hh,
-    on ? "HELM QUARTET" : "HELM QUARTET · BYPASS",
+    on ? "HELM QUARTET" : "HELM QUARTET · ASLEEP",
     `Σ${Math.round(peak * 100)} · ${wired} route${wired === 1 ? "" : "s"}`,
     C_GLOW,
     C,

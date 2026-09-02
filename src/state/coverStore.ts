@@ -29,11 +29,13 @@ export function raiseCoverCapacity(n: number): void {
 }
 
 export const useCoverStore = create<CoverState>((set, get) => {
-  async function parse(path: string): Promise<string> {
+  async function parse(path: string): Promise<string | null> {
     if (coverLibBroken) return "";
     try {
       const resp = await fetch(audioUrlForPath(path));
-      if (!resp.ok) return "";
+      // Transient (missing file, engine not ready) — don't cache, so a later
+      // scroll/rescan can retry once the file is back.
+      if (!resp.ok) return null;
       const blob = await resp.blob();
       let mm: typeof import("music-metadata");
       try {
@@ -52,7 +54,7 @@ export const useCoverStore = create<CoverState>((set, get) => {
       const coverBlob = new Blob([bytes], { type: pic.format || "image/jpeg" });
       return URL.createObjectURL(coverBlob);
     } catch {
-      return "";
+      return null;
     }
   }
 
@@ -83,6 +85,7 @@ export const useCoverStore = create<CoverState>((set, get) => {
       parse(p)
         .then((url) => {
           inflight.delete(p);
+          if (url === null) return;
           order.push(p);
           set((s) => ({ covers: { ...s.covers, [p]: url } }));
           evictIfNeeded();

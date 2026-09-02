@@ -6,7 +6,7 @@ import { useUIStore } from "@/state/uiStore";
 import { useSettingsStore } from "@/state/settingsStore";
 import { useAirspaceStore } from "@/state/airspaceStore";
 import { useCoverStore } from "@/state/coverStore";
-import { pathFromAudioSrc } from "@/state/libraryStore";
+import { pathFromAudioSrc, useLibraryStore } from "@/state/libraryStore";
 import { NeonButton } from "@/components/shared/NeonButton";
 import { playUi } from "@/audio/uiSounds";
 import {
@@ -92,6 +92,7 @@ export function TransportBar() {
   const coverPath = pathFromAudioSrc(src);
   const libCover = useCoverStore((s) => (coverPath ? s.covers[coverPath] : undefined));
   const requestCover = useCoverStore((s) => s.requestCover);
+  const inLibrary = useLibraryStore((s) => !!(coverPath && s.tracks.some((t) => t.path === coverPath)));
   useEffect(() => {
     if (coverPath) requestCover(coverPath);
   }, [coverPath, requestCover]);
@@ -113,9 +114,26 @@ export function TransportBar() {
             artwork wears an accent ring that breathes with the signal while
             playback is live (rides --beat-glow, zero JS cost). */}
         <div
-          className={`flex items-center gap-2.5 min-w-0 w-[210px] shrink-0 ${deck ? "cursor-pointer" : ""}`}
-          onClick={deck ? () => setView("airspace") : undefined}
-          title={deck ? "Playing in Airspace — click to open the browser" : undefined}
+          className={`flex items-center gap-2.5 min-w-0 w-[210px] shrink-0 ${
+            deck || inLibrary ? "cursor-pointer" : ""
+          }`}
+          onClick={() => {
+            if (deck) {
+              setView("airspace");
+              return;
+            }
+            if (coverPath && inLibrary) {
+              setView("library");
+              useLibraryStore.getState().revealTrack(coverPath);
+            }
+          }}
+          title={
+            deck
+              ? "Playing in Airspace — click to open the browser"
+              : inLibrary
+                ? "Show this track in Library"
+                : undefined
+          }
         >
           <div
             className="relative w-11 h-11 rounded-xl border border-white/10 bg-white/[0.04] shrink-0 grid place-items-center text-base text-dim overflow-hidden"

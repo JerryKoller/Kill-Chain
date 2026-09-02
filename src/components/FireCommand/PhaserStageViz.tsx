@@ -350,7 +350,7 @@ export function paintPhaser(
     ctx,
     W * 0.5,
     3,
-    !isLive ? "BYPASS" : p.rate < 0.2 ? "SLOW" : p.rate > 4 ? "JET" : "SWEEP",
+    !isLive ? "DRY" : p.rate < 0.2 ? "SLOW" : p.rate > 4 ? "JET" : "SWEEP",
     C_GLOW,
     { glow: flash },
   );
@@ -376,7 +376,7 @@ export function paintPhaser(
     Hh,
     "PHASE · SWEEP VEIL",
     !isLive
-      ? "BYPASS"
+      ? "DRY"
       : `${notches}n · ${p.rate < 1 ? p.rate.toFixed(2) : p.rate.toFixed(1)}Hz · D${Math.round(p.depth * 100)}`,
     C_GLOW,
     isLive ? C_HOT : C_MID,
@@ -549,7 +549,7 @@ export function PhaserStageViz() {
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
         style={{ color: hexA(live ? C_HOT : C_MID, 0.78) }}
       >
-        {live ? `${rate < 1 ? rate.toFixed(2) : rate.toFixed(1)}Hz` : "BYPASS"}
+        {live ? `${rate < 1 ? rate.toFixed(2) : rate.toFixed(1)}Hz` : "DRY"}
       </div>
     </div>
   );

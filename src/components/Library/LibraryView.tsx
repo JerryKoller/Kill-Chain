@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { GlassPanel } from "@/components/shared/GlassPanel";
 import { ActionBar } from "@/components/shared/ActionBar";
 import { NeonButton } from "@/components/shared/NeonButton";
@@ -22,6 +23,7 @@ import {
   enqueueLibrary,
   playNextLibrary,
   pathFromAudioSrc,
+  LIBRARY_RECENT_LIMIT,
   type LibrarySortKey,
   type LibraryGroupBy,
   type LibraryCollection,
@@ -146,13 +148,27 @@ export function LibraryView() {
   const setCollection = useLibraryStore((s) => s.setCollection);
   const toggleFavorite = useLibraryStore((s) => s.toggleFavorite);
   const movePlaylistItem = useLibraryStore((s) => s.movePlaylistItem);
+  const removeFromPlaylist = useLibraryStore((s) => s.removeFromPlaylist);
+  const focusPath = useLibraryStore((s) => s.focusPath);
+  const clearFocusPath = useLibraryStore((s) => s.clearFocusPath);
 
   const available = !!window.playground?.library;
   const toast = useUIStore((s) => s.toast);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmRemoveFolder, setConfirmRemoveFolder] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [missionLogOpen, setMissionLogOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const confirmClearTimer = useRef(0);
+  const confirmFolderTimer = useRef(0);
+  useEffect(
+    () => () => {
+      window.clearTimeout(confirmClearTimer.current);
+      window.clearTimeout(confirmFolderTimer.current);
+    },
+    [],
+  );
 
   const vizOpen = useVisualizerStore((s) => s.open);
   const setVizOpen = useVisualizerStore((s) => s.setOpen);
@@ -186,10 +202,31 @@ export function LibraryView() {
     [tracks, sortKey, sortDir, search, genreFilter, groupBy, collection, favorites, playCounts, lastPlayed, playlists],
   );
 
-  // Top genres in the library — filter chips (needs tag enrichment done).
+  // Genre chips follow the current collection (not the whole library), so a
+  // playlist without "Electronic" doesn't offer a chip that zeros the list.
+  const collectionTracks = useMemo(() => {
+    if (collection.startsWith("pl:")) {
+      const pl = playlists.find((p) => `pl:${p.id}` === collection);
+      const byPath = new Map(tracks.map((t) => [t.path, t]));
+      return (pl?.paths ?? []).flatMap((p) => {
+        const t = byPath.get(p);
+        return t ? [t] : [];
+      });
+    }
+    if (collection === "favorites") return tracks.filter((t) => favorites[t.path]);
+    if (collection === "recent") {
+      return tracks
+        .filter((t) => lastPlayed[t.path])
+        .sort((a, b) => (lastPlayed[b.path] ?? 0) - (lastPlayed[a.path] ?? 0))
+        .slice(0, LIBRARY_RECENT_LIMIT);
+    }
+    return tracks;
+  }, [tracks, collection, playlists, favorites, lastPlayed]);
+
+  // Top genres in the current collection — filter chips (needs tag enrichment done).
   const genres = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const t of tracks) {
+    for (const t of collectionTracks) {
       if (!t.genre) continue;
       counts.set(t.genre, (counts.get(t.genre) ?? 0) + 1);
     }
@@ -197,13 +234,19 @@ export function LibraryView() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 14)
       .map(([g, n]) => ({ genre: g, count: n }));
-  }, [tracks]);
+  }, [collectionTracks]);
+
+  useEffect(() => {
+    if (!genreFilter) return;
+    if (collectionTracks.some((t) => t.genre === genreFilter)) return;
+    setGenreFilter(null);
+  }, [collectionTracks, genreFilter, setGenreFilter]);
 
   const activePlaylist = collection.startsWith("pl:")
     ? playlists.find((p) => `pl:${p.id}` === collection) ?? null
     : null;
   /** Drag-to-reorder only makes sense with the playlist's true order visible. */
-  const canReorder = !!activePlaylist && search.trim() === "";
+  const canReorder = !!activePlaylist && search.trim() === "" && !genreFilter;
   const flatCollection = collection === "recent" || !!activePlaylist;
 
   // Auto-scan once on mount if we have folders but nothing scanned yet.
@@ -219,13 +262,16 @@ export function LibraryView() {
     if (!menu) return;
     const close = () => setMenu(null);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(null);
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setMenu(null);
     };
     window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
     };
   }, [menu]);
 
@@ -280,9 +326,17 @@ export function LibraryView() {
   const endIdx = Math.min(rows.length, findRow(scrollTop + viewH) + overscan + 1);
   const visible = rows.slice(startIdx, endIdx);
 
-  const playAt = (index: number) => void playLibrary(orderedTracks, index);
+  const playAt = (index: number) => {
+    const t = orderedTracks[index];
+    if (!t) return;
+    if (missingPaths[t.path]) {
+      toast("File missing — reveal in Explorer, rescan, or prune orphans", "warn");
+      return;
+    }
+    void playLibrary(orderedTracks, index);
+  };
 
-  // ── Keyboard navigation on the list (arrows + Enter) ──
+  // ── Keyboard navigation on the list (arrows + Enter + paging) ──
   const scrollTrackIntoView = useCallback(
     (path: string) => {
       const idx = rows.findIndex((r) => r.kind === "track" && r.track.path === path);
@@ -296,9 +350,40 @@ export function LibraryView() {
     [rows, offsets],
   );
 
+  // Fire export / transport "show in Library" — select the row once it's in view.
+  useEffect(() => {
+    if (!focusPath) return;
+    if (!orderedTracks.some((t) => t.path === focusPath)) return;
+    setSelectedPath(focusPath);
+    scrollTrackIntoView(focusPath);
+    clearFocusPath();
+  }, [focusPath, orderedTracks, scrollTrackIntoView, clearFocusPath]);
+
+  // Opening Library while something is already playing: land on that row.
+  const followedPlaying = useRef(false);
+  useEffect(() => {
+    if (followedPlaying.current || !playingPath) return;
+    if (!orderedTracks.some((t) => t.path === playingPath)) return;
+    followedPlaying.current = true;
+    setSelectedPath(playingPath);
+    scrollTrackIntoView(playingPath);
+  }, [playingPath, orderedTracks, scrollTrackIntoView]);
+
   const onListKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "/") {
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+      return;
+    }
+    if (e.key === "Escape") {
+      if (selectedPath) {
+        e.preventDefault();
+        setSelectedPath(null);
+      }
+      return;
+    }
     if (orderedTracks.length === 0) return;
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter") return;
     const cur = orderedTracks.findIndex((t) => t.path === selectedPath);
     if (e.key === "Enter") {
       if (cur >= 0) {
@@ -307,12 +392,27 @@ export function LibraryView() {
       }
       return;
     }
+    if (e.key === "Delete" && activePlaylist && cur >= 0) {
+      e.preventDefault();
+      const keep = orderedTracks[cur + 1]?.path ?? orderedTracks[cur - 1]?.path ?? null;
+      removeFromPlaylist(activePlaylist.id, orderedTracks[cur].path);
+      toast(`Removed from "${activePlaylist.name}"`);
+      setSelectedPath(keep);
+      if (keep) scrollTrackIntoView(keep);
+      return;
+    }
+    const page = Math.max(1, Math.floor(viewH / ROW_H) - 1);
+    let next = cur;
+    if (e.key === "ArrowDown") next = Math.min(orderedTracks.length - 1, (cur < 0 ? -1 : cur) + 1);
+    else if (e.key === "ArrowUp") next = Math.max(0, cur < 0 ? 0 : cur - 1);
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = orderedTracks.length - 1;
+    else if (e.key === "PageDown") next = Math.min(orderedTracks.length - 1, Math.max(0, cur) + page);
+    else if (e.key === "PageUp") next = Math.max(0, (cur < 0 ? 0 : cur) - page);
+    else return;
     e.preventDefault();
-    const next =
-      e.key === "ArrowDown"
-        ? Math.min(orderedTracks.length - 1, cur + 1)
-        : Math.max(0, cur < 0 ? 0 : cur - 1);
     const t = orderedTracks[next];
+    if (!t) return;
     setSelectedPath(t.path);
     scrollTrackIntoView(t.path);
   };
@@ -437,9 +537,21 @@ export function LibraryView() {
 
               <div className="relative flex-1 min-w-[160px]">
                 <input
+                  ref={searchInputRef}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search title, artist, album…"
+                  onKeyDown={(e) => {
+                    if (e.key !== "Escape") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (search) setSearch("");
+                    else if (genreFilter) setGenreFilter(null);
+                  }}
+                  placeholder="Search title, artist, album, genre…"
+                  aria-label="Search library"
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="off"
                   className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-cyan/50 transition"
                 />
                 {search && (
@@ -460,9 +572,9 @@ export function LibraryView() {
                   : pendingTags > 0
                     ? `Reading tags… ${pendingTags} left`
                     : `${orderedTracks.length}${collectionLabel ? ` ${collectionLabel}` : ""} track${orderedTracks.length === 1 ? "" : "s"}`}
-                {Object.keys(missingPaths).length > 0 && (
+                {orderedTracks.filter((t) => missingPaths[t.path]).length > 0 && (
                   <span className="text-plasma ml-2">
-                    · {Object.keys(missingPaths).length} missing
+                    · {orderedTracks.filter((t) => missingPaths[t.path]).length} missing
                   </span>
                 )}
               </div>
@@ -508,12 +620,17 @@ export function LibraryView() {
                 <button
                   onClick={() => {
                     if (confirmClear) {
+                      window.clearTimeout(confirmClearTimer.current);
                       clearAll();
                       setConfirmClear(false);
                       toast("Library cleared");
                     } else {
                       setConfirmClear(true);
-                      setTimeout(() => setConfirmClear(false), 2400);
+                      window.clearTimeout(confirmClearTimer.current);
+                      confirmClearTimer.current = window.setTimeout(
+                        () => setConfirmClear(false),
+                        2400,
+                      );
                     }
                   }}
                   className={`btn-ghost text-xs ${
@@ -536,7 +653,7 @@ export function LibraryView() {
             />
 
             {/* Genre filter chips (from real file tags) */}
-            {genres.length > 0 && (
+            {(genres.length > 0 || genreFilter) && (
               <div className="flex items-center gap-1.5 flex-wrap mt-2.5">
                 <span className="text-[10px] uppercase tracking-widest text-dim pr-0.5">
                   Genre
@@ -555,6 +672,15 @@ export function LibraryView() {
                     {genre}
                   </button>
                 ))}
+                {genreFilter && !genres.some((g) => g.genre === genreFilter) && (
+                  <button
+                    onClick={() => setGenreFilter(null)}
+                    className="rounded-full border px-2.5 py-0.5 text-[11px] transition border-cyan/60 bg-cyan/15 text-cyan"
+                    title="Active genre is outside the top chips — click to clear"
+                  >
+                    {genreFilter}
+                  </button>
+                )}
                 {genreFilter && (
                   <button
                     onClick={() => setGenreFilter(null)}
@@ -572,15 +698,37 @@ export function LibraryView() {
                 {folders.map((f) => (
                   <span
                     key={f}
-                    className="group inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] pl-2.5 pr-1.5 py-1 text-[11px] text-white/70"
+                    className={`group inline-flex items-center gap-1.5 rounded-full border pl-2.5 pr-1.5 py-1 text-[11px] ${
+                      confirmRemoveFolder === f
+                        ? "border-plasma/50 bg-plasma/15 text-plasma"
+                        : "border-white/10 bg-white/[0.03] text-white/70"
+                    }`}
                     title={f}
                   >
                     <span className="opacity-60">📁</span>
                     <span className="max-w-[160px] truncate">{folderName(f)}</span>
                     <button
-                      onClick={() => removeFolder(f)}
+                      onClick={() => {
+                        if (confirmRemoveFolder === f) {
+                          window.clearTimeout(confirmFolderTimer.current);
+                          removeFolder(f);
+                          setConfirmRemoveFolder(null);
+                          toast(`Removed “${folderName(f)}” from Library`);
+                        } else {
+                          setConfirmRemoveFolder(f);
+                          window.clearTimeout(confirmFolderTimer.current);
+                          confirmFolderTimer.current = window.setTimeout(
+                            () => setConfirmRemoveFolder(null),
+                            2400,
+                          );
+                        }
+                      }}
                       className="rounded-full w-4 h-4 grid place-items-center text-dim hover:text-plasma hover:bg-white/10"
-                      title="Remove folder"
+                      title={
+                        confirmRemoveFolder === f
+                          ? "Click again to remove this folder from the library (files on disk are untouched)"
+                          : "Remove folder from library (files on disk are untouched)"
+                      }
                     >
                       ✕
                     </button>
@@ -671,7 +819,7 @@ export function LibraryView() {
                   scanning={scanning}
                   collection={collection}
                   playlistName={activePlaylist?.name ?? null}
-                  searching={search.trim().length > 0}
+                  searching={search.trim().length > 0 || !!genreFilter}
                   onAdd={() => void addFolders()}
                 />
               </div>
@@ -694,7 +842,16 @@ export function LibraryView() {
                           key={row.key}
                           row={row}
                           top={top}
-                          onPlay={() => playAt(row.firstIndex)}
+                          onPlay={() => {
+                            let i = row.firstIndex;
+                            const end = row.firstIndex + row.count;
+                            while (i < end && missingPaths[orderedTracks[i]?.path]) i += 1;
+                            if (i >= end) {
+                              toast("Every track in this group is missing", "warn");
+                              return;
+                            }
+                            playAt(i);
+                          }}
                         />
                       );
                     }
@@ -806,6 +963,9 @@ function CollectionBar({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const skipRenameCommit = useRef(false);
+  const confirmDeleteTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(confirmDeleteTimer.current), []);
 
   const tab = (
     id: LibraryCollection,
@@ -828,6 +988,11 @@ function CollectionBar({
 
   const commitRename = (id: string) => {
     if (renameValue.trim()) renamePlaylist(id, renameValue);
+    setRenamingId(null);
+  };
+
+  const cancelRename = () => {
+    skipRenameCommit.current = true;
     setRenamingId(null);
   };
 
@@ -858,10 +1023,23 @@ function CollectionBar({
                   autoFocus
                   value={renameValue}
                   onChange={(e) => setRenameValue(e.target.value)}
-                  onBlur={() => commitRename(pl.id)}
+                  onBlur={() => {
+                    if (skipRenameCommit.current) {
+                      skipRenameCommit.current = false;
+                      return;
+                    }
+                    commitRename(pl.id);
+                  }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename(pl.id);
-                    if (e.key === "Escape") setRenamingId(null);
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitRename(pl.id);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      cancelRename();
+                    }
                   }}
                   className="bg-white/[0.06] border border-cyan/40 rounded-md px-2 py-0.5 text-xs w-32 outline-none"
                 />
@@ -919,12 +1097,17 @@ function CollectionBar({
                     <button
                       onClick={() => {
                         if (confirmDeleteId === pl.id) {
+                          window.clearTimeout(confirmDeleteTimer.current);
                           deletePlaylist(pl.id);
                           setConfirmDeleteId(null);
                           toast(`Deleted playlist "${pl.name}"`);
                         } else {
                           setConfirmDeleteId(pl.id);
-                          setTimeout(() => setConfirmDeleteId(null), 2400);
+                          window.clearTimeout(confirmDeleteTimer.current);
+                          confirmDeleteTimer.current = window.setTimeout(
+                            () => setConfirmDeleteId(null),
+                            2400,
+                          );
                         }
                       }}
                       className={`w-4 h-4 grid place-items-center rounded-full text-[10px] ml-0.5 ${
@@ -1099,15 +1282,17 @@ function AlbumGrid({
 }
 
 function AlbumCard({ cell, isPlaying }: { cell: AlbumCell; isPlaying: boolean }) {
-  const first = cell.tracks[0];
+  const missingPaths = useLibraryStore((s) => s.missingPaths);
+  const first = cell.tracks.find((t) => !missingPaths[t.path]) ?? cell.tracks[0];
+  const firstMissing = !!missingPaths[first.path];
   const cover = useCoverStore((s) => s.covers[first.path]);
   const requestCover = useCoverStore((s) => s.requestCover);
   const hasChain = useMissionLogStore(
     (s) => !!s.entries[albumKey(first.artist, first.album)],
   );
   useEffect(() => {
-    requestCover(first.path);
-  }, [first.path, requestCover]);
+    if (!firstMissing) requestCover(first.path);
+  }, [first.path, requestCover, firstMissing]);
 
   // Album order: track number then title (the flat list may be sorted by
   // anything — inside an album we always want disc order).
@@ -1115,7 +1300,13 @@ function AlbumCard({ cell, isPlaying }: { cell: AlbumCell; isPlaying: boolean })
     const ordered = [...cell.tracks].sort(
       (a, b) => (a.trackNo ?? 0) - (b.trackNo ?? 0) || a.title.localeCompare(b.title),
     );
-    void playLibrary(ordered, 0);
+    const missing = useLibraryStore.getState().missingPaths;
+    const playable = ordered.filter((t) => !missing[t.path]);
+    if (playable.length === 0) {
+      useUIStore.getState().toast("Every track in this album is missing", "warn");
+      return;
+    }
+    void playLibrary(playable, 0);
   };
 
   return (
@@ -1235,8 +1426,8 @@ function TrackRow({
   const logEntry = useMissionLogStore((s) => s.entries[trackKey(track.path)]);
   const isMissing = useLibraryStore((s) => !!s.missingPaths[track.path]);
   useEffect(() => {
-    requestCover(track.path);
-  }, [track.path, requestCover]);
+    if (!isMissing) requestCover(track.path);
+  }, [track.path, requestCover, isMissing]);
 
   return (
     <div
@@ -1273,7 +1464,9 @@ function TrackRow({
         className={`w-6 h-6 grid place-items-center rounded-md transition ${
           isFavorite
             ? "text-amber"
-            : "text-white/15 hover:text-white/60 opacity-0 group-hover:opacity-100"
+            : `text-white/15 hover:text-white/60 ${
+                isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              }`
         }`}
         title={isFavorite ? "Remove from favorites" : "Add to favorites"}
       >
@@ -1305,7 +1498,14 @@ function TrackRow({
       <div className="min-w-0 flex items-center gap-1.5">
         <span
           className={`truncate ${isPlaying ? "text-cyan font-medium" : "text-white/90"}`}
-          title={track.title}
+          title={[
+            track.title,
+            track.genre,
+            track.year != null ? String(track.year) : null,
+            isMissing ? "missing from disk" : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         >
           {track.title}
         </span>
@@ -1357,7 +1557,9 @@ function TrackRow({
           const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
           onMenu(r.right, r.bottom);
         }}
-        className="w-6 h-6 grid place-items-center rounded-md text-dim hover:text-white hover:bg-white/10 opacity-0 group-hover:opacity-100 transition justify-self-end"
+        className={`w-6 h-6 grid place-items-center rounded-md text-dim hover:text-white hover:bg-white/10 transition justify-self-end ${
+          isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        }`}
         title="Track actions"
       >
         ⋯
@@ -1394,6 +1596,7 @@ function TrackMenu({
   const toast = useUIStore((s) => s.toast);
 
   const isFav = !!favorites[track.path];
+  const isMissing = useLibraryStore((s) => !!s.missingPaths[track.path]);
 
   // Clamp so the menu never renders off-screen.
   const MENU_W = 224;
@@ -1407,8 +1610,10 @@ function TrackMenu({
   const label =
     "px-3 pt-1.5 pb-0.5 text-[9px] uppercase tracking-[0.2em] text-dim";
 
-  return (
+  return createPortal(
     <div
+      role="menu"
+      aria-label={`Actions for ${track.title}`}
       className="fixed z-50 rounded-xl border border-white/15 bg-ink/95 backdrop-blur-xl shadow-neon overflow-y-auto sidebar-scroll py-1"
       style={{ left: x, top: y, width: MENU_W, maxHeight: MENU_MAX_H }}
       onPointerDown={(e) => e.stopPropagation()}
@@ -1432,6 +1637,11 @@ function TrackMenu({
       <button
         className={item}
         onClick={() => {
+          if (isMissing) {
+            toast("File missing — reveal in Explorer, rescan, or prune orphans", "warn");
+            onClose();
+            return;
+          }
           playNextLibrary([track]);
           toast(`"${track.title}" will play next`);
           onClose();
@@ -1442,6 +1652,11 @@ function TrackMenu({
       <button
         className={item}
         onClick={() => {
+          if (isMissing) {
+            toast("File missing — reveal in Explorer, rescan, or prune orphans", "warn");
+            onClose();
+            return;
+          }
           enqueueLibrary([track]);
           toast(`Queued "${track.title}"`);
           onClose();
@@ -1585,7 +1800,8 @@ function TrackMenu({
           ○ Clear album chain
         </button>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1629,7 +1845,7 @@ function EmptyState({
   } else if (searching) {
     icon = <span className="text-4xl opacity-60">⌕</span>;
     title = "No matches";
-    hint = "Nothing in this view matches your search.";
+    hint = "Nothing in this view matches your search or genre filter.";
   } else if (collection === "favorites") {
     icon = <span className="text-4xl opacity-60">☆</span>;
     title = "No favorites yet";

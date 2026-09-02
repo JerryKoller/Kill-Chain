@@ -2,7 +2,7 @@
  * Arrangement timeline length — independent of pattern Bars (piano / drums).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFireSequencerStore, MAX_ARRANGEMENT_BARS } from "@/state/fireSequencerStore";
 
 const PRESETS = [16, 32, 64, 128, 256] as const;
@@ -18,6 +18,7 @@ export function ArrangementBarsControls({
   const setArrangementBars = useFireSequencerStore((s) => s.setArrangementBars);
   const [draft, setDraft] = useState(String(arrangementBars));
   const [focused, setFocused] = useState(false);
+  const skipBlurCommit = useRef(false);
 
   useEffect(() => {
     if (!focused) setDraft(String(arrangementBars));
@@ -74,12 +75,19 @@ export function ArrangementBarsControls({
         onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, "").slice(0, 3))}
         onFocus={() => setFocused(true)}
         onBlur={() => {
+          if (skipBlurCommit.current) {
+            skipBlurCommit.current = false;
+            setFocused(false);
+            return;
+          }
           setFocused(false);
           commitDraft();
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();
           if (e.key === "Escape") {
+            e.preventDefault();
+            skipBlurCommit.current = true;
             setDraft(String(arrangementBars));
             e.currentTarget.blur();
           }

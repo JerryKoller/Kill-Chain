@@ -82,9 +82,9 @@ export function ScopedPlayButton({
               boxShadow: `0 0 12px ${accent}55, inset 0 1px 0 rgba(255,255,255,0.28)`,
             }
       }
-      title={title ?? (armed ? `Pause ${scope}` : `Play ${scope}`)}
+      title={title ?? (armed ? `Hold Fire · ${scope}` : `Open Fire · ${scope}`)}
       aria-pressed={armed}
-      aria-label={armed ? `Pause ${scope}` : `Play ${scope}`}
+      aria-label={armed ? `Hold Fire · ${scope}` : `Open Fire · ${scope}`}
     >
       {armed ? <PauseGlyph /> : <PlayGlyph />}
       {label ? <span className="text-[9px] uppercase tracking-[0.1em]">{label}</span> : null}

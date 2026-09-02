@@ -462,7 +462,7 @@ export function WarpStageViz() {
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums"
         style={{ color: hexA(C_HOT, 0.7) }}
       >
-        {active ? "ACTIVE" : "BYPASSED"}
+        {active ? "ACTIVE" : "DRY"}
       </div>
     </div>
   );

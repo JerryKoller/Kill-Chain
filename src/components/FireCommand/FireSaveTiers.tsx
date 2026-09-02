@@ -122,7 +122,11 @@ export function FireSaveTiers() {
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") commitPatch();
-              if (e.key === "Escape") setNaming(false);
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setNaming(false);
+              }
             }}
             placeholder="Patch name"
             className="h-8 w-36 rounded-md bg-black/45 px-2 text-[11px] text-white outline-none ring-1 ring-white/15 placeholder:text-white/35 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(232,184,109,0.65)]"

@@ -27,6 +27,9 @@ import {
   snapMidiToScale,
   detectKeyFromNotes,
   STEPS_PER_BAR,
+  ROLL_SNAP_STORAGE,
+  writeRollSnap,
+  recordQuantizeLabel,
   SCALES,
   NOTE_NAMES,
   type RollNote,
@@ -134,12 +137,12 @@ const SNAP_OPTIONS = [
   { label: "1/8", steps: 2 },
   { label: "1/16", steps: 1 },
   { label: "1/32", steps: 0.5 },
-  { label: "T", steps: 2 / 3 },
+  { label: "T", steps: 2 / 3 }, // triplet 1/16
   { label: "Off", steps: 0 },
   { label: "Auto", steps: -1 },
 ] as const;
 
-const SNAP_STORAGE = "killchain.fire.rollSnap";
+const SNAP_STORAGE = ROLL_SNAP_STORAGE;
 const KICK_GHOST_MIDI = 36;
 
 type FoldMode = "all" | "scale" | "used";
@@ -161,7 +164,8 @@ function resolveRollSnap(snap: number, cellW: number): number {
     if (pxPerBar < 56) return 8;
     if (pxPerBar < 90) return 4;
     if (pxPerBar < 140) return 2;
-    return 1;
+    if (pxPerBar < 256) return 1;
+    return 0.5;
   }
   return 0; // Off — free placement
 }
@@ -414,7 +418,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
     snapRef.current = eff;
     lastLenRef.current = eff;
     setBrushLen(eff);
-    try { window.localStorage.setItem(SNAP_STORAGE, String(steps)); } catch { /* ignore */ }
+    writeRollSnap(steps);
   };
 
   useEffect(() => {
@@ -1605,7 +1609,13 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
       const inRoll = !!t?.closest("[data-fire-piano-roll]");
       const rollHovered = !!document.querySelector("[data-fire-piano-roll]:hover");
       const rollFocused = !!document.activeElement?.closest?.("[data-fire-piano-roll]");
-      if (!inRoll && !rollHovered && !rollFocused) return;
+      // Fullscreen shell is a separate overlay — the pointer/focus may sit
+      // on Exit / Tools while the roll still owns Escape (clear selection
+      // before the shell drops).
+      const rollFullscreen = !!document.querySelector(
+        "[data-fire-editor-fullscreen] [data-fire-piano-roll]",
+      );
+      if (!inRoll && !rollHovered && !rollFocused && !rollFullscreen) return;
 
       if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
         e.preventDefault();
@@ -1661,6 +1671,8 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         removeNotes(ids);
         setSelectedIds(new Set());
       } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
         setSelectedIds(new Set());
       } else if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C" || e.key === "x" || e.key === "X")) {
         e.preventDefault();
@@ -1736,7 +1748,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
   };
 
   return (
-    <div data-fire-piano-roll>
+    <div data-fire-piano-roll data-has-selection={selectedIds.size > 0 ? "1" : undefined}>
       <div
         className="mb-2 editor-toolbar rounded-xl border border-white/[0.08] bg-gradient-to-b from-white/[0.04] to-transparent"
         title="Draw: click places, drag stretches length, drag across pitches paints · edges resize · double-click / Alt-drag / RMB erase · Shift+drag velocity"
@@ -1744,7 +1756,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         <EditorToolbarGroup>
           <ScopedPlayButton
             scope="pattern"
-            title="Play / pause this pattern only"
+            title="Open Fire / Hold Fire this pattern"
           />
           <PatternSelect />
           <ToolbarMenu label="Bars" value={`${bars}`} panelClassName="w-auto min-w-[16rem]">
@@ -1785,8 +1797,9 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
         <ToolbarMenu
           label="Snap"
           value={
-            SNAP_OPTIONS.find((o) => o.steps === snapSteps)?.label
-            ?? (snapSteps === -1 ? "Auto" : String(snapSteps))
+            snapSteps === -1
+              ? `Auto→${recordQuantizeLabel(effectiveSnap)}`
+              : SNAP_OPTIONS.find((o) => o.steps === snapSteps)?.label ?? String(snapSteps)
           }
           panelClassName="w-52"
         >
@@ -1805,13 +1818,11 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
                 aria-pressed={snapSteps === opt.steps}
                 title={
                   opt.label === "T"
-                    ? "NOTE SNAP: triplet 1/8"
+                    ? "NOTE SNAP: triplet 1/16"
                     : opt.label === "Off"
                       ? "NOTE SNAP: Off — free placement"
                       : opt.label === "Auto"
-                        ? `NOTE SNAP: Adaptive → ${
-                            effectiveSnap === 16 ? "1" : effectiveSnap === 8 ? "1/2" : effectiveSnap === 4 ? "1/4" : effectiveSnap === 2 ? "1/8" : "1/16"
-                          } BAR`
+                        ? `NOTE SNAP: Adaptive → ${recordQuantizeLabel(effectiveSnap)} BAR`
                         : `NOTE SNAP: ${opt.label} NOTE`
                 }
               >
@@ -2099,13 +2110,13 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           ))}
           {(() => {
             const ext = selectedNote as RollNoteExt;
-            const extras: Array<{ label: string; key: keyof RollNoteExt; val: number; min: number; max: number; step: number }> = [
-              { label: "Prob", key: "probability", val: ext.probability ?? ext.prob ?? 1, min: 0, max: 1, step: 0.01 },
+            const extras: Array<{ label: string; key: keyof RollNoteExt; val: number; min: number; max: number; step: number; title?: string }> = [
+              { label: "Chance", key: "probability", val: ext.probability ?? ext.prob ?? 1, min: 0, max: 1, step: 0.01, title: "Seeded step chance — the same step always plays or skips" },
               { label: "Ratchet", key: "ratchet", val: ext.ratchet ?? 1, min: 1, max: 4, step: 1 },
               { label: "Micro", key: "micro", val: ext.micro ?? 0, min: -1, max: 1, step: 0.01 },
             ];
             return extras.map((f) => (
-              <label key={f.label} className="inline-flex items-center gap-1 text-[10px] text-white/55">
+              <label key={f.label} className="inline-flex items-center gap-1 text-[10px] text-white/55" title={f.title}>
                 {f.label}
                 <input
                   type="number"
@@ -2125,7 +2136,7 @@ export function PianoRoll({ tall = false }: { tall?: boolean } = {}) {
           })()}
           </>
         ) : (
-          <span className="text-[10px] text-white/30">Select or place a note to edit Start · Len · Pitch · Vel · Prob · Ratchet · Micro</span>
+          <span className="text-[10px] text-white/30">Select or place a note to edit Start · Len · Pitch · Vel · Chance · Ratchet · Micro</span>
         )}
       </div>
 

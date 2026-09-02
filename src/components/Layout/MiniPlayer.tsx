@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { usePlayerStore } from "@/state/playerStore";
 import { useSettingsStore } from "@/state/settingsStore";
+import { useCoverStore } from "@/state/coverStore";
+import { pathFromAudioSrc } from "@/state/libraryStore";
 import { getEngine } from "@/audio/AudioEngine";
 
 /**
@@ -13,12 +15,21 @@ import { getEngine } from "@/audio/AudioEngine";
 export function MiniPlayer() {
   const status = usePlayerStore((s) => s.status);
   const meta = usePlayerStore((s) => s.metadata);
+  const src = usePlayerStore((s) => s.src);
   const position = usePlayerStore((s) => s.position);
   const duration = usePlayerStore((s) => s.duration);
   const toggle = usePlayerStore((s) => s.toggle);
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
   const setMini = useSettingsStore((s) => s.set);
+
+  const coverPath = pathFromAudioSrc(src);
+  const libCover = useCoverStore((s) => (coverPath ? s.covers[coverPath] : undefined));
+  const requestCover = useCoverStore((s) => s.requestCover);
+  useEffect(() => {
+    if (coverPath) requestCover(coverPath);
+  }, [coverPath, requestCover]);
+  const coverUrl = (libCover && libCover.length > 0 ? libCover : null) ?? meta.coverUrl;
 
   // Spectrum canvas
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -95,12 +106,12 @@ export function MiniPlayer() {
         <div
           className="w-16 h-16 rounded-lg border border-white/10 bg-white/[0.04] overflow-hidden grid place-items-center text-2xl text-dim"
           style={
-            meta.coverUrl
-              ? { background: `center/cover no-repeat url("${meta.coverUrl}")` }
+            coverUrl
+              ? { background: `center/cover no-repeat url("${coverUrl}")` }
               : undefined
           }
         >
-          {!meta.coverUrl && "\u266B"}
+          {!coverUrl && "\u266B"}
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-xs uppercase tracking-[0.25em] text-dim truncate">

@@ -160,7 +160,7 @@ export function ScopeQuickActions({
             ? { borderColor: `${SCOPE_C}66`, color: SCOPE_C_GLOW, background: `${SCOPE_C}22` }
             : { borderColor: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.4)", background: "rgba(0,0,0,0.35)" }
         }
-        title={pathOn ? "Bypass the Signal Path SCOPE tap" : "Engage the Signal Path SCOPE tap"}
+        title={pathOn ? "Path off — Signal Path SCOPE tap" : "Path on — Signal Path SCOPE tap"}
         aria-pressed={pathOn}
       >
         {pathOn ? "Path On" : "Path Off"}

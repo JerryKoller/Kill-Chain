@@ -169,6 +169,41 @@ export interface RollNote {
 export const STEPS_PER_BAR = 16;
 export const MAX_BARS = 96;
 
+/** Same key the piano roll writes — record quantize follows that chip. */
+export const ROLL_SNAP_STORAGE = "killchain.fire.rollSnap";
+export const ROLL_SNAP_EVENT = "killchain.fire.rollSnap";
+
+/** Persist piano-roll snap and notify the record-quantize chip. */
+export function writeRollSnap(steps: number): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(ROLL_SNAP_STORAGE, String(steps)); } catch { /* ignore */ }
+  window.dispatchEvent(new Event(ROLL_SNAP_EVENT));
+}
+
+/** Grid in 16th-steps for MIDI record. Off/Auto fall back to 1/16. */
+export function readRecordQuantizeSteps(): number {
+  if (typeof window === "undefined") return 1;
+  try {
+    const v = Number(window.localStorage.getItem(ROLL_SNAP_STORAGE));
+    if (v === 0.25) return 1;
+    if (!Number.isFinite(v) || v <= 0) return 1;
+    return v;
+  } catch {
+    return 1;
+  }
+}
+
+export function recordQuantizeLabel(steps: number): string {
+  if (Math.abs(steps - 16) < 1e-6) return "1";
+  if (Math.abs(steps - 8) < 1e-6) return "1/2";
+  if (Math.abs(steps - 4) < 1e-6) return "1/4";
+  if (Math.abs(steps - 2) < 1e-6) return "1/8";
+  if (Math.abs(steps - 1) < 1e-6) return "1/16";
+  if (Math.abs(steps - 0.5) < 1e-6) return "1/32";
+  if (Math.abs(steps - 2 / 3) < 1e-6) return "T";
+  return "1/16";
+}
+
 /**
  * Discriminated union of piano-roll edits, consumed by `applyNoteOp`.
  *
@@ -1119,7 +1154,7 @@ interface PersistShape {
   soloMode: SoloMode;
   masterDim: boolean;
   masterMono: boolean;
-  /** Live recording (v1.6): snap captured notes to the 1/16 grid. */
+  /** Live recording (v1.6): snap captured notes to the piano-roll grid. */
   recordQuantize: boolean;
   recordMode: "overdub" | "replace";
   recordCountIn: number;
@@ -1163,6 +1198,8 @@ let recPassPushed = false;
 let recArmedAt = 0;
 /** Toast once per arm when first note lands off the live mirror. */
 let recOffMirrorToasted = false;
+/** Rate-limit the “armed but stopped” hint. */
+let recStoppedToastAt = 0;
 
 function starterSection(): Section {
   const bars = 2;
@@ -3264,7 +3301,7 @@ export interface FireSequencerState extends PersistShape, ActiveMirror {
   // ── live recording (v1.6) ──
   setRecording: (on: boolean) => void;
   setRecordQuantize: (on: boolean) => void;
-  /** Capture a live note-on into the roll (no-op unless playing + armed). */
+  /** Capture a live note-on into the roll (toasts if armed while stopped). */
   recordNoteOn: (midi: number, velocity: number) => void;
   /** Finalize the captured note's length. */
   recordNoteOff: (midi: number) => void;
@@ -5320,18 +5357,28 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
 
     recordNoteOn: (midi, velocity) => {
       const s = get();
-      if (!s.recording || !s.playing) return;
+      if (!s.recording) return;
+      if (!s.playing) {
+        const now = Date.now();
+        if (now - recStoppedToastAt > 4000) {
+          recStoppedToastAt = now;
+          void import("@/state/uiStore").then(({ useUIStore }) =>
+            useUIStore.getState().toast("Recording is armed — press Open Fire to capture", "info"),
+          );
+        }
+        return;
+      }
       const ctx = getEngine().ctx;
       if (recArmedAt > 0 && ctx.currentTime < recArmedAt) return;
       const target = resolveRecordTarget(s);
       if (!target) return; // gap under playhead / not ready
-      // Quantize toward the NEAREST step, but a note played just before the
-      // loop point must not wrap to the top: `round(15.6) % 16` was 0, so the
-      // last sixteenth of every pattern recorded onto beat 1.
+      // Quantize to the piano-roll snap chip. A note just before the loop
+      // must not wrap to beat 1 (`round(15.6) % 16` used to).
       let step = target.localStep;
       if (s.recordQuantize) {
-        const rounded = Math.round(target.localStep);
-        step = rounded >= target.total ? target.total - 1 : rounded;
+        const grid = readRecordQuantizeSteps();
+        const rounded = Math.round(target.localStep / grid) * grid;
+        step = rounded >= target.total ? Math.max(0, target.total - grid) : rounded;
       }
       step = clamp(step, 0, target.total - 0.25);
       // The whole pass is ONE undo entry — capture state before its first note.
@@ -5369,6 +5416,10 @@ export const useFireSequencerStore = create<FireSequencerState>((set, get) => {
               }),
             });
           }
+          const who = ch === 1 ? "Synth B" : "Synth A";
+          void import("@/state/uiStore").then(({ useUIStore }) =>
+            useUIStore.getState().toast(`Replace cleared ${who} — the other synth was kept`, "info"),
+          );
         }
       }
       if (target.write !== "mirror" && !recOffMirrorToasted) {

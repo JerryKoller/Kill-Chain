@@ -348,7 +348,7 @@ export function paintAir(
     ctx,
     W * 0.5,
     2,
-    !on ? "BYPASS" : p.msMode ? `${arch === "tilt" ? "TILT" : "DUAL SHELF"} · M/S` : arch === "tilt" ? "TILT" : "DUAL SHELF",
+    !on ? "ASLEEP" : p.msMode ? `${arch === "tilt" ? "TILT" : "DUAL SHELF"} · M/S` : arch === "tilt" ? "TILT" : "DUAL SHELF",
     on ? C_GLOW : C_MID,
     { glow: flash, height: 12 },
   );
@@ -383,7 +383,7 @@ export function paintAir(
     ctx,
     W,
     Hh,
-    on ? "SKY SHELF" : "SKY SHELF · BYPASS",
+    on ? "SKY SHELF" : "SKY SHELF · ASLEEP",
     `${airLabel(lowV, highV, amt)} · A${Math.round(amt * 100)}`,
     C_GLOW,
     on ? C_HOT : C_MID,

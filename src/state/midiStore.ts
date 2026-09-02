@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useAudioStore } from "@/state/audioStore";
+import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useFireMidiFocusStore } from "@/state/fireMidiFocusStore";
 import { useUIStore } from "@/state/uiStore";
 import { isBipolar, type SoundParams } from "@/audio/types";
@@ -16,6 +17,18 @@ export type MidiTarget =
   | { kind: "fireParam"; key: string }
   /** Orbit Vault scene recall by 0-based slot. */
   | { kind: "fireScene"; slot: number };
+
+/** Stable equality key — avoid JSON.stringify on every learn-button render. */
+export function midiTargetId(t: MidiTarget): string {
+  switch (t.kind) {
+    case "param": return `param:${t.key}`;
+    case "macro": return `macro:${t.name}`;
+    case "transport": return `transport:${t.action}`;
+    case "reactorPad": return `reactorPad:${t.pad}`;
+    case "fireParam": return `fireParam:${t.key}`;
+    case "fireScene": return `fireScene:${t.slot}`;
+  }
+}
 
 export interface MidiMapping {
   /** Composite key = `<deviceId>:<channel>:<cc>` for CC, `<deviceId>:<channel>:N:<note>` for notes. */
@@ -483,18 +496,14 @@ function applyMidi(target: MidiTarget, normalized: number): void {
     return;
   }
   if (target.kind === "fireParam") {
-    void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
-      const key = target.key as keyof import("@/audio/dsp/FireCommandSynth").FirePatch;
-      const value = mapFireMidiValue(target.key, normalized);
-      useFireCommandStore.getState().setParam(key, value as never);
-    });
+    const key = target.key as keyof import("@/audio/dsp/FireCommandSynth").FirePatch;
+    const value = mapFireMidiValue(target.key, normalized);
+    useFireCommandStore.getState().setParam(key, value as never);
     return;
   }
   if (target.kind === "fireScene") {
     if (normalized < 0.4) return;
-    void import("@/state/fireCommandStore").then(({ useFireCommandStore }) => {
-      useFireCommandStore.getState().recallScene(target.slot);
-    });
+    useFireCommandStore.getState().recallScene(target.slot);
     return;
   }
   if (target.kind === "macro") {

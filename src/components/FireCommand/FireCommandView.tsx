@@ -29,7 +29,7 @@ import { setStageVizPressureSource } from "./stageVizRaf";
 import { FIRE_BANDS, FIRE_MODULE_BY_ID, type FireModuleId } from "./fireModuleAtlas";
 import { DEFAULT_FIRE_PATCH, SPECTRAL_FFT_SIZE, type FirePatch, type LfoWave, type FireFilterType, type LfoDest, type SubWave, type DriveMode, type ModSource, type ModDest, type ModRoute, type SpectralMode, type FireBitDepth, type ChipNoiseMode, type FmEngineMode, type NoiseMode, type OscBInheritMode, type Lfo2Relation, type Lfo2DriftMode, type GlideMode, type GlideCurve, type GlideRateMode, type RingMode, type DriveTonePos, type PhaserStereoMode, type FilterModel, type WarpMode, type DelayCascadeMode, type UnisonDistribution, type UnisonPhaseMode, type UnisonTemporalMode } from "@/audio/dsp/FireCommandSynth";
 import { matrixArcsForParam, countRoutesFrom, MOD_DEST_LABELS } from "@/audio/dsp/modRouting";
-import { fxTechState, fxTechBadge, FX_QUALITY_LABELS, type FxQuality, type LowProtect } from "@/audio/dsp/fxClarity";
+import { fxTechState, fxTechBadge, fxStatusHint, FX_QUALITY_LABELS, type FxQuality, type LowProtect } from "@/audio/dsp/fxClarity";
 import {
   MASTER_CHAIN_SCENES,
   MIX_CHAIN_COPY,
@@ -456,6 +456,13 @@ export function FireCommandView() {
     return () => window.removeEventListener(FIRE_PALETTE_EVENT, open);
   }, []);
   const [confirmDefaults, setConfirmDefaults] = useState(false);
+  const confirmDefaultsTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (confirmDefaultsTimer.current) window.clearTimeout(confirmDefaultsTimer.current);
+    },
+    [],
+  );
   const [workspace, setWorkspaceRaw] = useFireWorkspace();
   const [synthBand, setSynthBandRaw] = useFireSynthBand();
 
@@ -560,9 +567,19 @@ export function FireCommandView() {
     const pressed = new Map<string, number>();
     const isText = (t: EventTarget | null) => {
       const el = t as HTMLElement | null;
-      // SELECT included: letter keys drive native type-ahead on the wavetable
-      // and mod-matrix dropdowns — they must not double as instrument keys.
-      return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+      if (!el || typeof el.closest !== "function") return false;
+      return !!el.closest(
+        "input, textarea, select, [contenteditable='true'], [role='slider'], [role='spinbutton']",
+      );
+    };
+    const editorOwnsKeys = (t: EventTarget | null) => {
+      const el = t instanceof Element ? t : null;
+      const sel = "[data-fire-piano-roll], [data-fire-arrangement], [data-fire-drums]";
+      if (el?.closest(sel)) return true;
+      if (document.activeElement?.closest?.(sel)) return true;
+      return !!document.querySelector(
+        "[data-fire-piano-roll]:hover, [data-fire-arrangement]:hover, [data-fire-drums]:hover",
+      );
     };
     const onDown = (e: KeyboardEvent) => {
       // Undo/redo across the whole Fire workspace (v1.6). Bound here rather
@@ -585,7 +602,14 @@ export function FireCommandView() {
           return;
         }
       }
-      if (e.ctrlKey || e.metaKey || e.altKey || isText(e.target)) return;
+      if (
+        e.ctrlKey
+        || e.metaKey
+        || e.altKey
+        || isText(e.target)
+        || editorOwnsKeys(e.target)
+        || document.querySelector("[aria-modal='true']")
+      ) return;
       const k = e.key.toLowerCase();
       const store = useFireCommandStore.getState();
       if (k === "z") { e.preventDefault(); if (!e.repeat) store.shiftOctave(-1); return; }
@@ -852,6 +876,10 @@ export function FireCommandView() {
                 data-ui-sound="none"
                 onClick={() => {
                   if (confirmDefaults) {
+                    if (confirmDefaultsTimer.current) {
+                      window.clearTimeout(confirmDefaultsTimer.current);
+                      confirmDefaultsTimer.current = null;
+                    }
                     playUi("purge");
                     resetToDefaults();
                     setConfirmDefaults(false);
@@ -862,7 +890,11 @@ export function FireCommandView() {
                   } else {
                     playUi("press");
                     setConfirmDefaults(true);
-                    setTimeout(() => setConfirmDefaults(false), 2400);
+                    if (confirmDefaultsTimer.current) window.clearTimeout(confirmDefaultsTimer.current);
+                    confirmDefaultsTimer.current = window.setTimeout(() => {
+                      confirmDefaultsTimer.current = null;
+                      setConfirmDefaults(false);
+                    }, 2400);
                   }
                 }}
                 className={`h-8 px-2.5 rounded-md text-[10px] font-semibold transition shrink-0 ring-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-rose-400/60 ${
@@ -978,21 +1010,26 @@ export function FireCommandView() {
       {(() => {
         const effectiveMode: FireKeyboardMode =
           workspace === "sequencer" && keyboardMode === "full" ? "strip" : keyboardMode;
+        // Native WinMM reports an empty port list as an "error" string
+        // (close FL / Rescan). That is not a MIDI failure — show the empty
+        // list, and keep "MIDI error" for permission / timeout / busy ports.
+        const emptyListAdvisory =
+          typeof midiError === "string" && /no midi inputs/i.test(midiError);
         const midiText = !midiAvailable
           ? "MIDI unsupported"
-          : midiError
-            ? "MIDI error"
-            : !midiListening
-              ? "MIDI connecting…"
-              : midiInputs.length === 0
-                ? "No MIDI device"
-                : midiInputs.map((i) => i.name).join(" · ");
+          : midiInputs.length > 0
+            ? midiInputs.map((i) => i.name).join(" · ")
+            : emptyListAdvisory || (!midiError && midiListening)
+              ? "No MIDI device"
+              : midiError
+                ? "MIDI error"
+                : "MIDI connecting…";
 
         if (effectiveMode === "hidden") {
           return (
             <div className={`shrink-0 z-10 ${flush ? "rounded-b-2xl bg-black/30 backdrop-blur-md" : "pt-2"}`}>
               <div className="px-3 py-1.5 flex items-center justify-between gap-2 flex-wrap">
-                <div className="fc-text-secondary min-w-0 truncate">
+                <div className="fc-text-secondary min-w-0 truncate" title={midiError ?? undefined}>
                   <span className="uppercase tracking-[0.2em] mr-2 text-white/45">Keys</span>
                   {midiText} · OCT {octave}
                 </div>
@@ -1022,7 +1059,7 @@ export function FireCommandView() {
           return (
             <div className={`shrink-0 z-10 ${flush ? "rounded-b-2xl bg-black/30 backdrop-blur-md" : "pt-2"}`}>
               <div className="px-3 py-2 flex items-center justify-between gap-3 flex-wrap">
-                <div className="fc-text-secondary min-w-0">
+                <div className="fc-text-secondary min-w-0" title={midiError ?? undefined}>
                   <span className="uppercase tracking-[0.2em] mr-2 text-white/45">Keyboard strip</span>
                   <span className="font-mono text-white/75">QWERTY · MIDI</span>
                   <span className="ml-2">OCT {octave}</span>
@@ -1045,6 +1082,7 @@ export function FireCommandView() {
             onCycleMode={cycleKeyboardMode}
             flush={flush}
             midiLabel={midiText}
+            midiHint={midiError}
             onRescanMidi={() => void rescanMidi()}
           />
         );
@@ -8890,7 +8928,7 @@ function ScopePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="output"
       chipHosted={chipHosted}
       defaultCollapsed
-      statusLine={!pathOn ? "Bypassed" : `On · display ${Math.round(displayGain * 100)}%`}
+      statusLine={!pathOn ? "Path off" : `On · display ${Math.round(displayGain * 100)}%`}
       right={<ScopeVoiceBadge />}
     >
       <div
@@ -8909,7 +8947,7 @@ function ScopePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: SCOPE_C_GLOW }}>
             Lumen Trace
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {!pathOn ? "bypass" : `${mixView} · ×${viz.zoom.toFixed(1)}`}
+              {!pathOn ? "path off" : `${mixView} · ×${viz.zoom.toFixed(1)}`}
             </span>
           </div>
         </div>
@@ -9002,7 +9040,7 @@ function AirPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="air"
       chipHosted={chipHosted}
       defaultCollapsed
-      statusLine={!enabled ? "Off" : live ? `On · ${arch} · ${Math.round(amt * 100)}%` : `On · ${arch}`}
+      statusLine={!enabled ? "Asleep" : live ? `On · ${arch} · ${Math.round(amt * 100)}%` : `On · ${arch}`}
     >
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
@@ -9020,7 +9058,7 @@ function AirPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: AIR_C_GLOW }}>
             Sky Shelf
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {!enabled ? "bypass" : `${arch}${msMode ? " · M/S" : ""} · A${Math.round(amt * 100)}`}
+              {!enabled ? "asleep" : `${arch}${msMode ? " · M/S" : ""} · A${Math.round(amt * 100)}`}
             </span>
           </div>
         </div>
@@ -9035,7 +9073,7 @@ function AirPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             }}
             title="Architecture"
           >
-            {!enabled ? "Bypass" : arch === "tilt" ? "Tilt" : "Dual"}
+            {!enabled ? "Asleep" : arch === "tilt" ? "Tilt" : "Dual"}
           </div>
         </div>
       </div>
@@ -9139,7 +9177,7 @@ function GluePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="glue"
       chipHosted={chipHosted}
       defaultCollapsed
-      statusLine={!enabled ? "Off" : `On · ${Math.round(punch * 100)}% · GR −${grDb.toFixed(1)}`}
+      statusLine={!enabled ? "Asleep" : `On · ${Math.round(punch * 100)}% · GR −${grDb.toFixed(1)}`}
     >
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
@@ -9158,7 +9196,7 @@ function GluePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Press Anvil
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : `${glueMode} · ${Math.round(punch * 100)}% · GR −${grDb.toFixed(1)}`}
             </span>
           </div>
@@ -9173,7 +9211,7 @@ function GluePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
             }}
           >
-            {!enabled ? "Bypass" : glueStageLabel(punch)}
+            {!enabled ? "Asleep" : glueStageLabel(punch)}
           </div>
         </div>
       </div>
@@ -9257,7 +9295,7 @@ function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="width"
       chipHosted={chipHosted}
       defaultCollapsed
-      statusLine={!enabled ? "Off" : `On · ${legend}`}
+      statusLine={!enabled ? "Asleep" : `On · ${legend}`}
     >
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
@@ -9275,7 +9313,7 @@ function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: WIDTH_C_GLOW }}>
             Side Horizon
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {!enabled ? "bypass · unity" : `${legend} · ${mech}${monoBelow > 20 ? ` · mono<${Math.round(monoBelow)}` : ""}`}
+              {!enabled ? "asleep · unity" : `${legend} · ${mech}${monoBelow > 20 ? ` · mono<${Math.round(monoBelow)}` : ""}`}
             </span>
           </div>
         </div>
@@ -9289,7 +9327,7 @@ function WidthPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
               border: `1px solid ${live ? `${c}70` : "rgba(255,255,255,0.12)"}`,
             }}
           >
-            {!enabled ? "Bypass" : widthStageLabel(w)}
+            {!enabled ? "Asleep" : widthStageLabel(w)}
           </div>
         </div>
       </div>
@@ -9883,9 +9921,11 @@ function ReverbPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
             Halo Vault
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${size.toFixed(1)}s · d${Math.round(damp * 100)} · Δ${Math.round(diff * 100)} · M${Math.round(mix * 100)}`
-                : `${size.toFixed(1)}s · dry`}
+              {fxStatusHint(
+                tech,
+                `${size.toFixed(1)}s · d${Math.round(damp * 100)} · Δ${Math.round(diff * 100)} · M${Math.round(mix * 100)}`,
+                `${size.toFixed(1)}s · dry`,
+              )}
             </span>
           </div>
         </div>
@@ -10285,9 +10325,11 @@ function DelayPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
             Ping Cascade
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${fmtSec(time)} · FB${Math.round(fbk * 100)} · M${Math.round(mix * 100)}`
-                : `${fmtSec(time)} · idle`}
+              {fxStatusHint(
+                tech,
+                `${fmtSec(time)} · FB${Math.round(fbk * 100)} · M${Math.round(mix * 100)}`,
+                `${fmtSec(time)} · idle`,
+              )}
             </span>
           </div>
         </div>
@@ -10666,9 +10708,11 @@ function ChorusPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
             Ensemble Drift
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${fmtHzRate(rate)} · D${Math.round(depth * 100)} · M${Math.round(mix * 100)}`
-                : `${fmtHzRate(rate)} · bypass`}
+              {fxStatusHint(
+                tech,
+                `${fmtHzRate(rate)} · D${Math.round(depth * 100)} · M${Math.round(mix * 100)}`,
+                `${fmtHzRate(rate)} · dry`,
+              )}
             </span>
           </div>
         </div>
@@ -11008,7 +11052,7 @@ function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const patch = useFxPathSlice();
   const pathOn = patch.pathFx !== false;
   const tech = fxTechState("fx.phaser", patch, { mix, pathOn });
-  const thematic = !live ? "Bypass" : rate > 4 ? "Jet" : rate < 0.2 ? "Slow" : "Sweep";
+  const thematic = !live ? "Dry" : rate > 4 ? "Jet" : rate < 0.2 ? "Slow" : "Sweep";
 
   return (
     <Section title="Phaser" color={c} collapseKey="fx.phaser" chipHosted={chipHosted}>
@@ -11029,9 +11073,11 @@ function PhaserPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
             Sweep Veil
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${fmtHzRate(rate)} · D${Math.round(depth * 100)} · M${Math.round(mix * 100)}`
-                : `${fmtHzRate(rate)} · bypass`}
+              {fxStatusHint(
+                tech,
+                `${fmtHzRate(rate)} · D${Math.round(depth * 100)} · M${Math.round(mix * 100)}`,
+                `${fmtHzRate(rate)} · dry`,
+              )}
             </span>
           </div>
         </div>
@@ -11524,9 +11570,11 @@ function AgePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
             Oxide Archive
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${bit === "off" ? "full" : bit} · C${Math.round(cass * 100)} · W${Math.round(wow * 100)}${vhs > 0.05 ? ` · V${Math.round(vhs * 100)}` : ""}`
-                : `${bit === "off" ? "full" : bit} · clean`}
+              {fxStatusHint(
+                tech,
+                `${bit === "off" ? "full" : bit} · C${Math.round(cass * 100)} · W${Math.round(wow * 100)}${vhs > 0.05 ? ` · V${Math.round(vhs * 100)}` : ""}`,
+                `${bit === "off" ? "full" : bit} · clean`,
+              )}
             </span>
           </div>
         </div>
@@ -11934,9 +11982,11 @@ function DrivePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
             Shape Crucible
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${mode} · D${Math.round(drive * 100)} · C${Math.round(crush * 100)} · ${fmtHz(tone)}`
-                : `${mode} · clean`}
+              {fxStatusHint(
+                tech,
+                `${mode} · D${Math.round(drive * 100)} · C${Math.round(crush * 100)} · ${fmtHz(tone)}`,
+                `${mode} · clean`,
+              )}
             </span>
           </div>
         </div>
@@ -12059,7 +12109,7 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
   const live = enabled && energy > 0.03;
 
   return (
-    <Section title="Macros" color={c} collapseKey="macros" defaultCollapsed chipHosted={chipHosted} statusLine={!enabled ? "Off" : `On · energy ${Math.round(energy * 100)} · ${routeCount} route${routeCount === 1 ? "" : "s"}`}>
+    <Section title="Macros" color={c} collapseKey="macros" defaultCollapsed chipHosted={chipHosted} statusLine={!enabled ? "Asleep" : `On · energy ${Math.round(energy * 100)} · ${routeCount} route${routeCount === 1 ? "" : "s"}`}>
       <div
         className="mb-2 flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5"
         style={{
@@ -12078,7 +12128,7 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Helm Quartet
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : `Σ${Math.round(energy * 100)} · ${routeCount} route${routeCount === 1 ? "" : "s"} · ${macroStageLabel(vals)}`}
             </span>
           </div>
@@ -12161,7 +12211,7 @@ function MacrosPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       </div>
       <div className="mt-1.5 text-center text-[10px] leading-snug" style={{ color: `${c}99` }}>
         Helm quartet — drag ↕ each column, stamp a character, snap all four. Double-click cycles shapes.
-        Levels feed the mod matrix · Bypass zeros every macro source.
+        Levels feed the mod matrix · Sleep zeros every macro source.
       </div>
     </Section>
   );
@@ -12234,7 +12284,7 @@ function GatePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
       collapseKey="gate"
       defaultCollapsed
       chipHosted={chipHosted}
-      statusLine={!enabled ? "Off" : on ? `On · ${openCount}/${n} steps open` : "Armed · idle"}
+      statusLine={!enabled ? "Asleep" : on ? `On · ${openCount}/${n} steps open` : "Armed · idle"}
       right={
         <span className="font-mono text-[10px]" style={{ color: `${c}aa` }}>
           {openCount}/{n}
@@ -12259,7 +12309,7 @@ function GatePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Rhythm Shutter
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : `${n}st · ${rate.toFixed(1)}Hz · D${Math.round(depth * 100)} · S${Math.round(smooth * 100)}`}
             </span>
           </div>
@@ -13318,6 +13368,7 @@ function Keyboard({
   onCycleMode,
   flush = false,
   midiLabel,
+  midiHint,
   midiHot = false,
   midiNote = null,
   onRescanMidi,
@@ -13327,6 +13378,7 @@ function Keyboard({
   onCycleMode?: () => void;
   flush?: boolean;
   midiLabel?: string;
+  midiHint?: string | null;
   midiHot?: boolean;
   midiNote?: number | null;
   onRescanMidi?: () => void;
@@ -13464,13 +13516,19 @@ function Keyboard({
                       }
                 }
                 title={
-                  "USB MIDI keys play the active Edit A/B target. On an Akai MPK Mini, Octave − / + shifts the keybed on the device. If no device shows, Rescan after plugging in (Electron needs MIDI permission — restart the app once after this update)."
+                  midiHint
+                    ? midiHint
+                    : "USB MIDI keys play the active Edit A/B target. On an Akai MPK Mini, Octave − / + shifts the keybed on the device. If no device shows, Rescan after plugging in (Electron needs MIDI permission — restart the app once after this update)."
                 }
               >
                 <span
                   className="w-1.5 h-1.5 rounded-full shrink-0"
                   style={{
-                    background: midiHot ? "#ff6a3d" : midiLabel.startsWith("No") || midiLabel.includes("unsupported") || midiLabel.includes("error") ? "rgba(255,80,80,0.7)" : "#6ee7b7",
+                    background: midiHot
+                      ? "#ff6a3d"
+                      : /unsupported|error|connecting|No MIDI/i.test(midiLabel)
+                        ? "rgba(255,80,80,0.7)"
+                        : "#6ee7b7",
                     boxShadow: midiHot ? "0 0 8px #ff6a3d" : undefined,
                   }}
                 />
@@ -13896,7 +13954,7 @@ function HarmonyPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Kin Halo
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : mode === "off"
                   ? "silent"
                   : `${meta.intervals} · ${voices}v · L${Math.round(level * 100)}`}
@@ -14063,7 +14121,7 @@ function ScalePanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Key Lattice
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : !lock
                   ? "open"
                   : `${rootName} ${meta.label} · ${degCount}°`}
@@ -14240,7 +14298,7 @@ function ChordPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Stack Vault
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : !on
                   ? "idle"
                   : `${label} · ${ivs.map((n) => (n === 0 ? "0" : `+${n}`)).join(" ")}`}
@@ -14452,7 +14510,7 @@ function HumanPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Feel Grain
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : !on
                   ? "grid"
                   : `${char?.label ?? "Custom"} · T${Math.round(timing * 100)} V${Math.round(vel * 100)}`}
@@ -14618,7 +14676,7 @@ function ScenesPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
             Orbit Vault
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
               {!enabled
-                ? "bypass"
+                ? "asleep"
                 : `${modeMeta.short} → Synth ${targetTag} only · shared bank · ${occ}/${SCENE_SLOTS} · energy ${Math.round(energy * 100)}`}
             </span>
           </div>
@@ -15101,9 +15159,11 @@ function SpectralPanel({ chipHosted = false }: { chipHosted?: boolean } = {}) {
           <div className="truncate text-[13px] font-semibold" style={{ color: bandShade(FC.fx, 0.96) }}>
             Bin Lattice
             <span className="ml-2 font-mono text-[10px] font-normal text-white/40">
-              {live
-                ? `${mode} · ${amountLabel} ${spectralFmtAmount(mode, amount)} · M${Math.round(mix * 100)}`
-                : "off · bypass"}
+              {fxStatusHint(
+                tech,
+                `${mode} · ${amountLabel} ${spectralFmtAmount(mode, amount)} · M${Math.round(mix * 100)}`,
+                "off",
+              )}
             </span>
           </div>
         </div>
@@ -15242,7 +15302,7 @@ function PathScopeGate({ children }: { children: React.ReactNode }) {
     <div className={on ? undefined : "opacity-35 pointer-events-none grayscale"} aria-disabled={!on}>
       {!on && (
         <div className="mb-2 text-center text-[10px] uppercase tracking-widest text-white/40">
-          Scope bypassed on Signal Path
+          Scope path off
         </div>
       )}
       {children}
@@ -15469,6 +15529,7 @@ function Dial({
   const [drag, setDrag] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
+  const skipTypedCommit = useRef(false);
   const toT = (v: number) => (curve === "log" ? Math.log(clamp(v, min, max) / min) / Math.log(max / min) : (v - min) / (max - min));
   const fromT = (tt: number) => {
     const raw = curve === "log" ? min * Math.pow(max / min, tt) : min + (max - min) * tt;
@@ -15500,6 +15561,10 @@ function Dial({
 
   const commitTyped = (raw: string) => {
     setEditing(false);
+    if (skipTypedCommit.current) {
+      skipTypedCommit.current = false;
+      return;
+    }
     const target = parseDisplayNumber(raw);
     if (!Number.isFinite(target)) return;
     const dispNum = (tt: number) => parseDisplayNumber(format(fromT(tt)));
@@ -15658,7 +15723,10 @@ function Dial({
           onBlur={(e) => commitTyped(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") commitTyped((e.target as HTMLInputElement).value);
-            else if (e.key === "Escape") setEditing(false);
+            else if (e.key === "Escape") {
+              skipTypedCommit.current = true;
+              setEditing(false);
+            }
             e.stopPropagation();
           }}
           className="w-[46px] text-[10px] font-mono text-center bg-black/70 border rounded -mt-0.5 leading-none text-white outline-none"

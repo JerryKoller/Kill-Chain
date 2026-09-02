@@ -370,7 +370,7 @@ export function paintChorus(
     ctx,
     W * 0.5,
     3,
-    !isLive ? "BYPASS" : model === "ensemble" ? "WIDE" : model === "tape" ? "TAPE" : "ENSEMBLE",
+    !isLive ? "DRY" : model === "ensemble" ? "WIDE" : model === "tape" ? "TAPE" : "ENSEMBLE",
     C_GLOW,
     { glow: flash },
   );
@@ -395,7 +395,7 @@ export function paintChorus(
     W,
     Hh,
     "CHOR · ENSEMBLE DRIFT",
-    !isLive ? "BYPASS" : `${nV}v · ${delayMs.toFixed(1)}ms · S${Math.round(spread * 100)}`,
+    !isLive ? "DRY" : `${nV}v · ${delayMs.toFixed(1)}ms · S${Math.round(spread * 100)}`,
     C_GLOW,
     isLive ? C_HOT : C_MID,
   );
@@ -567,7 +567,7 @@ export function ChorusStageViz() {
         className="pointer-events-none absolute right-3 top-2 font-mono text-[9px] tabular-nums uppercase"
         style={{ color: hexA(live ? C_HOT : C_MID, 0.78) }}
       >
-        {live ? `${rate < 1 ? rate.toFixed(2) : rate.toFixed(1)}Hz` : "BYPASS"}
+        {live ? `${rate < 1 ? rate.toFixed(2) : rate.toFixed(1)}Hz` : "DRY"}
       </div>
     </div>
   );

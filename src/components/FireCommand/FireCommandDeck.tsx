@@ -504,7 +504,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
     const items: { label: string; onClick: () => void; danger?: boolean }[] = [
       { label: "Open section", onClick: () => jump(node.moduleId) },
       {
-        label: pathOn[node.id] ? "Bypass stage" : "Enable stage",
+        label: pathOn[node.id] ? "Path off" : "Path on",
         onClick: () => setParam(PATH_KEYS[node.id], !pathOn[node.id] as never),
       },
       {
@@ -771,7 +771,7 @@ export function FireCommandDeck({ flush = false }: { flush?: boolean }) {
                         }
                         title={isMonitor
                           ? (on ? "Mute analysis tap" : "Enable analysis tap")
-                          : (on ? `Bypass ${node.label}` : `Enable ${node.label}`)}
+                          : (on ? `Path off — ${node.label}` : `Path on — ${node.label}`)}
                         aria-pressed={on}
                       >
                         {on ? "On" : "Off"}

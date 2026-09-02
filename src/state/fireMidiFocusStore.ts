@@ -68,7 +68,7 @@ interface FireMidiFocusState {
    * Returns true if the note was consumed (do not play synth).
    */
   handleNoteOn: (midi: number, velocity: number) => boolean;
-  /** Program Change — advance source. */
+  /** Program Change — jump to that module index (wraps the focus ring). */
   handleProgramChange: (program: number) => void;
 }
 
@@ -173,8 +173,8 @@ function resolveKnobIndex(cc: number, locked: number[] | null): number {
       useFireMidiFocusStore.setState({ knobSet: setCcs, knobsBound: 8 });
       saveLearnedKnobCcs(setCcs);
       useUIStore.getState().toast(`MPK knobs learned · K1=CC${setCcs[0]} … K8=CC${setCcs[7]}`);
-    } else {
-      useUIStore.getState().toast(`Learning knobs… K${idx + 1}=CC${cc} (${learnOrder.length}/8)`);
+    } else if (learnOrder.length === 1) {
+      useUIStore.getState().toast("Twist remaining knobs to bind K2–K8");
     }
   }
   return idx;
@@ -284,10 +284,14 @@ export const useFireMidiFocusStore = create<FireMidiFocusState>((set, get) => {
     return true;
   },
 
-  handleProgramChange: (_program) => {
+  handleProgramChange: (program) => {
     if (!get().enabled) return;
-    void _program;
-    get().cycleNext();
+    const p = Math.floor(program);
+    if (!Number.isFinite(p) || p < 0) {
+      get().cycleNext();
+      return;
+    }
+    get().jumpToIndex(p % FIRE_FOCUS_COUNT);
   },
   });
 });

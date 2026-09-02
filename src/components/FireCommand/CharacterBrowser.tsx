@@ -32,6 +32,13 @@ export function CharacterBrowser({
   const [phaseFilter, setPhaseFilter] = useState<FireCharacterPhase | "all">("all");
   const [favorites, setFavorites] = useState(() => readFavorites());
   const searchRef = useRef<HTMLInputElement>(null);
+  const jumpTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (jumpTimer.current) window.clearTimeout(jumpTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     const sync = () => setFavorites(readFavorites());
@@ -42,12 +49,15 @@ export function CharacterBrowser({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
     };
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
     const t = setTimeout(() => searchRef.current?.focus(), 80);
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       clearTimeout(t);
     };
   }, [open, onClose]);
@@ -87,7 +97,11 @@ export function CharacterBrowser({
     if (first) {
       // Expand band chips, then jump after modal exit animation settles.
       ensureExpanded(first);
-      window.setTimeout(() => jumpToModule(first), 120);
+      if (jumpTimer.current) window.clearTimeout(jumpTimer.current);
+      jumpTimer.current = window.setTimeout(() => {
+        jumpTimer.current = null;
+        jumpToModule(first);
+      }, 120);
     }
   };
 
@@ -108,6 +122,9 @@ export function CharacterBrowser({
             transition={{ type: "spring", stiffness: 320, damping: 30 }}
             onClick={(e) => e.stopPropagation()}
             className="w-full max-w-4xl h-[86vh] rounded-2xl flex flex-col overflow-hidden border border-[#a78bfa]/30"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Genesis characters"
             style={{
               background: "linear-gradient(165deg, rgb(18 12 28 / 0.99), rgb(8 6 14 / 0.995))",
               boxShadow: "0 24px 80px rgba(0,0,0,0.7), 0 0 60px rgba(167,139,250,0.08) inset",

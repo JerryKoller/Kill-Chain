@@ -67,7 +67,7 @@ export function FireCommandPalette({
       {
         id: "open-fire",
         label: "Open Fire / Hold Fire",
-        hint: "Toggle transport",
+        hint: "Play / stop",
         run: () => togglePlay(),
       },
       {
@@ -237,7 +237,11 @@ export function FireCommandPalette({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); onClose(); }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onClose();
+      }
       if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(filteredRef.current.length - 1, i + 1)); }
       if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(0, i - 1)); }
       if (e.key === "Enter") {
@@ -247,8 +251,8 @@ export function FireCommandPalette({
       }
       if (panelRef.current) trapTabKey(panelRef.current, e);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open, onClose]);
 
   if (!open) return null;

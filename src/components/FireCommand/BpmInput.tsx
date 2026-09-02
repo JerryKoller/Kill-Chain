@@ -70,6 +70,7 @@ export function BpmInput({
       return;
     }
     if (e.key === "Escape") {
+      e.preventDefault();
       setDraft(String(value));
       draftRef.current = String(value);
       e.currentTarget.blur();

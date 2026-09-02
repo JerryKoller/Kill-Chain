@@ -377,7 +377,7 @@ export function paintScale(
   tel(`SCALE · ${meta.label.toUpperCase()}`, C_GLOW, 0.7 * dim, VIZ_FONT_LABEL);
   tel(`${NOTE_NAMES[rootPc]} · ${chromatic ? 12 : steps.length}°`, C_DEGREE, 0.72, VIZ_FONT_VALUE);
 
-  pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : mode.toUpperCase(), C_GLOW, { glow: flash });
+  pill(ctx, W * 0.5, 3, !p.enabled ? "ASLEEP" : mode.toUpperCase(), C_GLOW, { glow: flash });
 
   // ── lock rail (bottom drag zone) ──
   const railY = Hh - 25;
@@ -395,7 +395,7 @@ export function paintScale(
     W,
     Hh,
     !p.enabled
-      ? "KEY LATTICE · BYPASS"
+      ? "KEY LATTICE · ASLEEP"
       : !p.lock
         ? "KEY LATTICE · OPEN"
         : chromatic

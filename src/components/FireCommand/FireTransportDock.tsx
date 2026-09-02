@@ -4,8 +4,8 @@
  * and Sequencer share one play/pause control.
  */
 
-import { useMemo, useEffect } from "react";
-import { useFireSequencerStore } from "@/state/fireSequencerStore";
+import { useMemo, useEffect, useState } from "react";
+import { useFireSequencerStore, recordQuantizeLabel, readRecordQuantizeSteps, ROLL_SNAP_EVENT } from "@/state/fireSequencerStore";
 import { useFireCommandStore } from "@/state/fireCommandStore";
 import { useUIStore } from "@/state/uiStore";
 import { BpmInput } from "./BpmInput";
@@ -109,6 +109,16 @@ function SwingControls() {
   );
 }
 
+function useRecordQuantizeLabel(): string {
+  const [label, setLabel] = useState(() => recordQuantizeLabel(readRecordQuantizeSteps()));
+  useEffect(() => {
+    const sync = () => setLabel(recordQuantizeLabel(readRecordQuantizeSteps()));
+    window.addEventListener(ROLL_SNAP_EVENT, sync);
+    return () => window.removeEventListener(ROLL_SNAP_EVENT, sync);
+  }, []);
+  return label;
+}
+
 export function FireTransportDock() {
   const playing = useFireSequencerStore((s) => s.playing);
   const bpm = useFireSequencerStore((s) => s.bpm);
@@ -140,6 +150,7 @@ export function FireTransportDock() {
   const selectionEnd = useFireSequencerStore((s) => s.selectionEnd);
   const toast = useUIStore((s) => s.toast);
   const panic = useFireCommandStore((s) => s.panic);
+  const recGridLabel = useRecordQuantizeLabel();
 
   const hasLoopSelection = useMemo(() => {
     if (selectionEnd <= selectionStart) return false;
@@ -155,6 +166,7 @@ export function FireTransportDock() {
         || el instanceof HTMLSelectElement
         || (el instanceof HTMLElement && el.isContentEditable)
       ) return;
+      if (document.querySelector("[aria-modal='true']")) return;
       if (e.code === "Space" || e.key === " ") {
         if (e.repeat) return;
         const focus = document.activeElement;
@@ -184,13 +196,14 @@ export function FireTransportDock() {
         // handlers run on the same keydown and mark it handled; if none of
         // them wanted it, we stop.
         if (e.defaultPrevented) return;
+        if (document.querySelector("[data-fire-editor-fullscreen]")) return;
         const t = e.target instanceof Element ? e.target : null;
-        const inEditor = !!t?.closest("[data-fire-piano-roll], [data-fire-arrangement]");
+        const inEditor = !!t?.closest("[data-fire-piano-roll], [data-fire-arrangement], [data-fire-drums]");
         const editorHot = !!document.querySelector(
-          "[data-fire-piano-roll]:hover, [data-fire-arrangement]:hover",
+          "[data-fire-piano-roll]:hover, [data-fire-arrangement]:hover, [data-fire-drums]:hover",
         );
         const editorFocused = !!document.activeElement?.closest?.(
-          "[data-fire-piano-roll], [data-fire-arrangement]",
+          "[data-fire-piano-roll], [data-fire-arrangement], [data-fire-drums]",
         );
         if (inEditor || editorHot || editorFocused) return;
         e.preventDefault();
@@ -436,16 +449,16 @@ export function FireTransportDock() {
                         ? { color: BRASS_SOFT, background: "rgba(232,184,109,0.16)", borderColor: "rgba(232,184,109,0.45)" }
                         : undefined
                     }
-                    title="Quantize captured notes to the 1/16 grid"
+                    title={recordQuantize ? `Quantize captured notes to the roll snap (${recGridLabel})` : "Record free — no snap"}
                     aria-pressed={recordQuantize}
                   >
-                    ⧗ 1/16
+                    ⧗ {recordQuantize ? recGridLabel : "FREE"}
                   </button>
                   <span className={`${SEQ_HINT} font-mono text-rose-200/80`}>
                     REC · {recordMode.toUpperCase()}
                     {recordCountIn > 0 ? ` · ${recordCountIn}b IN` : " · NO IN"}
                     {" · "}
-                    {recordQuantize ? "1/16" : "FREE"}
+                    {recordQuantize ? recGridLabel : "FREE"}
                   </span>
                 </div>
               )}

@@ -352,7 +352,7 @@ export function paintScenes(
     VIZ_FONT_VALUE,
   );
 
-  pill(ctx, W * 0.5, 3, !on ? "BYPASS" : moving ? "MORPH" : modeMeta.short, C_GLOW, { glow: flash });
+  pill(ctx, W * 0.5, 3, !on ? "ASLEEP" : moving ? "MORPH" : modeMeta.short, C_GLOW, { glow: flash });
 
   grain(ctx, W, Hh, 0.026);
   bezel(ctx, W, Hh, C);
@@ -360,7 +360,7 @@ export function paintScenes(
     ctx,
     W,
     Hh,
-    !on ? "ORBIT VAULT · BYPASS" : `ORBIT VAULT · ${modeMeta.short} · ${occ}/${n}`,
+    !on ? "ORBIT VAULT · ASLEEP" : `ORBIT VAULT · ${modeMeta.short} · ${occ}/${n}`,
     p.activeSlot >= 0 ? `SLOT ${p.activeSlot + 1}` : "TAP NODE",
     C_GLOW,
     C,

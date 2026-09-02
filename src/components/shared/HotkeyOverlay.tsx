@@ -12,9 +12,14 @@ export function HotkeyOverlay() {
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      close();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [open]);
 
   return (
@@ -34,6 +39,9 @@ export function HotkeyOverlay() {
             transition={{ type: "spring", stiffness: 280, damping: 28 }}
             onClick={(e) => e.stopPropagation()}
             className="glass-strong max-w-2xl w-full rounded-2xl p-6 relative"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Keyboard shortcuts"
           >
             <div className="flex items-start justify-between mb-4">
               <div>

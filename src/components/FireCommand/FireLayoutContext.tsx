@@ -92,10 +92,32 @@ export function FireLayoutProvider({ children }: { children: ReactNode }) {
 
   // Esc exits Focus / Solo mode from anywhere in Fire Command.
   // Routes through exitFocus so the auto-entered Focus density restores too.
+  // Bubble-phase + preventDefault: consume the key so a live Open Fire is not
+  // also panicked. Skip editors / inputs / modals — they own Escape first.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (focusIdRef.current) exitFocus();
+      if (e.defaultPrevented) return;
+      if (!focusIdRef.current) return;
+      const t = e.target;
+      if (
+        t instanceof HTMLInputElement
+        || t instanceof HTMLTextAreaElement
+        || t instanceof HTMLSelectElement
+        || (t instanceof HTMLElement && t.isContentEditable)
+      ) return;
+      if (document.querySelector("[aria-modal='true']")) return;
+      if (document.querySelector("[data-fire-editor-fullscreen]")) return;
+      const el = t instanceof Element ? t : null;
+      const editorSel = "[data-fire-piano-roll], [data-fire-arrangement], [data-fire-drums]";
+      const inEditor = !!el?.closest(editorSel);
+      const editorHot = !!document.querySelector(
+        "[data-fire-piano-roll]:hover, [data-fire-arrangement]:hover, [data-fire-drums]:hover",
+      );
+      const editorFocused = !!document.activeElement?.closest?.(editorSel);
+      if (inEditor || editorHot || editorFocused) return;
+      e.preventDefault();
+      exitFocus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

@@ -99,7 +99,7 @@ export function FullscreenEditorShell({
   children: ReactNode;
 }) {
   return (
-    <div className="fixed left-0 right-0 bottom-0 top-9 z-[90] flex flex-col bg-[#06070b] p-2.5 gap-2 overflow-hidden shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+    <div className="fixed left-0 right-0 bottom-0 top-9 z-[90] flex flex-col bg-[#06070b] p-2.5 gap-2 overflow-hidden shadow-[0_0_0_1px_rgba(255,255,255,0.08)]" data-fire-editor-fullscreen="">
       <header className="editor-fs-header shrink-0 flex flex-wrap items-center gap-2 px-1 min-h-9">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <ExitFullscreenButton onClick={onExit} />

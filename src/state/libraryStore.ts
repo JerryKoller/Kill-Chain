@@ -75,7 +75,9 @@ export function audioUrlForPath(p: string): string {
 export function pathFromAudioSrc(src: string | null): string | null {
   if (!src || !src.includes("?p=")) return null;
   try {
-    return decodeURIComponent(src.split("?p=")[1]);
+    const encoded = src.split("?p=")[1]?.split("&")[0];
+    if (!encoded) return null;
+    return decodeURIComponent(encoded);
   } catch {
     return null;
   }
@@ -96,6 +98,28 @@ function isUnder(p: string, folder: string): boolean {
   const a = p.toLowerCase().replace(/\\/g, "/");
   const b = folder.toLowerCase().replace(/\\/g, "/").replace(/\/+$/, "");
   return a === b || a.startsWith(b + "/");
+}
+
+/** Drop path keys from favorites / plays / playlists / missing when files leave the index. */
+function stripPathsFromMeta(
+  s: Pick<LibraryState, "favorites" | "playCounts" | "lastPlayed" | "playlists" | "missingPaths">,
+  gone: Set<string>,
+) {
+  const favorites = { ...s.favorites };
+  const playCounts = { ...s.playCounts };
+  const lastPlayed = { ...s.lastPlayed };
+  const missingPaths = { ...s.missingPaths };
+  for (const p of gone) {
+    delete favorites[p];
+    delete playCounts[p];
+    delete lastPlayed[p];
+    delete missingPaths[p];
+  }
+  const playlists = s.playlists.map((pl) => ({
+    ...pl,
+    paths: pl.paths.filter((p) => !gone.has(p)),
+  }));
+  return { favorites, playCounts, lastPlayed, playlists, missingPaths };
 }
 
 function mergeTags(t: LibraryTrack, tags: Partial<LibraryTrack>): LibraryTrack {
@@ -211,12 +235,22 @@ function load(): Persisted {
   }
 }
 
+function parseCollection(raw: unknown, playlists: Playlist[]): LibraryCollection {
+  if (raw === "all" || raw === "favorites" || raw === "recent") return raw;
+  if (typeof raw === "string" && raw.startsWith("pl:")) {
+    const id = raw.slice(3);
+    if (playlists.some((p) => p.id === id)) return raw as LibraryCollection;
+  }
+  return "all";
+}
+
 interface PersistedMeta {
   favorites: string[];
   playCounts: Record<string, number>;
   lastPlayed: Record<string, number>;
   playlists: Playlist[];
   missingPaths: string[];
+  collection: LibraryCollection;
 }
 
 function loadMeta(): PersistedMeta {
@@ -226,28 +260,31 @@ function loadMeta(): PersistedMeta {
     lastPlayed: {},
     playlists: [],
     missingPaths: [],
+    collection: "all",
   };
   try {
     const raw = localStorage.getItem(META_KEY);
     if (!raw) return empty;
     const p = JSON.parse(raw);
+    const playlists: Playlist[] = Array.isArray(p.playlists)
+      ? p.playlists
+          .filter((pl: unknown) => pl && typeof pl === "object")
+          .map((pl: Partial<Playlist>) => ({
+            id: String(pl.id ?? newPlaylistId()),
+            name: String(pl.name ?? "Playlist"),
+            createdAt: Number(pl.createdAt ?? Date.now()),
+            paths: Array.isArray(pl.paths) ? pl.paths.filter((x: unknown) => typeof x === "string") : [],
+          }))
+      : [];
     return {
       favorites: Array.isArray(p.favorites) ? p.favorites.filter((f: unknown) => typeof f === "string") : [],
       playCounts: p.playCounts && typeof p.playCounts === "object" ? p.playCounts : {},
       lastPlayed: p.lastPlayed && typeof p.lastPlayed === "object" ? p.lastPlayed : {},
-      playlists: Array.isArray(p.playlists)
-        ? p.playlists
-            .filter((pl: unknown) => pl && typeof pl === "object")
-            .map((pl: Partial<Playlist>) => ({
-              id: String(pl.id ?? newPlaylistId()),
-              name: String(pl.name ?? "Playlist"),
-              createdAt: Number(pl.createdAt ?? Date.now()),
-              paths: Array.isArray(pl.paths) ? pl.paths.filter((x: unknown) => typeof x === "string") : [],
-            }))
-        : [],
+      playlists,
       missingPaths: Array.isArray(p.missingPaths)
         ? p.missingPaths.filter((x: unknown) => typeof x === "string")
         : [],
+      collection: parseCollection(p.collection, playlists),
     };
   } catch {
     return empty;
@@ -274,6 +311,11 @@ interface LibraryState {
   genreFilter: string | null;
   /** Which slice is on screen (all / favorites / recent / a playlist). */
   collection: LibraryCollection;
+  /**
+   * One-shot: Library view should select + scroll this path (Fire export,
+   * transport "show in Library"). Not persisted.
+   */
+  focusPath: string | null;
 
   /** Favorite track paths (set semantics via a record for cheap lookups). */
   favorites: Record<string, true>;
@@ -313,6 +355,9 @@ interface LibraryState {
   setSearch: (q: string) => void;
   setGenreFilter: (g: string | null) => void;
   setCollection: (c: LibraryCollection) => void;
+  /** Jump Library to All, clear filters, and ask the list to focus this path. */
+  revealTrack: (path: string) => void;
+  clearFocusPath: () => void;
 
   toggleFavorite: (path: string) => void;
   /** Bump play count + recency for a track (called when playback starts). */
@@ -433,6 +478,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         lastPlayed: s.lastPlayed,
         playlists: s.playlists,
         missingPaths: Object.keys(s.missingPaths),
+        collection: s.collection,
       };
       localStorage.setItem(META_KEY, JSON.stringify(meta));
     } catch (err) {
@@ -542,7 +588,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     viewMode: initial.viewMode,
     search: "",
     genreFilter: null,
-    collection: "all",
+    collection: initialMeta.collection,
+    focusPath: null,
 
     favorites: Object.fromEntries(initialMeta.favorites.map((f) => [f, true as const])),
     playCounts: initialMeta.playCounts,
@@ -561,6 +608,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       const folders = Array.from(new Set([...get().folders, ...picked]));
       set({ folders });
       schedulePersist();
+      if (get().scanning) {
+        void import("@/state/uiStore").then(({ useUIStore }) =>
+          useUIStore
+            .getState()
+            .toast("Folder added — Refresh when the current scan finishes", "info"),
+        );
+        return;
+      }
       await get().rescan();
     },
 
@@ -602,18 +657,33 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       const tracks = existing
         ? get().tracks.map((t) => (t.path === track.path ? track : t))
         : [track, ...get().tracks];
-      set({ tracks });
+      const missingPaths = { ...get().missingPaths };
+      delete missingPaths[track.path];
+      // Fire export lands on Library — show All so the new file isn't hidden
+      // behind a playlist / genre / search the user had open.
+      set({
+        tracks,
+        missingPaths,
+        collection: "all",
+        search: "",
+        genreFilter: null,
+        focusPath: track.path,
+      });
       schedulePersist();
+      schedulePersistMeta();
       return track;
     },
 
     rescan: async () => {
       const api = window.playground?.library;
       if (!api) return;
+      if (get().scanning) return;
       const folders = get().folders;
       if (folders.length === 0) {
-        set({ tracks: [] });
+        const gone = new Set(get().tracks.map((t) => t.path));
+        set({ tracks: [], ...stripPathsFromMeta(get(), gone) });
         schedulePersist();
+        schedulePersistMeta();
         return;
       }
       set({ scanning: true });
@@ -656,16 +726,25 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         void runEnrichment();
       } catch (err) {
         console.error("[library] scan failed:", err);
+        void import("@/state/uiStore").then(({ useUIStore }) =>
+          useUIStore.getState().toast("Library scan failed — check folder permissions", "error"),
+        );
       } finally {
         set({ scanning: false });
       }
     },
 
     removeFolder: (folder) => {
+      const gone = new Set(
+        get()
+          .tracks.filter((t) => isUnder(t.path, folder))
+          .map((t) => t.path),
+      );
       const folders = get().folders.filter((f) => f !== folder);
-      const tracks = get().tracks.filter((t) => !isUnder(t.path, folder));
-      set({ folders, tracks });
+      const tracks = get().tracks.filter((t) => !gone.has(t.path));
+      set({ folders, tracks, ...stripPathsFromMeta(get(), gone) });
       schedulePersist();
+      schedulePersistMeta();
     },
 
     clearAll: () => {
@@ -680,6 +759,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         collection: "all",
         search: "",
         genreFilter: null,
+        focusPath: null,
       });
       schedulePersist();
       schedulePersistMeta();
@@ -712,6 +792,22 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     setCollection: (c) => {
       // Grouping is a flat-list concept; playlists keep their manual order.
       set({ collection: c });
+      schedulePersistMeta();
+    },
+
+    revealTrack: (path) => {
+      if (!path || !get().tracks.some((t) => t.path === path)) return;
+      set({
+        collection: "all",
+        search: "",
+        genreFilter: null,
+        focusPath: path,
+      });
+      schedulePersistMeta();
+    },
+
+    clearFocusPath: () => {
+      if (get().focusPath) set({ focusPath: null });
     },
 
     toggleFavorite: (path) => {
@@ -853,19 +949,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       if (gone.size === 0) return 0;
       const tracks = get().tracks.filter((t) => !gone.has(t.path));
       const removed = get().tracks.length - tracks.length;
-      const favorites = { ...get().favorites };
-      const playCounts = { ...get().playCounts };
-      const lastPlayed = { ...get().lastPlayed };
-      for (const p of gone) {
-        delete favorites[p];
-        delete playCounts[p];
-        delete lastPlayed[p];
-      }
-      const playlists = get().playlists.map((pl) => ({
-        ...pl,
-        paths: pl.paths.filter((p) => !gone.has(p)),
-      }));
-      set({ tracks, favorites, playCounts, lastPlayed, playlists, missingPaths: {} });
+      set({ tracks, ...stripPathsFromMeta(get(), gone), missingPaths: {} });
       schedulePersist();
       schedulePersistMeta();
       return removed;
@@ -963,7 +1047,8 @@ const cmpStr = (a: string, b: string) =>
   a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
 
 /** How many tracks the "Recent" collection shows at most. */
-const RECENT_LIMIT = 200;
+export const LIBRARY_RECENT_LIMIT = 200;
+const RECENT_LIMIT = LIBRARY_RECENT_LIMIT;
 
 /**
  * Produce the visible rows + the flat ordered track list for the current
@@ -994,7 +1079,9 @@ export function buildLibraryView(
       t.title.toLowerCase().includes(q) ||
       t.artist.toLowerCase().includes(q) ||
       t.album.toLowerCase().includes(q) ||
-      (t.genre !== null && t.genre.toLowerCase().includes(q)));
+      t.fileName.toLowerCase().includes(q) ||
+      (t.genre !== null && t.genre.toLowerCase().includes(q)) ||
+      (t.year != null && String(t.year).includes(q)));
 
   // ── Playlist collections: manual order wins over sort/group ──
   if (s.collection.startsWith("pl:")) {
@@ -1120,11 +1207,17 @@ export function buildLibraryView(
   return { orderedTracks, rows };
 }
 
+function playableTracks(list: LibraryTrack[]): LibraryTrack[] {
+  const missing = useLibraryStore.getState().missingPaths;
+  if (Object.keys(missing).length === 0) return list;
+  return list.filter((t) => !missing[t.path]);
+}
+
 function toQueueItems(list: LibraryTrack[]): QueueItem[] {
   return list.map((t) => ({
     id: t.id,
     src: audioUrlForPath(t.path),
-    name: t.fileName,
+    name: t.title || t.fileName,
     metadata: {
       title: t.title,
       artist: t.artist,
@@ -1140,21 +1233,28 @@ export async function playLibrary(
   index: number,
 ): Promise<void> {
   if (list.length === 0 || index < 0 || index >= list.length) return;
+  const playable = playableTracks(list);
+  if (playable.length === 0) return;
+  const want = list[index];
+  let start = playable.findIndex((t) => t.path === want.path);
+  if (start < 0) start = 0;
   await useAudioStore.getState().ensureReady();
-  await usePlayerStore.getState().setQueue(toQueueItems(list), index);
+  await usePlayerStore.getState().setQueue(toQueueItems(playable), start);
   await usePlayerStore.getState().play();
 }
 
 /** Append tracks to the end of the current queue. */
 export function enqueueLibrary(list: LibraryTrack[]): void {
-  if (list.length === 0) return;
-  usePlayerStore.getState().enqueue(toQueueItems(list));
+  const playable = playableTracks(list);
+  if (playable.length === 0) return;
+  usePlayerStore.getState().enqueue(toQueueItems(playable));
 }
 
 /** Insert tracks right after the currently playing queue item. */
 export function playNextLibrary(list: LibraryTrack[]): void {
-  if (list.length === 0) return;
-  usePlayerStore.getState().insertNext(toQueueItems(list));
+  const playable = playableTracks(list);
+  if (playable.length === 0) return;
+  usePlayerStore.getState().insertNext(toQueueItems(playable));
 }
 
 // ── Play tracking ──

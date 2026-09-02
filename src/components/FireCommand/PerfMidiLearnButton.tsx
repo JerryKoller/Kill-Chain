@@ -2,7 +2,7 @@
  * Compact MIDI learn button for Fire Command performance controls.
  */
 
-import { useMidiStore, type MidiTarget } from "@/state/midiStore";
+import { useMidiStore, midiTargetId, type MidiTarget } from "@/state/midiStore";
 import { FC_BAND } from "./fireColors";
 
 export function PerfMidiLearnButton({
@@ -20,11 +20,8 @@ export function PerfMidiLearnButton({
 
   if (!available) return null;
 
-  const learningThis =
-    learning
-    && learning.kind === target.kind
-    && JSON.stringify(learning) === JSON.stringify(target);
-  const mapped = mappings.filter((m) => JSON.stringify(m.target) === JSON.stringify(target));
+  const learningThis = !!learning && midiTargetId(learning) === midiTargetId(target);
+  const mapped = mappings.filter((m) => midiTargetId(m.target) === midiTargetId(target));
 
   return (
     <button
@@ -44,7 +41,9 @@ export function PerfMidiLearnButton({
           ? "Waiting for MIDI CC / note…"
           : mapped.length
             ? `Mapped: ${mapped.map((m) => m.label).join(", ")} — click to re-learn`
-            : `MIDI learn${label ? ` · ${label}` : ""}`
+            : target.kind === "fireScene"
+              ? `MIDI learn · scene ${target.slot + 1} (fires above 40% velocity)`
+              : `MIDI learn${label ? ` · ${label}` : ""}`
       }
     >
       {learningThis ? "…" : mapped.length ? "MIDI" : "Learn"}

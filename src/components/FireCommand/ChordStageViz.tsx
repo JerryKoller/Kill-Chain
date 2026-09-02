@@ -292,7 +292,7 @@ export function paintChord(
   tel(`VOICING · ${p.label.toUpperCase()}`, C_GLOW, 0.7 * dim, VIZ_FONT_LABEL);
   tel(`${n}v · SPREAD ${list[n - 1] ?? 0}st`, C_VOICE, 0.72, VIZ_FONT_VALUE);
 
-  pill(ctx, W * 0.5, 3, !p.enabled ? "BYPASS" : armed ? p.label.toUpperCase() : "IDLE", C_GLOW, { glow: flash });
+  pill(ctx, W * 0.5, 3, !p.enabled ? "ASLEEP" : armed ? p.label.toUpperCase() : "IDLE", C_GLOW, { glow: flash });
 
   // ── arm rail (bottom drag zone) ──
   const railY = Hh - 25;
@@ -309,7 +309,7 @@ export function paintChord(
     ctx,
     W,
     Hh,
-    !p.enabled ? "STACK VAULT · BYPASS" : armed ? `STACK VAULT · ${p.label.toUpperCase()}` : "STACK VAULT · IDLE",
+    !p.enabled ? "STACK VAULT · ASLEEP" : armed ? `STACK VAULT · ${p.label.toUpperCase()}` : "STACK VAULT · IDLE",
     `${list.map((v) => (v === 0 ? "0" : `+${v}`)).join(" ")} · ${n}v`,
     C_GLOW,
     C,
