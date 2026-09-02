@@ -266,8 +266,11 @@ interface LockLibraryState {
 
   /** Export records (all, or the given keys) as a `.klock` pack. */
   exportPack: (keys?: string[]) => Promise<boolean>;
-  /** Import a `.klock` pack — returns how many records landed. */
-  importPack: () => Promise<number>;
+  /**
+   * Import a `.klock` pack. Returns how many records landed, or `null` when
+   * the picker is unavailable or the user cancelled.
+   */
+  importPack: () => Promise<number | null>;
 }
 
 export const useLockLibraryStore = create<LockLibraryState>((set, get) => ({
@@ -360,7 +363,7 @@ export const useLockLibraryStore = create<LockLibraryState>((set, get) => ({
 
   exportPack: async (keys) => {
     const files = window.playground?.files;
-    if (!files) return false;
+    if (!files?.save) return false;
     const all = get().records;
     const chosen = keys && keys.length > 0 ? keys.map((k) => all[k]).filter(Boolean) : Object.values(all);
     if (chosen.length === 0) return false;
@@ -382,11 +385,11 @@ export const useLockLibraryStore = create<LockLibraryState>((set, get) => ({
 
   importPack: async () => {
     const files = window.playground?.files;
-    if (!files) return 0;
+    if (!files?.openText) return null;
     const res = await files.openText([
       { name: "Kill-Chain lock pack", extensions: ["klock", "json"] },
     ]);
-    if (!res) return 0;
+    if (!res) return null;
     try {
       const data = JSON.parse(res.text) as { kind?: string; records?: unknown[] };
       if (data.kind !== "kill-chain-lock-pack" || !Array.isArray(data.records)) return 0;

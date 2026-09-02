@@ -67,7 +67,7 @@ export class ErrorBoundary extends Component<Props, State> {
     // The retryKey forces React to remount the subtree on retry so any
     // bad ref / canvas state from the crashed render is thrown away.
     return (
-      <div key={this.state.retryKey} className="h-full w-full">
+      <div key={this.state.retryKey} className="h-full w-full min-h-0">
         {this.props.children}
       </div>
     );

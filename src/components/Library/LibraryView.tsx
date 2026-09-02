@@ -302,13 +302,24 @@ export function LibraryView() {
   };
   useEffect(() => () => cancelAnimationFrame(scrollRaf.current), []);
   useEffect(() => {
+    if (viewMode !== "list") return;
     const el = listRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => setViewH(el.clientHeight));
     ro.observe(el);
     setViewH(el.clientHeight);
+    setScrollTop(el.scrollTop);
     return () => ro.disconnect();
-  }, []);
+  }, [viewMode, rows.length]);
+
+  // List ↔ albums (and group/filter changes) remount or rebuild the windowed
+  // rows. Keep DOM scroll and the virtualizer's scrollTop in lockstep or the
+  // first rows render at a leftover offset and shear under the column header.
+  useEffect(() => {
+    setScrollTop(0);
+    const el = listRef.current;
+    if (el) el.scrollTop = 0;
+  }, [viewMode, groupBy, collection, search, genreFilter]);
 
   const overscan = 6;
   const findRow = (y: number) => {
@@ -421,8 +432,6 @@ export function LibraryView() {
   const dragFrom = useRef<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  const listHeight = "calc(100vh - 372px)";
-
   const collectionLabel =
     collection === "favorites"
       ? "favorite"
@@ -433,15 +442,17 @@ export function LibraryView() {
           : "";
 
   return (
-    <div className="flex flex-col gap-3 pb-4">
+    <div className="flex flex-col gap-3 h-full min-h-0">
+      <div className="shrink-0">
       <ActionBar
         title="Library"
         code="KC-02"
         subtitle="Your music — add folders, then browse, search, and play into the sculpting engine"
       />
+      </div>
 
       {!available ? (
-        <GlassPanel intense className="p-8">
+        <GlassPanel intense className="p-8 flex-1 min-h-0">
           <KCEmptyState
             className="w-full max-w-lg mx-auto"
             icon={<IconLibrary width={40} height={40} className="opacity-60" />}
@@ -461,9 +472,9 @@ export function LibraryView() {
           />
         </GlassPanel>
       ) : (
-        <>
+        <div className="flex flex-col gap-3 flex-1 min-h-0">
           {/* ── Controls ── */}
-          <GlassPanel intense className="p-3">
+          <GlassPanel intense className="p-3 shrink-0">
             <div className="flex items-center gap-2 flex-wrap">
               <NeonButton onClick={() => void addFolders()} className="text-xs">
                 ＋ Add folders
@@ -739,10 +750,10 @@ export function LibraryView() {
           </GlassPanel>
 
           {/* ── Track list / album grid ── */}
-          <GlassPanel intense className="p-0 overflow-hidden">
+          <GlassPanel intense className="p-0 overflow-hidden flex-1 min-h-0 flex flex-col">
             {viewMode === "grid" ? (
               rows.length === 0 ? (
-                <div style={{ height: listHeight, minHeight: 260 }}>
+                <div className="flex-1 min-h-0">
                   <EmptyState
                     hasFolders={folders.length > 0}
                     scanning={scanning}
@@ -756,7 +767,6 @@ export function LibraryView() {
                 <AlbumGrid
                   tracks={orderedTracks}
                   playingPath={playingPath}
-                  listHeight={listHeight}
                 />
               )
             ) : (
@@ -813,7 +823,7 @@ export function LibraryView() {
             </div>
 
             {rows.length === 0 ? (
-              <div style={{ height: listHeight, minHeight: 260 }}>
+              <div className="flex-1 min-h-0">
                 <EmptyState
                   hasFolders={folders.length > 0}
                   scanning={scanning}
@@ -829,8 +839,7 @@ export function LibraryView() {
                 tabIndex={0}
                 onKeyDown={onListKeyDown}
                 onScroll={onListScroll}
-                className="overflow-y-auto sidebar-scroll outline-none focus:ring-1 focus:ring-cyan/20"
-                style={{ height: listHeight, minHeight: 260 }}
+                className="flex-1 min-h-0 overflow-y-auto sidebar-scroll outline-none focus:ring-1 focus:ring-cyan/20 [overflow-anchor:none]"
               >
                 <div style={{ height: totalHeight, position: "relative" }}>
                   {visible.map((row, i) => {
@@ -905,7 +914,7 @@ export function LibraryView() {
             </>
             )}
           </GlassPanel>
-        </>
+        </div>
       )}
 
       {menu && (
@@ -1221,11 +1230,9 @@ interface AlbumCell {
 function AlbumGrid({
   tracks,
   playingPath,
-  listHeight,
 }: {
   tracks: LibraryTrack[];
   playingPath: string | null;
-  listHeight: string;
 }) {
   // The grid shows far more art at once than the list — widen the LRU so
   // scrolling back up doesn't re-parse covers that were just evicted.
@@ -1264,10 +1271,7 @@ function AlbumGrid({
   }, [tracks]);
 
   return (
-    <div
-      className="overflow-y-auto sidebar-scroll p-3"
-      style={{ height: listHeight, minHeight: 260 }}
-    >
+    <div className="flex-1 min-h-0 overflow-y-auto sidebar-scroll p-3 [overflow-anchor:none]">
       <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(148px,1fr))]">
         {albums.map((a) => (
           <AlbumCard

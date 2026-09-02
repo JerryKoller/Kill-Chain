@@ -9,7 +9,7 @@ import { useUIStore } from "@/state/uiStore";
 import { useAirspaceStore } from "@/state/airspaceStore";
 import { useLibraryStore, audioUrlForPath } from "@/state/libraryStore";
 import { getEngine } from "@/audio/AudioEngine";
-import { HEADPHONES, profileForId } from "@/audio/headphoneProfiles";
+import { profileForId } from "@/audio/headphoneProfiles";
 import { useEqStore } from "@/state/eqStore";
 import {
   measureTrack,
@@ -95,8 +95,10 @@ function persistPrefs(prefs: TractorPrefs): void {
   prefsTimer = setTimeout(() => {
     try {
       window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-    } catch {
-      /* ignore */
+    } catch (err) {
+      void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+        reportStorageFailure("Tractor prefs", err),
+      );
     }
   }, 300);
 }
@@ -133,6 +135,7 @@ export function TractorBeamView() {
   const [applied, setApplied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const aliveRef = useRef(true);
 
   const strengthRef = useRef(strength);
   strengthRef.current = strength;
@@ -150,7 +153,21 @@ export function TractorBeamView() {
     persistPrefs({ strength: strengthRef.current, targetId: id });
   }, []);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // Drop the ref so an in-flight catch does not toast "cancelled" or setState
+  // after we leave Tractor. Click-to-cancel keeps the ref and still toasts.
+  useEffect(
+    () => () => {
+      aliveRef.current = false;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    },
+    [],
+  );
+
+  // A/B compares the last engaged chain, not a recipe you haven't applied yet.
+  useEffect(() => {
+    setApplied(false);
+  }, [strength, targetId, excluded, curveEdits, layerSel, reference, correctionEnabled, headphoneId]);
 
   // ── The manifest: EVERYTHING derives from the measurement, instantly ──
   const manifest: LockManifest | null = useMemo(
@@ -223,13 +240,10 @@ export function TractorBeamView() {
         }
       } catch (err) {
         if (abortRef.current !== ac) return;
-        if ((err as DOMException)?.name === "AbortError") {
-          toast("Analysis cancelled");
-        } else {
-          console.error("[tractor] analysis failed:", err);
-          setError("Analysis failed — the file decoded but could not be scanned. Try another track.");
-          toast("Analysis failed — try another file", "error");
-        }
+        if ((err as DOMException)?.name === "AbortError") return;
+        console.error("[tractor] analysis failed:", err);
+        setError("Analysis failed — the file decoded but could not be scanned. Try another track.");
+        toast("Analysis failed — try another file", "error");
         setStatus("");
       } finally {
         if (abortRef.current === ac) {
@@ -258,9 +272,7 @@ export function TractorBeamView() {
         await runAnalysis(audioBuf, name, ac);
       } catch (err) {
         if (abortRef.current !== ac) return;
-        if ((err as DOMException)?.name === "AbortError") {
-          toast("Analysis cancelled");
-        } else {
+        if ((err as DOMException)?.name !== "AbortError") {
           console.error("[tractor] decode failed:", err);
           setError("Couldn't read that track — the file may be corrupt or an unsupported format.");
           toast("Couldn't read that track", "error");
@@ -274,8 +286,24 @@ export function TractorBeamView() {
   );
 
   const cancelAnalysis = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+    const ac = abortRef.current;
+    if (!ac || ac.signal.aborted) return;
+    ac.abort();
+    toast("Acquisition cancelled");
+  }, [toast]);
+
+  useEffect(() => {
+    if (!busy) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      cancelAnalysis();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, cancelAnalysis]);
 
   const onLiveLock = useCallback(() => {
     abortRef.current?.abort();
@@ -323,12 +351,10 @@ export function TractorBeamView() {
         }
       } catch (err) {
         if (abortRef.current !== ac) return;
-        if ((err as DOMException)?.name === "AbortError") {
-          toast("Live lock cancelled");
-        } else {
-          console.error("[tractor] live lock failed:", err);
-          setError("Live lock failed — the engine tap could not be read.");
-        }
+        if ((err as DOMException)?.name === "AbortError") return;
+        console.error("[tractor] live lock failed:", err);
+        setError("Live lock failed — the engine tap could not be read.");
+        toast("Live lock failed — the engine tap could not be read", "error");
         setStatus("");
       } finally {
         if (abortRef.current === ac) {
@@ -394,16 +420,26 @@ export function TractorBeamView() {
   // ── Reference target slot ──
   const [refBusy, setRefBusy] = useState(false);
   const onLoadReference = useCallback(() => {
+    if (typeof window.playground?.files?.openAudioMulti !== "function") {
+      toast("Loading a reference needs the desktop app");
+      return;
+    }
     setRefBusy(true);
-    void loadReferenceFile((p) => setStatus(p.stage))
+    void loadReferenceFile((p) => {
+      if (aliveRef.current) setStatus(p.stage);
+    })
       .then((ref) => {
+        if (!aliveRef.current) return;
         if (ref) {
           setReference(ref);
           toast(`Reference locked — ${ref.name}`, "success");
         }
       })
-      .catch(() => toast("Couldn't read the reference file", "error"))
+      .catch(() => {
+        if (aliveRef.current) toast("Couldn't read the reference file", "error");
+      })
       .finally(() => {
+        if (!aliveRef.current) return;
         setRefBusy(false);
         setStatus("");
       });
@@ -439,65 +475,70 @@ export function TractorBeamView() {
 
   // ── Engage: apply the manifest + record the lock ──
   const engageLock = useCallback(() => {
-    if (!manifest || manifest.silent) return;
+    if (!manifest || manifest.silent || busy) return;
     void (async () => {
-      const appliedLayers = await applyLockManifest(manifest, layerSel, resultName);
-      setApplied(true);
-      toast(
-        appliedLayers.length > 1
-          ? `Lock engaged — ${appliedLayers.length} layers`
-          : appliedLayers.length === 1
-            ? "Lock engaged — EQ matched"
-            : "Nothing selected to apply",
-        appliedLayers.length > 0 ? "success" : "warn",
-      );
-      if (appliedLayers.length === 0 || !measurement) return;
-      // Record into the Lock Library under the playing source's identity
-      // (falls back to the analyzed name for one-off files).
-      const src = await lockKeyForCurrentSource();
-      const ident = src ?? {
-        key: `live:${resultName ?? "unknown"}`,
-        kind: "live" as const,
-        name: resultName ?? "Lock",
-        sub: "",
-      };
-      const now = Date.now();
-      useLockLibraryStore.getState().upsert({
-        ...ident,
-        favorite: false,
-        savedAt: now,
-        updatedAt: now,
-        measurement: {
-          ...measurement,
-          levelsDb: measurement.levelsDb.map((v) => Math.round(v * 100) / 100),
-        },
-        targetId: targetIdRef.current,
-        strength: manifest.strength,
-        vetoes: [...excluded],
-        curveEdits: Object.fromEntries([...curveEdits].map(([f, d]) => [String(f), d])),
-        layers: { ...layerSel },
-        curve: manifest.curve,
-        masterMoves: manifest.masterMoves,
-        restore: manifest.restore,
-        clarity: manifest.clarity,
-        outputTrimDb: manifest.outputTrimDb,
-        matchBeforePct: manifest.matchBeforePct,
-        matchAfterPct: manifest.matchAfterPct,
-        contentLabel: manifest.contentLabel,
-        fingerprint: measurementFingerprint(measurement),
-        v: 1,
-      });
+      try {
+        const appliedLayers = await applyLockManifest(manifest, layerSel, resultName);
+        toast(
+          appliedLayers.length > 1
+            ? `Lock engaged — ${appliedLayers.length} layers`
+            : appliedLayers.length === 1
+              ? "Lock engaged — EQ matched"
+              : "Nothing selected to apply",
+          appliedLayers.length > 0 ? "success" : "warn",
+        );
+        if (appliedLayers.length === 0 || !measurement) return;
+        setApplied(true);
+        // Record into the Lock Library under the playing source's identity
+        // (falls back to the analyzed name for one-off files).
+        const src = await lockKeyForCurrentSource();
+        const ident = src ?? {
+          key: `live:${resultName ?? "unknown"}`,
+          kind: "live" as const,
+          name: resultName ?? "Lock",
+          sub: "",
+        };
+        const now = Date.now();
+        useLockLibraryStore.getState().upsert({
+          ...ident,
+          favorite: false,
+          savedAt: now,
+          updatedAt: now,
+          measurement: {
+            ...measurement,
+            levelsDb: measurement.levelsDb.map((v) => Math.round(v * 100) / 100),
+          },
+          targetId: targetIdRef.current,
+          strength: manifest.strength,
+          vetoes: [...excluded],
+          curveEdits: Object.fromEntries([...curveEdits].map(([f, d]) => [String(f), d])),
+          layers: { ...layerSel },
+          curve: manifest.curve,
+          masterMoves: manifest.masterMoves,
+          restore: manifest.restore,
+          clarity: manifest.clarity,
+          outputTrimDb: manifest.outputTrimDb,
+          matchBeforePct: manifest.matchBeforePct,
+          matchAfterPct: manifest.matchAfterPct,
+          contentLabel: manifest.contentLabel,
+          fingerprint: measurementFingerprint(measurement),
+          v: 1,
+        });
+      } catch (err) {
+        console.error("[tractor] engage failed:", err);
+        toast("Couldn't engage the lock", "error");
+      }
     })();
-  }, [manifest, layerSel, resultName, measurement, excluded, curveEdits, toast]);
+  }, [manifest, layerSel, resultName, measurement, excluded, curveEdits, toast, busy]);
 
   const saveResult = useCallback(() => {
-    if (!manifest || manifest.silent) return;
+    if (!manifest || manifest.silent || busy) return;
     const base = (resultName || "Tractor").replace(/\.[^.]+$/, "").slice(0, 28);
     void import("@/state/userPresetsStore").then(({ useUserPresetsStore }) => {
       useUserPresetsStore.getState().savePreset(`Beam · ${base}`, manifest.result.params);
-      toast(`Saved preset "Beam · ${base}"`, "success");
+      toast(`Saved "Beam · ${base}" (Armory knobs — EQ stays in the Lock Library)`, "success");
     });
-  }, [manifest, resultName, toast]);
+  }, [manifest, resultName, toast, busy]);
 
   /** Open a Lock Library record back into the console for re-voicing. */
   const openRecord = useCallback(
@@ -523,6 +564,12 @@ export function TractorBeamView() {
     },
     [toast],
   );
+
+  const canEngage =
+    !!manifest &&
+    !manifest.silent &&
+    manifest.items.some((item) => item.active && layerSel[item.id]);
+  const canLoadReference = typeof window.playground?.files?.openAudioMulti === "function";
 
   return (
     <div className="flex flex-col gap-3 pb-4">
@@ -553,13 +600,26 @@ export function TractorBeamView() {
           <LockButton busy={busy} progress={progress} status={status} onLock={onLock} onCancel={cancelAnalysis} />
 
           <div className="grid grid-cols-3 gap-2">
-            <button onClick={onPickFile} disabled={busy} className="kc-btn kc-btn--ghost kc-btn--sm">
+            <button
+              type="button"
+              onClick={onPickFile}
+              disabled={busy}
+              className="kc-btn kc-btn--ghost kc-btn--sm"
+              title="Pick a file from disk"
+            >
               ＋ File
             </button>
-            <button onClick={onUseCurrent} disabled={busy} className="kc-btn kc-btn--ghost kc-btn--sm">
+            <button
+              type="button"
+              onClick={onUseCurrent}
+              disabled={busy || !playerEl?.src}
+              className="kc-btn kc-btn--ghost kc-btn--sm"
+              title={playerEl?.src ? "Analyze the loaded track (even if paused)" : "No track loaded"}
+            >
               ♪ Current
             </button>
             <button
+              type="button"
               onClick={onLiveLock}
               disabled={busy}
               className="kc-btn kc-btn--ghost kc-btn--sm"
@@ -591,7 +651,11 @@ export function TractorBeamView() {
                 <div className="text-[10px] uppercase tracking-[0.25em] text-dim">Target ref</div>
                 {reference && (
                   <button
-                    onClick={() => setReference(null)}
+                    type="button"
+                    onClick={() => {
+                      setReference(null);
+                      toast("Reference cleared");
+                    }}
                     className="text-[10px] text-dim hover:text-white/80 transition"
                     title="Clear the reference — back to profile targets"
                   >
@@ -605,9 +669,15 @@ export function TractorBeamView() {
                 </div>
               ) : (
                 <button
+                  type="button"
                   onClick={onLoadReference}
                   disabled={refBusy || busy}
                   className="text-sm text-cyan/90 hover:text-cyan transition disabled:opacity-50"
+                  title={
+                    canLoadReference
+                      ? "Pick a reference track — Tractor matches the source toward it"
+                      : "Loading a reference needs the desktop app"
+                  }
                 >
                   {refBusy ? "Reading…" : "+ Load reference"}
                 </button>
@@ -676,8 +746,8 @@ export function TractorBeamView() {
             <div className="text-sm font-medium">{headphone.name}</div>
             <div className="text-[11px] text-dim mt-0.5">
               {correctionEnabled
-                ? "Correction ON — assuming a flat baseline."
-                : "Correction OFF — compensating the headphone's own colour."}
+                ? "Correction ON — headphone profile is flattening; Tractor voices for a flat baseline."
+                : "Correction OFF — Tractor also compensates this headphone's colour."}
             </div>
           </div>
 
@@ -702,6 +772,11 @@ export function TractorBeamView() {
                   <div className="text-xl font-semibold truncate" title={resultName ?? undefined}>
                     {resultName || "Analysis complete"}
                   </div>
+                  {busy && (
+                    <div className="text-[11px] text-amber mt-0.5">
+                      Scan in progress — this is the previous lock until acquisition finishes.
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <Stat
@@ -766,7 +841,7 @@ export function TractorBeamView() {
                   {excluded.size > 0 && (
                     <span className="flex items-center gap-2">
                       {excluded.size} band{excluded.size === 1 ? "" : "s"} vetoed
-                      <button onClick={clearVetoes} className="kc-btn kc-btn--ghost kc-btn--sm uppercase tracking-[0.15em]">
+                      <button type="button" onClick={clearVetoes} className="kc-btn kc-btn--ghost kc-btn--sm uppercase tracking-[0.15em]">
                         Restore
                       </button>
                     </span>
@@ -774,7 +849,7 @@ export function TractorBeamView() {
                   {curveEdits.size > 0 && (
                     <span className="flex items-center gap-2">
                       {curveEdits.size} band{curveEdits.size === 1 ? "" : "s"} hand-edited
-                      <button onClick={clearEdits} className="kc-btn kc-btn--ghost kc-btn--sm uppercase tracking-[0.15em]">
+                      <button type="button" onClick={clearEdits} className="kc-btn kc-btn--ghost kc-btn--sm uppercase tracking-[0.15em]">
                         Reset edits
                       </button>
                     </span>
@@ -786,14 +861,33 @@ export function TractorBeamView() {
 
               <div className="flex items-center gap-2 flex-wrap">
                 <button
+                  type="button"
                   onClick={engageLock}
-                  disabled={manifest.silent}
+                  disabled={!canEngage || busy}
                   className="kc-btn kc-btn--primary"
-                  title="Apply every enabled layer of the manifest and record the lock"
+                  title={
+                    busy
+                      ? "Wait — a scan is running. This curve is the previous lock until it finishes."
+                      : manifest.silent
+                        ? "Nothing to apply — the source looks silent"
+                        : canEngage
+                          ? "Apply every enabled layer of the manifest and record the lock"
+                          : "Turn on at least one layer in the manifest"
+                  }
                 >
                   ⚡ Engage lock
                 </button>
-                <button onClick={saveResult} disabled={manifest.silent} className="kc-btn kc-btn--ghost">
+                <button
+                  type="button"
+                  onClick={saveResult}
+                  disabled={manifest.silent || busy}
+                  className="kc-btn kc-btn--ghost"
+                  title={
+                    busy
+                      ? "Wait — a scan is running. This curve is the previous lock until it finishes."
+                      : "Armory preset of the derived tone knobs only — the EQ curve is not included. Engage lock to keep EQ in the Lock Library."
+                  }
+                >
                   Save as preset
                 </button>
                 <AbCompareButton applied={applied} playing={playerStatus === "playing"} />
@@ -813,10 +907,11 @@ export function TractorBeamView() {
         <div className="text-xs uppercase tracking-[0.3em] text-dim mb-2">How it works</div>
         <ol className="grid md:grid-cols-3 gap-3 text-[12px] leading-relaxed text-white/75">
           <li className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
-            <span className="text-cyan font-semibold">1 · Lock</span> — the source is measured
-            offline (~100 FFT windows start-to-finish, silence skipped, sections compared) and read
-            for health: an already-clean master gets a capped, gentle correction; damage like an HF
-            cutoff, crunch or a thin body justifies a firmer hand.
+            <span className="text-cyan font-semibold">1 · Lock</span> — a loaded
+            file is scanned offline (FFT windows start-to-finish, silence skipped).
+            Live capture / LOCK-while-playing listens for ~20 s instead. Health is
+            read: an already-clean master gets a capped, gentle correction; damage
+            like an HF cutoff, crunch or a thin body justifies a firmer hand.
           </li>
           <li className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
             <span className="text-cyan font-semibold">2 · Manifest</span> — every proposed layer is
@@ -827,8 +922,8 @@ export function TractorBeamView() {
           <li className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
             <span className="text-cyan font-semibold">3 · Remember</span> — engaging the lock files
             it in the Lock Library under the source's identity. Next time that source plays,
-            Auto-Lock restores the saved lock instantly instead of re-scanning; locks export as
-            .klock packs.
+            Auto-Lock restores the saved lock instantly instead of re-scanning. Desktop can export
+            locks as .klock packs.
           </li>
         </ol>
       </GlassPanel>
@@ -854,13 +949,14 @@ function LockButton({
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={busy ? onCancel : onLock}
         className={`relative w-full overflow-hidden rounded-2xl border px-4 py-5 text-center transition group ${
           busy
             ? "border-cyan/60 bg-cyan/[0.08]"
             : "border-cyan/40 bg-cyan/[0.05] hover:bg-cyan/[0.1] hover:border-cyan/70"
         }`}
-        title={busy ? "Cancel the acquisition" : "Measure whatever is playing (or loaded) and prepare the full correction manifest"}
+        title={busy ? "Cancel the acquisition (Esc)" : "Measure whatever is playing (or loaded) and prepare the full correction manifest"}
       >
         {/* Acquisition sweep */}
         {busy && (
@@ -885,7 +981,7 @@ function LockButton({
             <span className="block text-[11px] text-dim">
               {busy
                 ? `${status || "Working…"} · ${Math.round(progress * 100)}% — click to cancel`
-                : "Read the playing source · full chain manifest"}
+                : "Measure the loaded or playing source · nothing applies until Engage"}
             </span>
           </span>
         </span>
@@ -977,6 +1073,7 @@ function ManifestPanel({
           const on = sel[item.id] && item.active;
           return (
             <button
+              type="button"
               key={item.id}
               onClick={() => item.active && onToggle(item.id)}
               disabled={!item.active}
@@ -1016,6 +1113,7 @@ function ManifestPanel({
 // ── Auto-lock, mission presets, library picker (kept from v2.2) ────────────
 
 function AutoLockToggle() {
+  const toast = useUIStore((s) => s.toast);
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -1027,10 +1125,19 @@ function AutoLockToggle() {
     return () => un?.();
   }, []);
   const toggle = () => {
-    void import("@/lib/tractorAutoLock").then((m) => m.setAutoLock(!m.isAutoLockArmed()));
+    void import("@/lib/tractorAutoLock").then((m) => {
+      const next = !m.isAutoLockArmed();
+      m.setAutoLock(next);
+      toast(
+        next
+          ? "Auto-lock armed — saved locks restore instantly; new material is scanned live"
+          : "Auto-lock off",
+      );
+    });
   };
   return (
     <button
+      type="button"
       onClick={toggle}
       data-ui-sound="toggle"
       data-ui-on={armed ? "true" : "false"}
@@ -1075,6 +1182,7 @@ function MissionPresetPicker({
           const sel = t.id === active.id;
           return (
             <button
+              type="button"
               key={t.id}
               onClick={() => onChange(t.id)}
               aria-pressed={sel}
@@ -1214,25 +1322,54 @@ function LockLibraryPanel({
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Escape") return;
+                e.preventDefault();
+                setQuery("");
+              }}
               placeholder="Search locks…"
               className="flex-1 min-w-0 bg-white/[0.04] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-cyan/50 transition"
             />
             <button
-              onClick={() => void exportPack().then((ok) => ok && toast("Lock pack exported", "success"))}
+              type="button"
+              onClick={() => {
+                if (typeof window.playground?.files?.save !== "function") {
+                  toast("Exporting locks needs the desktop app");
+                  return;
+                }
+                void exportPack().then((ok) => ok && toast("Lock pack exported", "success"));
+              }}
               disabled={count === 0}
               className="kc-btn kc-btn--ghost kc-btn--sm"
-              title="Export every lock as a .klock pack"
+              title={
+                typeof window.playground?.files?.save !== "function"
+                  ? "Exporting locks needs the desktop app"
+                  : "Export every lock as a .klock pack"
+              }
             >
               ↥
             </button>
             <button
-              onClick={() =>
-                void importPack().then((n) =>
-                  toast(n > 0 ? `Imported ${n} lock${n === 1 ? "" : "s"}` : "No locks found in that file", n > 0 ? "success" : "warn"),
-                )
-              }
+              type="button"
+              onClick={() => {
+                if (typeof window.playground?.files?.openText !== "function") {
+                  toast("Importing locks needs the desktop app");
+                  return;
+                }
+                void importPack().then((n) => {
+                  if (n === null) return;
+                  toast(
+                    n > 0 ? `Imported ${n} lock${n === 1 ? "" : "s"}` : "No locks found in that file",
+                    n > 0 ? "success" : "warn",
+                  );
+                });
+              }}
               className="kc-btn kc-btn--ghost kc-btn--sm"
-              title="Import a .klock pack"
+              title={
+                typeof window.playground?.files?.openText !== "function"
+                  ? "Importing locks needs the desktop app"
+                  : "Import a .klock pack"
+              }
             >
               ↧
             </button>
@@ -1252,7 +1389,14 @@ function LockLibraryPanel({
                     ★
                   </button>
                   <button
-                    onClick={() => void applyRecord(r.key).then((ok) => ok && toast(`Lock restored — ${r.name}`, "success"))}
+                    onClick={() =>
+                      void applyRecord(r.key).then((ok) =>
+                        toast(
+                          ok ? `Lock restored — ${r.name}` : "That lock is gone",
+                          ok ? "success" : "warn",
+                        ),
+                      )
+                    }
                     disabled={disabled}
                     className="min-w-0 flex-1 text-left disabled:opacity-50"
                     title={`Apply this lock now\n${r.matchBeforePct}% → ${r.matchAfterPct}% · ${getTargetProfile(r.targetId).label} · strength ${Math.round(r.strength * 100)}%`}
@@ -1276,7 +1420,11 @@ function LockLibraryPanel({
                     open
                   </button>
                   <button
-                    onClick={() => remove(r.key)}
+                    type="button"
+                    onClick={() => {
+                      remove(r.key);
+                      toast(`Deleted lock "${r.name}"`);
+                    }}
                     className="shrink-0 opacity-0 group-hover:opacity-100 text-white/30 hover:text-rose-300 text-xs transition"
                     title="Delete this lock"
                   >
@@ -1326,7 +1474,19 @@ function LibraryPicker({
     return list.slice(0, 30);
   }, [tracks, query, open]);
 
-  if (tracks.length === 0) return null;
+  if (tracks.length === 0) {
+    const desktop = !!window.playground?.library;
+    return (
+      <div className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
+        <div className="text-sm font-semibold text-white/50">♬ From library</div>
+        <p className="text-[11px] text-dim mt-0.5 leading-relaxed">
+          {desktop
+            ? "No Library tracks yet — add folders in Library, then pick one here."
+            : "Library picker needs the desktop app."}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02]">
@@ -1343,6 +1503,11 @@ function LibraryPicker({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              setQuery("");
+            }}
             placeholder="Search title, artist, album…"
             className="w-full bg-white/[0.04] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-cyan/50 transition"
           />
@@ -1377,8 +1542,8 @@ function EmptyState() {
       <KCEmptyState
         className="w-full max-w-md"
         icon={<IconTractor width={40} height={40} />}
-        title="Nothing playing yet"
-        hint="Load a file, pick a Library track, or play something while Tractor listens. It reads the track's balance and suggests an EQ curve for your output."
+        title="No lock yet"
+        hint="LOCK measures a loaded file (even if paused), a Library track, or ~20 s of whatever is playing. Nothing is applied until you Engage."
       />
     </div>
   );
@@ -1391,6 +1556,7 @@ function ErrorState({ message }: { message: string }) {
         <div className="text-5xl mb-3 opacity-70 text-plasma">⚠</div>
         <div className="text-lg font-semibold">Lock failed</div>
         <div className="text-sm text-dim mt-1 max-w-sm mx-auto leading-relaxed">{message}</div>
+        <div className="text-[11px] text-dim mt-2">LOCK or pick another file to try again.</div>
       </div>
     </div>
   );

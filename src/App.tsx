@@ -245,12 +245,17 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden" style={{ zoom: uiScale }}>
         <Sidebar />
         <main className="flex-1 overflow-hidden flex flex-col">
-          {/* Fire Command pins its DAW keyboard above the transport, so it
-              must own an overflow region instead of living in the shared
-              page scroll (sticky fails under Framer's transform wrapper). */}
+          {/* Fire Command and Library own this pane instead of the shared
+              page scroll. Fire pins the DAW keyboard above the transport
+              (sticky fails under Framer's transform wrapper). Library's list
+              header used to sit on a 100vh-minus-toolbar guess — switching
+              Albums → List added a row, the page jumped, and the column
+              labels sheared under the sticky ActionBar. */}
           <div
             className={`flex-1 min-h-0 px-4 pb-2 noise relative scroll-pt-0 overscroll-y-contain ${
-              view === "fire" ? "overflow-hidden flex flex-col" : "overflow-auto"
+              view === "fire" || view === "library"
+                ? "overflow-hidden flex flex-col"
+                : "overflow-auto"
             }`}
           >
             <AnimatePresence mode="wait">
@@ -265,7 +270,11 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={forceReduced ? undefined : { opacity: 0, y: -6 }}
                 transition={{ duration: forceReduced ? 0 : 0.18, ease: [0.2, 0.7, 0.2, 1] }}
-                className={view === "fire" ? "flex-1 min-h-0 h-full flex flex-col" : "min-h-full"}
+                className={
+                  view === "fire" || view === "library"
+                    ? "flex-1 min-h-0 h-full flex flex-col"
+                    : "min-h-full"
+                }
               >
                 {/* Each view gets its own ErrorBoundary so a crash in one
                     never blanks out the whole app — that was the source of

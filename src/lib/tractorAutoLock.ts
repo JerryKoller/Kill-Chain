@@ -101,7 +101,10 @@ export async function autoLockScan(
     useUIStore.getState().toast(`◎ Auto-lock retuned — ${label}${capped}`);
     return "applied";
   } catch {
-    return signal.aborted ? "aborted" : "failed";
+    if (signal.aborted) return "aborted";
+    const { useUIStore } = await import("@/state/uiStore");
+    useUIStore.getState().toast("Auto-lock scan failed", "error");
+    return "failed";
   }
 }
 

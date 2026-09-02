@@ -436,16 +436,16 @@ const ENTRIES: Entry[] = [
   {
     term: "Tractor Beam",
     category: "Tools",
-    short: "Auto-EQ that matches a track to your headphones.",
+    short: "Measure a source and propose an EQ lock — nothing applies until you Engage.",
     long:
-      "Analyses the loaded track with high-resolution (1/3-octave) measurement and retunes your Sculptor bands toward a balanced target voiced for your output profile — keeping your band count and layout. Smart Lock / Live Lock / Auto-Lock / Full Chain extend Tractor for content-aware and hands-free workflows. Primary 'fix/shape' beat in the basic tour.",
+      "LOCK measures a loaded file (full-track scan) or ~20 s of whatever is playing, then shows a health-aware correction voiced for your output profile. Smart Lock, Live Lock, Auto-Lock, and the manifest layers extend that. Nothing lands on the chain until you Engage; Engage also files the lock in the Lock Library.",
   },
   {
     term: "Spectral Lock",
     category: "Tools",
-    short: "Tractor Beam's Bass / Treble EQ read-out.",
+    short: "Tractor Beam's measurement result — health, match, and the proposed curve.",
     long:
-      "Shows the net EQ move Tractor Beam is applying — positive means it lifted that end, negative means it cut it — so the numbers match the curve you see.",
+      "After LOCK, Tractor shows how healthy the source is, predicted target match, and the EQ curve it wants to apply. Nothing lands on the chain until you Engage.",
   },
   {
     term: "Library (tool)",
@@ -471,16 +471,16 @@ const ENTRIES: Entry[] = [
   {
     term: "Auto-Lock",
     category: "Tools",
-    short: "Hands-free Tractor Beam — re-locks on every track change.",
+    short: "Hands-free Tractor Beam — restore saved locks, scan only new material.",
     long:
-      "When armed, a new video or track triggers a fresh 9-second live measurement and the full chain re-locks itself: EQ curve, dynamics, width and de-ess, tuned per item.",
+      "When armed, a source with a saved lock restores instantly. New material is measured live (~9 s) and the full manifest engages automatically. Mission Log memory and manual override take priority over a fresh scan.",
   },
   {
     term: "Full Chain",
     category: "Tools",
-    short: "Tractor moves beyond EQ — dynamics, image, de-ess, space.",
+    short: "Tractor moves beyond EQ — dynamics, image, de-ess, repair, trim.",
     long:
-      "'Engage full chain' applies the correction curve plus master moves across the whole program: multiband glue where dynamics are crushed, width where the image is narrow, de-ess where the top is spiky.",
+      "Engage lock applies the selected manifest layers: Sculptor EQ plus optional master moves, restoration, clarity, and loudness trim. Toggle layers off in the manifest before engaging if you only want some of them.",
   },
   {
     term: "3rd Dimension",
