@@ -436,9 +436,9 @@ const ENTRIES: Entry[] = [
   {
     term: "Macro Reactor",
     category: "Tools",
-    short: "Stackable one-tap sound moves you can keep or reset.",
+    short: "Stackable performance pads you can keep or stand down.",
     long:
-      "Tap pads to layer instant moves (Drop Switch, Focus Beam, Analog Bloom…). Stack as many as you like, then Keep blend to bake them in or Reset to undo. Fully non-destructive.",
+      "Performance pads (Low-Pass Dive, Telephone, Widen, Crush, Half-Speed, Duck, Air Raid, Radio Comms) layer tone-knob deltas on the sound you walked in with. Latch toggles; Momentary holds while the pad, number key, or MIDI note is down. Keep blend writes those knobs onto the sculpt (parametric EQ is unchanged). Reset, Escape, or leaving without Keep restores the unapplied stack. Opening the tab is silent. Half-Speed is tape-slow space and wow/flutter — it does not change playback speed.",
   },
   {
     term: "Tractor Beam",

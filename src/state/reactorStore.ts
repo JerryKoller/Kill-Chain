@@ -110,7 +110,7 @@ export const FACTORY_PADS: ReactorPad[] = [
     icon: "◐",
     accent: "#a06bff",
     mode: "latch",
-    description: "Syrup-slow drag feel — space swells, transients melt, pitch wobbles.",
+    description: "Tape-slow space: reverb swells, transients melt, wow/flutter wobbles. Does not change playback speed.",
     deltas: {
       reverbAmount: 0.5, reverbSize: 0.75, texture: 0.5, punch: -0.4,
       air: -0.3, sparkle: -0.35, warmth: 0.25, body: 0.15,
@@ -214,18 +214,44 @@ function loadPads(): ReactorPad[] {
 // Debounced — the PadEditor's delta sliders call updatePad per input event,
 // and a synchronous localStorage write per pointermove janks the drag.
 let padsPersistTimer: number | null = null;
+let padsPending: ReactorPad[] | null = null;
+
+function persistPadsImmediate(pads: ReactorPad[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const slim = pads.map((p) => ({ id: p.id, name: p.name, mode: p.mode, deltas: p.deltas }));
+    window.localStorage.setItem(PADS_KEY, JSON.stringify(slim));
+  } catch (err) {
+    console.warn("[reactor] failed to persist pads:", err);
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Reactor pads", err),
+    );
+  }
+}
+
 function persistPads(pads: ReactorPad[]): void {
   if (typeof window === "undefined") return;
+  padsPending = pads;
   if (padsPersistTimer != null) window.clearTimeout(padsPersistTimer);
   padsPersistTimer = window.setTimeout(() => {
     padsPersistTimer = null;
-    try {
-      const slim = pads.map((p) => ({ id: p.id, name: p.name, mode: p.mode, deltas: p.deltas }));
-      window.localStorage.setItem(PADS_KEY, JSON.stringify(slim));
-    } catch (err) {
-      console.warn("[reactor] failed to persist pads:", err);
-    }
+    const payload = padsPending;
+    padsPending = null;
+    if (payload) persistPadsImmediate(payload);
   }, 300);
+}
+
+/** Write a pending pad-edit debounce now (leave / refresh). */
+export function flushPadsPersist(): void {
+  if (typeof window === "undefined") return;
+  if (padsPersistTimer != null) {
+    window.clearTimeout(padsPersistTimer);
+    padsPersistTimer = null;
+  }
+  if (!padsPending) return;
+  const payload = padsPending;
+  padsPending = null;
+  persistPadsImmediate(payload);
 }
 
 function loadScenes(): (ReactorScene | null)[] {
@@ -265,6 +291,9 @@ function persistScenes(scenes: (ReactorScene | null)[]): void {
     window.localStorage.setItem(SCENES_KEY, JSON.stringify(scenes));
   } catch (err) {
     console.warn("[reactor] failed to persist scenes:", err);
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Reactor scenes", err),
+    );
   }
 }
 
@@ -284,8 +313,10 @@ interface ReactorState {
   releasePad: (id: string) => void;
   togglePad: (id: string, intensity: number) => void;
   setPadIntensity: (id: string, intensity: number) => void;
-  /** Entry point for MIDI-learned pads (0-based index, velocity 0..1). */
+  /** MIDI note-on / CC rise (0-based index, velocity 0..1). Latch toggles; momentary engages. */
   midiTrigger: (padIndex: number, velocity: number) => void;
+  /** MIDI note-off / CC fall — releases a momentary pad; latch is unchanged. */
+  midiRelease: (padIndex: number) => void;
   /** Bake the current stack into the sculpt. Returns the kept label. */
   keep: () => string | null;
   /** Release everything and restore the baseline sound. */
@@ -299,7 +330,7 @@ interface ReactorState {
   restoreAllPads: () => void;
 
   saveScene: (slot: number) => boolean;
-  recallScene: (slot: number) => void;
+  recallScene: (slot: number) => boolean;
   clearScene: (slot: number) => void;
 }
 
@@ -472,7 +503,16 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
     if (!get().sessionActive) return;
     const pad = get().pads[padIndex];
     if (!pad) return;
-    get().togglePad(pad.id, clampIntensity(velocity));
+    const intensity = clampIntensity(velocity);
+    if (pad.mode === "momentary") get().engagePad(pad.id, intensity);
+    else get().togglePad(pad.id, intensity);
+  },
+
+  midiRelease: (padIndex) => {
+    if (!get().sessionActive) return;
+    const pad = get().pads[padIndex];
+    if (!pad || pad.mode !== "momentary") return;
+    get().releasePad(pad.id);
   },
 
   keep: () => {
@@ -481,7 +521,8 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
     if (!baseline || active.length === 0) return null;
     const padById = new Map(pads.map((p) => [p.id, p]));
     // Bake at full ramp — the sound the user aimed for, not a mid-attack frame.
-    const out = { ...useAudioStore.getState().params };
+    const audio = useAudioStore.getState();
+    const out = { ...audio.params };
     for (const k of touched) out[k] = baseline[k];
     for (const [id, eng] of active) {
       const pad = padById.get(id);
@@ -494,6 +535,11 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
     const label = active
       .map(([id]) => padById.get(id)?.name ?? id)
       .join(" + ");
+    // Preview frames never entered undo history. Snap params back to the
+    // walk-in sound (DSP stays on the live stack until replaceParams) so
+    // Undo after Keep restores the pre-reactor sculpt, not the last tick.
+    const undoSnap = { ...audio.params };
+    for (const k of touched) undoSnap[k] = baseline[k];
     pendingIntensity.clear();
     touched.clear();
     stopLoop();
@@ -501,6 +547,7 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
     // the remembered bypass instead of restoring it.
     baselineBypass = null;
     set({ engaged: {}, baseline: null, lastKept: label });
+    useAudioStore.setState({ params: undoSnap });
     useAudioStore.getState().replaceParams(out);
     return label;
   },
@@ -534,6 +581,12 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
     });
     set({ pads });
     persistPads(pads);
+    // Momentary means "only while held" — a latched pad flipped to Mom
+    // must not stay on with nobody holding it.
+    if (patch.mode === "momentary") {
+      const live = get().engaged[id];
+      if (live && live.phase !== "out") get().releasePad(id);
+    }
     // Live-edit support: re-merge immediately if the pad is engaged.
     const eng = get().engaged[id];
     if (eng && eng.phase !== "out") {
@@ -559,12 +612,17 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
     const pads = FACTORY_PADS.map((p) => ({ ...p, deltas: { ...p.deltas } }));
     set({ pads });
     persistPads(pads);
+    // Factory Dive / Duck / Air Raid are momentary — a latched custom
+    // strike must not stay on after the pad is restored to "hold only".
     for (const [id, eng] of Object.entries(get().engaged)) {
       if (eng.phase === "out") continue;
       const pad = pads.find((p) => p.id === id);
-      if (pad) {
-        for (const k of Object.keys(pad.deltas)) touched.add(k as keyof SoundParams);
+      if (!pad) continue;
+      if (pad.mode === "momentary") {
+        get().releasePad(id);
+        continue;
       }
+      for (const k of Object.keys(pad.deltas)) touched.add(k as keyof SoundParams);
     }
     startLoop();
   },
@@ -592,14 +650,15 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
 
   recallScene: (slot) => {
     const scene = get().scenes[slot];
-    if (!scene) return;
+    if (!scene) return false;
     const valid = scene.pads.filter((p) => get().pads.some((x) => x.id === p.id));
-    if (valid.length === 0) return;
+    if (valid.length === 0) return false;
     const inScene = new Set(valid.map((p) => p.id));
     for (const [id, eng] of Object.entries(get().engaged)) {
       if (!inScene.has(id) && eng.phase !== "out") get().releasePad(id);
     }
     for (const p of valid) get().engagePad(p.id, p.intensity);
+    return true;
   },
 
   clearScene: (slot) => {
@@ -610,3 +669,9 @@ export const useReactorStore = create<ReactorState>((set, get) => ({
     persistScenes(scenes);
   },
 }));
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    flushPadsPersist();
+  });
+}

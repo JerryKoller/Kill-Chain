@@ -8,6 +8,7 @@ import { useMidiStore } from "@/state/midiStore";
 import { SOUND_PARAM_META, type SoundParams } from "@/audio/types";
 import {
   SCENE_SLOT_COUNT,
+  flushPadsPersist,
   useReactorStore,
   type ReactorPad,
 } from "@/state/reactorStore";
@@ -20,8 +21,9 @@ import { PadEditor } from "./PadEditor";
  * you walked in with. LATCH pads toggle; MOMENTARY pads engage only while
  * held. Where you strike a pad vertically sets its intensity, and dragging
  * up/down while held rides the depth live. Number keys 1–8 fire pads while
- * the surface is armed (focused). KEEP BLEND bakes the stack; RESET — or
- * leaving the view — restores the pre-reactor sound exactly.
+ * the surface is armed (focused). KEEP BLEND bakes the stack onto the sculpt;
+ * RESET, Escape, or leaving with an unapplied stack restores the walk-in
+ * sound. Opening the tab is silent until a pad is struck.
  */
 export function MacroReactorView() {
   const pads = useReactorStore((s) => s.pads);
@@ -39,6 +41,7 @@ export function MacroReactorView() {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const keyHeldRef = useRef<Set<string>>(new Set());
+  const purgeTimer = useRef<number | null>(null);
   const pressRef = useRef<{
     id: string;
     wasEngaged: boolean;
@@ -52,7 +55,17 @@ export function MacroReactorView() {
   useEffect(() => {
     useReactorStore.getState().setSessionActive(true);
     containerRef.current?.focus({ preventScroll: true });
-    return () => useReactorStore.getState().setSessionActive(false);
+    return () => {
+      const st = useReactorStore.getState();
+      const hadStack =
+        st.baseline != null &&
+        Object.values(st.engaged).some((eng) => eng.phase !== "out");
+      st.setSessionActive(false);
+      flushPadsPersist();
+      if (hadStack) {
+        useUIStore.getState().toast("Left Reactor — unapplied stack was restored");
+      }
+    };
   }, []);
 
   // Alt-Tab safety: keyup never arrives if the window loses focus while a
@@ -66,6 +79,57 @@ export function MacroReactorView() {
     window.addEventListener("blur", onWinBlur);
     return () => window.removeEventListener("blur", onWinBlur);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (purgeTimer.current != null) window.clearTimeout(purgeTimer.current);
+    },
+    [],
+  );
+
+  // Escape: cancel MIDI learn, close Tune, then stand down the live stack.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      const midi = useMidiStore.getState();
+      if (midi.learning?.kind === "reactorPad") {
+        e.preventDefault();
+        midi.setLearning(null);
+        toast("MIDI learn cancelled");
+        return;
+      }
+      if (confirmPurge) {
+        e.preventDefault();
+        setConfirmPurge(false);
+        return;
+      }
+      if (editingId) {
+        e.preventDefault();
+        setEditingId(null);
+        return;
+      }
+      const st = useReactorStore.getState();
+      const live = Object.values(st.engaged).some((eng) => eng.phase !== "out");
+      if (live) {
+        e.preventDefault();
+        st.resetAll();
+        toast("Reactor stood down — original sound restored");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editingId, confirmPurge, toast]);
 
   const activeEntries = useMemo(
     () => Object.entries(engaged).filter(([, e]) => e.phase !== "out"),
@@ -138,7 +202,7 @@ export function MacroReactorView() {
   const onPadPointerDown =
     (pad: ReactorPad) => (e: React.PointerEvent<HTMLButtonElement>) => {
       if ((e.target as HTMLElement).closest("[data-krx-stop]")) return;
-      e.currentTarget.setPointerCapture(e.pointerId);
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
       const st = useReactorStore.getState();
       const eng = st.engaged[pad.id];
       const isOn = !!eng && eng.phase !== "out";
@@ -168,7 +232,8 @@ export function MacroReactorView() {
     };
 
   const onPadPointerUp =
-    (pad: ReactorPad) => () => {
+    (pad: ReactorPad) => (e: React.PointerEvent<HTMLButtonElement>) => {
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
       const press = pressRef.current;
       if (!press || press.id !== pad.id) return;
       pressRef.current = null;
@@ -181,18 +246,58 @@ export function MacroReactorView() {
       if (press.wasEngaged && quickTap) st.releasePad(pad.id);
     };
 
-  const onPadPointerCancel = (pad: ReactorPad) => () => {
-    if (pressRef.current?.id === pad.id) pressRef.current = null;
-    if (pad.mode === "momentary") useReactorStore.getState().releasePad(pad.id);
+  const onPadPointerCancel = (pad: ReactorPad) => (e: React.PointerEvent<HTMLButtonElement>) => {
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    const press = pressRef.current;
+    const mine = press?.id === pad.id;
+    if (mine) pressRef.current = null;
+    if (pad.mode === "momentary") {
+      useReactorStore.getState().releasePad(pad.id);
+      return;
+    }
+    // OS abort on a *new* latch strike must not leave the pad on. Riding an
+    // already-latched pad + cancel keeps it. Ignore cancels for other pads.
+    if (mine && press && !press.wasEngaged) {
+      useReactorStore.getState().releasePad(pad.id);
+    }
   };
 
-  // Keyboard activation (Enter) on a focused pad button arrives as a click
-  // with detail === 0; pointer taps are fully handled by the pointer events.
-  // The timestamp guard stops a held Enter key (auto-repeat) from flickering.
+  // Space / Enter on a focused pad: hold for momentary, toggle for latch.
+  // preventDefault so Space doesn't also hit global play/pause, and so the
+  // synthesized click doesn't latch a momentary pad on.
+  const onPadKeyDown =
+    (pad: ReactorPad) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if ((e.target as HTMLElement).closest("[data-krx-stop]")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      const st = useReactorStore.getState();
+      if (pad.mode === "momentary") {
+        keyHeldRef.current.add(pad.id);
+        st.engagePad(pad.id, 1);
+      } else {
+        st.togglePad(pad.id, 1);
+      }
+    };
+
+  const onPadKeyUp =
+    (pad: ReactorPad) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (keyHeldRef.current.delete(pad.id)) {
+        useReactorStore.getState().releasePad(pad.id);
+      }
+    };
+
+  // Keyboard activation fallback (screen readers / leftover click). Latch
+  // toggles; momentary must not latch via this path — Space/Enter own hold.
   const lastKeyToggleRef = useRef(0);
   const onPadClick =
     (pad: ReactorPad) => (e: React.MouseEvent<HTMLButtonElement>) => {
       if (e.detail !== 0) return;
+      if (pad.mode === "momentary") return;
       if ((e.target as HTMLElement).closest("[data-krx-stop]")) return;
       const now = performance.now();
       if (now - lastKeyToggleRef.current < 250) return;
@@ -203,7 +308,7 @@ export function MacroReactorView() {
   // ── Header actions ──
   const doKeep = () => {
     const label = useReactorStore.getState().keep();
-    if (label) toast(`Baked into sculpt: ${label}`);
+    if (label) toast(`Kept ${label} (tone knobs — EQ unchanged)`);
   };
 
   const doReset = () => {
@@ -220,8 +325,11 @@ export function MacroReactorView() {
   };
 
   const doRecallScene = (slot: number) => {
-    useReactorStore.getState().recallScene(slot);
-    toast(`Scene S${slot + 1} deployed`);
+    if (useReactorStore.getState().recallScene(slot)) {
+      toast(`Scene S${slot + 1} deployed`);
+    } else {
+      toast(`Scene S${slot + 1} has no valid pads`);
+    }
   };
 
   const editingPad = editingId ? pads.find((p) => p.id === editingId) : null;
@@ -264,16 +372,26 @@ export function MacroReactorView() {
               </span>
             </div>
             <div className="text-sm text-white/70 truncate">
-              Performance strike surface — hold, latch, stack and ride macro moves
+              Performance strike surface — hold, latch, stack and ride. Keep writes knobs, not EQ.
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <NeonButton variant="ghost" disabled={!hasActive} onClick={doReset}>
-              Reset
-            </NeonButton>
-            <NeonButton disabled={!hasActive} onClick={doKeep}>
-              Keep blend
-            </NeonButton>
+            <span title={!hasActive ? "Nothing engaged" : "Restore the sound you walked in with"}>
+              <NeonButton variant="ghost" disabled={!hasActive} onClick={doReset}>
+                Reset
+              </NeonButton>
+            </span>
+            <span
+              title={
+                !hasActive
+                  ? "Engage a pad first"
+                  : "Bake the stack into the sculpt (tone knobs — parametric EQ unchanged)"
+              }
+            >
+              <NeonButton disabled={!hasActive} onClick={doKeep}>
+                Keep blend
+              </NeonButton>
+            </span>
           </div>
         </div>
       </div>
@@ -284,17 +402,17 @@ export function MacroReactorView() {
           <Step
             n="1"
             title="Strike a pad"
-            body="LATCH pads toggle; MOMENTARY pads run only while held. Strike height sets intensity — drag up/down while held to ride it."
+            body="LATCH pads toggle; MOMENTARY pads run only while held (pointer, number key, or MIDI note). Strike height sets intensity — drag up/down while held to ride it."
           />
           <Step
             n="2"
             title="Stack & perform"
-            body="Number keys 1–8 fire pads at full depth. Stack moves, then store the combo in a scene slot for instant recall."
+            body="Number keys 1–8 fire pads at full depth while this surface is focused. Stack moves, then store the combo in a scene slot for instant recall."
           />
           <Step
             n="3"
             title="Keep or stand down"
-            body="KEEP BLEND bakes the stack into your sculpt. RESET — or leaving — restores the exact sound you started with."
+            body="KEEP BLEND writes the stack into the sculpt (tone knobs — parametric EQ unchanged). RESET, Escape, or leaving without Keep restores the sound you walked in with."
           />
         </div>
       </GlassPanel>
@@ -329,6 +447,8 @@ export function MacroReactorView() {
                 onPointerMove={onPadPointerMove(pad)}
                 onPointerUp={onPadPointerUp(pad)}
                 onPointerCancel={onPadPointerCancel(pad)}
+                onKeyDown={onPadKeyDown(pad)}
+                onKeyUp={onPadKeyUp(pad)}
                 onClick={onPadClick(pad)}
                 onEdit={() =>
                   setEditingId((cur) => (cur === pad.id ? null : pad.id))
@@ -354,20 +474,26 @@ export function MacroReactorView() {
           <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
             <div className="text-[10px] text-dim">
               {midiAvailable
-                ? "MIDI: open a pad's TUNE panel to map hardware triggers."
+                ? "MIDI: Tune a pad to map a trigger. Latch toggles on press; Momentary holds while the note is down."
                 : ""}
             </div>
             <button
               onClick={() => {
                 if (confirmPurge) {
+                  if (purgeTimer.current != null) {
+                    window.clearTimeout(purgeTimer.current);
+                    purgeTimer.current = null;
+                  }
                   setConfirmPurge(false);
                   useReactorStore.getState().restoreAllPads();
                   toast("All pads restored to factory spec");
                 } else {
                   setConfirmPurge(true);
-                  window.setTimeout(() => setConfirmPurge(false), 2400);
+                  if (purgeTimer.current != null) window.clearTimeout(purgeTimer.current);
+                  purgeTimer.current = window.setTimeout(() => setConfirmPurge(false), 2400);
                 }
               }}
+              title="Restore all eight pads to factory names, modes, and targets. Does not undo a Keep."
               className={`rounded-lg border px-3 py-1.5 text-[10px] uppercase tracking-[0.2em] font-semibold transition ${
                 confirmPurge
                   ? "border-rose-400/70 bg-rose-500/20 text-rose-200"
@@ -472,9 +598,9 @@ export function MacroReactorView() {
           <div className="text-[11px] text-dim leading-relaxed">
             Previews are non-destructive.{" "}
             <span className="text-cyan">Keep blend</span> writes the engaged
-            stack into your real sculpt;{" "}
-            <span className="text-white/70">Reset</span> restores the sound you
-            had before.
+            stack into your sculpt (tone knobs — parametric EQ unchanged);{" "}
+            <span className="text-white/70">Reset</span> or leaving without Keep
+            restores the sound you walked in with.
           </div>
         </GlassPanel>
       </div>
@@ -505,6 +631,8 @@ function ReactorPadButton({
   onPointerMove,
   onPointerUp,
   onPointerCancel,
+  onKeyDown,
+  onKeyUp,
   onClick,
   onEdit,
   onFlipMode,
@@ -517,6 +645,8 @@ function ReactorPadButton({
   onPointerMove: (e: React.PointerEvent<HTMLButtonElement>) => void;
   onPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
   onPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLButtonElement>) => void;
+  onKeyUp: (e: React.KeyboardEvent<HTMLButtonElement>) => void;
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onEdit: () => void;
   onFlipMode: () => void;
@@ -531,6 +661,8 @@ function ReactorPadButton({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
+      onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
       onClick={onClick}
       data-ui-sound="none" // live strike surface — no UI click stings (issue #3)
       initial={{ opacity: 0, y: 14 }}
@@ -538,6 +670,7 @@ function ReactorPadButton({
       transition={{ delay: index * 0.03, type: "spring", stiffness: 420, damping: 30 }}
       whileTap={{ scale: 0.985 }}
       aria-pressed={isOn}
+      aria-label={`${pad.name}, ${pad.mode === "momentary" ? "momentary" : "latch"}`}
       className={`group relative overflow-hidden rounded-2xl border p-4 pr-6 text-left min-h-[168px] select-none touch-none transition ${
         isOn
           ? "border-white/25 bg-white/[0.08] krx-pad-live"
@@ -624,7 +757,7 @@ function ReactorPadButton({
                 key={k}
                 className="text-[8px] uppercase tracking-wider rounded-full border border-white/10 px-1.5 py-0.5 text-white/40"
               >
-                {k}
+                {SOUND_PARAM_META.find((m) => m.key === k)?.label ?? k}
               </span>
             ))}
           {Object.keys(pad.deltas).length > 3 && (
@@ -675,6 +808,14 @@ function SceneSlot({
   onClear: () => void;
 }) {
   const [confirmClear, setConfirmClear] = useState(false);
+  const confirmTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (confirmTimer.current != null) window.clearTimeout(confirmTimer.current);
+    },
+    [],
+  );
 
   if (!scene) {
     return (
@@ -726,11 +867,16 @@ function SceneSlot({
       <button
         onClick={() => {
           if (confirmClear) {
+            if (confirmTimer.current != null) {
+              window.clearTimeout(confirmTimer.current);
+              confirmTimer.current = null;
+            }
             setConfirmClear(false);
             onClear();
           } else {
             setConfirmClear(true);
-            window.setTimeout(() => setConfirmClear(false), 2400);
+            if (confirmTimer.current != null) window.clearTimeout(confirmTimer.current);
+            confirmTimer.current = window.setTimeout(() => setConfirmClear(false), 2400);
           }
         }}
         className={`shrink-0 text-[9px] uppercase tracking-widest px-2 py-1 rounded-lg border transition ${

@@ -11,7 +11,7 @@ export type MidiTarget =
   | { kind: "param"; key: keyof SoundParams }
   | { kind: "macro"; name: "warmer" | "cleaner" | "punchier" | "wider" | "bigger" | "tighter" }
   | { kind: "transport"; action: "play-pause" | "next" | "prev" | "snapshot-a" | "swap-ab" }
-  /** Macro Reactor pad by 0-based index (toggles; velocity = intensity). */
+  /** Macro Reactor pad by 0-based index (latch toggles; momentary holds while the note is down; velocity = intensity). */
   | { kind: "reactorPad"; pad: number }
   /** Fire Command performance patch params (macros, gate, harmony mix, etc.). */
   | { kind: "fireParam"; key: string }
@@ -393,6 +393,15 @@ function handleMessage(deviceId: string, data: ArrayLike<number>): void {
     id = `${deviceId}:${channel}:note:${data1}`;
     value = data2 / 127;
     label = `Note ${data1} ch${channel + 1}`;
+  } else if (status === 0x80 || (status === 0x90 && data2 === 0)) {
+    // Note-off must not zero param / Fire knobs. Reactor MOMENTARY pads
+    // are the exception: they hold only while the note is down.
+    const noteId = `${deviceId}:${channel}:note:${data1}`;
+    const mapping = useMidiStore.getState().mappings.find((m) => m.id === noteId);
+    if (mapping?.target.kind === "reactorPad") {
+      applyMidi(mapping.target, 0);
+    }
+    return;
   } else {
     return;
   }
@@ -531,12 +540,15 @@ function applyMidi(target: MidiTarget, normalized: number): void {
     return;
   }
   if (target.kind === "reactorPad") {
-    // Fire only on a value rise (note-on / button press above 40%);
-    // velocity scales the pad's intensity. Dispatch is dynamic to avoid
-    // a circular import (reactorStore -> audioStore -> ...).
-    if (normalized < 0.4) return;
+    // Note-on / CC rise engages (latch toggles). Note-off / CC fall
+    // releases momentary pads only — latch stays until the next press.
     import("@/state/reactorStore").then(({ useReactorStore }) => {
-      useReactorStore.getState().midiTrigger(target.pad, normalized);
+      const st = useReactorStore.getState();
+      if (normalized < 0.4) {
+        st.midiRelease(target.pad);
+        return;
+      }
+      st.midiTrigger(target.pad, normalized);
     });
     return;
   }

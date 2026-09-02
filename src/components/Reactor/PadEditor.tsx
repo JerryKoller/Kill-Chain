@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SOUND_PARAM_META, type SoundParams } from "@/audio/types";
 import { useReactorStore, type PadMode, type ReactorPad } from "@/state/reactorStore";
 import { useMidiStore } from "@/state/midiStore";
@@ -32,6 +32,21 @@ export function PadEditor({
 
   const [nameDraft, setNameDraft] = useState(pad.name);
   const [confirmRestore, setConfirmRestore] = useState(false);
+  const restoreTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    setNameDraft(pad.name);
+  }, [pad.name]);
+
+  useEffect(() => {
+    return () => {
+      if (restoreTimer.current != null) window.clearTimeout(restoreTimer.current);
+      const midi = useMidiStore.getState();
+      if (midi.learning?.kind === "reactorPad" && midi.learning.pad === index) {
+        midi.setLearning(null);
+      }
+    };
+  }, [index]);
 
   const rows = useMemo(
     () =>
@@ -92,7 +107,11 @@ export function PadEditor({
             onBlur={commitName}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") setNameDraft(pad.name);
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setNameDraft(pad.name);
+              }
             }}
             className="min-w-[160px] flex-1 bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-sm font-semibold focus:outline-none focus:border-cyan/60"
             aria-label="Pad name"
@@ -114,7 +133,7 @@ export function PadEditor({
                 title={
                   m === "latch"
                     ? "Tap engages, tap again releases"
-                    : "Engages only while held (pointer or number key)"
+                    : "Engages only while held (pointer, number key, or MIDI note)"
                 }
               >
                 {m === "latch" ? "Latch" : "Momentary"}
@@ -125,6 +144,10 @@ export function PadEditor({
           <button
             onClick={() => {
               if (confirmRestore) {
+                if (restoreTimer.current != null) {
+                  window.clearTimeout(restoreTimer.current);
+                  restoreTimer.current = null;
+                }
                 setConfirmRestore(false);
                 restorePad(pad.id);
                 setNameDraft(
@@ -134,7 +157,8 @@ export function PadEditor({
                 toast("Pad restored to factory spec");
               } else {
                 setConfirmRestore(true);
-                window.setTimeout(() => setConfirmRestore(false), 2400);
+                if (restoreTimer.current != null) window.clearTimeout(restoreTimer.current);
+                restoreTimer.current = window.setTimeout(() => setConfirmRestore(false), 2400);
               }
             }}
             className={`rounded-lg border px-3 py-1.5 text-[10px] uppercase tracking-[0.15em] font-semibold transition ${
@@ -143,7 +167,7 @@ export function PadEditor({
                 : "border-white/12 text-white/50 hover:text-white/80 hover:border-white/25"
             }`}
           >
-            {confirmRestore ? "CONFIRM PURGE" : "Factory"}
+            {confirmRestore ? "CONFIRM RESTORE" : "Factory"}
           </button>
 
           <button
@@ -231,9 +255,13 @@ export function PadEditor({
             >
               {learningThis ? "Waiting for MIDI input…" : "◍ MIDI learn"}
             </button>
-            {learningThis && midiInputs.length === 0 && (
+            {learningThis && (
               <span className="text-[10px] text-dim">
-                No MIDI inputs detected — connect a controller.
+                {midiInputs.length === 0
+                  ? "No MIDI inputs detected — connect a controller."
+                  : pad.mode === "momentary"
+                    ? "Play a note — Momentary holds while the note is down."
+                    : "Play a note — Latch toggles on each press."}
               </span>
             )}
             {padMappings.map((m) => (
