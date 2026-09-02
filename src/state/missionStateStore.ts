@@ -339,6 +339,10 @@ async function pollOnce(): Promise<void> {
     void readSignal().then((now) => {
       if (now && now.sig === src.sig) void runPipeline(src);
       else setState({ pendingOp: null });
+    }).catch(() => {
+      if (lastSig !== src.sig) return;
+      lastSig = "";
+      setState({ pendingOp: null });
     });
   }, SETTLE_MS);
 }
