@@ -5,7 +5,7 @@ import { parseMissionMarkdown, pathEditable, matchPath } from "./schema.mjs";
 import { assertTransition, ALLOWED_TRANSITIONS } from "./machine.mjs";
 import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import { scanUnixTools } from "./unix.mjs";
-import { parseCritic, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest } from "./critic.mjs";
+import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest } from "./critic.mjs";
 import { assertSafeMissionId } from "./schema.mjs";
 import {
   classifyPorcelain,
@@ -212,6 +212,13 @@ export async function runMissionTests() {
 
   const existOk = checkReferencedFilesExist("inspect `src/components/FireCommand/ModuleEnableToggle.tsx`");
   check("valid existing UI file existence", existOk.ok);
+
+  const loosePaths = parseMentionedPaths("INSPECTED COMPONENTS\n### `Section` Component (fireUiKit.tsx:63)\nFcChip (fcChip.tsx:287)");
+  check(
+    "bare FireCommand basenames resolve if they exist",
+    loosePaths.includes("src/components/FireCommand/fireUiKit.tsx") && loosePaths.includes("src/components/FireCommand/fcChip.tsx"),
+    JSON.stringify(loosePaths),
+  );
 
   const existBad = checkReferencedFilesExist("edit candidate `src/components/FireCommand/HomeBandContent.tsx`");
   check("invented HomeBandContent fails existence", !existBad.ok && existBad.missing.some((p) => p.includes("HomeBandContent")));

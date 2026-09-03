@@ -44,6 +44,12 @@ export function parseMentionedPaths(text) {
   while ((m = re.exec(String(text || "")))) {
     set.add(m[1].replace(/\\/g, "/"));
   }
+  const loose = /(?:^|[`'"\s(\[])((?:FireCommand\/)?[A-Za-z][A-Za-z0-9_-]*\.tsx)\b/gm;
+  while ((m = loose.exec(String(text || "")))) {
+    const raw = m[1].replace(/\\/g, "/");
+    const rel = raw.startsWith("src/") ? raw : (raw.startsWith("FireCommand/") ? `src/components/${raw}` : `src/components/FireCommand/${raw}`);
+    if (repoFileExists(rel)) set.add(rel);
+  }
   return [...set];
 }
 
