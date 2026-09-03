@@ -69,6 +69,7 @@ Does not train, download Unsloth, or modify the Kill Chain app.
 function printHits(res, k = 8) {
   const hits = (res.hits || []).slice(0, k);
   if (res.manifest?.gitCommit) console.log(`corpus git ${res.manifest.gitCommit}`);
+  if (!hits.length && res.notice) console.log(res.notice);
   for (const h of hits) {
     const c = h.chunk;
     const loc = `${c.path}${c.lineStart ? `:${c.lineStart}-${c.lineEnd || c.lineStart}` : ""}`;

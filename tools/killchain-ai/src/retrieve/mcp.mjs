@@ -14,17 +14,21 @@ function err(id, code, message) {
 }
 
 const TOOLS = [
-  { name: "search", description: "Hybrid Kill Chain search (exact symbol/path, BM25, graph, optional embeddings).", inputSchema: { type: "object", properties: { query: { type: "string" }, k: { type: "number" } }, required: ["query"] } },
-  { name: "symbol", description: "Look up a function/class/component by exact or partial name.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
-  { name: "callers", description: "Callers of a symbol from the corpus call graph.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
-  { name: "callees", description: "Callees of a symbol from the corpus call graph.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
-  { name: "tests_for", description: "Tests and smoke cases related to a symbol or path.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
-  { name: "invariants", description: "AGENTS.md / architecture invariants and danger rules.", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
-  { name: "context_pack", description: "Compact task context pack for Qwen/OpenCode.", inputSchema: { type: "object", properties: { task: { type: "string" }, budget: { type: "number" } }, required: ["task"] } },
+  { name: "search", description: "Hybrid Kill Chain search (exact symbol/path, BM25, graph, optional embeddings). Use before guessing file names.", inputSchema: { type: "object", properties: { query: { type: "string" }, k: { type: "number" } }, required: ["query"] } },
+  { name: "symbol", description: "Look up a function/class/store by exact name, useX hook prefix, or file basename (sessionSnapshotsStore → useSessionSnapshotsStore).", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "callers", description: "Callers of a symbol from the corpus call graph. Bare store names resolve like symbol lookup.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "callees", description: "Callees of a symbol from the corpus call graph. Bare store names resolve like symbol lookup.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "tests_for", description: "Indexed tests and smoke cases for a symbol or path. An empty/honest-none result means no indexed coverage — do not invent tests.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
+  { name: "invariants", description: "AGENTS.md / architecture invariants and danger rules. Accepts descriptive queries; ranks by token overlap.", inputSchema: { type: "object", properties: { query: { type: "string" } } } },
+  { name: "context_pack", description: "Compact provenance-backed Kill Chain context pack. Prefer omitting budget (default 8000; clamped 2000–32000). After tools finish, write the investigation report as the user-visible final answer, not only as hidden reasoning.", inputSchema: { type: "object", properties: { task: { type: "string" }, budget: { type: "number", minimum: 2000, maximum: 32000, default: 8000 } }, required: ["task"] } },
 ];
 
 function hitText(res, limit = 8) {
-  return (res.hits || []).slice(0, limit).map((h) => {
+  const hits = res.hits || [];
+  if (!hits.length) {
+    return res.notice || "No indexed hits. This is a correct empty result when nothing in the corpus matches — not a tool failure. Do not invent files, symbols, or tests.";
+  }
+  return hits.slice(0, limit).map((h) => {
     const c = h.chunk;
     return [
       `# ${c.title}`,
@@ -61,10 +65,7 @@ async function callTool(name, args) {
 }
 
 function writeFrame(obj) {
-  const json = JSON.stringify(obj);
-  const buf = Buffer.from(json, "utf8");
-  process.stdout.write(`Content-Length: ${buf.length}\r\n\r\n`);
-  process.stdout.write(buf);
+  process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
 async function handleMessage(msg) {
@@ -75,6 +76,7 @@ async function handleMessage(msg) {
       protocolVersion: "2024-11-05",
       serverInfo: { name: "killchain-retrieve", version: "0.1.0" },
       capabilities: { tools: {} },
+      instructions: "After Kill Chain retrieval tools finish, the user-visible assistant message must contain the investigation report. Do not leave findings only in hidden reasoning. Include confirmed facts from code, one competing hypothesis you checked, the conclusion, the smallest safe fix if any, validation commands without claiming they passed, and remaining uncertainties.",
     }));
     return;
   }

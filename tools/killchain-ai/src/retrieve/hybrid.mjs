@@ -101,11 +101,18 @@ function graphExpand(chunks, hits, query = "", limit = 12) {
 
 function alwaysInject(chunks, query) {
   const q = query.toLowerCase();
-  const qToks = tokenize(query).filter((t) => t.length >= 4);
+  const qToks = expandQueryTokens(tokenize(query)).filter((t) => t.length >= 4);
+  const ownershipCue = /overlap|ownership|claim|playback|audible|double.?mount|strict.?mode|one.?audible/i.test(q);
   const out = [];
   for (const c of chunks) {
-    if (c.type === "constitution" && /HARD INVARIANTS|PRIMARY OBJECTIVE|VALIDATION/i.test(c.title)) {
+    if (c.type === "constitution" && /HARD INVARIANTS/i.test(c.title)) {
       out.push({ chunk: c, score: 15, via: "policy-inject" });
+    } else if (c.type === "constitution") {
+      const blob = `${c.title || ""} ${c.text || ""}`.toLowerCase();
+      const overlap = qToks.filter((t) => blob.includes(t)).length;
+      if (overlap >= 2 && /PRIMARY OBJECTIVE|VALIDATION|GIT SAFETY/i.test(c.title)) {
+        out.push({ chunk: c, score: 11 + overlap, via: "policy-inject" });
+      }
     }
     if (c.type === "invariant") {
       const blob = `${c.title || ""} ${c.text || ""} ${c.symbol || ""} ${(c.tags || []).join(" ")}`.toLowerCase();
@@ -119,6 +126,13 @@ function alwaysInject(chunks, query) {
       if (/dsp|approval|limiter|compressor|eq |loudness|spatial/i.test(q) ||
           qToks.some((t) => t.length >= 5 && blob.includes(t))) {
         out.push({ chunk: c, score: 16, via: "policy-inject" });
+      }
+    }
+    if (c.type === "ownership") {
+      const blob = `${c.title || ""} ${c.text || ""} ${(c.tags || []).join(" ")}`.toLowerCase();
+      const overlap = qToks.filter((t) => blob.includes(t)).length;
+      if (ownershipCue || overlap >= 1) {
+        out.push({ chunk: c, score: 19 + overlap * 3, via: "policy-inject" });
       }
     }
   }
@@ -181,44 +195,85 @@ export async function hybridSearch(query, opts = {}) {
   return { manifest, query, mode: opts.mode || "full", hits: all.slice(0, k) };
 }
 
+export function resolveSymbolQuery(chunks, name) {
+  const raw = String(name || "").trim();
+  if (!raw) return [];
+  const q = raw.toLowerCase().replace(/\\/g, "/");
+  const qFile = q.replace(/\.(ts|tsx|js|mjs)$/, "");
+  const qBase = qFile.split("/").pop();
+  const scored = [];
+  for (const c of chunks) {
+    const sym = c.symbol || "";
+    const sl = sym.toLowerCase();
+    const path = String(c.path || "").replace(/\\/g, "/");
+    const pl = path.toLowerCase();
+    const base = pl.split("/").pop().replace(/\.(ts|tsx|js|mjs)$/, "");
+    let score = 0;
+    let why = "";
+    if (sl && sl === q) {
+      score = 100;
+      why = "exact";
+    } else if (sl && sl.endsWith("." + q)) {
+      score = 92;
+      why = "qualified";
+    } else if (sl && sl === "use" + q) {
+      score = 88;
+      why = "use-prefix";
+    } else if (q.startsWith("use") && sl && sl === q.slice(3)) {
+      score = 86;
+      why = "use-strip";
+    } else if (base && (base === q || base === qBase)) {
+      score = 82;
+      why = "path-base";
+    } else if (qBase.length >= 6 && (pl.endsWith("/" + qBase + ".ts") || pl.endsWith("/" + qBase + ".tsx") || pl.endsWith("/" + qBase + ".js"))) {
+      score = 80;
+      why = "path";
+    } else if (c.type === "symbol" && q.length >= 8 && sl.endsWith(q)) {
+      score = 70;
+      why = "suffix";
+    }
+    if (score) scored.push({ chunk: c, score, via: why });
+  }
+  scored.sort((a, b) => b.score - a.score || (a.chunk.lineStart || 0) - (b.chunk.lineStart || 0));
+  return scored;
+}
+
 export function symbolLookup(name) {
   const { chunks, manifest } = loadChunks();
-  const q = name.toLowerCase();
-  const hits = chunks.filter((c) =>
-    (c.symbol && c.symbol.toLowerCase() === q) ||
-    (c.symbol && c.symbol.toLowerCase().endsWith("." + q)) ||
-    (c.symbol && c.symbol.toLowerCase().includes(q) && c.type === "symbol"),
-  );
-  hits.sort((a, b) => {
-    const ae = a.symbol.toLowerCase() === q ? 0 : 1;
-    const be = b.symbol.toLowerCase() === q ? 0 : 1;
-    if (ae !== be) return ae - be;
-    return (a.lineStart || 0) - (b.lineStart || 0);
-  });
-  return { manifest, hits: hits.map((chunk) => ({ chunk, score: 100, via: "symbol" })) };
+  const hits = resolveSymbolQuery(chunks, name);
+  return { manifest, hits };
 }
 
 export function callersOf(name) {
   const { chunks, manifest } = loadChunks();
+  const resolved = resolveSymbolQuery(chunks, name);
+  const names = new Set([name]);
+  for (const h of resolved.slice(0, 8)) {
+    if (h.chunk.symbol) {
+      names.add(h.chunk.symbol);
+      const short = h.chunk.symbol.split(".").pop();
+      if (short) names.add(short);
+    }
+  }
   const hits = [];
-  const needle = `${name}(`;
   const seen = new Set();
   const callerNames = new Set();
   for (const c of chunks) {
-    if (c.symbol === name || (c.symbol && c.symbol.endsWith("." + name))) {
+    if (c.symbol && [...names].some((n) => c.symbol === n || c.symbol.endsWith("." + n))) {
       for (const x of c.relationships?.calledBy || []) callerNames.add(x);
     }
   }
   for (const c of chunks) {
-    if ((c.symbol === name || (c.symbol && c.symbol.endsWith("." + name))) && c.type === "symbol") {
+    const isDef = c.type === "symbol" && c.symbol && [...names].some((n) => c.symbol === n || c.symbol.endsWith("." + n));
+    if (isDef) {
       if (!seen.has(c.id)) {
         hits.push({ chunk: c, score: 50, via: "definition" });
         seen.add(c.id);
       }
       continue;
     }
-    const lists = (c.relationships?.calls || []).includes(name) || callerNames.has(c.symbol);
-    const textHit = c.type === "symbol" && (c.text || "").includes(needle) && c.symbol !== name;
+    const lists = [...names].some((n) => (c.relationships?.calls || []).includes(n)) || callerNames.has(c.symbol);
+    const textHit = c.type === "symbol" && [...names].some((n) => n && (c.text || "").includes(`${n}(`)) && !names.has(c.symbol);
     if (lists || textHit) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
@@ -230,7 +285,9 @@ export function callersOf(name) {
 
 export function calleesOf(name) {
   const { chunks, manifest } = loadChunks();
-  const def = chunks.find((c) => c.symbol === name && c.type === "symbol");
+  const resolved = resolveSymbolQuery(chunks, name);
+  const def = resolved.find((h) => h.chunk.type === "symbol")?.chunk
+    || chunks.find((c) => c.symbol === name && c.type === "symbol");
   const names = new Set(def?.relationships?.calls || []);
   const hits = [];
   if (def) hits.push({ chunk: def, score: 50, via: "definition" });
@@ -242,11 +299,9 @@ export function calleesOf(name) {
 
 export function testsFor(nameOrPath) {
   const { chunks, manifest } = loadChunks();
-  const q = nameOrPath.toLowerCase();
-  const related = chunks.filter((c) =>
-    (c.symbol && c.symbol.toLowerCase() === q) ||
-    (c.path && (c.path.toLowerCase() === q || c.path.toLowerCase().endsWith(q))),
-  );
+  const q = String(nameOrPath || "").toLowerCase();
+  const resolved = resolveSymbolQuery(chunks, nameOrPath);
+  const related = resolved.map((h) => h.chunk);
   const testPaths = new Set();
   for (const c of related) {
     for (const t of c.relationships?.tests || []) testPaths.add(t.split("#")[0]);
@@ -257,7 +312,13 @@ export function testsFor(nameOrPath) {
     if ((c.text || "").toLowerCase().includes(q) || (c.title || "").toLowerCase().includes(q)) return true;
     return false;
   });
-  return { manifest, hits: hits.map((chunk) => ({ chunk, score: 30, via: "test" })) };
+  const resolvedHint = resolved[0]?.chunk
+    ? ` Resolved as ${resolved[0].chunk.symbol || resolved[0].chunk.path}.`
+    : "";
+  const notice = hits.length
+    ? null
+    : `No indexed test relationship found for "${nameOrPath}".${resolvedHint} This is a correct empty result when the corpus has no test/script coverage — not a tool failure. Do not invent tests.`;
+  return { manifest, hits: hits.map((chunk) => ({ chunk, score: 30, via: "test" })), notice };
 }
 
 export function invariants(query = "") {
@@ -265,12 +326,28 @@ export function invariants(query = "") {
   const types = new Set(["invariant", "constitution", "danger", "validation"]);
   let hits = chunks.filter((c) => types.has(c.type));
   if (query.trim()) {
-    const q = query.toLowerCase();
-    hits = hits.filter((c) =>
-      (c.title || "").toLowerCase().includes(q) ||
-      (c.text || "").toLowerCase().includes(q) ||
-      (c.tags || []).join(" ").toLowerCase().includes(q),
-    );
+    const qToks = tokenize(query).filter((t) => t.length >= 4);
+    hits = hits
+      .map((chunk) => {
+        const blob = `${chunk.title || ""} ${chunk.text || ""} ${(chunk.tags || []).join(" ")}`.toLowerCase();
+        const overlap = qToks.filter((t) => blob.includes(t)).length;
+        return { chunk, overlap };
+      })
+      .filter(({ overlap }) => overlap >= 1)
+      .sort((a, b) =>
+        b.overlap - a.overlap ||
+        (a.chunk.type === "invariant" ? 0 : 1) - (b.chunk.type === "invariant" ? 0 : 1)
+      );
+    const mapped = hits.map(({ chunk, overlap }) => ({
+      chunk,
+      score: 20 + overlap * 4,
+      via: "invariant",
+    }));
+    return {
+      manifest,
+      hits: mapped,
+      notice: mapped.length ? null : `No indexed invariant/policy chunks matched "${query}". Try a shorter architecture term (claimSource, Mission State, persist).`,
+    };
   }
   hits.sort((a, b) => (a.type === "invariant" ? 0 : 1) - (b.type === "invariant" ? 0 : 1));
   return { manifest, hits: hits.map((chunk) => ({ chunk, score: 20, via: "invariant" })) };

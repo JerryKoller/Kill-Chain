@@ -275,6 +275,10 @@ Actively try to disprove the initial diagnosis before modifying code.
 
 Clearly distinguish confirmed behavior from speculation.
 
+When an investigation is complete, put the findings in the user-visible reply. Do not leave the report only in hidden reasoning.
+
+A complete investigation reply includes confirmed facts supported by code; at least one competing hypothesis you checked, with the evidence that confirmed or ruled it out; the root cause if the hypothesis survives; the smallest safe fix (proposal only unless authorized to edit); validation commands to run (never claim they passed unless you ran them); and remaining uncertainties.
+
 Make the smallest possible diff.
 
 Do not reformat, re-indent, rename, or otherwise alter unrelated code during a focused fix.
