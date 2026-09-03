@@ -92,10 +92,33 @@ export function scanRewireFront({ root = repoRoot } = {}) {
   };
 }
 
+export function scanTimerPairing({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const gaps = [];
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    const sets = [...text.matchAll(/\bsetInterval\s*\(/g)].length;
+    const rAF = [...text.matchAll(/\brequestAnimationFrame\s*\(/g)].length;
+    const clears = [...text.matchAll(/\bclearInterval\s*\(/g)].length;
+    const cancelRAF = [...text.matchAll(/\bcancelAnimationFrame\s*\(/g)].length;
+    if ((sets && !clears) || (rAF && !cancelRAF)) {
+      gaps.push({
+        path: rel(abs),
+        setInterval: sets,
+        clearInterval: clears,
+        requestAnimationFrame: rAF,
+        cancelAnimationFrame: cancelRAF,
+      });
+    }
+  }
+  return { gaps, count: gaps.length };
+}
+
 export function writeOvernightScan() {
   const claim = scanClaimSource();
   const rewire = scanRewireFront();
   const persist = scanPersistenceReports();
+  const timers = scanTimerPairing();
   const report = {
     at: new Date().toISOString(),
     claimSource: claim,
@@ -106,9 +129,11 @@ export function writeOvernightScan() {
       frontGainAssignments: rewire.frontGainAssignments,
     },
     persistenceGaps: persist.hits,
+    timerPairingGaps: timers.gaps,
     notes: [
       "Read-only scan. Production audio was not modified.",
       "Persistence gaps are same-file heuristics, not proof that a caller lacks reportStorageFailure via import.",
+      "Timer gaps are same-file setInterval/rAF vs clear/cancel heuristics.",
     ],
   };
   const dir = join(dataDir, "overnight");

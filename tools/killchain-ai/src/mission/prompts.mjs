@@ -13,7 +13,8 @@ export const DISCIPLINE = `WINDOWS + DISCIPLINE (deterministic; do not "remember
 - Put the user-visible answer in the assistant TEXT / final message. Do not bury the only report in hidden reasoning.
 - Do not git push, merge, rebase, reset --hard, or commit.
 - Do not install packages or change package.json.
-- Do not modify files outside the mission allowed paths. If this pass is read-only / dry-run, do not edit production files at all.`;
+- Do not modify files outside the mission allowed paths. If this pass is read-only / dry-run, do not edit production files at all.
+- If a Unix tool (bash/grep/sed/awk/head/tail/find) fails or is flagged, do not retry it in this mission. Switch to Kill Chain MCP or PowerShell immediately.`;
 
 export function missionHeader(spec, status) {
   return `KILL CHAIN LOCAL MISSION
@@ -30,7 +31,7 @@ forbiddenPaths: ${(spec.forbiddenPaths || []).join(", ") || "(defaults apply: Au
 acceptance:
 ${(spec.acceptance || []).map((a) => `- ${a}`).join("\n") || "- (none listed)"}
 
-${spec.brief ? `additional brief:\n${clip(spec.brief, 6000)}` : ""}`;
+${status.unixViolations ? "UNIX TOOLS ALREADY FLAGGED THIS MISSION. Do not retry bash/grep/sed/awk/head/tail/find. Use Kill Chain MCP or PowerShell only.\n" : ""}${spec.brief ? `additional brief:\n${clip(spec.brief, 6000)}` : ""}`;
 }
 
 export function investigatePrompt(spec, status) {

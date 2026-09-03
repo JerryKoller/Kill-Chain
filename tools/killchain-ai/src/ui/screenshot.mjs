@@ -350,6 +350,19 @@ export async function captureFireCommand({
       }
     }
     log.push({ opened });
+    const scrollPerf = await evalValue(session.client, `(() => {
+      const hit = [...document.querySelectorAll("div,span")].find((n) => {
+        const t = (n.innerText || "").trim();
+        return (t === "Rhythm Shutter" || t.startsWith("Rhythm Shutter") || t === "Macros" || t === "Macro") && t.length < 80;
+      });
+      if (hit) {
+        hit.scrollIntoView({ block: "center", inline: "nearest" });
+        return { ok: true, text: (hit.innerText || "").slice(0, 80) };
+      }
+      return { ok: false };
+    })()`);
+    log.push({ scrollPerf });
+    await new Promise((r) => setTimeout(r, 500));
 
     const metrics = await evalValue(session.client, `(() => {
       const byText = (needle) => {
@@ -389,6 +402,36 @@ export async function captureFireCommand({
     mkdirSync(join(dest, ".."), { recursive: true });
     writeFileSync(dest, buf);
     const stats = pngStats(buf);
+    const viewports = {};
+    for (const w of DEFAULT_VIEWPORTS) {
+      try {
+        await session.client.send("Emulation.setDeviceMetricsOverride", {
+          width: w,
+          height,
+          deviceScaleFactor: 1,
+          mobile: false,
+        });
+        await new Promise((r) => setTimeout(r, 350));
+      } catch { /* emulation optional */ }
+      const vpShot = await session.client.send("Page.captureScreenshot", {
+        format: "png",
+        captureBeyondViewport: false,
+        fromSurface: true,
+      });
+      const vpBuf = Buffer.from(vpShot.data, "base64");
+      const vpPath = join(dir, `fire-command-${w}.png`);
+      writeFileSync(vpPath, vpBuf);
+      const vpMetrics = await evalValue(session.client, metricsExpression({
+        selectors: ["#root", "button[data-module='fire']"],
+      }));
+      viewports[String(w)] = {
+        path: vpPath,
+        bytes: vpBuf.length,
+        stats: pngStats(vpBuf),
+        overflow: vpMetrics?.bodyOverflowX,
+        viewport: vpMetrics?.viewport,
+      };
+    }
     const report = {
       at: new Date().toISOString(),
       dest,
@@ -397,6 +440,7 @@ export async function captureFireCommand({
       opened,
       log,
       metrics,
+      viewports,
       note: "Diagnostic Chrome only. Production splash/license/tour unchanged.",
     };
     writeFileSync(join(dir, "fire-command-capture.json"), `${JSON.stringify(report, null, 2)}\n`);
