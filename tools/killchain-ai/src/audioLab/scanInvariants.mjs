@@ -270,6 +270,34 @@ export function scanMeasureLive({ root = repoRoot } = {}) {
   return { definition, callers, count: callers.length };
 }
 
+export function scanInitStopMissionState({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const initCallers = [];
+  const stopCallers = [];
+  let initDef = null;
+  let stopDef = null;
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    if (!text.includes("initMissionState") && !text.includes("stopMissionState")) continue;
+    const path = rel(abs);
+    const initD = lineHits(text, /export function initMissionState\b/);
+    if (initD.length) initDef = { path, ...initD[0] };
+    const stopD = lineHits(text, /export function stopMissionState\b/);
+    if (stopD.length) stopDef = { path, ...stopD[0] };
+    for (const h of lineHits(text, /\binitMissionState\s*\(/)) {
+      if (/export function initMissionState/.test(h.text)) continue;
+      if (/^(\*|\/\/)/.test(h.text)) continue;
+      initCallers.push({ path, ...h });
+    }
+    for (const h of lineHits(text, /\bstopMissionState\s*\(/)) {
+      if (/export function stopMissionState/.test(h.text)) continue;
+      if (/^(\*|\/\/)/.test(h.text)) continue;
+      stopCallers.push({ path, ...h });
+    }
+  }
+  return { initDef, stopDef, initCallers, stopCallers, initCount: initCallers.length, stopCount: stopCallers.length };
+}
+
 export function scanAnalysers({ root = repoRoot } = {}) {
   const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
   const hits = [];
@@ -296,6 +324,7 @@ export function writeOvernightScan() {
   const autoLockScan = scanAutoLockScan();
   const applyChain = scanApplyChain();
   const measureLive = scanMeasureLive();
+  const initStop = scanInitStopMissionState();
   const storeEngine = scanStoreEngineCoupling();
   const bridges = scanAudioStoreBridges();
   const bridgePaths = new Set(bridges.hits.map((h) => h.path));
@@ -317,6 +346,7 @@ export function writeOvernightScan() {
     autoLockScan,
     applyChain,
     measureLive,
+    initStopMissionState: initStop,
     storeEngineCoupling: storeEngine.hits,
     audioStoreBridges: bridges.hits,
     presentationOnlyStores: presentationOnly,
@@ -331,6 +361,7 @@ export function writeOvernightScan() {
       "autoLockScan is the Tractor fresh-scan helper. Extra callers besides missionStateStore would also be a dual-orchestrator risk.",
       "applyChain restores a chain snapshot; callers include audioStore, missionStateStore, missionLogStore, sessionSnapshotsStore. Extra callers should be reviewed.",
       "measureLive is the Tractor live-tap measurement helper. Callers include Auto-Lock, Tractor UI, Target Lock, Deadflat, and Read & Repair.",
+      "initMissionState is called from App.tsx. stopMissionState currently has zero src/ call sites; that is a harness gap, not an overnight production edit.",
     ],
   };
   const dir = join(dataDir, "overnight");

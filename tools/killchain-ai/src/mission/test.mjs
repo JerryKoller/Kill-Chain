@@ -1412,6 +1412,11 @@ ${JSON.stringify({
       && (scan.measureLive?.callers || []).some((c) => String(c.path).includes("tractorAutoLock"))
       && (scan.measureLive?.callers || []).some((c) => String(c.path).includes("TractorBeamView")),
   );
+  check(
+    "initMissionState is called from App.tsx and stopMissionState has no src callers",
+    (scan.initStopMissionState?.initCallers || []).some((c) => String(c.path).includes("App.tsx"))
+      && scan.initStopMissionState?.stopCount === 0,
+  );
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
   check("Fire Command map finds many UI files", fireMap.count >= 80);
