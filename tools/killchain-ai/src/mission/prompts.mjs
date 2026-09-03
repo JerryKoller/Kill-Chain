@@ -100,6 +100,8 @@ VERDICT: FAIL
 or
 VERDICT: BLOCK
 
+Write the verdict on its own line as VERDICT: PASS (or FAIL/BLOCK) with no backticks around the word.
+
 A PASS without INSPECTED, RISK, and EVIDENCE is invalid.
 A PASS that only says the plan looks good / is comprehensive is invalid.
 If a referenced src/ file does not exist and is not labeled NEW FILE, VERDICT must be FAIL.
@@ -290,6 +292,8 @@ EVIDENCE: <why that risk is acceptable, or why NOT_READY>
 VERDICT: READY
 or
 VERDICT: NOT_READY
+
+Write the verdict on its own line as VERDICT: READY or VERDICT: NOT_READY with no backticks around the word.
 
 Also include: acceptance checklist, remaining uncertainties, recommended commit message (do not commit), what a human must visually verify. Automated typecheck/build is not visual proof.
 

@@ -5,7 +5,7 @@ import { parseMissionMarkdown, pathEditable, matchPath } from "./schema.mjs";
 import { assertTransition, ALLOWED_TRANSITIONS } from "./machine.mjs";
 import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import { scanUnixTools } from "./unix.mjs";
-import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest } from "./critic.mjs";
+import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew } from "./critic.mjs";
 import { assertSafeMissionId } from "./schema.mjs";
 import {
   classifyPorcelain,
@@ -280,6 +280,13 @@ export async function runMissionTests() {
 
   const mdVerdict = parseCritic("### INSPECTED\n- src/components/FireCommand/ModuleEnableToggle.tsx\n\n### RISK\nclick feel could change if hit area grows\n\n### EVIDENCE\nonClick still calls setModuleEnable\n\n### VERDICT\nPASS\n");
   check("markdown ### VERDICT PASS parses", !mdVerdict.missingVerdict && mdVerdict.verdict === "PASS" && mdVerdict.inspected.includes("ModuleEnableToggle"));
+  const tickVerdict = parseCritic("INSPECTED: FireBreadcrumb.tsx\nRISK: jump hints could bypass Mission State\nEVIDENCE: hints would be UI-only fields\nVERDICT: `READY` with Evidence\n");
+  check("backtick VERDICT READY parses", !tickVerdict.missingVerdict && tickVerdict.verdict === "READY");
+  check("vue SFC paths are wrong-stack", findWrongStackPaths("edit `src/components/FireCommand/FireBreadcrumb.vue`").includes("src/components/FireCommand/FireBreadcrumb.vue"));
+  const markedExisting = existingMarkedNew(" | `src/state/fireCommandStore.ts` | NEW FILE | jump hint state |");
+  check("existing file labeled NEW FILE is flagged", markedExisting.includes("src/state/fireCommandStore.ts"));
+  const vueGate = evaluateArtifactGate("NEW FILE `src/components/FireCommand/KeyboardHintBar.vue`", { allowedPaths: ["src/components/FireCommand/**"], forbiddenPaths: [], readOnlyPaths: [], level: 0 });
+  check("artifact gate rejects .vue", !vueGate.ok && vueGate.errors.some((e) => e.startsWith("wrong-stack")));
 
   const existOk = checkReferencedFilesExist("inspect `src/components/FireCommand/ModuleEnableToggle.tsx`");
   check("valid existing UI file existence", existOk.ok);

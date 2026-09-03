@@ -69,6 +69,11 @@ Eval (holdout; no training)
   eval --ab [--model qwen3.5:9b] [--limit N] [--ids id1,id2]
   eval --ab --skip-generate   Retrieval ranking + packs only (no Ollama)
 
+  ui capture-fire             Diagnostic Chrome: license, skip tour, Fire Command shot
+  ui diagnose                 GPU on/off Vite screenshot probe
+  audio-lab scan              Static claimSource/rewireFront/persistence scan
+  audio-lab                   Retrieval-grounded Qwen invariant notes (read-only)
+
   status                    Paths, git, AGENTS.md
 
 Does not train, download Unsloth, or modify the Kill Chain app.
@@ -196,6 +201,35 @@ async function main() {
       return;
     }
     throw new Error("sft generate | sft validate [--self-test]");
+  }
+
+  if (cmd === "ui") {
+    const sub = pos[0] || "help";
+    if (sub === "capture-fire") {
+      const { captureFireCommand } = await import("./ui/screenshot.mjs");
+      const r = await captureFireCommand({ url: flags.url || "http://127.0.0.1:5174/" });
+      console.log(JSON.stringify({ ok: r.ok, dest: r.dest, bytes: r.bytes, stats: r.stats, opened: r.opened }, null, 2));
+      if (!r.ok) process.exitCode = 1;
+      return;
+    }
+    if (sub === "diagnose") {
+      const { diagnoseViteScreenshot } = await import("./ui/screenshot.mjs");
+      const r = await diagnoseViteScreenshot({ url: flags.url || "http://127.0.0.1:5174/" });
+      console.log(JSON.stringify(r, null, 2));
+      return;
+    }
+    throw new Error("ui capture-fire | ui diagnose");
+  }
+
+  if (cmd === "audio-lab") {
+    if (pos[0] === "scan") {
+      const { writeOvernightScan } = await import("./audioLab/scanInvariants.mjs");
+      console.log(JSON.stringify(writeOvernightScan(), null, 2));
+      return;
+    }
+    const { runAudioLabQwen } = await import("./audioLab/runAudioLab.mjs");
+    await runAudioLabQwen({ log: console.log });
+    return;
   }
 
   if (cmd === "eval") {

@@ -188,6 +188,210 @@ export async function captureReadyUi({
   }
 }
 
+async function evalValue(client, expression) {
+  const ev = await client.send("Runtime.evaluate", {
+    expression,
+    returnByValue: true,
+    awaitPromise: true,
+  });
+  if (ev.exceptionDetails) {
+    return { error: ev.exceptionDetails.text || "eval-error" };
+  }
+  return ev.result?.value ?? null;
+}
+
+function clickExactText(text) {
+  return `(() => {
+    const want = ${JSON.stringify(text)};
+    const nodes = [...document.querySelectorAll("button, label, a, [role='button']")];
+    const el = nodes.find((n) => (n.innerText || "").replace(/\\s+/g, " ").trim() === want
+      || (n.innerText || "").includes(want) && (n.innerText || "").length < 120);
+    if (!el) return { ok: false, want };
+    el.click();
+    return { ok: true, want, tag: el.tagName, text: (el.innerText || "").slice(0, 80) };
+  })()`;
+}
+
+/**
+ * Diagnostic-only: hide splash, accept license, skip tour, open Fire Command.
+ * Does not change production splash/license/tour behavior.
+ */
+export async function captureFireCommand({
+  url = "http://127.0.0.1:5174/",
+  outPath,
+  width = 1440,
+  height = 900,
+  waitMs = 20000,
+  port = 9340,
+} = {}) {
+  const dir = screenshotDir();
+  const dest = outPath || join(dir, "fire-command.png");
+  const session = await launchHeadlessChrome({ url, width, height, port });
+  const log = [];
+  try {
+    await session.client.send("Page.enable");
+    await session.client.send("Runtime.enable");
+    const t0 = Date.now();
+    while (Date.now() - t0 < waitMs) {
+      const ready = await evalValue(session.client, `({
+        rootChildren: document.getElementById("root")?.childElementCount || 0,
+        buttons: document.querySelectorAll("button").length,
+        textLen: (document.body && document.body.innerText || "").length,
+        hasLicense: /Agree to continue|I agree/.test(document.body.innerText || ""),
+        hasTour: /Skip tour/.test(document.body.innerText || ""),
+      })`);
+      log.push({ wait: Date.now() - t0, ready });
+      if (ready && (ready.rootChildren > 0 || ready.buttons > 0 || ready.textLen > 40)) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    await evalValue(session.client, `(() => {
+      const splash = document.getElementById("boot-splash");
+      if (splash) { splash.classList.add("boot-hide"); splash.style.display = "none"; }
+      return Boolean(splash);
+    })()`);
+    await new Promise((r) => setTimeout(r, 400));
+
+    const licenseCb = await evalValue(session.client, `(() => {
+      const input = document.querySelector("input[type=checkbox]");
+      if (!input) return { ok: false, reason: "no-checkbox" };
+      if (!input.checked) input.click();
+      return { ok: true, checked: input.checked };
+    })()`);
+    log.push({ licenseCb });
+    await new Promise((r) => setTimeout(r, 200));
+    const agree = await evalValue(session.client, clickExactText("I agree — continue"));
+    log.push({ agree });
+    await new Promise((r) => setTimeout(r, 800));
+
+    const skip = await evalValue(session.client, clickExactText("Skip tour"));
+    log.push({ skip });
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const fireClick = await evalValue(session.client, `(() => {
+      const el = document.querySelector("button[data-module='fire']");
+      if (!el) return { ok: false, reason: "no-data-module-fire" };
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      el.click();
+      return { ok: true, aria: el.getAttribute("aria-current"), text: (el.innerText || "").slice(0, 80) };
+    })()`);
+    log.push({ fireClick });
+
+    const t1 = Date.now();
+    let opened = null;
+    while (Date.now() - t1 < 45000) {
+      opened = await evalValue(session.client, `({
+        href: location.href,
+        ariaFire: document.querySelector("button[data-module='fire']")?.getAttribute("aria-current") || null,
+        weaponsEl: Boolean(document.querySelector('[title="Fire Command MK IV — weapons free"]')),
+        hasWeapons: /weapons free|Fire Command MK/i.test(document.body.innerText || ""),
+        hasRhythm: /Rhythm Shutter/.test(document.body.innerText || ""),
+        hasGate: /\\bGate\\b/.test(document.body.innerText || ""),
+        hasMacro: /\\bMacro\\b/.test(document.body.innerText || ""),
+        error: (document.body.innerText || "").match(/Something went wrong|ErrorBoundary|is not defined/)?.[0] || null,
+        textSample: (document.body.innerText || "").slice(0, 500),
+      })`);
+      if (opened?.weaponsEl || opened?.hasWeapons || opened?.hasRhythm) break;
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    if (!(opened?.weaponsEl || opened?.hasWeapons || opened?.hasRhythm)) {
+      const seeded = await evalValue(session.client, `(() => {
+        try {
+          const key = "audio-playground.settings.v1";
+          const raw = JSON.parse(localStorage.getItem(key) || "{}");
+          raw.onboardingDone = true;
+          raw.legalAcceptedVersion = raw.legalAcceptedVersion || "1.0-draft";
+          raw.legalAcceptedAt = raw.legalAcceptedAt || new Date().toISOString();
+          localStorage.setItem(key, JSON.stringify(raw));
+          localStorage.setItem("killchain.lastView.v1", "fire");
+          location.reload();
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
+      })()`);
+      log.push({ seeded });
+      await new Promise((r) => setTimeout(r, 2500));
+      const t2 = Date.now();
+      while (Date.now() - t2 < 45000) {
+        opened = await evalValue(session.client, `({
+          href: location.href,
+          ariaFire: document.querySelector("button[data-module='fire']")?.getAttribute("aria-current") || null,
+          weaponsEl: Boolean(document.querySelector('[title="Fire Command MK IV — weapons free"]')),
+          hasWeapons: /weapons free|Fire Command MK/i.test(document.body.innerText || ""),
+          hasRhythm: /Rhythm Shutter/.test(document.body.innerText || ""),
+          hasGate: /\\bGate\\b/.test(document.body.innerText || ""),
+          hasMacro: /\\bMacro\\b/.test(document.body.innerText || ""),
+          splash: Boolean(document.getElementById("boot-splash")) && getComputedStyle(document.getElementById("boot-splash")).display !== "none",
+          textSample: (document.body.innerText || "").slice(0, 500),
+        })`);
+        if (opened?.splash) {
+          await evalValue(session.client, `(() => {
+            const splash = document.getElementById("boot-splash");
+            if (splash) { splash.style.display = "none"; }
+            return true;
+          })()`);
+        }
+        if (opened?.weaponsEl || opened?.hasWeapons || opened?.hasRhythm) break;
+        await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    log.push({ opened });
+
+    const metrics = await evalValue(session.client, `(() => {
+      const byText = (needle) => {
+        const el = [...document.querySelectorAll("div,span,button,h1,h2,h3")].find(
+          (n) => (n.innerText || "").includes(needle) && (n.innerText || "").length < 200,
+        );
+        if (!el) return { needle, found: false };
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return {
+          needle,
+          found: true,
+          tag: el.tagName,
+          text: (el.innerText || "").slice(0, 160),
+          box: { x: r.x, y: r.y, w: r.width, h: r.height },
+          overflowX: el.scrollWidth - el.clientWidth,
+          gap: cs.gap,
+          opacity: cs.opacity,
+          color: cs.color,
+        };
+      };
+      return {
+        href: location.href,
+        viewport: { innerWidth: window.innerWidth, innerHeight: window.innerHeight },
+        rhythm: byText("Rhythm Shutter"),
+        gate: byText("Gate"),
+        macro: byText("Macro"),
+        skipTour: byText("Skip tour"),
+      };
+    })()`);
+    const shot = await session.client.send("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+      fromSurface: true,
+    });
+    const buf = Buffer.from(shot.data, "base64");
+    mkdirSync(join(dest, ".."), { recursive: true });
+    writeFileSync(dest, buf);
+    const stats = pngStats(buf);
+    const report = {
+      at: new Date().toISOString(),
+      dest,
+      bytes: buf.length,
+      stats,
+      opened,
+      log,
+      metrics,
+      note: "Diagnostic Chrome only. Production splash/license/tour unchanged.",
+    };
+    writeFileSync(join(dir, "fire-command-capture.json"), `${JSON.stringify(report, null, 2)}\n`);
+    return { ok: Boolean(opened?.hasRhythm || opened?.hasWeapons || opened?.weaponsEl), ...report };
+  } finally {
+    await session.close();
+  }
+}
+
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
   diagnoseViteScreenshot({ url: process.argv[2] || "http://127.0.0.1:5174/" }).then((r) => {

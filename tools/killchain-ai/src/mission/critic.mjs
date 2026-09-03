@@ -8,9 +8,9 @@ const PRAISE_RE = /\b(looks good|comprehensive plan|all criteria met|well done|e
 
 export function parseCritic(text) {
   const raw = String(text || "").trim();
-  const m = raw.match(/VERDICT:\s*\**\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i)
-    || raw.match(/#{1,3}\s*VERDICT\s*\n+\s*\**\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i)
-    || raw.match(/\*\*VERDICT:\*\*\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i);
+  const m = raw.match(/VERDICT:\s*\**\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/i)
+    || raw.match(/#{1,3}\s*VERDICT\s*\n+\s*\**\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/i)
+    || raw.match(/\*\*VERDICT:\*\*\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/i);
   const verdict = m ? m[1].toUpperCase() : null;
   const findings = [];
   for (const line of raw.split(/\r?\n/)) {
@@ -96,6 +96,21 @@ export function checkReferencedFilesExist(text) {
     if (!repoFileExists(p)) missing.push(p);
   }
   return { ok: missing.length === 0, missing, created, paths };
+}
+
+/** Vue SFCs are never valid in this React/TSX app. */
+export function findWrongStackPaths(text) {
+  const set = new Set();
+  const re = /(?:^|[`'"\s(\[])((?:src\/)?[A-Za-z0-9_./-]+\.vue)\b/g;
+  let m;
+  while ((m = re.exec(String(text || "")))) set.add(m[1].replace(/\\/g, "/"));
+  return [...set];
+}
+
+/** Existing repo files must not be labeled NEW FILE. */
+export function existingMarkedNew(text) {
+  const { created } = classifyReferencedPaths(text);
+  return created.filter((p) => repoFileExists(p));
 }
 
 export function checkEditTargetsAllowed(text, spec) {
@@ -229,10 +244,14 @@ export function checkProposalConcrete(text) {
 export function evaluateArtifactGate(text, spec) {
   const files = checkReferencedFilesExist(text);
   const scope = checkEditTargetsAllowed(text, spec);
+  const vue = findWrongStackPaths(text);
+  const markedNew = existingMarkedNew(text);
   const errors = [];
   if (!files.ok) errors.push(`invented-files:${files.missing.join(",")}`);
   if (!scope.ok) errors.push(`outside-allowed:${scope.problems.map((p) => p.path).join(",")}`);
-  return { ok: errors.length === 0, errors, files, scope };
+  if (vue.length) errors.push(`wrong-stack:.vue:${vue.join(",")}`);
+  if (markedNew.length) errors.push(`existing-marked-new:${markedNew.join(",")}`);
+  return { ok: errors.length === 0, errors, files, scope, vue, markedNew };
 }
 
 export function evaluateCriticGate({ criticText, planText = "", proposalText = "", spec, tools = [], phase = "" } = {}) {
@@ -244,15 +263,20 @@ export function evaluateCriticGate({ criticText, planText = "", proposalText = "
   const named = parseMentionedPaths(criticText || "");
   const finalDiffInPrompt = String(phase) === "final" && evidence.ok && named.length >= 1;
 
-  const errors = [];
-  if (parsed.missingVerdict) errors.push("missing-verdict");
+  const rawErrors = [];
+  if (parsed.missingVerdict) rawErrors.push("missing-verdict");
   if (parsed.verdict === "PASS" || parsed.verdict === "READY") {
-    if (!evidence.ok) errors.push(evidence.reason);
-    if (!toolsGate.ok && !finalDiffInPrompt) errors.push("critic-no-tools");
+    if (!evidence.ok) rawErrors.push(evidence.reason);
+    if (!toolsGate.ok && !finalDiffInPrompt) rawErrors.push("critic-no-tools");
   }
-  if (!planFiles.ok) errors.push(`invented-files:${planFiles.missing.join(",")}`);
-  if (proposalText && !artifacts.ok) errors.push(...artifacts.errors);
+  if (!planFiles.ok) rawErrors.push(`invented-files:${planFiles.missing.join(",")}`);
+  if (proposalText && !artifacts.ok) rawErrors.push(...artifacts.errors);
+  const vueAll = findWrongStackPaths([planText, proposalText, criticText].join("\n"));
+  if (vueAll.length) rawErrors.push(`wrong-stack:.vue:${vueAll.join(",")}`);
+  const markedNewAll = existingMarkedNew([planText, proposalText, criticText].join("\n"));
+  if (markedNewAll.length) rawErrors.push(`existing-marked-new:${markedNewAll.join(",")}`);
 
+  const errors = [...new Set(rawErrors)];
   const pass = (parsed.verdict === "PASS" || parsed.verdict === "READY") && errors.length === 0;
   return {
     ok: errors.length === 0 && (parsed.verdict === "PASS" || parsed.verdict === "READY" || parsed.verdict === "FAIL" || parsed.verdict === "BLOCK"),
