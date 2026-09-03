@@ -351,15 +351,41 @@ export async function captureFireCommand({
     }
     log.push({ opened });
     const scrollPerf = await evalValue(session.client, `(() => {
-      const hit = [...document.querySelectorAll("div,span")].find((n) => {
-        const t = (n.innerText || "").trim();
-        return (t === "Rhythm Shutter" || t.startsWith("Rhythm Shutter") || t === "Macros" || t === "Macro") && t.length < 80;
-      });
-      if (hit) {
-        hit.scrollIntoView({ block: "center", inline: "nearest" });
-        return { ok: true, text: (hit.innerText || "").slice(0, 80) };
+      const want = new Set(["Rhythm Shutter", "Macros", "GATE RATE", "GATE_C_RATE"]);
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node;
+      const textHits = [];
+      while ((node = walker.nextNode())) {
+        const t = (node.nodeValue || "").trim();
+        if (!t || t.length > 40) continue;
+        if (!want.has(t) && t !== "Gate" && t !== "Macro" && t !== "Macros") continue;
+        const el = node.parentElement;
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        textHits.push({ text: t, tag: el.tagName, y: Math.round(r.y), h: Math.round(r.height), w: Math.round(r.width) });
+        if (t === "Rhythm Shutter" && r.height < 64) {
+          el.scrollIntoView({ block: "center", inline: "nearest" });
+          let scroller = el.parentElement;
+          while (scroller && scroller !== document.body) {
+            if (scroller.scrollHeight > scroller.clientHeight + 40) {
+              const cr = el.getBoundingClientRect();
+              const sr = scroller.getBoundingClientRect();
+              scroller.scrollTop += cr.top - sr.top - Math.min(80, sr.height / 4);
+              break;
+            }
+            scroller = scroller.parentElement;
+          }
+          const after = el.getBoundingClientRect();
+          return { ok: true, text: t, method: "text-node", y: Math.round(after.y), h: Math.round(after.height), textHits: textHits.slice(0, 8) };
+        }
       }
-      return { ok: false };
+      const overflow = [...document.querySelectorAll("div")].filter((n) => n.scrollHeight > n.clientHeight + 80);
+      overflow.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+      if (overflow[0]) {
+        overflow[0].scrollTop = Math.min(overflow[0].scrollHeight, Math.floor(overflow[0].clientHeight * 0.9));
+        return { ok: false, method: "overflow-fallback", scrolled: overflow[0].className.slice(0, 80), textHits };
+      }
+      return { ok: false, method: "none", textHits };
     })()`);
     log.push({ scrollPerf });
     await new Promise((r) => setTimeout(r, 500));

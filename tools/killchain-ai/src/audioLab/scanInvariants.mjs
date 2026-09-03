@@ -130,6 +130,27 @@ export function scanTapConnects({ root = repoRoot } = {}) {
   return { connects, count: connects.length };
 }
 
+export function scanStoreEngineCoupling({ root = repoRoot } = {}) {
+  const dir = join(root, "src", "state");
+  const names = existsSync(dir) ? readdirSync(dir).filter((n) => /\.(ts|tsx)$/.test(n)) : [];
+  const hits = [];
+  for (const name of names) {
+    const abs = join(dir, name);
+    const text = readFileSync(abs, "utf8");
+    const engine = /from\s+["']@\/audio\/AudioEngine["']/.test(text) || /from\s+["'][^"']*\/audio\/AudioEngine["']/.test(text);
+    const getEngine = /\bgetEngine\s*\(/.test(text);
+    const activeFire = /\bactiveFireEngine\s*\(/.test(text);
+    if (!engine && !getEngine && !activeFire) continue;
+    hits.push({
+      path: rel(abs),
+      importsAudioEngine: engine,
+      getEngineCalls: [...text.matchAll(/\bgetEngine\s*\(/g)].length,
+      activeFireEngineCalls: [...text.matchAll(/\bactiveFireEngine\s*\(/g)].length,
+    });
+  }
+  return { hits, count: hits.length };
+}
+
 export function scanAnalysers({ root = repoRoot } = {}) {
   const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
   const hits = [];
@@ -152,6 +173,7 @@ export function writeOvernightScan() {
   const timers = scanTimerPairing();
   const taps = scanTapConnects();
   const analysers = scanAnalysers();
+  const storeEngine = scanStoreEngineCoupling();
   const report = {
     at: new Date().toISOString(),
     claimSource: claim,
@@ -165,10 +187,12 @@ export function writeOvernightScan() {
     timerPairingGaps: timers.gaps,
     tapConnects: taps.connects,
     analysers: analysers.hits,
+    storeEngineCoupling: storeEngine.hits,
     notes: [
       "Read-only scan. Production audio was not modified.",
       "Persistence gaps are same-file heuristics, not proof that a caller lacks reportStorageFailure via import.",
       "Timer gaps are same-file setInterval/rAF vs clear/cancel heuristics.",
+      "storeEngineCoupling lists src/state files that import or call AudioEngine/getEngine/activeFireEngine. Presence is not a defect.",
     ],
   };
   const dir = join(dataDir, "overnight");

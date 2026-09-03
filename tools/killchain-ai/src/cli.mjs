@@ -71,6 +71,7 @@ Eval (holdout; no training)
 
   ui capture-fire             Diagnostic Chrome: license, skip tour, Fire Command shot
   ui diagnose                 GPU on/off Vite screenshot probe
+  ui fire-map                 Inventory Fire Command files vs inner FireCommandView panels
   audio-lab scan              Static claimSource/rewireFront/persistence scan
   audio-lab                   Retrieval-grounded Qwen invariant notes (read-only)
 
@@ -218,7 +219,17 @@ async function main() {
       console.log(JSON.stringify(r, null, 2));
       return;
     }
-    throw new Error("ui capture-fire | ui diagnose");
+    if (sub === "fire-map") {
+      const { writeFireCommandMap } = await import("./ui/scanFireCommand.mjs");
+      const r = writeFireCommandMap();
+      console.log(JSON.stringify({
+        count: r.count,
+        innerPanelsWithoutSiblingFile: r.innerPanelsWithoutSiblingFile,
+        fireCommandViewLines: r.files.find((f) => f.name === "FireCommandView.tsx")?.lines,
+      }, null, 2));
+      return;
+    }
+    throw new Error("ui capture-fire | ui diagnose | ui fire-map");
   }
 
   if (cmd === "audio-lab") {

@@ -503,7 +503,16 @@ Option B add an icon
 Which visual enhancement vector do you prefer? Human review of visual strategy requested before any code edits proceed.
 path: src/components/FireCommand/ModuleEnableToggle.tsx
 `.repeat(3));
-  check("multi-option asks-human proposal fails", !multiOpt.ok && multiOpt.errors.includes("unresolved-design"));
+  check("multi-option asks-human proposal fails", !multiOpt.ok && multiOpt.errors.includes("unresolved-design") && multiOpt.errors.includes("option-menu"));
+  const optionMenuOnly = checkProposalConcrete(`
+File: src/components/FireCommand/FireBreadcrumb.tsx
+Intended modification: inspect-only map of presentation issues.
+Option A tighten breadcrumb truncation.
+Option B restyle the workspace tabs.
+Option C add empty-state copy.
+Pick later. ${"x".repeat(200)}
+`);
+  check("option A/B/C menu fails even without asking the operator", !optionMenuOnly.ok && optionMenuOnly.errors.includes("option-menu"));
 
   const thin = checkProposalConcrete("I will propose later.");
   check("thin proposal fails", !thin.ok && thin.errors.includes("proposal-too-thin"));
@@ -1345,6 +1354,14 @@ ${JSON.stringify({
   const scan = (await import("../audioLab/scanInvariants.mjs")).writeOvernightScan();
   check("claimSource scanner finds callers", scan.claimSource.count >= 6);
   check("rewireFront front-gains stay inside rewireFront", scan.rewireFront.ok);
+  check("store-engine coupling scan lists fireCommandStore", (scan.storeEngineCoupling || []).some((h) => String(h.path).includes("fireCommandStore")));
+
+  const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
+  check("Fire Command map finds many UI files", fireMap.count >= 80);
+  check(
+    "DrivePanel is inner FireCommandView, not a sibling file",
+    fireMap.innerPanelsWithoutSiblingFile.includes("DrivePanel") && fireMap.fireCommandViewInnerFunctions.includes("DrivePanel"),
+  );
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;
