@@ -39,7 +39,7 @@ function field(raw, name) {
 
 export function parseMentionedPaths(text) {
   const set = new Set();
-  const re = /(?:^|[`'"\s(\[])((?:src|electron|scripts)\/[A-Za-z0-9_./-]+\.(?:tsx|mjs|ts|js|css|json))/gm;
+  const re = /(?:^|[`'"*\s(\[])((?:src|electron|scripts)\/[A-Za-z0-9_./-]+\.(?:tsx|mjs|ts|js|css|json))/gm;
   let m;
   while ((m = re.exec(String(text || "")))) {
     set.add(m[1].replace(/\\/g, "/"));

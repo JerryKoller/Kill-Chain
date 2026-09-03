@@ -308,6 +308,8 @@ export async function runMissionTests() {
 
   const existOk = checkReferencedFilesExist("inspect `src/components/FireCommand/ModuleEnableToggle.tsx`");
   check("valid existing UI file existence", existOk.ok);
+  const mdBoldPath = parseMentionedPaths("- **src/state/sessionSnapshotsStore.ts** — Zustand store");
+  check("markdown-bold src paths still parse", mdBoldPath.includes("src/state/sessionSnapshotsStore.ts"));
 
   const loosePaths = parseMentionedPaths("INSPECTED COMPONENTS\n### `Section` Component (fireUiKit.tsx:63)\nFcChip (fcChip.tsx:287)");
   check(
