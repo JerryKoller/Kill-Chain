@@ -206,6 +206,26 @@ export function scanAutoFlatten({ root = repoRoot } = {}) {
     if (def.length) definition = { path, ...def[0] };
     for (const h of lineHits(text, /\bautoFlatten\s*\(/)) {
       if (/export async function autoFlatten/.test(h.text)) continue;
+      if (/^(\*|\/\/)/.test(h.text)) continue;
+      callers.push({ path, ...h });
+    }
+  }
+  return { definition, callers, count: callers.length };
+}
+
+export function scanAutoLockScan({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const callers = [];
+  let definition = null;
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    if (!text.includes("autoLockScan")) continue;
+    const path = rel(abs);
+    const def = lineHits(text, /export async function autoLockScan\b/);
+    if (def.length) definition = { path, ...def[0] };
+    for (const h of lineHits(text, /\bautoLockScan\s*\(/)) {
+      if (/export async function autoLockScan/.test(h.text)) continue;
+      if (/^(\*|\/\/)/.test(h.text)) continue;
       callers.push({ path, ...h });
     }
   }
@@ -235,6 +255,7 @@ export function writeOvernightScan() {
   const taps = scanTapConnects();
   const analysers = scanAnalysers();
   const autoFlatten = scanAutoFlatten();
+  const autoLockScan = scanAutoLockScan();
   const storeEngine = scanStoreEngineCoupling();
   const bridges = scanAudioStoreBridges();
   const bridgePaths = new Set(bridges.hits.map((h) => h.path));
@@ -253,6 +274,7 @@ export function writeOvernightScan() {
     tapConnects: taps.connects,
     analysers: analysers.hits,
     autoFlatten,
+    autoLockScan,
     storeEngineCoupling: storeEngine.hits,
     audioStoreBridges: bridges.hits,
     presentationOnlyStores: presentationOnly,
@@ -262,7 +284,9 @@ export function writeOvernightScan() {
       "Timer gaps are same-file setInterval/rAF vs clear/cancel heuristics.",
       "storeEngineCoupling lists src/state files that import or call AudioEngine/getEngine/activeFireEngine. Presence is not a defect.",
       "audioStoreBridges lists stores that drive DSP through audioStore without importing AudioEngine. They are not presentation-only.",
+      "presentationOnlyStores excludes both engine-coupled stores and audioStore bridges. Still a heuristic, not Level 2B permission.",
       "autoFlatten lists the DSP helper definition and call sites. Presence of a missionStateStore caller is expected; extra callers would be a dual-orchestrator risk.",
+      "autoLockScan is the Tractor fresh-scan helper. Extra callers besides missionStateStore would also be a dual-orchestrator risk.",
     ],
   };
   const dir = join(dataDir, "overnight");

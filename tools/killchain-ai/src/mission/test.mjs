@@ -1392,6 +1392,12 @@ ${JSON.stringify({
     scan.autoFlatten?.definition?.path?.includes("AutoFlatten.ts")
       && (scan.autoFlatten?.callers || []).some((c) => String(c.path).includes("missionStateStore")),
   );
+  check(
+    "autoLockScan is defined in tractorAutoLock.ts and called from missionStateStore",
+    scan.autoLockScan?.definition?.path?.includes("tractorAutoLock.ts")
+      && (scan.autoLockScan?.callers || []).some((c) => String(c.path).includes("missionStateStore"))
+      && (scan.autoLockScan?.callers || []).length === 1,
+  );
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
   check("Fire Command map finds many UI files", fireMap.count >= 80);
