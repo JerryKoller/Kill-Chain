@@ -72,6 +72,7 @@ Eval (holdout; no training)
   ui capture-fire             Diagnostic Chrome: license, skip tour, Fire Command shot
   ui diagnose                 GPU on/off Vite screenshot probe
   ui fire-map                 Inventory Fire Command files vs inner FireCommandView panels
+  ui metrics                  Assert saved Fire Command capture metrics (no Chrome unless --live)
   audio-lab scan              Static claimSource/rewireFront/persistence scan
   audio-lab                   Retrieval-grounded Qwen invariant notes (read-only)
 
@@ -229,7 +230,34 @@ async function main() {
       }, null, 2));
       return;
     }
-    throw new Error("ui capture-fire | ui diagnose | ui fire-map");
+    if (sub === "metrics") {
+      const { screenshotDir } = await import("./ui/screenshot.mjs");
+      const { captureMetricsToReport, defaultFireMetricAssertions, assertMetrics } = await import("./ui/metrics.mjs");
+      const { join } = await import("node:path");
+      const { existsSync, readFileSync, writeFileSync, mkdirSync } = await import("node:fs");
+      const { dataDir } = await import("./paths.mjs");
+      if (flags.live) {
+        const { captureFireCommand } = await import("./ui/screenshot.mjs");
+        await captureFireCommand({ url: flags.url || "http://127.0.0.1:5174/" });
+      }
+      const capPath = join(screenshotDir(), "fire-command-capture.json");
+      if (!existsSync(capPath)) {
+        console.log(JSON.stringify({ ok: false, error: "no fire-command-capture.json; run ui capture-fire or ui metrics --live" }));
+        process.exitCode = 1;
+        return;
+      }
+      const cap = JSON.parse(readFileSync(capPath, "utf8"));
+      const width = cap.metrics?.viewport?.innerWidth || 1440;
+      const report = captureMetricsToReport(cap.metrics, width);
+      const asserted = assertMetrics(report, defaultFireMetricAssertions(width));
+      const out = { ok: asserted.ok, failures: asserted.failures, href: cap.metrics?.href, dest: cap.dest, hasRhythm: cap.opened?.hasRhythm || false };
+      mkdirSync(join(dataDir, "overnight"), { recursive: true });
+      writeFileSync(join(dataDir, "overnight", "UI_METRICS.json"), `${JSON.stringify({ at: new Date().toISOString(), ...out, report }, null, 2)}\n`);
+      console.log(JSON.stringify(out, null, 2));
+      if (!asserted.ok) process.exitCode = 1;
+      return;
+    }
+    throw new Error("ui capture-fire | ui diagnose | ui fire-map | ui metrics");
   }
 
   if (cmd === "audio-lab") {

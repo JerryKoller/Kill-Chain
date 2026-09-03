@@ -89,6 +89,59 @@ export function assertMetrics(report, assertions = []) {
     if (a.notTruncated && row.truncated) {
       failures.push({ ...a, reason: "truncated" });
     }
+    if (a.titleEquals && String(row.title || "") !== String(a.titleEquals)) {
+      failures.push({ ...a, reason: `title ${row.title} != ${a.titleEquals}` });
+    }
+    if (typeof a.minBoxW === "number" && Number(row.box?.w) < a.minBoxW) {
+      failures.push({ ...a, reason: `box.w ${row.box?.w} < ${a.minBoxW}` });
+    }
   }
   return { ok: failures.length === 0, failures, report };
+}
+
+export const FIRE_METRIC_SELECTORS = [
+  "[data-fire-root]",
+  "[data-fire-module='gate']",
+  "[data-fire-module='macros']",
+  "button[data-module='fire']",
+  "[title='Rhythmic audio gate']",
+];
+
+/** Convert a captureFireCommand metrics blob into assertMetrics rows. */
+export function captureMetricsToReport(metrics, width = 1440) {
+  const rows = [];
+  const push = (sel, row) => {
+    if (!row) return;
+    rows.push({
+      sel,
+      found: Boolean(row.found),
+      tag: row.tag,
+      title: row.title || null,
+      aria: row.aria || null,
+      text: row.text || "",
+      box: row.box || { x: 0, y: 0, w: 0, h: 0 },
+      overflowX: row.overflowX || 0,
+      overflowY: 0,
+      truncated: Boolean(row.truncated),
+      gap: row.gap,
+      columnGap: row.columnGap,
+      opacity: row.opacity,
+      color: row.color,
+    });
+  };
+  push("[data-fire-module='gate']", metrics?.modules?.gate);
+  push("[data-fire-module='macros']", metrics?.modules?.macros);
+  push("text:Rhythm Shutter", metrics?.rhythm);
+  return {
+    href: metrics?.href,
+    viewport: metrics?.viewport || { innerWidth: width },
+    byWidth: { [String(width)]: rows },
+  };
+}
+
+export function defaultFireMetricAssertions(width = 1440) {
+  return [
+    { sel: "[data-fire-module='gate']", width, requireFound: true, maxOverflowX: 80 },
+    { sel: "[data-fire-module='macros']", width, requireFound: false, maxOverflowX: 80 },
+  ];
 }

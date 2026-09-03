@@ -480,7 +480,7 @@ export async function captureFireCommand({
       const vpPath = join(dir, `fire-command-${w}.png`);
       writeFileSync(vpPath, vpBuf);
       const vpMetrics = await evalValue(session.client, metricsExpression({
-        selectors: ["#root", "button[data-module='fire']"],
+        selectors: ["#root", "button[data-module='fire']", "[data-fire-module='gate']", "[data-fire-module='macros']", "[data-fire-root]"],
       }));
       viewports[String(w)] = {
         path: vpPath,

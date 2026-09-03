@@ -298,6 +298,11 @@ export async function runMissionTests() {
     byWidth: { "1280": [{ sel: "#gate-strip", found: true, overflowX: 40, gap: "20px", opacity: "1", truncated: true }] },
   }, [{ sel: "#gate-strip", width: 1280, maxOverflowX: 1, gapEquals: "4.8px", notTruncated: true }]);
   check("UI metric harness flags overflow/gap/truncation", !metricBad.ok && metricBad.failures.length >= 2);
+  const metricTitle = assertMetrics({
+    viewport: { innerWidth: 1440 },
+    byWidth: { "1440": [{ sel: "[title='Rhythmic audio gate']", found: true, title: "Rhythmic audio gate", overflowX: 0, box: { w: 120 }, truncated: false }] },
+  }, [{ sel: "[title='Rhythmic audio gate']", width: 1440, titleEquals: "Rhythmic audio gate", minBoxW: 40 }]);
+  check("UI metric harness matches title and min width", metricTitle.ok);
   const criticInvented = evaluateCriticGate({
     criticText: "INSPECTED: src/components/FireCommand/DrivePanel.tsx\nRISK: canvas could be mistaken for a meter\nEVIDENCE: DriveStageViz only reads store\nVERDICT: READY\n",
     spec: { level: 0, allowedPaths: [], forbiddenPaths: [], readOnlyPaths: ["src/components/FireCommand/**"] },
@@ -1366,6 +1371,22 @@ ${JSON.stringify({
   check("store-engine coupling scan lists fireCommandStore", (scan.storeEngineCoupling || []).some((h) => String(h.path).includes("fireCommandStore")));
   check("playerStore getEngine sites are line-mapped", (scan.storeEngineCoupling || []).some((h) => h.path.includes("playerStore") && (h.getEngineLines || []).length >= 5));
   check("presentation-only store list is separate from engine-coupled stores", Array.isArray(scan.presentationOnlyStores));
+  check(
+    "reactorStore is an audioStore bridge with a 30 Hz preview tick",
+    (scan.audioStoreBridges || []).some((h) => h.path.includes("reactorStore") && h.previewParams >= 2 && h.highRateTick),
+  );
+  check(
+    "missionStateStore is an audioStore bridge via dynamic import",
+    (scan.audioStoreBridges || []).some((h) => h.path.includes("missionStateStore") && h.dynamicImport),
+  );
+  check(
+    "reactorStore is not presentation-only after bridge scan",
+    !(scan.presentationOnlyStores || []).some((p) => String(p).includes("reactorStore")),
+  );
+  check(
+    "repairStore remains presentation-heuristic",
+    (scan.presentationOnlyStores || []).some((p) => String(p).includes("repairStore")),
+  );
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
   check("Fire Command map finds many UI files", fireMap.count >= 80);

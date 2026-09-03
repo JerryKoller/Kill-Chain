@@ -155,6 +155,45 @@ export function scanStoreEngineCoupling({ root = repoRoot } = {}) {
   return { hits, count: hits.length, presentationOnly };
 }
 
+/**
+ * Stores that do not import AudioEngine but still drive DSP through audioStore
+ * (previewParams / replaceParams / setBypass / dynamic import). These are NOT
+ * presentation-only. Presence is not a defect.
+ */
+export function scanAudioStoreBridges({ root = repoRoot } = {}) {
+  const dir = join(root, "src", "state");
+  const names = existsSync(dir) ? readdirSync(dir).filter((n) => /\.(ts|tsx)$/.test(n)) : [];
+  const hits = [];
+  for (const name of names) {
+    if (name === "audioStore.ts") continue;
+    const abs = join(dir, name);
+    const text = readFileSync(abs, "utf8");
+    const staticImport = /from\s+["']@\/state\/audioStore["']/.test(text)
+      || /from\s+["'][^"']*\/audioStore["']/.test(text);
+    const dynamicImport = /import\s*\(\s*["']@\/state\/audioStore["']\s*\)/.test(text);
+    const previewParams = [...text.matchAll(/\bpreviewParams\s*\(/g)].length;
+    const replaceParams = [...text.matchAll(/\breplaceParams\s*\(/g)].length;
+    const setBypass = [...text.matchAll(/\bsetBypass\s*\(/g)].length;
+    const setOutputGain = [...text.matchAll(/\bsetOutputGain(?:Db)?\s*\(/g)].length;
+    const useAudioStore = [...text.matchAll(/\buseAudioStore\b/g)].length;
+    if (!staticImport && !dynamicImport && previewParams === 0 && replaceParams === 0 && useAudioStore === 0) {
+      continue;
+    }
+    hits.push({
+      path: rel(abs),
+      staticImport,
+      dynamicImport,
+      useAudioStore,
+      previewParams,
+      replaceParams,
+      setBypass,
+      setOutputGain,
+      highRateTick: /\bsetInterval\s*\(/.test(text) && previewParams > 0,
+    });
+  }
+  return { hits, count: hits.length };
+}
+
 export function scanAnalysers({ root = repoRoot } = {}) {
   const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
   const hits = [];
@@ -178,6 +217,9 @@ export function writeOvernightScan() {
   const taps = scanTapConnects();
   const analysers = scanAnalysers();
   const storeEngine = scanStoreEngineCoupling();
+  const bridges = scanAudioStoreBridges();
+  const bridgePaths = new Set(bridges.hits.map((h) => h.path));
+  const presentationOnly = storeEngine.presentationOnly.filter((path) => !bridgePaths.has(path));
   const report = {
     at: new Date().toISOString(),
     claimSource: claim,
@@ -192,12 +234,15 @@ export function writeOvernightScan() {
     tapConnects: taps.connects,
     analysers: analysers.hits,
     storeEngineCoupling: storeEngine.hits,
-    presentationOnlyStores: storeEngine.presentationOnly,
+    audioStoreBridges: bridges.hits,
+    presentationOnlyStores: presentationOnly,
     notes: [
       "Read-only scan. Production audio was not modified.",
       "Persistence gaps are same-file heuristics, not proof that a caller lacks reportStorageFailure via import.",
       "Timer gaps are same-file setInterval/rAF vs clear/cancel heuristics.",
       "storeEngineCoupling lists src/state files that import or call AudioEngine/getEngine/activeFireEngine. Presence is not a defect.",
+      "audioStoreBridges lists stores that drive DSP through audioStore without importing AudioEngine. They are not presentation-only.",
+      "presentationOnlyStores excludes both engine-coupled stores and audioStore bridges. Still a heuristic, not Level 2B permission.",
     ],
   };
   const dir = join(dataDir, "overnight");
