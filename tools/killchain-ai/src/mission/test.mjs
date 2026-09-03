@@ -1405,6 +1405,13 @@ ${JSON.stringify({
       && (scan.applyChain?.callers || []).some((c) => String(c.path).includes("missionStateStore"))
       && (scan.applyChain?.callers || []).some((c) => String(c.path).includes("audioStore")),
   );
+  check(
+    "measureLive is defined in tractorLive.ts with Auto-Lock and Tractor UI callers",
+    scan.measureLive?.definition?.path?.includes("tractorLive.ts")
+      && (scan.measureLive?.callers || []).length >= 4
+      && (scan.measureLive?.callers || []).some((c) => String(c.path).includes("tractorAutoLock"))
+      && (scan.measureLive?.callers || []).some((c) => String(c.path).includes("TractorBeamView")),
+  );
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
   check("Fire Command map finds many UI files", fireMap.count >= 80);

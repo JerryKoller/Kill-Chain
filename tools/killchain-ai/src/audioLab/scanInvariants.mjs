@@ -251,6 +251,25 @@ export function scanApplyChain({ root = repoRoot } = {}) {
   return { definition, callers, count: callers.length };
 }
 
+export function scanMeasureLive({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const callers = [];
+  let definition = null;
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    if (!text.includes("measureLive")) continue;
+    const path = rel(abs);
+    const def = lineHits(text, /export async function measureLive\b/);
+    if (def.length) definition = { path, ...def[0] };
+    for (const h of lineHits(text, /\bmeasureLive\s*\(/)) {
+      if (/export async function measureLive/.test(h.text)) continue;
+      if (/^(\*|\/\/)/.test(h.text)) continue;
+      callers.push({ path, ...h });
+    }
+  }
+  return { definition, callers, count: callers.length };
+}
+
 export function scanAnalysers({ root = repoRoot } = {}) {
   const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
   const hits = [];
@@ -276,6 +295,7 @@ export function writeOvernightScan() {
   const autoFlatten = scanAutoFlatten();
   const autoLockScan = scanAutoLockScan();
   const applyChain = scanApplyChain();
+  const measureLive = scanMeasureLive();
   const storeEngine = scanStoreEngineCoupling();
   const bridges = scanAudioStoreBridges();
   const bridgePaths = new Set(bridges.hits.map((h) => h.path));
@@ -296,6 +316,7 @@ export function writeOvernightScan() {
     autoFlatten,
     autoLockScan,
     applyChain,
+    measureLive,
     storeEngineCoupling: storeEngine.hits,
     audioStoreBridges: bridges.hits,
     presentationOnlyStores: presentationOnly,
@@ -309,6 +330,7 @@ export function writeOvernightScan() {
       "autoFlatten lists the DSP helper definition and call sites. Presence of a missionStateStore caller is expected; extra callers would be a dual-orchestrator risk.",
       "autoLockScan is the Tractor fresh-scan helper. Extra callers besides missionStateStore would also be a dual-orchestrator risk.",
       "applyChain restores a chain snapshot; callers include audioStore, missionStateStore, missionLogStore, sessionSnapshotsStore. Extra callers should be reviewed.",
+      "measureLive is the Tractor live-tap measurement helper. Callers include Auto-Lock, Tractor UI, Target Lock, Deadflat, and Read & Repair.",
     ],
   };
   const dir = join(dataDir, "overnight");
