@@ -75,6 +75,7 @@ export function classifyReferencedPaths(text) {
     const ctx = contextAround(text, p);
     const isNew = /\bNEW FILE\b/i.test(ctx);
     if (isNew) created.push(p);
+    else if (/\binspect[- ]only\b/i.test(ctx)) inspect.push(p);
     else if (EDIT_CTX.test(ctx)) edit.push(p);
     else inspect.push(p);
   }

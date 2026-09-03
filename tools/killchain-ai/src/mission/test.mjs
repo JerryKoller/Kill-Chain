@@ -1041,6 +1041,8 @@ ${JSON.stringify({
   const namedProposal = `File: ${TARGET}\nSymbol: PatternSelect\nIntended modification: add data-testid on the root element.\nBEFORE: <div>\nAFTER: <div data-testid="x">\n`.repeat(4);
   const expectFiles = expectedEditFiles(namedProposal, emptySpec);
   check("proposal names authorized edit files", expectFiles.includes(TARGET), expectFiles.join(","));
+  const inspectOnlyProposal = `File: ${TARGET}\nSymbol: PatternSelect\nIntended modification: inspect-only — already correct, no change needed.\nWhy: current banner is authoritative. Diff class: none.\n`.repeat(5);
+  check("inspect-only proposal is not an expected edit", expectedEditFiles(inspectOnlyProposal, emptySpec).length === 0);
 
   const emptyClass = classifyEditOutcome({
     expected: true,

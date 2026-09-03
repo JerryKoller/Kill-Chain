@@ -787,9 +787,13 @@ export async function runMission({
             appendJournal(dir, `more proposal rounds remaining`);
             break;
           }
+          const expect = shouldExpectEdit(body, spec, { dryRun: status.dryRun });
           status.forceEditAfterProposal = false;
           if (!canEdit) {
             transition(dir, status, "FINAL_REVIEW", "dry-run or read-only — no edits");
+          } else if (!expect.expected) {
+            appendJournal(dir, "proposal is inspect-only (no authorized edit targets); skipping EDITING");
+            transition(dir, status, "FINAL_REVIEW", "inspect-only proposal");
           } else {
             if (!readText(dir, "ORIGINAL_PROPOSAL.md").trim()) {
               writeText(dir, "ORIGINAL_PROPOSAL.md", body);
