@@ -513,6 +513,13 @@ Option C add empty-state copy.
 Pick later. ${"x".repeat(200)}
 `);
   check("option A/B/C menu fails even without asking the operator", !optionMenuOnly.ok && optionMenuOnly.errors.includes("option-menu"));
+  const asksOp = checkProposalConcrete(`
+File: src/components/FireCommand/HarmonyPanel.tsx
+Intended modification: none — inspect only.
+Would you like me to perform a fresh investigation or work with a different topic?
+Please clarify how you'd like to proceed. ${"x".repeat(200)}
+`);
+  check("proposal that asks the operator what to do fails", !asksOp.ok && asksOp.errors.includes("asks-operator"));
 
   const thin = checkProposalConcrete("I will propose later.");
   check("thin proposal fails", !thin.ok && thin.errors.includes("proposal-too-thin"));

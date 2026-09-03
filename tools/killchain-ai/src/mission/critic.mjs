@@ -235,10 +235,11 @@ export function checkProposalConcrete(text) {
   const errors = [];
   if (raw.trim().length < 400) errors.push("proposal-too-thin");
   const options = new Set((raw.match(/\bOption [A-D]\b/g) || []).map((s) => s.toUpperCase()));
-  const asksHuman = /\b(which (?:visual |option |enhancement )?do you prefer|which option|await(?:s|ing)? human|human review required|before any code edits|choose (?:one|among)|human review of visual strategy)\b/i.test(raw);
+  const asksHuman = /\b(which (?:visual |option |enhancement )?do you prefer|which option|await(?:s|ing)? human|human review required|before any code edits|choose (?:one|among)|human review of visual strategy|would you like me to|please clarify how you'd like to proceed)\b/i.test(raw);
   if (options.size >= 2) errors.push("option-menu");
   if (options.size >= 2 && asksHuman) errors.push("unresolved-design");
   if (asksHuman && /\bOption [A-D]\b/i.test(raw)) errors.push("unresolved-design");
+  if (/\bwould you like me to\b/i.test(raw) || /\bplease clarify how you'd like to proceed\b/i.test(raw)) errors.push("asks-operator");
   return { ok: errors.length === 0, errors: [...new Set(errors)] };
 }
 
