@@ -112,7 +112,11 @@ export const useHotkeyStore = create<HotkeyState>((set, get) => ({
     set({ bindings });
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(bindings));
-    } catch { /* ignore */ }
+    } catch (err) {
+      void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+        reportStorageFailure("Hotkeys", err),
+      );
+    }
     return true;
   },
 
