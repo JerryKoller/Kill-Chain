@@ -421,6 +421,23 @@ export async function captureFireCommand({
           color: cs.color,
         };
       };
+      const module = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return { sel, found: false };
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return {
+          sel,
+          found: true,
+          tag: el.tagName,
+          text: (el.innerText || "").slice(0, 120),
+          box: { x: r.x, y: r.y, w: r.width, h: r.height },
+          overflowX: el.scrollWidth - el.clientWidth,
+          gap: cs.gap,
+          columnGap: cs.columnGap,
+          opacity: cs.opacity,
+        };
+      };
       return {
         href: location.href,
         viewport: { innerWidth: window.innerWidth, innerHeight: window.innerHeight },
@@ -428,6 +445,10 @@ export async function captureFireCommand({
         gate: byText("Gate"),
         macro: byText("Macro"),
         skipTour: byText("Skip tour"),
+        modules: {
+          gate: module("[data-fire-module='gate']"),
+          macros: module("[data-fire-module='macros']"),
+        },
       };
     })()`);
     const shot = await session.client.send("Page.captureScreenshot", {
