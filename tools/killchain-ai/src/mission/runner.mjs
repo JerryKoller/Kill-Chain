@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { missionsDataDir, repoRoot } from "../paths.mjs";
 import { gitCapture } from "../git.mjs";
@@ -19,7 +19,7 @@ import {
   writeText,
 } from "./store.mjs";
 import { runPreflight } from "./preflight.mjs";
-import { runOpenCode } from "./opencode.mjs";
+import { parseOpenCodeJsonl, runOpenCode, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import {
   criticPrompt,
   editPrompt,
@@ -30,12 +30,12 @@ import {
   proposalPrompt,
   repairPrompt,
 } from "./prompts.mjs";
-import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, proposalScopeCheck } from "./critic.mjs";
+import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, checkProposalConcrete, proposalScopeCheck, quarantineFitsDest } from "./critic.mjs";
 import {
   changesSince,
   fileSizeOk,
   gitDiffCheck,
-  gitDiffStat,
+  gitAppDiffStat,
   gitPorcelain,
   isAppPath,
   isToolingPath,
@@ -162,10 +162,16 @@ async function invoke(ctx, phase, prompt) {
 
   const parsed = result.parsed || {};
   let text = (result.text || "").trim();
-  if (parsed.visibleTextMissing) {
-    status.visibleTextMisses += 1;
-    appendJournal(dir, `visible TEXT missing on ${title}; retrying once`);
-    if (status.modelCalls < spec.maxModelCalls) {
+  const thin = visibleReportTooThin(phase, text, parsed);
+  if (parsed.visibleTextMissing || thin) {
+    if (thin && !parsed.visibleTextMissing) {
+      appendJournal(dir, `visible TEXT thin (${text.length} chars) on ${title}; retrying once`);
+    } else {
+      status.visibleTextMisses += 1;
+      appendJournal(dir, `visible TEXT missing on ${title}; retrying once`);
+    }
+    if (!parsed.visibleTextMissing && thin) status.visibleTextMisses += 1;
+    if (status.modelCalls < spec.maxModelCalls || phase === "final" || phase === "plan-critic") {
       status.modelCalls += 1;
       const retryN = status.modelCalls;
       const retryPath = join(dir, "sessions", `${String(retryN).padStart(3, "0")}-${phase}-empty-retry.jsonl`);
@@ -196,6 +202,14 @@ async function invoke(ctx, phase, prompt) {
       } catch (err) {
         appendJournal(dir, `empty-text retry failed: ${err.message}`);
       }
+    }
+  }
+
+  if (visibleReportTooThin(phase, text, parsed)) {
+    const buried = buriedVerdict(parsed.reasoning);
+    if (buried) {
+      appendJournal(dir, `visible TEXT still thin; using buried reasoning with VERDICT (${buried.length} chars)`);
+      text = buried;
     }
   }
 
@@ -258,14 +272,21 @@ function postPhaseGit(ctx, { revertAllApp = false } = {}) {
   }
 }
 
-function ingestThinProposal(dir, text, gitResult, round) {
+function ingestThinDump(dir, text, gitResult, destName) {
   if ((text || "").trim().length >= 800) return text;
-  const dumps = gitResult?.reverted?.quarantined || [];
+  const dumps = [...(gitResult?.reverted?.quarantined || [])];
+  const qdir = join(dir, "quarantine");
+  if (existsSync(qdir)) {
+    for (const name of readdirSync(qdir)) {
+      dumps.push({ from: name, to: join(qdir, name) });
+    }
+  }
   let best = "";
   let from = "";
   for (const q of dumps) {
     if (!existsSync(q.to)) continue;
     if (!/\.md$/i.test(q.from) && !/\.md$/i.test(q.to)) continue;
+    if (!quarantineFitsDest(q.from, destName) && !quarantineFitsDest(q.to, destName)) continue;
     const body = readFileSync(q.to, "utf8");
     if (body.length > best.length) {
       best = body;
@@ -273,9 +294,8 @@ function ingestThinProposal(dir, text, gitResult, round) {
     }
   }
   if (best.length > (text || "").length + 200) {
-    writeText(dir, "PROPOSAL.md", best);
-    if (round > 1) writeText(dir, `PROPOSAL_${round}.md`, best);
-    appendJournal(dir, `ingested quarantined ${from} into PROPOSAL.md (${best.length} chars)`);
+    writeText(dir, destName, best);
+    appendJournal(dir, `ingested quarantined ${from} into ${destName} (${best.length} chars)`);
     return best;
   }
   return text;
@@ -308,12 +328,20 @@ async function maybeRebuildCorpus(ctx, reason) {
   }
 }
 
+function reviewDiff(dir, status) {
+  const current = readText(dir, "CURRENT.diff");
+  if (current.trim()) return current;
+  if (status.dryRun) return "(no production diff — dry-run; ignore tooling/worktree noise)";
+  const app = gitAppDiffStat();
+  return app.patch || "(no application diff)";
+}
+
 function writeCheckpoint(ctx, label) {
   if (ctx.spec.checkpointPolicy === "never") return;
   const n = (ctx.status.checkpoints = (ctx.status.checkpoints || 0) + 1);
   const cdir = join(ctx.dir, "checkpoints", String(n).padStart(2, "0"));
   mkdirSync(cdir, { recursive: true });
-  const stat = gitDiffStat();
+  const stat = gitAppDiffStat();
   writeFileSync(join(cdir, "label.txt"), `${label}\n`, "utf8");
   writeFileSync(join(cdir, "status.json"), `${JSON.stringify(ctx.status, null, 2)}\n`, "utf8");
   writeFileSync(join(cdir, "diff.patch"), stat.patch || "", "utf8");
@@ -390,13 +418,24 @@ export async function runMission({
           return status;
         }
         const last = [...(status.transitions || [])].reverse().find((t) => t.to === status.state);
-        const restore = last?.from || "PREFLIGHT";
+        let restore = last?.from || "PREFLIGHT";
+        const blocked = status.blockedReason || "";
+        if (restore === "FINAL_REVIEW" && /NOT_READY|unresolved-design|proposal/.test(blocked)) {
+          restore = "PROPOSING";
+          status.proposalRound = 0;
+          status.editRetries = 0;
+          status.criticRetries = 0;
+        }
         appendJournal(dir, `retry: ${status.state} → restore ${restore} (bypassing terminal lock)`);
         status.state = restore;
         status.failedReason = null;
         status.blockedReason = null;
         status.endedAt = null;
         status.lastError = null;
+        if (restore === "PLAN_REVIEW" || restore === "FINAL_REVIEW") {
+          status.planRetries = restore === "PLAN_REVIEW" ? 0 : status.planRetries;
+          status.criticRetries = 0;
+        }
         saveStatus(dir, status);
       }
     }
@@ -456,7 +495,8 @@ export async function runMission({
           const investigation = readText(dir, "INVESTIGATION.md");
           const { text } = await invoke(ctx, "plan", planPrompt(spec, status, investigation));
           writeText(dir, "PLAN.md", text);
-          postPhaseGit(ctx, { revertAllApp: true });
+          const git = postPhaseGit(ctx, { revertAllApp: true });
+          ingestThinDump(dir, text, git, "PLAN.md");
           transition(dir, status, "PLAN_REVIEW");
           if (maybeStop(ctx)) return status;
           break;
@@ -464,6 +504,7 @@ export async function runMission({
 
         case "PLAN_REVIEW": {
           log("plan critic (local Qwen)…");
+          ingestThinDump(dir, readText(dir, "PLAN.md"), {}, "PLAN.md");
           const plan = readText(dir, "PLAN.md");
           let { text, parsed } = await invoke(ctx, "plan-critic", criticPrompt(spec, status, { plan }));
           writeText(dir, "PLAN_CRITIC.md", text);
@@ -474,12 +515,12 @@ export async function runMission({
             spec,
             tools: parsed.tools || [],
           });
-          if (!gate.toolsGate.ok && (status.criticRetries || 0) < 1) {
+          if ((!gate.toolsGate.ok || gate.missingVerdict) && (status.criticRetries || 0) < 1) {
             status.criticRetries = (status.criticRetries || 0) + 1;
-            appendJournal(dir, "critic used zero retrieval/read tools; retrying once");
+            appendJournal(dir, "critic format/tools weak; retrying critic once");
             const retry = await invoke(ctx, "plan-critic", criticPrompt(spec, status, {
               plan,
-              extra: "You used zero Kill Chain MCP / read tools. Inspect real files first, then fill INSPECTED, RISK, EVIDENCE, VERDICT.",
+              extra: "Previous critic output was missing a one-line VERDICT: PASS|FAIL|BLOCK or used zero retrieval tools. Inspect real files, then output INSPECTED, RISK, EVIDENCE, and VERDICT: PASS (or FAIL) on its own line.",
             }));
             text = retry.text;
             parsed = retry.parsed;
@@ -524,21 +565,23 @@ export async function runMission({
           );
           writeText(dir, "PROPOSAL.md", text);
           const git = postPhaseGit(ctx, { revertAllApp: true });
-          ingestThinProposal(dir, text, git, status.proposalRound + 1);
+          ingestThinDump(dir, text, git, "PROPOSAL.md");
           const body = readText(dir, "PROPOSAL.md");
           const art = evaluateArtifactGate(body, spec);
           const symbols = await checkInventedSymbolsAsync(body);
+          const concrete = checkProposalConcrete(body);
           writeText(dir, "proposal-scope.json", JSON.stringify({
             ...art,
             symbols,
+            concrete,
             legacy: proposalScopeCheck(body, spec, { dryRun: status.dryRun }),
           }, null, 2));
-          if (!art.ok || !symbols.ok) {
+          if (!art.ok || !symbols.ok || !concrete.ok) {
             status.editRetries += 1;
             if (status.editRetries > spec.maxRetriesPerPhase) {
-              return block(dir, status, `proposal gate: ${(art.errors || []).join("; ")} inventedSymbols=${(symbols.invented || []).join(",")}`);
+              return block(dir, status, `proposal gate: ${(art.errors || []).join("; ")} inventedSymbols=${(symbols.invented || []).join(",")} ${concrete.errors.join(";")}`);
             }
-            appendJournal(dir, `proposal gate fail; retry ${(art.errors || []).join(",")}`);
+            appendJournal(dir, `proposal gate fail; retry ${(art.errors || []).concat(concrete.errors).join(",")}`);
             break;
           }
           status.proposalRound += 1;
@@ -595,7 +638,7 @@ export async function runMission({
             transition(dir, status, "EDITING", "revert unauthorized; retry");
             break;
           }
-          const stat = gitDiffStat();
+          const stat = gitAppDiffStat();
           writeText(dir, "diff-stat.json", JSON.stringify(stat, null, 2));
           writeText(dir, "CURRENT.diff", stat.patch || "");
           const size = fileSizeOk(stat, spec);
@@ -685,7 +728,7 @@ export async function runMission({
             proposal: readText(dir, "PROPOSAL.md"),
             critic: readText(dir, "PLAN_CRITIC.md"),
             investigation: readText(dir, "INVESTIGATION.md"),
-            diff: readText(dir, "CURRENT.diff") || gitDiffStat().patch,
+            diff: reviewDiff(dir, status),
           }));
           writeText(dir, "FINAL_CRITIC.md", text);
           let gate = evaluateCriticGate({
@@ -702,7 +745,7 @@ export async function runMission({
               proposal: readText(dir, "PROPOSAL.md"),
               critic: text,
               investigation: readText(dir, "INVESTIGATION.md"),
-              diff: readText(dir, "CURRENT.diff"),
+              diff: reviewDiff(dir, status),
             }));
             writeText(dir, "FINAL_CRITIC.md", retry.text);
             gate = evaluateCriticGate({

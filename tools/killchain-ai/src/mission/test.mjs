@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseMissionMarkdown, pathEditable, matchPath } from "./schema.mjs";
 import { assertTransition, ALLOWED_TRANSITIONS } from "./machine.mjs";
-import { parseOpenCodeJsonl } from "./opencode.mjs";
+import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import { scanUnixTools } from "./unix.mjs";
-import { parseCritic, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate } from "./critic.mjs";
+import { parseCritic, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest } from "./critic.mjs";
 import { assertSafeMissionId } from "./schema.mjs";
 import {
   classifyPorcelain,
@@ -13,6 +13,7 @@ import {
   unauthorizedChanges,
   unexpectedJunk,
   diffCheckArgs,
+  appDiffFiles,
 } from "./gitops.mjs";
 import { runPreflight } from "./preflight.mjs";
 import { runValidation } from "./validate.mjs";
@@ -184,8 +185,22 @@ export async function runMissionTests() {
   );
   check("MCP first + visible text", mcpParsed.mcpFirst && mcpParsed.text === "hello");
 
+  check("thin final TEXT is too thin", visibleReportTooThin("final", "I will inspect files now.", {}));
+  check("long final TEXT is not thin", !visibleReportTooThin("final", "x".repeat(500), {}));
+  check(
+    "buried VERDICT recovered",
+    buriedVerdict(`${"padding\n".repeat(40)}INSPECTED: foo\nVERDICT: READY\n`).includes("READY"),
+  );
+  check(
+    "tooling path excluded from app diff",
+    appDiffFiles(["tools/killchain-ai/src/mission/runner.mjs", "src/components/FireCommand/ModuleEnableToggle.tsx"]).length === 1,
+  );
+
   const criticFail = parseCritic("some thoughts\nVERDICT: FAIL\n- missing FireCommandView");
   check("critic FAIL parsed", criticFail.verdict === "FAIL" && criticFail.findings.length === 1);
+
+  const mdVerdict = parseCritic("### INSPECTED\n- src/components/FireCommand/ModuleEnableToggle.tsx\n\n### RISK\nclick feel could change if hit area grows\n\n### EVIDENCE\nonClick still calls setModuleEnable\n\n### VERDICT\nPASS\n");
+  check("markdown ### VERDICT PASS parses", !mdVerdict.missingVerdict && mdVerdict.verdict === "PASS" && mdVerdict.inspected.includes("ModuleEnableToggle"));
 
   const existOk = checkReferencedFilesExist("inspect `src/components/FireCommand/ModuleEnableToggle.tsx`");
   check("valid existing UI file existence", existOk.ok);
@@ -264,6 +279,26 @@ export async function runMissionTests() {
   });
   check("grounded PASS with risk/evidence", grounded.pass, JSON.stringify(grounded.errors));
 
+  const headingGate = evaluateCriticGate({
+    criticText: [
+      "### INSPECTED",
+      "- src/components/FireCommand/ModuleEnableToggle.tsx button styles",
+      "",
+      "### RISK",
+      "glow styling could look like a larger hit target and change click feel",
+      "",
+      "### EVIDENCE",
+      "onClick still calls setModuleEnable; inspected ModuleEnableToggle.tsx exists",
+      "",
+      "### VERDICT",
+      "PASS",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx",
+    spec: specUi,
+    tools: ["killchain_search", "read"],
+  });
+  check("markdown heading critic PASS gate", headingGate.pass, JSON.stringify(headingGate.errors));
+
   const noTools = evaluateCriticGate({
     criticText: [
       "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
@@ -276,6 +311,32 @@ export async function runMissionTests() {
     tools: [],
   });
   check("level 1 critic with zero tools fails", !noTools.pass && noTools.errors.includes("critic-no-tools"));
+
+  check("quarantine PLAN dump not ingested as proposal", !quarantineFitsDest("1788410059304-PLAN.md", "PROPOSAL.md"));
+  check("quarantine PROPOSAL dump matches dest", quarantineFitsDest("PROPOSAL.md", "PROPOSAL.md"));
+
+  const multiOpt = checkProposalConcrete(`
+# Proposal
+Option A darken disabled
+Option B add an icon
+Which visual enhancement vector do you prefer? Human review of visual strategy requested before any code edits proceed.
+path: src/components/FireCommand/ModuleEnableToggle.tsx
+`.repeat(3));
+  check("multi-option asks-human proposal fails", !multiOpt.ok && multiOpt.errors.includes("unresolved-design"));
+
+  const thin = checkProposalConcrete("I will propose later.");
+  check("thin proposal fails", !thin.ok && thin.errors.includes("proposal-too-thin"));
+
+  const concreteOk = checkProposalConcrete(`
+File: src/components/FireCommand/ModuleEnableToggle.tsx
+Symbol: ModuleEnableToggle
+Intended modification: darken disabled background only.
+BEFORE: background: "rgba(0,0,0,0.45)"
+AFTER:  background: "rgba(0,0,0,0.72)"
+Why: glanceable off-state. Invariants: same onClick, setModuleEnable, aria-pressed.
+Diff class: small UI-only. No Option B. No operator choice.
+`.repeat(2));
+  check("concrete single-edit proposal passes", concreteOk.ok, JSON.stringify(concreteOk.errors));
 
   try {
     assertSafeMissionId("../escape");
@@ -358,7 +419,9 @@ export async function runMissionTests() {
           "- checked FireCommandView.tsx exists and is named as inspect-only",
         ].join("\n");
       }
-      if (prompt.includes("PROPOSAL-BEFORE-WRITE")) text = "FILE-BY-FILE: inspect-only src/components/FireCommand/FireCommandView.tsx";
+      if (prompt.includes("PROPOSAL-BEFORE-WRITE")) {
+        text = `${"FILE-BY-FILE: inspect-only `src/components/FireCommand/FireCommandView.tsx`. Dry-run, no production writes. Confirm enable-toggle callers. No AudioEngine. No store writes. ".repeat(6)}`;
+      }
       if (prompt.includes("FINAL REVIEW")) {
         text = [
           "INSPECTED: src/components/FireCommand/FireCommandView.tsx",

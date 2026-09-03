@@ -8,7 +8,9 @@ const PRAISE_RE = /\b(looks good|comprehensive plan|all criteria met|well done|e
 
 export function parseCritic(text) {
   const raw = String(text || "").trim();
-  const m = raw.match(/VERDICT:\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i);
+  const m = raw.match(/VERDICT:\s*\**\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i)
+    || raw.match(/#{1,3}\s*VERDICT\s*\n+\s*\**\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i)
+    || raw.match(/\*\*VERDICT:\*\*\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i);
   const verdict = m ? m[1].toUpperCase() : null;
   const findings = [];
   for (const line of raw.split(/\r?\n/)) {
@@ -27,8 +29,12 @@ export function parseCritic(text) {
 }
 
 function field(raw, name) {
-  const m = String(raw).match(new RegExp(`^${name}:\\s*(.+)$`, "im"));
-  return m ? m[1].trim() : "";
+  const same = String(raw).match(new RegExp(`^(?:#{1,3}\\s*)?${name}:\\s*(.+)$`, "im"));
+  if (same && !/^#{1,3}/.test(same[0])) return same[1].trim();
+  if (same && same[1] && !/^\s*$/.test(same[1]) && !/^#{1,3}/.test(same[1])) return same[1].trim();
+  const heading = String(raw).match(new RegExp(`^#{1,3}\\s*${name}\\s*$\\r?\\n+([\\s\\S]*?)(?=\\r?\\n#{1,3}\\s|\\nVERDICT:|$)`, "im"));
+  if (heading) return heading[1].trim().slice(0, 1200);
+  return "";
 }
 
 export function parseMentionedPaths(text) {
@@ -168,6 +174,25 @@ export async function checkInventedSymbolsAsync(text) {
     invented.push(name);
   }
   return { ok: invented.length === 0, invented };
+}
+
+export function quarantineFitsDest(fromPath, destName) {
+  const base = String(fromPath || "").split(/[/\\]/).pop().toLowerCase();
+  const dest = String(destName || "").toLowerCase();
+  if (dest.startsWith("plan")) return /plan/.test(base) && !/proposal/.test(base);
+  if (dest.startsWith("proposal")) return /proposal/.test(base);
+  return true;
+}
+
+export function checkProposalConcrete(text) {
+  const raw = String(text || "");
+  const errors = [];
+  if (raw.trim().length < 400) errors.push("proposal-too-thin");
+  const options = new Set((raw.match(/\bOption [A-D]\b/g) || []).map((s) => s.toUpperCase()));
+  const asksHuman = /\b(which (?:visual |option |enhancement )?do you prefer|which option|await(?:s|ing)? human|human review required|before any code edits|choose (?:one|among)|human review of visual strategy)\b/i.test(raw);
+  if (options.size >= 2 && asksHuman) errors.push("unresolved-design");
+  if (asksHuman && /\bOption [A-D]\b/i.test(raw)) errors.push("unresolved-design");
+  return { ok: errors.length === 0, errors: [...new Set(errors)] };
 }
 
 export function evaluateArtifactGate(text, spec) {

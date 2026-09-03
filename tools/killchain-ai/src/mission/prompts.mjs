@@ -134,6 +134,8 @@ For each file:
 
 For tiny patches also include exact BEFORE / AFTER snippets.
 
+Pick exactly ONE concrete edit. Do not present Option A/B/C for the operator to choose. Human visual review happens after the live diff, not as a design-choice gate. Unresolved product questions fail this gate.
+
 Mark brand-new files as **NEW FILE** on the same line as the path.
 Do not invent files. If a path does not exist and is not NEW FILE, the runner will reject the proposal.
 Do not change AudioEngine/DSP unless this is an authorized level-4 mission.
@@ -203,6 +205,8 @@ or
 VERDICT: NOT_READY
 
 Also include: acceptance checklist, remaining uncertainties, recommended commit message (do not commit), what a human must visually verify. Automated typecheck/build is not visual proof.
+
+Dry-run READY means the proposal is concrete, in-scope, and ready for a later live edit. NOT_READY if it still asks the user to pick among design options. Human screenshot review is after live edit, not a reason to block a concrete dry-run proposal.
 
 INVESTIGATION:
 ${clip(investigation, 4000)}

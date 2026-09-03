@@ -95,6 +95,10 @@ export function gitDiffCheck(paths = []) {
   }
 }
 
+export function appDiffFiles(files) {
+  return (files || []).filter((p) => isAppPath(p) && !isToolingPath(p));
+}
+
 export function gitDiffStat() {
   const numstat = gitRun(["diff", "--numstat"], { allowFail: true });
   const nameOnly = gitRun(["diff", "--name-only"], { allowFail: true });
@@ -107,6 +111,24 @@ export function gitDiffStat() {
     if (b !== "-") deletions += Number(b) || 0;
   }
   const patch = gitRun(["diff"], { allowFail: true });
+  return { files, insertions, deletions, patch };
+}
+
+export function gitAppDiffStat() {
+  const nameOnly = gitRun(["diff", "--name-only"], { allowFail: true });
+  const files = appDiffFiles(nameOnly ? nameOnly.split(/\r?\n/).filter(Boolean).map(toPosixRel) : []);
+  if (!files.length) {
+    return { files: [], insertions: 0, deletions: 0, patch: "" };
+  }
+  const numstat = gitRun(["diff", "--numstat", "--", ...files], { allowFail: true });
+  let insertions = 0;
+  let deletions = 0;
+  for (const line of numstat.split(/\r?\n/).filter(Boolean)) {
+    const [a, b] = line.split("\t");
+    if (a !== "-") insertions += Number(a) || 0;
+    if (b !== "-") deletions += Number(b) || 0;
+  }
+  const patch = gitRun(["diff", "--", ...files], { allowFail: true });
   return { files, insertions, deletions, patch };
 }
 

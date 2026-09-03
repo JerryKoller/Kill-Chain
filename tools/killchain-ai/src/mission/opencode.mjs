@@ -62,6 +62,22 @@ export function parseOpenCodeJsonl(raw) {
   };
 }
 
+const REPORT_PHASES = new Set(["plan", "plan-critic", "proposal", "final"]);
+
+export function visibleReportTooThin(phase, text, parsed = {}) {
+  const t = String(text || "").trim();
+  if (t.length === 0) return true;
+  if (t.length >= 400) return false;
+  return REPORT_PHASES.has(String(phase || ""));
+}
+
+export function buriedVerdict(reasoning) {
+  const raw = String(reasoning || "");
+  if (raw.length < 200) return "";
+  if (!/VERDICT:\s*\**\s*(PASS|FAIL|BLOCK|READY|NOT_READY)|#{1,3}\s*VERDICT\b/i.test(raw)) return "";
+  return raw.length > 12000 ? raw.slice(-12000) : raw;
+}
+
 export function extractVisible(parsed) {
   if (parsed.text) return parsed.text;
   if (parsed.reasoning) return parsed.reasoning.slice(-8000);
