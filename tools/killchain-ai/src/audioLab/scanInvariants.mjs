@@ -148,7 +148,10 @@ export function scanStoreEngineCoupling({ root = repoRoot } = {}) {
       activeFireEngineCalls: [...text.matchAll(/\bactiveFireEngine\s*\(/g)].length,
     });
   }
-  return { hits, count: hits.length };
+  const presentationOnly = names
+    .map((name) => rel(join(dir, name)))
+    .filter((path) => !hits.some((h) => h.path === path));
+  return { hits, count: hits.length, presentationOnly };
 }
 
 export function scanAnalysers({ root = repoRoot } = {}) {
@@ -188,6 +191,7 @@ export function writeOvernightScan() {
     tapConnects: taps.connects,
     analysers: analysers.hits,
     storeEngineCoupling: storeEngine.hits,
+    presentationOnlyStores: storeEngine.presentationOnly,
     notes: [
       "Read-only scan. Production audio was not modified.",
       "Persistence gaps are same-file heuristics, not proof that a caller lacks reportStorageFailure via import.",

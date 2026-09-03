@@ -288,6 +288,21 @@ export async function captureFireCommand({
     })()`);
     log.push({ perf });
     await new Promise((r) => setTimeout(r, 800));
+    const gateChip = await evalValue(session.client, `(() => {
+      const byTitle = document.querySelector('[title="Rhythmic audio gate"]');
+      if (byTitle) {
+        byTitle.click();
+        return { ok: true, via: "title", text: (byTitle.innerText || "").slice(0, 40) };
+      }
+      const btn = [...document.querySelectorAll("button")].find((n) => /rhythm shutter/i.test(n.innerText || ""));
+      if (btn) {
+        btn.click();
+        return { ok: true, via: "button-text", text: (btn.innerText || "").slice(0, 40) };
+      }
+      return { ok: false, reason: "no-gate-chip" };
+    })()`);
+    log.push({ gateChip });
+    await new Promise((r) => setTimeout(r, 700));
 
     const t1 = Date.now();
     let opened = null;
@@ -297,16 +312,16 @@ export async function captureFireCommand({
         ariaFire: document.querySelector("button[data-module='fire']")?.getAttribute("aria-current") || null,
         weaponsEl: Boolean(document.querySelector('[title="Fire Command MK IV — weapons free"]')),
         hasWeapons: /weapons free|Fire Command MK/i.test(document.body.innerText || ""),
-        hasRhythm: /Rhythm Shutter/.test(document.body.innerText || ""),
+        hasRhythm: /rhythm shutter/i.test(document.body.innerText || ""),
         hasGate: /\\bGate\\b/.test(document.body.innerText || ""),
         hasMacro: /\\bMacro\\b/.test(document.body.innerText || ""),
         error: (document.body.innerText || "").match(/Something went wrong|ErrorBoundary|is not defined/)?.[0] || null,
         textSample: (document.body.innerText || "").slice(0, 500),
       })`);
-      if (opened?.weaponsEl || opened?.hasWeapons || opened?.hasRhythm) break;
+      if (opened?.hasRhythm) break;
       await new Promise((r) => setTimeout(r, 600));
     }
-    if (!(opened?.weaponsEl || opened?.hasWeapons || opened?.hasRhythm)) {
+    if (!opened?.hasRhythm) {
       const seeded = await evalValue(session.client, `(() => {
         try {
           const key = "audio-playground.settings.v1";
@@ -332,7 +347,7 @@ export async function captureFireCommand({
           ariaFire: document.querySelector("button[data-module='fire']")?.getAttribute("aria-current") || null,
           weaponsEl: Boolean(document.querySelector('[title="Fire Command MK IV — weapons free"]')),
           hasWeapons: /weapons free|Fire Command MK/i.test(document.body.innerText || ""),
-          hasRhythm: /Rhythm Shutter/.test(document.body.innerText || ""),
+          hasRhythm: /rhythm shutter/i.test(document.body.innerText || ""),
           hasGate: /\\bGate\\b/.test(document.body.innerText || ""),
           hasMacro: /\\bMacro\\b/.test(document.body.innerText || ""),
           splash: Boolean(document.getElementById("boot-splash")) && getComputedStyle(document.getElementById("boot-splash")).display !== "none",
@@ -345,47 +360,43 @@ export async function captureFireCommand({
             return true;
           })()`);
         }
-        if (opened?.weaponsEl || opened?.hasWeapons || opened?.hasRhythm) break;
+        if (opened?.hasRhythm) break;
         await new Promise((r) => setTimeout(r, 600));
       }
     }
     log.push({ opened });
     const scrollPerf = await evalValue(session.client, `(() => {
-      const want = new Set(["Rhythm Shutter", "Macros", "GATE RATE", "GATE_C_RATE"]);
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      let node;
-      const textHits = [];
-      while ((node = walker.nextNode())) {
-        const t = (node.nodeValue || "").trim();
-        if (!t || t.length > 40) continue;
-        if (!want.has(t) && t !== "Gate" && t !== "Macro" && t !== "Macros") continue;
-        const el = node.parentElement;
-        if (!el) continue;
-        const r = el.getBoundingClientRect();
-        textHits.push({ text: t, tag: el.tagName, y: Math.round(r.y), h: Math.round(r.height), w: Math.round(r.width) });
-        if (t === "Rhythm Shutter" && r.height < 64) {
-          el.scrollIntoView({ block: "center", inline: "nearest" });
-          let scroller = el.parentElement;
-          while (scroller && scroller !== document.body) {
-            if (scroller.scrollHeight > scroller.clientHeight + 40) {
-              const cr = el.getBoundingClientRect();
-              const sr = scroller.getBoundingClientRect();
-              scroller.scrollTop += cr.top - sr.top - Math.min(80, sr.height / 4);
-              break;
-            }
-            scroller = scroller.parentElement;
-          }
-          const after = el.getBoundingClientRect();
-          return { ok: true, text: t, method: "text-node", y: Math.round(after.y), h: Math.round(after.height), textHits: textHits.slice(0, 8) };
+      const findLabel = (want) => {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          if ((node.nodeValue || "").trim() === want) return node.parentElement;
         }
+        return null;
+      };
+      const root = document.querySelector("[data-fire-root]");
+      const scroller = root && [...root.querySelectorAll("div")].find((n) => {
+        const c = String(n.className || "");
+        return c.includes("overflow-y-auto") && c.includes("overscroll-y-contain") && !c.includes("sidebar");
+      });
+      const steps = [];
+      for (let i = 0; i < 18; i++) {
+        const hit = findLabel("Rhythm Shutter") || findLabel("RHYTHM SHUTTER") || findLabel("Trance Gate");
+        if (hit) {
+          hit.scrollIntoView({ block: "center", inline: "nearest" });
+          const r = hit.getBoundingClientRect();
+          steps.push({ i, text: (hit.innerText || "").slice(0, 40), y: Math.round(r.y), h: Math.round(r.height) });
+          if (r.y >= 40 && r.y < window.innerHeight - 48) {
+            return { ok: true, method: "fire-scroller", y: Math.round(r.y), steps: steps.slice(-4), scroller: scroller ? String(scroller.className).slice(0, 100) : null };
+          }
+        } else {
+          steps.push({ i, found: false, scrollTop: scroller ? Math.round(scroller.scrollTop) : null });
+        }
+        if (!scroller) break;
+        scroller.scrollTop += Math.max(140, Math.floor(scroller.clientHeight * 0.5));
+        if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) break;
       }
-      const overflow = [...document.querySelectorAll("div")].filter((n) => n.scrollHeight > n.clientHeight + 80);
-      overflow.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
-      if (overflow[0]) {
-        overflow[0].scrollTop = Math.min(overflow[0].scrollHeight, Math.floor(overflow[0].clientHeight * 0.9));
-        return { ok: false, method: "overflow-fallback", scrolled: overflow[0].className.slice(0, 80), textHits };
-      }
-      return { ok: false, method: "none", textHits };
+      return { ok: false, method: "fire-scroller", steps: steps.slice(-8), scroller: scroller ? String(scroller.className).slice(0, 100) : null };
     })()`);
     log.push({ scrollPerf });
     await new Promise((r) => setTimeout(r, 500));
@@ -470,7 +481,7 @@ export async function captureFireCommand({
       note: "Diagnostic Chrome only. Production splash/license/tour unchanged.",
     };
     writeFileSync(join(dir, "fire-command-capture.json"), `${JSON.stringify(report, null, 2)}\n`);
-    return { ok: Boolean(opened?.hasRhythm || opened?.hasWeapons || opened?.weaponsEl), ...report };
+    return { ok: Boolean(opened?.hasRhythm || scrollPerf?.ok || metrics?.rhythm?.found), ...report };
   } finally {
     await session.close();
   }
