@@ -1342,6 +1342,10 @@ ${JSON.stringify({
 
   check("15 read-only state still cannot write", phaseWritesApp("repair-diagnose") === false && phaseWritesApp("plan") === false && phaseWritesApp("proposal") === false);
 
+  const scan = (await import("../audioLab/scanInvariants.mjs")).writeOvernightScan();
+  check("claimSource scanner finds callers", scan.claimSource.count >= 6);
+  check("rewireFront front-gains stay inside rewireFront", scan.rewireFront.ok);
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;
   return { passed, failed };
