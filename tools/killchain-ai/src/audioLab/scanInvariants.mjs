@@ -130,6 +130,39 @@ export function scanTapConnects({ root = repoRoot } = {}) {
   return { connects, count: connects.length };
 }
 
+/**
+ * Classify live tap connect files (excluding AudioEngine's standing graph).
+ * Presence of connect without finally is not automatically a leak: Scope uses
+ * effect cleanup; visualIntel uses start/stop refcount.
+ */
+export function scanTapLifetimes({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const hits = [];
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    if (!/\b(preTap|destinationTap|fireTap)\.connect\s*\(/.test(text) && !/\battachRecorder\s*\(/.test(text)) continue;
+    const path = rel(abs);
+    if (path === "src/audio/AudioEngine.ts") continue;
+    const finallyDisconnect = /finally\s*\{[\s\S]{0,800}\.disconnect\s*\(/.test(text) || /finally\s*\{[\s\S]{0,400}\.detach\s*\(/.test(text);
+    const effectCleanup = /return\s*\(\s*\)\s*=>\s*\{[\s\S]{0,1200}\.disconnect\s*\(/.test(text);
+    const startStop = /\bstart\s*\(\s*\)\s*[:{][\s\S]{0,2000}\.connect\s*\(/.test(text) && /\bstop\s*\(\s*\)\s*[:{][\s\S]{0,2000}\.disconnect\s*\(/.test(text);
+    let kind = "unknown";
+    if (path.includes("AudioEngine")) kind = "engine-graph";
+    else if (finallyDisconnect) kind = "finally";
+    else if (effectCleanup) kind = "effect-cleanup";
+    else if (startStop) kind = "start-stop";
+    hits.push({
+      path,
+      preTapConnect: lineHits(text, /\bpreTap\.connect\s*\(/).length,
+      destinationTapConnect: lineHits(text, /\bdestinationTap\.connect\s*\(/).length,
+      fireTapConnect: lineHits(text, /\bfireTap\.connect\s*\(/).length,
+      attachRecorder: lineHits(text, /\battachRecorder\s*\(/).filter((h) => !/function attachRecorder/.test(h.text)).length,
+      kind,
+    });
+  }
+  return { hits, count: hits.length };
+}
+
 export function scanStoreEngineCoupling({ root = repoRoot } = {}) {
   const dir = join(root, "src", "state");
   const names = existsSync(dir) ? readdirSync(dir).filter((n) => /\.(ts|tsx)$/.test(n)) : [];
@@ -391,6 +424,7 @@ export function writeOvernightScan() {
   const persist = scanPersistenceReports();
   const timers = scanTimerPairing();
   const taps = scanTapConnects();
+  const tapLifetimes = scanTapLifetimes();
   const analysers = scanAnalysers();
   const autoFlatten = scanAutoFlatten();
   const autoLockScan = scanAutoLockScan();
@@ -416,6 +450,7 @@ export function writeOvernightScan() {
     persistenceGaps: persist.hits,
     timerPairingGaps: timers.gaps,
     tapConnects: taps.connects,
+    tapLifetimes: tapLifetimes.hits,
     analysers: analysers.hits,
     autoFlatten,
     autoLockScan,
@@ -443,6 +478,7 @@ export function writeOvernightScan() {
       "startStageVizLoop callers are Fire Command *StageViz components. Each must invoke the returned stop function.",
       "fireStudioTaps: live ScriptProcessor recorders must detach in finally (realtime dry + stems). Offline bounce is a separate dispose path.",
       "bounceExportTaps: Library/track bounce connects destinationTap to a ScriptProcessor and must disconnect in finally.",
+      "tapLifetimes classifies non-engine live connects as finally, effect-cleanup, start-stop, or unknown. Unknown is a harness lead, not an overnight production edit.",
     ],
   };
   const dir = join(dataDir, "overnight");

@@ -1460,6 +1460,12 @@ ${JSON.stringify({
     "bounceExport destinationTap disconnects in finally",
     scan.bounceExportTaps?.ok === true && scan.bounceExportTaps?.finallyDisconnect === true,
   );
+  check(
+    "bounceExport tap lifetime is finally; Scope is effect-cleanup; visualIntel is start-stop",
+    (scan.tapLifetimes || []).some((h) => String(h.path).includes("bounceExport.ts") && h.kind === "finally")
+      && (scan.tapLifetimes || []).some((h) => String(h.path).includes("ScopeView.tsx") && h.kind === "effect-cleanup")
+      && (scan.tapLifetimes || []).some((h) => String(h.path).includes("visualIntel.ts") && h.kind === "start-stop"),
+  );
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;
