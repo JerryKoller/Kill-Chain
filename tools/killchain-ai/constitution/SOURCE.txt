@@ -1,0 +1,9 @@
+Canonical AGENTS.md (Kill Chain AI constitution):
+  C:\Users\Zero\Desktop\Sony_Project\Kill-Chain-AI\AGENTS.md
+
+This directory holds a byte-for-byte snapshot used when the canonical path
+is unavailable. The corpus builder prefers the canonical file, then this
+copy, then a repo-root AGENTS.md.
+
+Do not invent replacement rules. Edit the canonical file, then recopy and
+rebuild the corpus.

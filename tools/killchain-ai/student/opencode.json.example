@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "comment": "Example OpenCode config fragment. Copy fields into your OpenCode config; do not commit secrets. Model is stock Qwen until a fine-tune exists.",
+  "model": "ollama/qwen3.5:9b",
+  "mcp": {
+    "killchain": {
+      "type": "local",
+      "command": ["node", "tools/killchain-ai/src/cli.mjs", "mcp"],
+      "environment": {}
+    }
+  }
+}
