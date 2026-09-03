@@ -1387,6 +1387,11 @@ ${JSON.stringify({
     "repairStore remains presentation-heuristic",
     (scan.presentationOnlyStores || []).some((p) => String(p).includes("repairStore")),
   );
+  check(
+    "autoFlatten is defined in AutoFlatten.ts and called from missionStateStore",
+    scan.autoFlatten?.definition?.path?.includes("AutoFlatten.ts")
+      && (scan.autoFlatten?.callers || []).some((c) => String(c.path).includes("missionStateStore")),
+  );
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
   check("Fire Command map finds many UI files", fireMap.count >= 80);
