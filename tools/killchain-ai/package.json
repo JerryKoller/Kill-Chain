@@ -2,7 +2,7 @@
   "name": "killchain-ai",
   "private": true,
   "version": "0.1.0",
-  "description": "Isolated Kill Chain corpus, retrieval, SFT, and eval tooling. Not part of the application.",
+  "description": "Isolated Kill Chain corpus, retrieval, SFT, eval, and local mission-runner tooling. Not part of the application.",
   "type": "module",
   "bin": {
     "kc-ai": "./kc-ai.cmd"
@@ -13,6 +13,7 @@
     "mcp": "node src/cli.mjs mcp",
     "sft": "node src/cli.mjs sft generate",
     "validate": "node src/cli.mjs sft validate",
-    "eval": "node src/cli.mjs eval"
+    "eval": "node src/cli.mjs eval",
+    "mission": "node src/cli.mjs mission"
   }
 }

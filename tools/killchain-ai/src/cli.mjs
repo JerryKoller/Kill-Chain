@@ -41,6 +41,15 @@ Usage:
 Corpus
   corpus [--embed]          Scan repo + AGENTS.md, write data/corpus
 
+Mission runner (local Qwen / OpenCode; no app edits unless a mission allows them)
+  mission create --template ui-feature --id <id>
+  mission validate <file>
+  mission run <file> [--dry-run] [--stop-after STATE]
+  mission status [id]
+  mission resume <id> [--dry-run]
+  mission report <id>
+  mission test
+
 Retrieval (works without embeddings)
   search <query> [--k 12] [--mode full|lexical|lexical-graph]
   symbol <name>
@@ -151,6 +160,12 @@ async function main() {
     const pack = await contextPack(task, { budget: Number(flags.budget || 8000), mode: flags.mode || "full" });
     console.log(pack.markdown);
     console.error(`# pack chunks=${pack.chunkCount} tokens~${pack.tokenEstimate} git=${pack.gitCommit}`);
+    return;
+  }
+
+  if (cmd === "mission") {
+    const { missionMain } = await import("./mission/cli.mjs");
+    await missionMain({ flags, pos, log: console.log });
     return;
   }
 

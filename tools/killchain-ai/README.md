@@ -43,6 +43,18 @@ node tools/killchain-ai/src/cli.mjs corpus --embed
 
 Uses local Ollama `nomic-embed-text` if present.
 
+## Mission runner (local Qwen)
+
+Long-horizon **mission runner** around Ollama + OpenCode + Kill Chain MCP. Fresh bounded OpenCode sessions; durable state on disk.
+
+```powershell
+.\tools\killchain-ai\kc-ai.ps1 mission test
+.\tools\killchain-ai\kc-ai.ps1 mission run .\tools\killchain-ai\missions\pilot-fire-ux-plan.md --dry-run
+.\tools\killchain-ai\kc-ai.ps1 mission status
+```
+
+See `missions/README.md`. Does not modify the application unless a mission (not dry-run) explicitly allows paths.
+
 ## Outputs (gitignored)
 
 - `data/corpus/chunks.jsonl` — structured chunks with provenance + git commit

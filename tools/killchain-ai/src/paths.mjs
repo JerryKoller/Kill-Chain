@@ -9,6 +9,8 @@ export const corpusDir = join(dataDir, "corpus");
 export const indexDir = join(dataDir, "index");
 export const sftDir = join(dataDir, "sft");
 export const evalDir = join(dataDir, "eval");
+export const missionsSpecDir = join(toolsRoot, "missions");
+export const missionsDataDir = join(dataDir, "missions");
 
 const CANONICAL_AGENTS = resolve(
   repoRoot,
