@@ -90,6 +90,9 @@ function persist(profiles: HeadphoneProfile[]): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
   } catch (err) {
     console.warn("[customHeadphones] persist failed:", err);
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Custom headphones", err),
+    );
   }
 }
 
