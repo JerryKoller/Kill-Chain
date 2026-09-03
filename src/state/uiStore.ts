@@ -58,12 +58,12 @@ export const useUIStore = create<UIState>((set, get) => ({
   view: loadLastView(),
   setView: (view) => {
     set({ view });
-    try { window.localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ }
+    try { window.localStorage.setItem(VIEW_KEY, view); } catch (err) { void import("@/lib/appHealth").then(({ reportStorageFailure }) => reportStorageFailure("Last view", err)); }
   },
   glossaryFocusTerm: null,
   openGlossary: (term) => {
     set({ view: "glossary", glossaryFocusTerm: term ?? null });
-    try { window.localStorage.setItem(VIEW_KEY, "glossary"); } catch { /* ignore */ }
+    try { window.localStorage.setItem(VIEW_KEY, "glossary"); } catch (err) { void import("@/lib/appHealth").then(({ reportStorageFailure }) => reportStorageFailure("Last view", err)); }
   },
   clearGlossaryFocus: () => set({ glossaryFocusTerm: null }),
   toastMessage: null,
