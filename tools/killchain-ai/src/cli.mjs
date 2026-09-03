@@ -238,6 +238,12 @@ async function main() {
     return;
   }
 
+  if (cmd === "overnight-metrics") {
+    const { summarizeOvernightMissions } = await import("./eval/overnightMetrics.mjs");
+    console.log(JSON.stringify(summarizeOvernightMissions(), null, 2));
+    return;
+  }
+
   if (cmd === "eval") {
     if (flags.ab) {
       const { runPhase2, rescorePhase2 } = await import("./eval/ab.mjs");
