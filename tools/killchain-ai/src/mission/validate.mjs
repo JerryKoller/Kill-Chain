@@ -14,25 +14,46 @@ export const VALIDATION_SCRIPTS = {
   "heap-diff": ["run", "heap-diff"],
 };
 
+export function npmSpawnSpec(scriptArgs) {
+  const args = [...scriptArgs];
+  if (process.platform === "win32") {
+    return { command: "cmd.exe", args: ["/d", "/s", "/c", "npm", ...args] };
+  }
+  return { command: "npm", args };
+}
+
 export function runNpmScript(name, { cwd = repoRoot, timeoutMs = 10 * 60 * 1000 } = {}) {
   const args = VALIDATION_SCRIPTS[name];
   if (!args) return Promise.resolve({ name, ok: false, code: 2, stdout: "", stderr: `unknown script ${name}`, durationMs: 0 });
   return new Promise((resolve) => {
     const started = Date.now();
-    const npmBin = process.platform === "win32" ? "npm.cmd" : "npm";
-    const child = spawn(npmBin, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      shell: false,
-    });
+    const spec = npmSpawnSpec(args);
+    let child;
+    try {
+      child = spawn(spec.command, spec.args, {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        shell: false,
+      });
+    } catch (e) {
+      resolve({
+        name,
+        ok: false,
+        code: 1,
+        stdout: "",
+        stderr: String(e.message || e),
+        durationMs: Date.now() - started,
+      });
+      return;
+    }
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (d) => {
+    child.stdout?.on("data", (d) => {
       stdout += d;
       if (stdout.length > 80_000) stdout = stdout.slice(-80_000);
     });
-    child.stderr.on("data", (d) => {
+    child.stderr?.on("data", (d) => {
       stderr += d;
       if (stderr.length > 80_000) stderr = stderr.slice(-80_000);
     });

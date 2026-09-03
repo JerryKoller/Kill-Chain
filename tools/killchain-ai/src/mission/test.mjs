@@ -16,7 +16,7 @@ import {
   appDiffFiles,
 } from "./gitops.mjs";
 import { runPreflight } from "./preflight.mjs";
-import { runValidation } from "./validate.mjs";
+import { runValidation, npmSpawnSpec } from "./validate.mjs";
 import { createMissionStore, loadMission, transition } from "./store.mjs";
 import { runMission } from "./runner.mjs";
 
@@ -129,6 +129,14 @@ export async function runMissionTests() {
     },
   );
   check("failed typecheck is not ok", val.ok === false && val.results[0].code === 1);
+
+  const npmSpec = npmSpawnSpec(["run", "typecheck"]);
+  check(
+    "windows npm spawn uses cmd.exe",
+    process.platform === "win32"
+      ? npmSpec.command === "cmd.exe" && npmSpec.args.includes("npm") && !npmSpec.args.includes("npm.cmd")
+      : npmSpec.command === "npm",
+  );
 
   const pfDirty = await runPreflight(specL2, {
     gitCapture: () => ({ commit: "abc", short: "abc", branch: "ai/kill-chain-agent", dirty: true }),
