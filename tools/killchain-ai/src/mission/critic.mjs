@@ -94,13 +94,16 @@ export function checkReferencedFilesExist(text) {
 export function checkEditTargetsAllowed(text, spec) {
   const { edit, created } = classifyReferencedPaths(text);
   const problems = [];
+  const futureCandidates = (spec.level || 0) === 0 || spec.dryRun;
   for (const p of [...edit, ...created]) {
     if (pathForbidden(p, spec) && !inListed(p, spec.readOnlyPaths)) {
       problems.push({ path: p, reason: "forbidden" });
       continue;
     }
     const allowed = inListed(p, spec.allowedPaths);
-    if (!allowed) problems.push({ path: p, reason: "outside-allowed" });
+    if (allowed) continue;
+    if (futureCandidates && repoFileExists(p) && inListed(p, spec.readOnlyPaths)) continue;
+    problems.push({ path: p, reason: "outside-allowed" });
   }
   return { ok: problems.length === 0, problems, edit, created };
 }

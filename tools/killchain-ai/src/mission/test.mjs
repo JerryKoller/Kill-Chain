@@ -257,6 +257,24 @@ export async function runMissionTests() {
   );
   check("proposal outside allowedPaths fails", !outside.ok && outside.scope.problems.some((p) => p.path.includes("uiStore")));
 
+  const specDisc = parseMissionMarkdown(`---
+{
+  "id": "disc-scope",
+  "title": "t",
+  "goal": "g",
+  "level": 0,
+  "allowedPaths": [],
+  "readOnlyPaths": ["src/components/FireCommand/**"]
+}
+---
+`).spec;
+  specDisc.dryRun = true;
+  const future = evaluateArtifactGate(
+    "intended modification later LEVEL 2 change `src/components/FireCommand/WidthPanel.tsx`",
+    specDisc,
+  );
+  check("level 0 discovery may name future UI edit candidates", future.ok, JSON.stringify(future.errors));
+
   const missingV = evaluateCriticGate({
     criticText: "looks fine, ship it",
     planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx",
