@@ -298,6 +298,13 @@ export async function runMissionTests() {
     byWidth: { "1280": [{ sel: "#gate-strip", found: true, overflowX: 40, gap: "20px", opacity: "1", truncated: true }] },
   }, [{ sel: "#gate-strip", width: 1280, maxOverflowX: 1, gapEquals: "4.8px", notTruncated: true }]);
   check("UI metric harness flags overflow/gap/truncation", !metricBad.ok && metricBad.failures.length >= 2);
+  const criticInvented = evaluateCriticGate({
+    criticText: "INSPECTED: src/components/FireCommand/DrivePanel.tsx\nRISK: canvas could be mistaken for a meter\nEVIDENCE: DriveStageViz only reads store\nVERDICT: READY\n",
+    spec: { level: 0, allowedPaths: [], forbiddenPaths: [], readOnlyPaths: ["src/components/FireCommand/**"] },
+    tools: ["killchain_search"],
+    phase: "final",
+  });
+  check("final critic invented DrivePanel is rejected", criticInvented.errors.some((e) => String(e).includes("DrivePanel")));
 
   const existOk = checkReferencedFilesExist("inspect `src/components/FireCommand/ModuleEnableToggle.tsx`");
   check("valid existing UI file existence", existOk.ok);

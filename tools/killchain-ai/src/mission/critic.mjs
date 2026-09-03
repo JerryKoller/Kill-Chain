@@ -270,6 +270,8 @@ export function evaluateCriticGate({ criticText, planText = "", proposalText = "
     if (!toolsGate.ok && !finalDiffInPrompt) rawErrors.push("critic-no-tools");
   }
   if (!planFiles.ok) rawErrors.push(`invented-files:${planFiles.missing.join(",")}`);
+  const criticFiles = checkReferencedFilesExist(criticText || "");
+  if (!criticFiles.ok) rawErrors.push(`invented-files:${criticFiles.missing.join(",")}`);
   if (proposalText && !artifacts.ok) rawErrors.push(...artifacts.errors);
   const vueAll = findWrongStackPaths([planText, proposalText, criticText].join("\n"));
   if (vueAll.length) rawErrors.push(`wrong-stack:.vue:${vueAll.join(",")}`);

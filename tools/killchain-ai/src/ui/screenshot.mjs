@@ -279,6 +279,15 @@ export async function captureFireCommand({
     const gotIt = await evalValue(session.client, clickExactText("Got it"));
     log.push({ gotIt });
     await new Promise((r) => setTimeout(r, 600));
+    const perf = await evalValue(session.client, `(() => {
+      const tabs = [...document.querySelectorAll("button")];
+      const el = tabs.find((n) => (n.innerText || "").trim() === "PERF" || (n.getAttribute("title") || "").startsWith("Performance"));
+      if (!el) return { ok: false, reason: "no-PERF-tab" };
+      el.click();
+      return { ok: true, text: (el.innerText || "").slice(0, 40), title: el.getAttribute("title") };
+    })()`);
+    log.push({ perf });
+    await new Promise((r) => setTimeout(r, 800));
 
     const t1 = Date.now();
     let opened = null;
