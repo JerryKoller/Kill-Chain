@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseMissionMarkdown, pathEditable, matchPath } from "./schema.mjs";
@@ -13,12 +13,31 @@ import {
   unauthorizedChanges,
   unexpectedJunk,
   diffCheckArgs,
+  allowedAppDiffFiles,
   appDiffFiles,
+  changesSince,
+  missingCheckpointAppFiles,
+  extractFilePatch,
 } from "./gitops.mjs";
 import { runPreflight } from "./preflight.mjs";
 import { runValidation, npmSpawnSpec } from "./validate.mjs";
 import { createMissionStore, loadMission, transition } from "./store.mjs";
 import { runMission } from "./runner.mjs";
+import {
+  captureBaseline,
+  capturePhaseSnapshot,
+  createFsIo,
+  enforcePhaseDelta,
+  fingerprintRel,
+  loadAttribution,
+  persistTotalMissionDiff,
+  resolveAdoption,
+  restoreCheckpointFiles,
+  restoreSnapshot,
+  sha256,
+  writeLosslessCheckpoint,
+} from "./attribution.mjs";
+import { clip } from "./prompts.mjs";
 
 function ok(name, cond, detail = "") {
   if (cond) {
@@ -149,6 +168,51 @@ export async function runMissionTests() {
   });
   check("dirty worktree preflight BLOCK", pfDirty.ok === false && /uiStore/.test(pfDirty.errors.join(" ")));
 
+  const pfExpectedDirty = await runPreflight({
+    ...specL2,
+    allowedPaths: ["src/components/FireCommand/GatePanel.tsx"],
+    baselineDirtyPaths: ["src/components/FireCommand/ModuleEnableToggle.tsx"],
+  }, {
+    gitCapture: () => ({ commit: "abc", short: "abc", branch: "ai/kill-chain-agent", dirty: true }),
+    gitPorcelain: () => parsePorcelain(" M src/components/FireCommand/GatePanel.tsx\n M src/components/FireCommand/ModuleEnableToggle.tsx"),
+    checkOllama: async () => ({ ok: true, names: ["qwen3.5:9b"] }),
+    opencodeVersion: async () => "1.18.26",
+    opencodeMcpList: async () => ({ connected: true, line: "killchain connected" }),
+    loadCorpusManifest: () => ({ gitCommit: "abc" }),
+    snapshotWorktree: () => ({ porcelain: parsePorcelain(" M src/components/FireCommand/GatePanel.tsx\n M src/components/FireCommand/ModuleEnableToggle.tsx"), head: "abc" }),
+  });
+  check(
+    "12 unrelated dirty allowed file at start BLOCK unless adopted",
+    pfExpectedDirty.ok === false && /GatePanel/.test(pfExpectedDirty.errors.join(" ")),
+  );
+
+  const pfAdopt = await runPreflight({
+    ...specL2,
+    allowedPaths: ["src/components/FireCommand/GatePanel.tsx"],
+    adoptDirtyPaths: ["src/components/FireCommand/GatePanel.tsx"],
+    preserveDirtyPaths: ["src/components/FireCommand/ModuleEnableToggle.tsx"],
+  }, {
+    gitCapture: () => ({ commit: "abc", short: "abc", branch: "ai/kill-chain-agent", dirty: true }),
+    gitPorcelain: () => parsePorcelain(" M src/components/FireCommand/GatePanel.tsx\n M src/components/FireCommand/ModuleEnableToggle.tsx"),
+    checkOllama: async () => ({ ok: true, names: ["qwen3.5:9b"] }),
+    opencodeVersion: async () => "1.18.26",
+    opencodeMcpList: async () => ({ connected: true, line: "killchain connected" }),
+    loadCorpusManifest: () => ({ gitCommit: "abc" }),
+    snapshotWorktree: () => ({ porcelain: parsePorcelain(" M src/components/FireCommand/GatePanel.tsx\n M src/components/FireCommand/ModuleEnableToggle.tsx"), head: "abc" }),
+  });
+  check(
+    "adopted allowed + preserved foreign dirt preflight OK",
+    pfAdopt.ok === true && /GatePanel/.test((pfAdopt.warnings || []).join(" ")),
+  );
+
+  check(
+    "allowed app diff excludes baseline dirty toggle",
+    allowedAppDiffFiles(
+      ["src/components/FireCommand/GatePanel.tsx", "src/components/FireCommand/ModuleEnableToggle.tsx"],
+      { ...specL2, allowedPaths: ["src/components/FireCommand/GatePanel.tsx"] },
+    ).join(",") === "src/components/FireCommand/GatePanel.tsx",
+  );
+
   const pfOllama = await runPreflight(parsed.spec, {
     gitCapture: () => ({ commit: "abc", short: "abc", branch: "ai/kill-chain-agent", dirty: false }),
     gitPorcelain: () => [],
@@ -202,6 +266,10 @@ export async function runMissionTests() {
   check(
     "tooling path excluded from app diff",
     appDiffFiles(["tools/killchain-ai/src/mission/runner.mjs", "src/components/FireCommand/ModuleEnableToggle.tsx"]).length === 1,
+  );
+  check(
+    "generated tsbuildinfo excluded from app diff",
+    appDiffFiles(["tsconfig.tsbuildinfo", "src/components/FireCommand/fireUiKit.tsx"]).join(",") === "src/components/FireCommand/fireUiKit.tsx",
   );
 
   const criticFail = parseCritic("some thoughts\nVERDICT: FAIL\n- missing FireCommandView");
@@ -344,6 +412,58 @@ export async function runMissionTests() {
     tools: [],
   });
   check("level 1 critic with zero tools fails", !noTools.pass && noTools.errors.includes("critic-no-tools"));
+
+  const bashInspect = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: glow styling could look like a larger hit target and change click feel",
+      "EVIDENCE: proposal keeps the same onClick and setModuleEnable; inspected ModuleEnableToggle.tsx exists",
+      "VERDICT: READY",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx",
+    proposalText: "inspect-only `src/components/FireCommand/ModuleEnableToggle.tsx`",
+    spec: specUi,
+    tools: ["bash"],
+  });
+  check("level 1 critic with bash inspect tools passes", bashInspect.pass, JSON.stringify(bashInspect.errors));
+
+  const finalNoTools = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: glow styling could look like a larger hit target and change click feel",
+      "EVIDENCE: proposal keeps the same onClick and setModuleEnable; inspected ModuleEnableToggle.tsx exists",
+      "VERDICT: READY",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx",
+    spec: specUi,
+    tools: [],
+    phase: "final",
+  });
+  check("final critic may use prompt diff without tools", finalNoTools.pass, JSON.stringify(finalNoTools.errors));
+
+  const startSnap = { porcelain: parsePorcelain(" M src/components/FireCommand/fireUiKit.tsx") };
+  const phaseSnap = { porcelain: parsePorcelain(" M src/components/FireCommand/fireUiKit.tsx\n M src/components/FireCommand/fcChip.tsx") };
+  const nowPorc = parsePorcelain(" M src/components/FireCommand/fireUiKit.tsx\n M src/components/FireCommand/fcChip.tsx\n M src/components/FireCommand/GatePanel.tsx");
+  const vsStart = changesSince(startSnap, nowPorc);
+  const vsPhase = changesSince(phaseSnap, nowPorc);
+  check("mission-start delta includes prior phase files", vsStart.added.some((r) => r.path.includes("fcChip")));
+  check(
+    "phase-start delta excludes prior allowed edits",
+    !vsPhase.added.some((r) => r.path.includes("fcChip")) && vsPhase.added.some((r) => r.path.includes("GatePanel")),
+  );
+  check(
+    "missing checkpoint files skip already dirty",
+    missingCheckpointAppFiles(
+      ["src/components/FireCommand/fireUiKit.tsx", "src/components/FireCommand/fcChip.tsx"],
+      ["src/components/FireCommand/fireUiKit.tsx"],
+    ).join(",") === "src/components/FireCommand/fcChip.tsx",
+  );
+
+  const split = extractFilePatch(
+    "diff --git a/src/components/FireCommand/fcChip.tsx b/src/components/FireCommand/fcChip.tsx\nindex 1..2\n--- a/src/components/FireCommand/fcChip.tsx\n+++ b/src/components/FireCommand/fcChip.tsx\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/src/components/FireCommand/fireUiKit.tsx b/src/components/FireCommand/fireUiKit.tsx\n",
+    "src/components/FireCommand/fcChip.tsx",
+  );
+  check("extractFilePatch stops before next file", split.includes("fcChip.tsx") && !split.includes("fireUiKit.tsx"));
 
   check("quarantine PLAN dump not ingested as proposal", !quarantineFitsDest("1788410059304-PLAN.md", "PROPOSAL.md"));
   check("quarantine PROPOSAL dump matches dest", quarantineFitsDest("PROPOSAL.md", "PROPOSAL.md"));
@@ -534,6 +654,357 @@ ${JSON.stringify({
     },
   });
   check("model invocation fail is FAILED or BLOCKED", ["FAILED", "BLOCKED"].includes(failInvoke.state), `state=${failInvoke.state}`);
+
+  const FOO = "src/components/FireCommand/Foo.tsx";
+  const BAR = "src/components/FireCommand/Bar.tsx";
+  const TOGGLE = "src/components/FireCommand/ModuleEnableToggle.tsx";
+  const STORE = "src/state/uiStore.ts";
+  const NEWF = "src/components/FireCommand/NewPanel.tsx";
+
+  function attrSpec(over = {}) {
+    const parsed = parseMissionMarkdown(`---
+${JSON.stringify({
+    id: over.id || "attr-harness",
+    title: "t",
+    goal: "g",
+    level: 2,
+    allowedPaths: over.allowedPaths || [FOO],
+    adoptDirtyPaths: over.adoptDirtyPaths || [],
+    preserveDirtyPaths: over.preserveDirtyPaths || [],
+    baselineDirtyPaths: over.baselineDirtyPaths || [],
+    corpus: "never",
+    maxModelCalls: 20,
+  }, null, 2)}
+---
+`);
+    return parsed;
+  }
+
+  function attrWorld(over = {}) {
+    const root = mkdtempSync(join(tmpdir(), "kc-attr-"));
+    const missionDir = join(root, "mission");
+    mkdirSync(missionDir, { recursive: true });
+    const head = new Map();
+    const io = createFsIo(root, {
+      readHead: (rel) => (head.has(rel) ? Buffer.from(head.get(rel)) : null),
+    });
+    const seed = (rel, buf) => {
+      const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+      io.write(rel, b);
+      head.set(rel, Buffer.from(b));
+    };
+    const parsed = attrSpec(over);
+    return { root, io, missionDir, spec: parsed.spec, parsed, seed };
+  }
+
+  const adoptOutside = attrSpec({
+    id: "adopt-outside",
+    allowedPaths: [FOO],
+    adoptDirtyPaths: [STORE],
+  });
+  check("13 adopted path outside allowedPaths → reject", !adoptOutside.ok && adoptOutside.errors.some((e) => /adoptDirtyPaths/.test(e)));
+
+  {
+    const w = attrWorld();
+    w.seed(FOO, "HEAD\n");
+    const resolved = resolveAdoption(w.spec, []);
+    const attr = captureBaseline(w.missionDir, w.spec, resolved, w.io, []);
+    const pre = capturePhaseSnapshot(w.missionDir, "edit", w.spec, attr, w.io, []);
+    w.io.write(FOO, Buffer.from("EDIT\n"));
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir,
+      key: "edit",
+      preFiles: pre,
+      spec: w.spec,
+      io: w.io,
+      porcelainNow: [{ xy: " M", path: FOO, untracked: false }],
+      writesApp: true,
+      attribution: attr,
+    });
+    check("1 clean authorized file edited during EDITING", r.ok && r.allowed.includes(FOO) && attr.missionOwned.includes(FOO) && w.io.read(FOO).toString() === "EDIT\n");
+  }
+
+  {
+    const w = attrWorld({ id: "attr-adopt", adoptDirtyPaths: [FOO] });
+    w.seed(FOO, "PRIOR\n");
+    const porcelain = [{ xy: " M", path: FOO, untracked: false }];
+    const resolved = resolveAdoption(w.spec, porcelain);
+    check("2 already-dirty authorized file adopted", resolved.adopted.includes(FOO) && !resolved.unexpected.length);
+    const attr = captureBaseline(w.missionDir, w.spec, resolved, w.io, porcelain);
+    check("2 baseline stores adopted bytes", fingerprintRel(w.io, FOO).hash === sha256(Buffer.from("PRIOR\n")) && attr.missionOwned.includes(FOO));
+
+    const pre1 = capturePhaseSnapshot(w.missionDir, "edit1", w.spec, attr, w.io, porcelain);
+    w.io.write(FOO, Buffer.from("REV1\n"));
+    const e1 = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit1", preFiles: pre1, spec: w.spec, io: w.io,
+      porcelainNow: porcelain, writesApp: true, attribution: attr,
+    });
+    const pre2 = capturePhaseSnapshot(w.missionDir, "edit2", w.spec, attr, w.io, porcelain);
+    w.io.write(FOO, Buffer.from("REV2\n"));
+    const e2 = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit2", preFiles: pre2, spec: w.spec, io: w.io,
+      porcelainNow: porcelain, writesApp: true, attribution: attr,
+    });
+    check("3 revision edits same file again", e1.ok && e2.ok && e2.delta.hashes[FOO].before === sha256(Buffer.from("REV1\n")) && w.io.read(FOO).toString() === "REV2\n");
+    persistTotalMissionDiff(w.missionDir, w.spec, attr, w.io, porcelain);
+    check("8 validation after several edits sees total mission state", attr.totalMissionDiff.dirty.includes(FOO) && attr.totalMissionDiff.hashes[FOO].before === sha256(Buffer.from("PRIOR\n")));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-plan-ro", adoptDirtyPaths: [FOO] });
+    const original = Buffer.from("OWNED\n");
+    w.seed(FOO, original);
+    const porcelain = [{ xy: " M", path: FOO, untracked: false }];
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, porcelain), w.io, porcelain);
+    const pre = capturePhaseSnapshot(w.missionDir, "plan", w.spec, attr, w.io, porcelain);
+    w.io.write(FOO, Buffer.from("PLAN-MUTATION\n"));
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "plan", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: porcelain, writesApp: false, attribution: attr,
+    });
+    check("4 read-only PLANNING modifies adopted dirty file → restore exact pre-phase state", r.readOnlyViolation && r.restored && w.io.read(FOO).equals(original));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-critic-ro", adoptDirtyPaths: [FOO] });
+    const original = Buffer.from("OWNED-CRITIC\n");
+    w.seed(FOO, original);
+    const porcelain = [{ xy: " M", path: FOO, untracked: false }];
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, porcelain), w.io, porcelain);
+    const pre = capturePhaseSnapshot(w.missionDir, "plan-critic", w.spec, attr, w.io, porcelain);
+    w.io.write(FOO, Buffer.from("CRITIC-MUTATION\n"));
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "plan-critic", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: porcelain, writesApp: false, attribution: attr,
+    });
+    check("5 critic modifies app source → restore", r.readOnlyViolation && w.io.read(FOO).equals(original));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-unauth", allowedPaths: [FOO] });
+    w.seed(FOO, "FOO0\n");
+    w.seed(BAR, "BAR0\n");
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, []), w.io, []);
+    const pre = capturePhaseSnapshot(w.missionDir, "edit-unauth", w.spec, attr, w.io, []);
+    w.io.write(FOO, Buffer.from("FOO1\n"));
+    w.io.write(BAR, Buffer.from("BAR1\n"));
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit-unauth", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: [
+        { xy: " M", path: FOO, untracked: false },
+        { xy: " M", path: BAR, untracked: false },
+      ],
+      writesApp: true, attribution: attr,
+    });
+    check(
+      "6 unauthorized second file → restore only that delta",
+      !r.ok && r.unauthorized.includes(BAR) && r.allowed.includes(FOO)
+        && w.io.read(FOO).toString() === "FOO1\n" && w.io.read(BAR).toString() === "BAR0\n",
+    );
+  }
+
+  {
+    const w = attrWorld({ id: "attr-resume", adoptDirtyPaths: [FOO] });
+    w.seed(FOO, "RESUME-BASE\n");
+    const porcelain = [{ xy: " M", path: FOO, untracked: false }];
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, porcelain), w.io, porcelain);
+    const loaded = loadAttribution(w.missionDir);
+    check("7 resume preserves adopted dirty baseline", loaded.adopted.includes(FOO) && loaded.missionOwned.includes(FOO) && loaded.baseline === "baseline");
+    restoreSnapshot(w.missionDir, "baseline", w.io);
+    check("7 baseline restore still OWNED", w.io.read(FOO).toString() === "RESUME-BASE\n" && attr.adopted.includes(FOO));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-ckpt" });
+    const body = Buffer.from("CHECKPOINT-FULL-FILE\nsecond line\n");
+    w.seed(FOO, body);
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, []), w.io, []);
+    const pre = capturePhaseSnapshot(w.missionDir, "edit-ckpt", w.spec, attr, w.io, []);
+    const edited = Buffer.from("CHECKPOINT-FULL-FILE\nsecond line\nthird\n");
+    w.io.write(FOO, edited);
+    enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit-ckpt", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: [{ xy: " M", path: FOO, untracked: false }], writesApp: true, attribution: attr,
+    });
+    const ck = writeLosslessCheckpoint(w.missionDir, 1, {
+      spec: w.spec, status: { state: "CHECKPOINT", phaseIndex: 0 }, attribution: attr, io: w.io,
+      porcelain: [{ xy: " M", path: FOO, untracked: false }], label: "test",
+    });
+    w.io.write(FOO, Buffer.from("WIPED\n"));
+    const rest = restoreCheckpointFiles(ck.dir, [FOO], w.io);
+    check("9 checkpoint restoration preserves full file", rest.ok && w.io.read(FOO).equals(edited) && ck.changed.includes(FOO));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-large" });
+    const large = Buffer.from(`${"A".repeat(8000)}${"B".repeat(8000)}${"C".repeat(40000)}\nunique-tail-XYZ\n`);
+    w.seed(FOO, "small\n");
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, []), w.io, []);
+    const pre = capturePhaseSnapshot(w.missionDir, "edit-large", w.spec, attr, w.io, []);
+    w.io.write(FOO, large);
+    enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit-large", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: [{ xy: " M", path: FOO, untracked: false }], writesApp: true, attribution: attr,
+    });
+    const ck = writeLosslessCheckpoint(w.missionDir, 2, {
+      spec: w.spec, status: { state: "CHECKPOINT", phaseIndex: 0 }, attribution: attr, io: w.io,
+      porcelain: [{ xy: " M", path: FOO, untracked: false }], label: "large",
+    });
+    w.io.write(FOO, Buffer.from("truncated?\n"));
+    restoreCheckpointFiles(ck.dir, [FOO], w.io);
+    const roundtrip = w.io.read(FOO);
+    check(
+      "10 large diff/checkpoint cannot truncate",
+      roundtrip.equals(large) && roundtrip.length > 50000 && clip(large.toString(), 8000).includes("[truncated"),
+    );
+  }
+
+  {
+    const w = attrWorld({
+      id: "attr-classify",
+      allowedPaths: [FOO],
+      adoptDirtyPaths: [FOO],
+      preserveDirtyPaths: [TOGGLE],
+    });
+    const porcelain = [
+      { xy: " M", path: FOO, untracked: false },
+      { xy: " M", path: TOGGLE, untracked: false },
+      { xy: " M", path: STORE, untracked: false },
+    ];
+    const resolved = resolveAdoption(w.spec, porcelain);
+    check("11 mission-owned dirt is not confused with unrelated preexisting dirt", resolved.adopted.includes(FOO) && resolved.preserved.includes(TOGGLE) && resolved.unexpected.some((r) => r.path === STORE));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-del", allowedPaths: [FOO] });
+    w.seed(FOO, "OLD\n");
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, []), w.io, []);
+    const pre = capturePhaseSnapshot(w.missionDir, "edit-del", w.spec, attr, w.io, []);
+    w.io.remove(FOO);
+    w.io.write(FOO, Buffer.from("NEW\n"));
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit-del", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: [{ xy: " M", path: FOO, untracked: false }], writesApp: true, attribution: attr,
+    });
+    check("14 file deleted/recreated during edit", r.ok && w.io.read(FOO).toString() === "NEW\n" && r.allowed.includes(FOO));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-crlf", adoptDirtyPaths: [FOO] });
+    const crlf = Buffer.from("line1\r\nline2\r\n");
+    w.seed(FOO, crlf);
+    const porcelain = [{ xy: " M", path: FOO, untracked: false }];
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, porcelain), w.io, porcelain);
+    const pre = capturePhaseSnapshot(w.missionDir, "plan-crlf", w.spec, attr, w.io, porcelain);
+    w.io.write(FOO, Buffer.from("line1\nline2\nmut\n"));
+    enforcePhaseDelta({
+      missionDir: w.missionDir, key: "plan-crlf", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: porcelain, writesApp: false, attribution: attr,
+    });
+    check("15 CRLF adopted file preserves EOL", w.io.read(FOO).equals(crlf) && fingerprintRel(w.io, FOO).crlf === true);
+  }
+
+  {
+    const w = attrWorld({ id: "attr-new", allowedPaths: ["src/components/FireCommand/**"] });
+    w.seed(FOO, "keep\n");
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, []), w.io, []);
+    const pre = capturePhaseSnapshot(w.missionDir, "edit-new", w.spec, attr, w.io, []);
+    w.io.write(NEWF, Buffer.from("brand-new\n"));
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit-new", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: [{ xy: "??", path: NEWF, untracked: true }], writesApp: true, attribution: attr,
+    });
+    const ck = writeLosslessCheckpoint(w.missionDir, 3, {
+      spec: w.spec, status: { state: "CHECKPOINT", phaseIndex: 0 }, attribution: attr, io: w.io,
+      porcelain: [{ xy: "??", path: NEWF, untracked: true }], label: "newfile",
+    });
+    w.io.remove(NEWF);
+    restoreCheckpointFiles(ck.dir, [NEWF], w.io);
+    check("16 untracked authorized NEW FILE survives checkpoints correctly", r.ok && r.allowed.includes(NEWF) && w.io.read(NEWF).toString() === "brand-new\n");
+  }
+
+  {
+    const w = attrWorld({ id: "attr-ro-new", allowedPaths: ["src/components/FireCommand/**"] });
+    w.seed(FOO, "keep\n");
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, []), w.io, []);
+    const pre = capturePhaseSnapshot(w.missionDir, "plan-new", w.spec, attr, w.io, []);
+    w.io.write(NEWF, Buffer.from("should-not-keep\n"));
+    let quarantined = false;
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "plan-new", preFiles: pre, spec: w.spec, io: w.io,
+      porcelainNow: [{ xy: "??", path: NEWF, untracked: true }], writesApp: false, attribution: attr,
+      quarantineNewFile: () => { quarantined = true; },
+    });
+    check("17 read-only phase creation of NEW FILE is reverted/quarantined", r.readOnlyViolation && quarantined && !w.io.exists(NEWF));
+  }
+
+  {
+    const w = attrWorld({ id: "attr-repair", adoptDirtyPaths: [FOO] });
+    w.seed(FOO, "V1\n");
+    const porcelain = [{ xy: " M", path: FOO, untracked: false }];
+    const attr = captureBaseline(w.missionDir, w.spec, resolveAdoption(w.spec, porcelain), w.io, porcelain);
+    const preEdit = capturePhaseSnapshot(w.missionDir, "edit-r", w.spec, attr, w.io, porcelain);
+    w.io.write(FOO, Buffer.from("V2\n"));
+    enforcePhaseDelta({
+      missionDir: w.missionDir, key: "edit-r", preFiles: preEdit, spec: w.spec, io: w.io,
+      porcelainNow: porcelain, writesApp: true, attribution: attr,
+    });
+    const preRepair = capturePhaseSnapshot(w.missionDir, "repair", w.spec, attr, w.io, porcelain);
+    w.io.write(FOO, Buffer.from("V3-repair\n"));
+    const r = enforcePhaseDelta({
+      missionDir: w.missionDir, key: "repair", preFiles: preRepair, spec: w.spec, io: w.io,
+      porcelainNow: porcelain, writesApp: true, attribution: attr,
+    });
+    check("18 repair phase may alter a previously edited mission-owned file", r.ok && w.io.read(FOO).toString() === "V3-repair\n" && attr.missionOwned.includes(FOO));
+  }
+
+  {
+    const world = mkdtempSync(join(tmpdir(), "kc-plan-ro-"));
+    const io = createFsIo(world);
+    io.write(FOO, Buffer.from("OWNED-LIVE\n"));
+    const specMd = join(world, "mission.md");
+    writeFileSync(specMd, `---
+{
+  "id": "plan-restore-owned",
+  "title": "t",
+  "goal": "g",
+  "level": 2,
+  "allowedPaths": ["src/components/FireCommand/Foo.tsx"],
+  "adoptDirtyPaths": ["src/components/FireCommand/Foo.tsx"],
+  "corpus": "never",
+  "maxModelCalls": 20
+}
+---
+`, "utf8");
+    const planRun = await runMission({
+      specPath: specMd,
+      dryRun: true,
+      stopAfter: "PLAN_REVIEW",
+      dataRoot: join(world, "data"),
+      log: () => {},
+      deps: {
+        ...liveDeps,
+        createIo: () => io,
+        gitPorcelain: () => [{ xy: " M", path: FOO, untracked: false }],
+        gitDiffCheck: () => ({ ok: true, output: "", args: [] }),
+        gitAllowedAppDiffStat: () => ({ files: [FOO], insertions: 1, deletions: 0, patch: "diff" }),
+        runOpenCode: async ({ prompt, outPath }) => {
+          if (String(prompt).includes("CURRENT PASS: PLAN")) {
+            io.write(FOO, Buffer.from("PLAN-WROTE-THIS\n"));
+          }
+          const text = String(prompt).includes("CURRENT PASS: PLAN")
+            ? "PLAN: inspect Foo.tsx only"
+            : "investigation of Foo";
+          return fakeInvoke(text)({ outPath });
+        },
+      },
+    });
+    check(
+      "4b runner PLANNING restore of adopted dirty file",
+      planRun.state === "PLAN_REVIEW" && io.read(FOO).toString() === "OWNED-LIVE\n" && (planRun.readOnlyViolations || 0) >= 1,
+      `state=${planRun.state} bytes=${io.read(FOO)?.toString()} violations=${planRun.readOnlyViolations}`,
+    );
+  }
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;

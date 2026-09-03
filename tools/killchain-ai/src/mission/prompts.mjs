@@ -1,3 +1,4 @@
+/** Prompt-only. Never use for checkpoint/recovery artifacts — those must be lossless. */
 export function clip(text, n = 12000) {
   const s = String(text || "");
   if (s.length <= n) return s;

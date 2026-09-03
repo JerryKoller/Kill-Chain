@@ -3,8 +3,14 @@ import { join } from "node:path";
 import { findAgentsMd, corpusDir, repoRoot } from "../paths.mjs";
 import { gitCapture } from "../git.mjs";
 import { ollamaTags } from "../eval/ollama.mjs";
-import { parseMissionFile } from "./schema.mjs";
+import { matchesAny, parseMissionFile } from "./schema.mjs";
 import { classifyPorcelain, gitPorcelain, snapshotWorktree } from "./gitops.mjs";
+import {
+  adoptionPreflightErrors,
+  loadAdoptCheckpoint,
+  loadParentMission,
+  resolveAdoption,
+} from "./attribution.mjs";
 import { findOpenCodeBin, opencodeMcpList, opencodeVersion } from "./opencode.mjs";
 
 const EXPECTED_BRANCH = process.env.KC_MISSION_BRANCH || "ai/kill-chain-agent";
@@ -53,9 +59,22 @@ export async function runPreflight(spec, deps = {}) {
   }
 
   const appDirty = classified.app.filter((r) => r.path !== "tsconfig.tsbuildinfo");
-  if (appDirty.length) {
-    errors.push(
-      `worktree has unexpected application changes:\n${appDirty.map((r) => `  ${r.xy} ${r.path}`).join("\n")}`,
+  const dataRoot = deps.missionsDataDir || undefined;
+  const parent = spec.baseMissionId
+    ? (deps.loadParentMission ? deps.loadParentMission(spec.baseMissionId) : loadParentMission(spec.baseMissionId, dataRoot))
+    : null;
+  const checkpoint = spec.adoptCheckpoint
+    ? (deps.loadAdoptCheckpoint ? deps.loadAdoptCheckpoint(spec) : loadAdoptCheckpoint(spec, dataRoot))
+    : { files: [], error: null };
+  if (checkpoint.error) errors.push(checkpoint.error);
+  const resolved = deps.resolveAdoption
+    ? deps.resolveAdoption(spec, porcelain, { parent, checkpointFiles: checkpoint.files })
+    : resolveAdoption(spec, porcelain, { parent, checkpointFiles: checkpoint.files });
+  errors.push(...(resolved.errors || []));
+  errors.push(...adoptionPreflightErrors({ ...resolved, errors: [] }));
+  if (resolved.adopted?.length || resolved.preserved?.length) {
+    warnings.push(
+      `worktree dirt classified adopted=${(resolved.adopted || []).join(",") || "(none)"} preserved=${(resolved.preserved || []).join(",") || "(none)"}`,
     );
   }
 
@@ -121,7 +140,16 @@ export async function runPreflight(spec, deps = {}) {
     needRebuild,
     snapshot,
     repoRoot,
+    adoption: resolved,
   };
+}
+
+/** @deprecated dirty allowlist is not automatically expected; use resolveAdoption. */
+export function isExpectedAppDirty(rel, spec) {
+  if (!rel || rel === "tsconfig.tsbuildinfo") return true;
+  if (matchesAny(rel, spec.adoptDirtyPaths || [])) return true;
+  if (matchesAny(rel, spec.preserveDirtyPaths || spec.baselineDirtyPaths || [])) return true;
+  return false;
 }
 
 export function parseSpecOrError(absPath) {

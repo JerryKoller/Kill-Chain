@@ -186,7 +186,23 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
   const allowedPaths = asStringArray(raw.allowedPaths, "allowedPaths", errors);
   const readOnlyPaths = asStringArray(raw.readOnlyPaths, "readOnlyPaths", errors);
   const forbiddenPaths = asStringArray(raw.forbiddenPaths, "forbiddenPaths", errors);
+  const baselineDirtyPaths = asStringArray(raw.baselineDirtyPaths, "baselineDirtyPaths", errors);
+  const adoptDirtyPaths = asStringArray(raw.adoptDirtyPaths, "adoptDirtyPaths", errors);
+  const preserveDirtyPaths = asStringArray(raw.preserveDirtyPaths, "preserveDirtyPaths", errors);
   const acceptance = asStringArray(raw.acceptance, "acceptance", errors);
+  const baseMissionId = String(raw.baseMissionId || "").trim();
+  if (baseMissionId && !ID_RE.test(baseMissionId)) {
+    errors.push(`baseMissionId must be kebab-case: ${baseMissionId}`);
+  }
+  const adoptCheckpoint = String(raw.adoptCheckpoint || "").trim();
+  if (adoptCheckpoint && (adoptCheckpoint.includes("..") || adoptCheckpoint.startsWith("/") || /^[a-zA-Z]:/.test(adoptCheckpoint))) {
+    errors.push(`adoptCheckpoint must be a mission-relative path without ..: ${adoptCheckpoint}`);
+  }
+  for (const p of adoptDirtyPaths) {
+    if (!matchesAny(p, allowedPaths)) {
+      errors.push(`adoptDirtyPaths includes "${p}" which is outside allowedPaths`);
+    }
+  }
 
   let validation = raw.validation || {};
   if (typeof validation !== "object" || Array.isArray(validation)) {
@@ -269,6 +285,11 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
     allowedPaths,
     readOnlyPaths,
     forbiddenPaths,
+    baselineDirtyPaths,
+    adoptDirtyPaths,
+    preserveDirtyPaths: [...new Set([...preserveDirtyPaths, ...baselineDirtyPaths])],
+    baseMissionId,
+    adoptCheckpoint,
     acceptance,
     validation: {
       required: requiredVal,

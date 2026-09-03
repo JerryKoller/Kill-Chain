@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { missionsDataDir, repoRoot } from "../paths.mjs";
 import { gitCapture } from "../git.mjs";
 import { buildCorpus } from "../corpus/build.mjs";
-import { parseMissionFile } from "./schema.mjs";
+import { parseMissionFile, pathEditable } from "./schema.mjs";
 import { isTerminal } from "./machine.mjs";
 import {
   appendJournal,
@@ -19,6 +19,7 @@ import {
   writeText,
 } from "./store.mjs";
 import { runPreflight } from "./preflight.mjs";
+import { runValidation, validationSummary } from "./validate.mjs";
 import { parseOpenCodeJsonl, runOpenCode, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import {
   criticPrompt,
@@ -30,23 +31,28 @@ import {
   proposalPrompt,
   repairPrompt,
 } from "./prompts.mjs";
-import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, checkProposalConcrete, proposalScopeCheck, quarantineFitsDest } from "./critic.mjs";
+import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, checkProposalConcrete, proposalScopeCheck, quarantineFitsDest, unionToolNames } from "./critic.mjs";
 import {
-  changesSince,
   fileSizeOk,
   gitDiffCheck,
-  gitAppDiffStat,
+  gitAllowedAppDiffStat,
   gitPorcelain,
-  isAppPath,
-  isToolingPath,
-  restoreGenerated,
+  restoreMissingCheckpointFiles,
   revertUnauthorized,
   snapshotWorktree,
-  unauthorizedChanges,
   unexpectedJunk,
-  wasPathClean,
 } from "./gitops.mjs";
-import { runValidation, validationSummary } from "./validate.mjs";
+import {
+  captureBaseline,
+  capturePhaseSnapshot,
+  createFsIo,
+  enforcePhaseDelta,
+  loadAttribution,
+  persistTotalMissionDiff,
+  resolveAdoption,
+  saveAttribution,
+  writeLosslessCheckpoint,
+} from "./attribution.mjs";
 
 function nowMs() {
   return Date.now();
@@ -95,6 +101,8 @@ function composeReport(status, { extra = "" } = {}) {
 - unixViolations: ${status.unixViolations}
 - mcpFirstMisses: ${status.mcpFirstMisses}
 - visibleTextMisses: ${status.visibleTextMisses}
+- readOnlyViolations: ${status.readOnlyViolations || 0}
+- automaticRestores: ${status.automaticRestores || 0}
 - headAtStart: ${status.headAtStart}
 - branchAtStart: ${status.branchAtStart}
 - blockedReason: ${status.blockedReason || ""}
@@ -184,6 +192,9 @@ async function invoke(ctx, phase, prompt) {
           cwd: repoRoot,
         });
         if (retry.text?.trim()) text = retry.text.trim();
+        if (retry.parsed?.tools?.length) {
+          parsed.tools = unionToolNames(parsed.tools, retry.parsed.tools);
+        }
         status.invocations.push({
           n: retryN,
           phase: `${phase}-empty-retry`,
@@ -242,34 +253,111 @@ async function invoke(ctx, phase, prompt) {
   return { text, parsed, result };
 }
 
+function allowedStat(ctx) {
+  if (ctx.deps.gitAllowedAppDiffStat) return ctx.deps.gitAllowedAppDiffStat(ctx.spec);
+  return gitAllowedAppDiffStat(ctx.spec);
+}
+
+function diffCheckNow(ctx) {
+  if (ctx.deps.gitDiffCheck) return ctx.deps.gitDiffCheck();
+  return gitDiffCheck();
+}
+
 function currentPorcelain(ctx) {
   return ctx.deps.gitPorcelain ? ctx.deps.gitPorcelain() : gitPorcelain();
 }
 
-function postPhaseGit(ctx, { revertAllApp = false } = {}) {
-  const { spec, status, dir } = ctx;
-  try {
-    const { added } = changesSince(ctx.snapshot, currentPorcelain(ctx));
-    const junk = unexpectedJunk(added, spec, { dryRun: status.dryRun });
-    const { unauthorized, allowed } = unauthorizedChanges(added, spec, { dryRun: status.dryRun || revertAllApp });
-    const toRevert = revertAllApp
-      ? added.filter((r) => !isToolingPath(r.path) && (isAppPath(r.path) || r.untracked))
-      : unauthorized;
-    if (junk.length) {
-      appendJournal(dir, `junk files: ${junk.map((j) => j.path).join(", ")}`);
-    }
-    if (toRevert.length) {
-      const q = join(dir, "quarantine");
-      const r = revertUnauthorized(toRevert, { quarantineDir: q });
-      appendJournal(dir, `reverted unauthorized: ${(r.reverted || []).join(", ")} quarantined=${r.quarantined?.length || 0}`);
-      status.lastError = `unauthorized or dry-run edits: ${toRevert.map((x) => x.path).join(", ")}`;
-      return { ok: false, unauthorized: toRevert, allowed, junk, reverted: r };
-    }
-    return { ok: true, unauthorized: [], allowed, junk };
-  } catch (err) {
-    appendJournal(dir, `postPhaseGit error: ${err.message}`);
-    return { ok: false, error: String(err.message || err), unauthorized: [], allowed: [], junk: [] };
+function repoIo(ctx) {
+  if (ctx.io) return ctx.io;
+  if (ctx.deps.createIo) ctx.io = ctx.deps.createIo();
+  else ctx.io = createFsIo(ctx.deps.repoRoot || repoRoot);
+  return ctx.io;
+}
+
+function beginPhase(ctx, label) {
+  const key = `${String(ctx.status.modelCalls).padStart(3, "0")}-${label}`;
+  ctx.phaseKey = key;
+  ctx.preFiles = capturePhaseSnapshot(
+    ctx.dir,
+    key,
+    ctx.spec,
+    ctx.attribution || {},
+    repoIo(ctx),
+    currentPorcelain(ctx),
+  );
+  return key;
+}
+
+function endPhase(ctx, { writesApp = false } = {}) {
+  if (!ctx.phaseKey || !ctx.preFiles) {
+    return { ok: true, delta: { dirty: [] }, allowed: [], unauthorized: [], restored: false };
   }
+  if (!ctx.attribution) {
+    ctx.attribution = {
+      adopted: [],
+      preserved: [],
+      missionOwned: [],
+      phaseDeltas: [],
+      readOnlyViolations: 0,
+      automaticRestores: 0,
+    };
+  }
+  const result = enforcePhaseDelta({
+    missionDir: ctx.dir,
+    key: ctx.phaseKey,
+    preFiles: ctx.preFiles,
+    spec: ctx.spec,
+    io: repoIo(ctx),
+    porcelainNow: currentPorcelain(ctx),
+    writesApp,
+    attribution: ctx.attribution,
+    quarantineNewFile: (rel) => {
+      const buf = repoIo(ctx).read(rel);
+      if (!buf) return;
+      mkdirSync(join(ctx.dir, "quarantine"), { recursive: true });
+      const dest = join(ctx.dir, "quarantine", `${Date.now()}-${basename(rel)}`);
+      writeFileSync(dest, buf);
+      appendJournal(ctx.dir, `quarantined new file ${rel} → ${dest}`);
+    },
+  });
+  ctx.attribution.phaseDeltas = [...(ctx.attribution.phaseDeltas || []), result.delta];
+  if (result.readOnlyViolation) {
+    ctx.status.readOnlyViolations = (ctx.status.readOnlyViolations || 0) + 1;
+    ctx.attribution.readOnlyViolations = (ctx.attribution.readOnlyViolations || 0) + 1;
+    ctx.attribution.automaticRestores = (ctx.attribution.automaticRestores || 0) + 1;
+    ctx.status.editRetries = (ctx.status.editRetries || 0) + 1;
+    appendJournal(ctx.dir, `read-only source write restored: ${(result.unauthorized || []).join(", ")}`);
+    ctx.status.lastError = `read-only phase wrote application source: ${(result.unauthorized || []).join(", ")}`;
+  } else if (result.restored && result.unauthorized?.length) {
+    ctx.status.editRetries = (ctx.status.editRetries || 0) + 1;
+    ctx.attribution.automaticRestores = (ctx.attribution.automaticRestores || 0) + 1;
+    appendJournal(ctx.dir, `unauthorized phase delta restored: ${result.unauthorized.join(", ")}`);
+    ctx.status.lastError = `unauthorized paths: ${result.unauthorized.join(", ")}`;
+  }
+  saveAttribution(ctx.dir, ctx.attribution);
+  persistTotalMissionDiff(ctx.dir, ctx.spec, ctx.attribution, repoIo(ctx), currentPorcelain(ctx));
+  saveAttribution(ctx.dir, ctx.attribution);
+  ctx.lastEnforce = result;
+  ctx.status.expectedAppDirty = [...new Set([
+    ...(ctx.attribution.missionOwned || []),
+    ...(result.allowed || []),
+  ])];
+  ctx.status.automaticRestores = ctx.attribution.automaticRestores || 0;
+  ctx.phaseKey = null;
+  ctx.preFiles = null;
+  const junk = unexpectedJunk(currentPorcelain(ctx), ctx.spec, { dryRun: ctx.status.dryRun });
+  if (junk.length) {
+    appendJournal(ctx.dir, `junk files: ${junk.map((j) => j.path).join(", ")}`);
+    const r = revertUnauthorized(junk, { quarantineDir: join(ctx.dir, "quarantine") });
+    result.junk = junk;
+    result.reverted = r;
+  }
+  return result;
+}
+
+/** Read-only phases pass revertAllApp:true → writesApp false. */
+function postPhaseGit(ctx, { revertAllApp = false } = {}) {
+  return endPhase(ctx, { writesApp: !revertAllApp });
 }
 
 function ingestThinDump(dir, text, gitResult, destName) {
@@ -328,25 +416,36 @@ async function maybeRebuildCorpus(ctx, reason) {
   }
 }
 
-function reviewDiff(dir, status) {
+function reviewDiff(dir, status, ctx = null) {
   const current = readText(dir, "CURRENT.diff");
   if (current.trim()) return current;
   if (status.dryRun) return "(no production diff — dry-run; ignore tooling/worktree noise)";
-  const app = gitAppDiffStat();
+  const app = ctx ? allowedStat(ctx) : gitAllowedAppDiffStat(status._spec || {});
   return app.patch || "(no application diff)";
 }
 
 function writeCheckpoint(ctx, label) {
   if (ctx.spec.checkpointPolicy === "never") return;
   const n = (ctx.status.checkpoints = (ctx.status.checkpoints || 0) + 1);
-  const cdir = join(ctx.dir, "checkpoints", String(n).padStart(2, "0"));
-  mkdirSync(cdir, { recursive: true });
-  const stat = gitAppDiffStat();
-  writeFileSync(join(cdir, "label.txt"), `${label}\n`, "utf8");
-  writeFileSync(join(cdir, "status.json"), `${JSON.stringify(ctx.status, null, 2)}\n`, "utf8");
-  writeFileSync(join(cdir, "diff.patch"), stat.patch || "", "utf8");
-  writeFileSync(join(cdir, "files.txt"), (stat.files || []).join("\n"), "utf8");
-  appendJournal(ctx.dir, `checkpoint ${n} ${label} files=${stat.files.length}`);
+  const lossless = writeLosslessCheckpoint(ctx.dir, n, {
+    spec: ctx.spec,
+    status: ctx.status,
+    attribution: ctx.attribution || {},
+    io: repoIo(ctx),
+    porcelain: currentPorcelain(ctx),
+    label,
+    validation: null,
+    head: ctx.status.headAtStart,
+    phaseDelta: ctx.lastEnforce?.delta || null,
+  });
+  try {
+    const stat = allowedStat(ctx);
+    writeFileSync(join(lossless.dir, "diff.patch"), stat.patch || "", "utf8");
+    writeFileSync(join(lossless.dir, "README.txt"), "Recovery is files/ copies + meta.json hashes. diff.patch is human-readable only and must not be the sole restore source.\n", "utf8");
+  } catch {
+    writeFileSync(join(lossless.dir, "diff.patch"), "", "utf8");
+  }
+  appendJournal(ctx.dir, `checkpoint ${n} ${label} files=${lossless.changed.length}`);
 }
 
 export async function runMission({
@@ -403,6 +502,8 @@ export async function runMission({
     approveAudioEdit,
     snapshot: null,
     preflight: null,
+    io: null,
+    attribution: resumed ? loadAttribution(dir) : null,
   };
 
   try {
@@ -438,6 +539,12 @@ export async function runMission({
         }
         saveStatus(dir, status);
       }
+      if (!ctx.attribution) {
+        const porcelain = currentPorcelain(ctx);
+        const resolved = resolveAdoption(spec, porcelain);
+        ctx.attribution = captureBaseline(dir, spec, resolved, repoIo(ctx), porcelain);
+        appendJournal(dir, "resume captured missing attribution baseline");
+      }
     }
 
     while (!isTerminal(status.state)) {
@@ -465,8 +572,14 @@ export async function runMission({
             ollama: { ok: pf.ollama.ok },
             corpusStale: pf.corpusStale,
             needRebuild: pf.needRebuild,
+            adoption: pf.adoption || null,
           }, null, 2));
           if (!pf.ok) return block(dir, status, pf.errors.join("; "));
+          ctx.io = repoIo(ctx);
+          if (!ctx.attribution) {
+            const resolved = pf.adoption || { adopted: [], preserved: [], unexpected: [], errors: [] };
+            ctx.attribution = captureBaseline(dir, spec, resolved, ctx.io, pf.porcelain || currentPorcelain(ctx));
+          }
           await maybeRebuildCorpus(ctx, "start");
           ctx.snapshot = deps.snapshotWorktree ? deps.snapshotWorktree() : snapshotWorktree();
           if (maybeStop(ctx)) return status;
@@ -476,14 +589,12 @@ export async function runMission({
 
         case "INVESTIGATING": {
           log("investigating (local Qwen)…");
+          beginPhase(ctx, "investigate");
           const { text } = await invoke(ctx, "investigate", investigatePrompt(spec, status));
           writeText(dir, "INVESTIGATION.md", text);
           const git = postPhaseGit(ctx, { revertAllApp: true });
-          if (!git.ok) {
-            status.editRetries += 1;
-            if (status.editRetries > spec.maxRetriesPerPhase) {
-              return block(dir, status, `investigation created unauthorized files: ${status.lastError}`);
-            }
+          if (!git.ok && status.editRetries > spec.maxRetriesPerPhase) {
+            return block(dir, status, `investigation created unauthorized files: ${status.lastError}`);
           }
           transition(dir, status, "PLANNING");
           if (maybeStop(ctx)) return status;
@@ -492,6 +603,7 @@ export async function runMission({
 
         case "PLANNING": {
           log("planning (local Qwen)…");
+          beginPhase(ctx, "plan");
           const investigation = readText(dir, "INVESTIGATION.md");
           const { text } = await invoke(ctx, "plan", planPrompt(spec, status, investigation));
           writeText(dir, "PLAN.md", text);
@@ -504,6 +616,7 @@ export async function runMission({
 
         case "PLAN_REVIEW": {
           log("plan critic (local Qwen)…");
+          beginPhase(ctx, "plan-critic");
           ingestThinDump(dir, readText(dir, "PLAN.md"), {}, "PLAN.md");
           const plan = readText(dir, "PLAN.md");
           let { text, parsed } = await invoke(ctx, "plan-critic", criticPrompt(spec, status, { plan }));
@@ -518,12 +631,13 @@ export async function runMission({
           if ((!gate.toolsGate.ok || gate.missingVerdict) && (status.criticRetries || 0) < 1) {
             status.criticRetries = (status.criticRetries || 0) + 1;
             appendJournal(dir, "critic format/tools weak; retrying critic once");
+            beginPhase(ctx, "plan-critic-retry");
             const retry = await invoke(ctx, "plan-critic", criticPrompt(spec, status, {
               plan,
               extra: "Previous critic output was missing a one-line VERDICT: PASS|FAIL|BLOCK or used zero retrieval tools. Inspect real files, then output INSPECTED, RISK, EVIDENCE, and VERDICT: PASS (or FAIL) on its own line.",
             }));
             text = retry.text;
-            parsed = retry.parsed;
+            parsed = { ...(retry.parsed || {}), tools: unionToolNames(parsed.tools, retry.parsed?.tools) };
             writeText(dir, "PLAN_CRITIC.md", text);
             postPhaseGit(ctx, { revertAllApp: true });
             gate = evaluateCriticGate({
@@ -556,6 +670,7 @@ export async function runMission({
 
         case "PROPOSING": {
           log(`proposal round ${status.proposalRound + 1} (local Qwen)…`);
+          beginPhase(ctx, "proposal");
           const plan = readText(dir, "PLAN.md");
           const critic = readText(dir, "PLAN_CRITIC.md");
           const { text } = await invoke(
@@ -610,36 +725,53 @@ export async function runMission({
             return block(dir, status, "level 4 without allowAudioEdits");
           }
           log("editing (local Qwen)…");
+          beginPhase(ctx, "edit");
           const proposal = readText(dir, "PROPOSAL.md");
           const plan = readText(dir, "PLAN.md");
           await invoke(ctx, "edit", editPrompt(spec, status, { proposal, plan }));
+          const editGit = endPhase(ctx, { writesApp: true });
+          if (!editGit.ok && status.editRetries > spec.maxRetriesPerPhase) {
+            return block(dir, status, `unauthorized paths: ${(editGit.unauthorized || []).join(", ")}`);
+          }
           transition(dir, status, "DIFF_REVIEW");
           if (maybeStop(ctx)) return status;
           break;
         }
 
         case "DIFF_REVIEW": {
-          const { added } = changesSince(ctx.snapshot, currentPorcelain(ctx));
-          const { unauthorized, allowed } = unauthorizedChanges(added, spec, { dryRun: status.dryRun });
-          const check = gitDiffCheck();
+          let enforced = ctx.lastEnforce;
+          if (!enforced && ctx.attribution?.phaseDeltas?.length) {
+            const d = ctx.attribution.phaseDeltas[ctx.attribution.phaseDeltas.length - 1];
+            enforced = {
+              ok: true,
+              allowed: (d.dirty || []).filter((p) => pathEditable(p, ctx.spec, { dryRun: false })),
+              unauthorized: [],
+              delta: d,
+            };
+          }
+          enforced = enforced || { ok: true, allowed: [], unauthorized: [], delta: { dirty: [] } };
+          const allowed = enforced.allowed || [];
+          const unauthorized = enforced.ok ? [] : (enforced.unauthorized || []);
+          const check = diffCheckNow(ctx);
+          writeText(dir, "phase-delta.json", JSON.stringify(enforced.delta || {}, null, 2));
           writeText(dir, "diff-check.json", JSON.stringify({
             ok: check.ok,
             output: check.output,
             args: check.args,
-            unauthorized: unauthorized.map((r) => r.path),
-            allowed: allowed.map((r) => r.path),
+            unauthorized,
+            allowed,
+            phaseDelta: enforced.delta || {},
+            missionOwned: ctx.attribution?.missionOwned || [],
           }, null, 2));
           if (unauthorized.length) {
-            revertUnauthorized(unauthorized, { quarantineDir: join(dir, "quarantine") });
-            status.editRetries += 1;
             if (status.editRetries > spec.maxRetriesPerPhase) {
-              return block(dir, status, `unauthorized paths: ${unauthorized.map((r) => r.path).join(", ")}`);
+              return block(dir, status, `unauthorized paths: ${unauthorized.join(", ")}`);
             }
             transition(dir, status, "EDITING", "revert unauthorized; retry");
             break;
           }
-          const stat = gitAppDiffStat();
-          writeText(dir, "diff-stat.json", JSON.stringify(stat, null, 2));
+          const stat = allowedStat(ctx);
+          writeText(dir, "diff-stat.json", JSON.stringify({ ...stat, phaseDelta: enforced.delta || {}, totalMission: ctx.attribution?.totalMissionDiff || null }, null, 2));
           writeText(dir, "CURRENT.diff", stat.patch || "");
           const size = fileSizeOk(stat, spec);
           if (size.warn) {
@@ -649,9 +781,9 @@ export async function runMission({
           if (!check.ok) {
             status.warnings.push(`git diff --check: ${check.output.slice(0, 400)}`);
           }
-          status.expectedAppDirty = allowed.map((r) => r.path);
+          status.expectedAppDirty = [...new Set([...(ctx.attribution?.missionOwned || []), ...allowed])];
           saveStatus(dir, status);
-          transition(dir, status, "VALIDATING", `${allowed.length} allowed files`);
+          transition(dir, status, "VALIDATING", `${allowed.length} phase-delta files owned=${(ctx.attribution?.missionOwned || []).length}`);
           if (maybeStop(ctx)) return status;
           break;
         }
@@ -686,6 +818,7 @@ export async function runMission({
 
         case "REPAIRING": {
           log("repair diagnosis (local Qwen)…");
+          beginPhase(ctx, "repair");
           const { text } = await invoke(ctx, "repair", repairPrompt(spec, status, {
             plan: readText(dir, "PLAN.md"),
             proposal: readText(dir, "PROPOSAL.md"),
@@ -718,42 +851,82 @@ export async function runMission({
 
         case "FINAL_REVIEW": {
           log("final review (local Qwen)…");
+          if (!ctx.snapshot) ctx.snapshot = { porcelain: [] };
+          const restored = restoreMissingCheckpointFiles(dir, allowedStat(ctx).files, repoIo(ctx));
+          if (restored.restored?.length) {
+            appendJournal(dir, `restored checkpoint files: ${restored.restored.join(", ")}`);
+          } else if (!restored.ok) {
+            appendJournal(dir, `checkpoint restore failed: ${String(restored.output || "").slice(0, 400)}`);
+          }
+          const reviewStat = allowedStat(ctx);
+          status.expectedAppDirty = reviewStat.files;
+          writeText(dir, "CURRENT.diff", reviewStat.patch || "");
+          writeText(dir, "diff-stat.json", JSON.stringify(reviewStat, null, 2));
+          saveStatus(dir, status);
           if (!status.dryRun && spec.levelInfo?.edits && (spec.validation?.required || []).length) {
-            const report = await runValidation(spec, { snapshot: ctx.snapshot, log });
+            const report = await (deps.runValidation
+              ? deps.runValidation(spec, { snapshot: ctx.snapshot, log })
+              : runValidation(spec, { snapshot: ctx.snapshot, log }));
             writeText(dir, "validation-final.json", JSON.stringify(report, null, 2));
             if (!report.ok) return block(dir, status, "final validation failed");
           }
-          let { text, parsed } = await invoke(ctx, "final", finalPrompt(spec, status, {
-            plan: readText(dir, "PLAN.md"),
-            proposal: readText(dir, "PROPOSAL.md"),
-            critic: readText(dir, "PLAN_CRITIC.md"),
-            investigation: readText(dir, "INVESTIGATION.md"),
-            diff: reviewDiff(dir, status),
-          }));
-          writeText(dir, "FINAL_CRITIC.md", text);
-          let gate = evaluateCriticGate({
-            criticText: text,
-            planText: readText(dir, "PLAN.md"),
-            proposalText: readText(dir, "PROPOSAL.md"),
-            spec,
-            tools: parsed.tools || [],
-          });
+          const priorFinalTools = unionToolNames(
+            ...(status.invocations || []).filter((i) => String(i.phase || "").startsWith("final")).map((i) => i.tools),
+          );
+          const existingCritic = readText(dir, "FINAL_CRITIC.md");
+          let text = existingCritic;
+          let parsed = { tools: priorFinalTools };
+          let gate = existingCritic.trim()
+            ? evaluateCriticGate({
+              criticText: existingCritic,
+              planText: readText(dir, "PLAN.md"),
+              proposalText: readText(dir, "PROPOSAL.md"),
+              spec,
+              tools: priorFinalTools,
+              phase: "final",
+            })
+            : { pass: false, errors: ["missing-verdict"], modelVerdict: null };
+          if (!gate.pass) {
+            beginPhase(ctx, "final");
+            const invoked = await invoke(ctx, "final", finalPrompt(spec, status, {
+              plan: readText(dir, "PLAN.md"),
+              proposal: readText(dir, "PROPOSAL.md"),
+              critic: readText(dir, "PLAN_CRITIC.md"),
+              investigation: readText(dir, "INVESTIGATION.md"),
+              diff: reviewDiff(dir, status, ctx),
+            }));
+            text = invoked.text;
+            parsed = invoked.parsed;
+            writeText(dir, "FINAL_CRITIC.md", text);
+            postPhaseGit(ctx, { revertAllApp: true });
+            gate = evaluateCriticGate({
+              criticText: text,
+              planText: readText(dir, "PLAN.md"),
+              proposalText: readText(dir, "PROPOSAL.md"),
+              spec,
+              tools: unionToolNames(parsed.tools, priorFinalTools),
+              phase: "final",
+            });
+          }
           if (!gate.pass && (status.criticRetries || 0) < 2) {
             status.criticRetries = (status.criticRetries || 0) + 1;
+            beginPhase(ctx, "final-retry");
             const retry = await invoke(ctx, "final", finalPrompt(spec, status, {
               plan: readText(dir, "PLAN.md"),
               proposal: readText(dir, "PROPOSAL.md"),
               critic: text,
               investigation: readText(dir, "INVESTIGATION.md"),
-              diff: reviewDiff(dir, status),
+              diff: reviewDiff(dir, status, ctx),
             }));
             writeText(dir, "FINAL_CRITIC.md", retry.text);
+            postPhaseGit(ctx, { revertAllApp: true });
             gate = evaluateCriticGate({
               criticText: retry.text,
               planText: readText(dir, "PLAN.md"),
               proposalText: readText(dir, "PROPOSAL.md"),
               spec,
-              tools: retry.parsed?.tools || [],
+              tools: unionToolNames(parsed.tools, retry.parsed?.tools, priorFinalTools),
+              phase: "final",
             });
             text = retry.text;
           }
@@ -761,8 +934,8 @@ export async function runMission({
           if (!gate.pass) {
             return block(dir, status, `final critic gate: ${gate.errors.join("; ") || gate.modelVerdict}`);
           }
-          postPhaseGit(ctx, { revertAllApp: status.dryRun || !spec.levelInfo?.edits });
-          const check = gitDiffCheck();
+          postPhaseGit(ctx, { revertAllApp: true });
+          const check = diffCheckNow(ctx);
           appendJournal(dir, `final diff --check ok=${check.ok}`);
           transition(dir, status, "COMPLETE", "stop for human review");
           const facts = composeReport(status, { extra: "" });
@@ -795,4 +968,4 @@ export async function runMission({
   }
 }
 
-export { restoreGenerated, wasPathClean };
+export { restoreGenerated, wasPathClean } from "./gitops.mjs";

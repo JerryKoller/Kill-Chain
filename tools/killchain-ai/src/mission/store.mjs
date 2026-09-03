@@ -62,6 +62,8 @@ export function newStatus(spec, { dryRun, head, branch } = {}) {
     unixViolations: 0,
     mcpFirstMisses: 0,
     visibleTextMisses: 0,
+    readOnlyViolations: 0,
+    automaticRestores: 0,
     forceEditAfterProposal: false,
     checkpoints: 0,
     warnings: [],

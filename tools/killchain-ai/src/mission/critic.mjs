@@ -156,11 +156,32 @@ export function criticEvidenceOk(parsed) {
   return { ok: true, reason: "grounded" };
 }
 
+function isCriticInspectTool(name) {
+  const n = String(name || "").toLowerCase();
+  if (isKillchainMcpTool(name) || n === "read" || n === "glob") return true;
+  // OpenCode file inspect often lands on bash/grep even when unix discipline flags it.
+  return n === "bash" || n === "grep";
+}
+
 export function criticToolsOk(toolNames, spec) {
   const names = toolNames || [];
-  const used = names.some((n) => isKillchainMcpTool(n) || n === "read");
+  const used = names.some((n) => isCriticInspectTool(n));
   const requireTools = (spec?.level || 0) >= 1;
   return { ok: !requireTools || used, used, requireTools, names };
+}
+
+export function unionToolNames(...lists) {
+  const out = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const n of list || []) {
+      const key = String(n || "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(n);
+    }
+  }
+  return out;
 }
 
 export async function checkInventedSymbolsAsync(text) {
@@ -213,19 +234,20 @@ export function evaluateArtifactGate(text, spec) {
   return { ok: errors.length === 0, errors, files, scope };
 }
 
-export function evaluateCriticGate({ criticText, planText = "", proposalText = "", spec, tools = [] } = {}) {
+export function evaluateCriticGate({ criticText, planText = "", proposalText = "", spec, tools = [], phase = "" } = {}) {
   const parsed = parseCritic(criticText);
-  const corpus = [planText, proposalText, criticText].filter(Boolean).join("\n\n");
   const artifacts = evaluateArtifactGate(proposalText || planText || criticText, spec);
   const planFiles = checkReferencedFilesExist(planText || "");
   const evidence = criticEvidenceOk(parsed);
   const toolsGate = criticToolsOk(tools, spec);
+  const named = parseMentionedPaths(criticText || "");
+  const finalDiffInPrompt = String(phase) === "final" && evidence.ok && named.length >= 1;
 
   const errors = [];
   if (parsed.missingVerdict) errors.push("missing-verdict");
   if (parsed.verdict === "PASS" || parsed.verdict === "READY") {
     if (!evidence.ok) errors.push(evidence.reason);
-    if (!toolsGate.ok) errors.push("critic-no-tools");
+    if (!toolsGate.ok && !finalDiffInPrompt) errors.push("critic-no-tools");
   }
   if (!planFiles.ok) errors.push(`invented-files:${planFiles.missing.join(",")}`);
   if (proposalText && !artifacts.ok) errors.push(...artifacts.errors);
@@ -241,6 +263,6 @@ export function evaluateCriticGate({ criticText, planText = "", proposalText = "
     artifacts,
     planFiles,
     evidence,
-    toolsGate,
+    toolsGate: { ...toolsGate, waived: Boolean(finalDiffInPrompt && !toolsGate.ok) },
   };
 }
