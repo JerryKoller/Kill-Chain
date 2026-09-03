@@ -53,14 +53,31 @@ export function scanFireCommandPanels({ root = repoRoot } = {}) {
   const inner = innerFunctions(viewText);
   const fileSet = new Set(names);
   const innerPanelsMissingFile = inner.filter((n) => /Panel$/.test(n) && !fileSet.has(`${n}.tsx`) && !fileSet.has(`${n}.ts`));
+  const extractedPanelHelpers = files.filter((f) => /Panel\.(tsx|ts)$/.test(f.name)).map((f) => f.name);
+  const innerPanelFunctions = inner.filter((n) => /Panel$/.test(n));
+  const helperNamesShadowingInner = extractedPanelHelpers
+    .map((n) => n.replace(/\.(tsx|ts)$/, ""))
+    .filter((n) => inner.includes(n));
+  const panelVizPairs = files
+    .filter((f) => /Panel\.(tsx|ts)$/.test(f.name))
+    .map((f) => ({
+      helper: f.path,
+      viz: f.imports.filter((p) => /StageViz|Meter/.test(p)),
+    }))
+    .filter((p) => p.viz.length);
   return {
     count: files.length,
     files,
     fireCommandViewInnerFunctions: inner,
     innerPanelsWithoutSiblingFile: innerPanelsMissingFile,
+    extractedPanelHelpers,
+    innerPanelFunctions,
+    helperNamesShadowingInner,
+    panelVizPairs,
     notes: [
       "Read-only inventory. Production UI was not modified.",
       "Inner *Panel functions live in FireCommandView.tsx; they are not separate files. Do not invent DrivePanel.tsx.",
+      "Sibling *Panel.tsx files are often HELPERS used by the inner function of the same name. Editing WidthPanel.tsx is not the same as editing the inner WidthPanel() in FireCommandView.",
     ],
   };
 }

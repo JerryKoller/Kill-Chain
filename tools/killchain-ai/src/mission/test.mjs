@@ -1394,6 +1394,14 @@ ${JSON.stringify({
     "DrivePanel is inner FireCommandView, not a sibling file",
     fireMap.innerPanelsWithoutSiblingFile.includes("DrivePanel") && fireMap.fireCommandViewInnerFunctions.includes("DrivePanel"),
   );
+  check(
+    "WidthPanel.tsx helper shadows inner WidthPanel()",
+    (fireMap.helperNamesShadowingInner || []).includes("WidthPanel") && (fireMap.extractedPanelHelpers || []).includes("WidthPanel.tsx"),
+  );
+  check(
+    "HarmonyPanel helper imports HarmonyStageViz",
+    (fireMap.panelVizPairs || []).some((p) => p.helper.includes("HarmonyPanel") && p.viz.some((v) => v.includes("HarmonyStageViz"))),
+  );
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;
