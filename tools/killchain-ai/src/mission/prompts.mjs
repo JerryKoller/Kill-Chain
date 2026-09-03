@@ -300,6 +300,8 @@ Also include: acceptance checklist, remaining uncertainties, recommended commit 
 
 Dry-run READY means the proposal is concrete, in-scope, and ready for a later live edit. NOT_READY if it still asks the user to pick among design options. Human screenshot review is after live edit, not a reason to block a concrete dry-run proposal.
 
+If allowedPaths is empty (map-only / no production edits): VERDICT READY means the map cites existing files and callers. Do not use NOT_READY merely because a later live implementation is unauthorized — that is already mission policy. Use NOT_READY if the map invents files, lacks evidence, or asks the operator to choose.
+
 INVESTIGATION:
 ${clip(investigation, 4000)}
 
