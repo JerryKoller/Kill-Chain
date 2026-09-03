@@ -5,7 +5,7 @@ import { parseMissionMarkdown, pathEditable, matchPath } from "./schema.mjs";
 import { assertTransition, ALLOWED_TRANSITIONS } from "./machine.mjs";
 import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import { scanUnixTools } from "./unix.mjs";
-import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew } from "./critic.mjs";
+import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew, findInventedInnerPanelFiles } from "./critic.mjs";
 import { assertMetrics } from "../ui/metrics.mjs";
 import { assertSafeMissionId } from "./schema.mjs";
 import {
@@ -310,6 +310,18 @@ export async function runMissionTests() {
     phase: "final",
   });
   check("final critic invented DrivePanel is rejected", criticInvented.errors.some((e) => String(e).includes("DrivePanel")));
+  const bareInner = findInventedInnerPanelFiles("edit candidate DrivePanel.tsx and DelayPanel.tsx for the filter row");
+  check(
+    "bare DrivePanel.tsx / DelayPanel.tsx count as invented inner panels",
+    bareInner.some((p) => p.includes("DrivePanel")) && bareInner.some((p) => p.includes("DelayPanel")),
+  );
+  const bareInnerGate = evaluateArtifactGate(
+    "Intended modification: change DrivePanel.tsx contrast for the inner Drive module",
+    { allowedPaths: ["src/components/FireCommand/**"], forbiddenPaths: [], readOnlyPaths: [], level: 2 },
+  );
+  check("artifact gate rejects bare invented inner panel files", !bareInnerGate.ok && bareInnerGate.errors.some((e) => String(e).includes("invented-inner-panel")));
+  const forbidOnly = findInventedInnerPanelFiles("Do not invent DrivePanel.tsx or DelayPanel.tsx; those are inner FireCommandView functions.");
+  check("forbidding invented inner panel names is not itself a citation", forbidOnly.length === 0);
 
   const existOk = checkReferencedFilesExist("inspect `src/components/FireCommand/ModuleEnableToggle.tsx`");
   check("valid existing UI file existence", existOk.ok);
@@ -1437,6 +1449,16 @@ ${JSON.stringify({
   check(
     "HarmonyPanel helper imports HarmonyStageViz",
     (fireMap.panelVizPairs || []).some((p) => p.helper.includes("HarmonyPanel") && p.viz.some((v) => v.includes("HarmonyStageViz"))),
+  );
+  check(
+    "fireStudio live recorders detach in finally",
+    scan.fireStudioTaps?.ok === true
+      && scan.fireStudioTaps?.realtimeHasFinallyDetach === true
+      && scan.fireStudioTaps?.stemsHasFinallyDetach === true,
+  );
+  check(
+    "bounceExport destinationTap disconnects in finally",
+    scan.bounceExportTaps?.ok === true && scan.bounceExportTaps?.finallyDisconnect === true,
   );
 
   console.log(`\n${passed} passed, ${failed} failed`);

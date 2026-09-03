@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { repoRoot } from "../paths.mjs";
 import { matchPath, pathForbidden } from "./schema.mjs";
 import { isKillchainMcpTool } from "./unix.mjs";
+import { scanFireCommandPanels } from "../ui/scanFireCommand.mjs";
 
 const PRAISE_RE = /\b(looks good|comprehensive plan|all criteria met|well done|excellent work|great job|\blgtm\b|nothing to criticize|no issues found|perfect plan|solid plan)\b/i;
 
@@ -96,6 +97,29 @@ export function checkReferencedFilesExist(text) {
     if (!repoFileExists(p)) missing.push(p);
   }
   return { ok: missing.length === 0, missing, created, paths };
+}
+
+/**
+ * Inner FireCommandView *Panel functions are not sibling files.
+ * Treat DrivePanel.tsx as invented when cited as a real path/edit/inspect target,
+ * not when the text merely forbids inventing it.
+ */
+export function findInventedInnerPanelFiles(text, innerWithoutFile = null) {
+  const names = innerWithoutFile || (scanFireCommandPanels().innerPanelsWithoutSiblingFile || []);
+  const src = String(text || "");
+  const found = [];
+  for (const name of names) {
+    const full = new RegExp(`src/components/FireCommand/${name}\\.tsx\\b`);
+    const cited = new RegExp(
+      `(?:INSPECTED|FILE|edit candidate|intended modification|NEW FILE|change|modify|edit)\\b[^\\n]{0,120}${name}\\.tsx\\b`,
+      "i",
+    );
+    const tickPath = new RegExp("`(?:src/components/FireCommand/)?" + name + "\\.tsx`");
+    if (full.test(src) || cited.test(src) || tickPath.test(src)) {
+      found.push(`src/components/FireCommand/${name}.tsx`);
+    }
+  }
+  return [...new Set(found)];
 }
 
 /** Vue SFCs are never valid in this React/TSX app. */
@@ -248,12 +272,14 @@ export function evaluateArtifactGate(text, spec) {
   const scope = checkEditTargetsAllowed(text, spec);
   const vue = findWrongStackPaths(text);
   const markedNew = existingMarkedNew(text);
+  const innerPanels = findInventedInnerPanelFiles(text);
   const errors = [];
   if (!files.ok) errors.push(`invented-files:${files.missing.join(",")}`);
   if (!scope.ok) errors.push(`outside-allowed:${scope.problems.map((p) => p.path).join(",")}`);
   if (vue.length) errors.push(`wrong-stack:.vue:${vue.join(",")}`);
   if (markedNew.length) errors.push(`existing-marked-new:${markedNew.join(",")}`);
-  return { ok: errors.length === 0, errors, files, scope, vue, markedNew };
+  if (innerPanels.length) errors.push(`invented-inner-panel:${innerPanels.join(",")}`);
+  return { ok: errors.length === 0, errors, files, scope, vue, markedNew, innerPanels };
 }
 
 export function evaluateCriticGate({ criticText, planText = "", proposalText = "", spec, tools = [], phase = "" } = {}) {
@@ -279,6 +305,8 @@ export function evaluateCriticGate({ criticText, planText = "", proposalText = "
   if (vueAll.length) rawErrors.push(`wrong-stack:.vue:${vueAll.join(",")}`);
   const markedNewAll = existingMarkedNew([planText, proposalText, criticText].join("\n"));
   if (markedNewAll.length) rawErrors.push(`existing-marked-new:${markedNewAll.join(",")}`);
+  const innerAll = findInventedInnerPanelFiles([planText, proposalText, criticText].join("\n"));
+  if (innerAll.length) rawErrors.push(`invented-inner-panel:${innerAll.join(",")}`);
 
   const errors = [...new Set(rawErrors)];
   const pass = (parsed.verdict === "PASS" || parsed.verdict === "READY") && errors.length === 0;

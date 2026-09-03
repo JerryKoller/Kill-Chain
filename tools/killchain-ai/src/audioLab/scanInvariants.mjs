@@ -317,6 +317,59 @@ export function scanStartStageVizLoop({ root = repoRoot } = {}) {
   return { definition, callers, count: callers.length };
 }
 
+export function scanFireStudioTaps({ root = repoRoot } = {}) {
+  const path = "src/lib/fireStudio.ts";
+  const abs = join(root, path);
+  if (!existsSync(abs)) return { path, missing: true, ok: false };
+  const text = readFileSync(abs, "utf8");
+  const getEngine = lineHits(text, /\bgetEngine\s*\(/);
+  const attachDef = lineHits(text, /function attachRecorder\b/);
+  const attachCalls = lineHits(text, /\battachRecorder\s*\(/).filter((h) => !/function attachRecorder/.test(h.text));
+  const detachCalls = lineHits(text, /\.detach\s*\(/);
+  const finallyBlocks = [...text.matchAll(/\bfinally\s*\{/g)].length;
+  const scriptProcessor = lineHits(text, /\bcreateScriptProcessor\s*\(/);
+  const fireTap = lineHits(text, /\.fireTap\b/);
+  const partTap = lineHits(text, /\bgetFirePartTap\s*\(/);
+  const destTap = lineHits(text, /\.destinationTap\b/);
+  const realtimeHasFinallyDetach = /const rec = attachRecorder[\s\S]{0,800}finally\s*\{[\s\S]{0,200}rec\.detach\(/.test(text);
+  const stemsHasFinallyDetach = /for \(const r of recs\) r\.rec\.detach\(/.test(text);
+  return {
+    path,
+    getEngineCount: getEngine.length,
+    getEngine,
+    attachDef,
+    attachCalls,
+    detachCalls,
+    finallyBlocks,
+    scriptProcessor,
+    fireTap,
+    partTap,
+    destTap,
+    realtimeHasFinallyDetach,
+    stemsHasFinallyDetach,
+    ok: attachDef.length >= 1 && realtimeHasFinallyDetach && stemsHasFinallyDetach && scriptProcessor.length >= 1,
+  };
+}
+
+export function scanBounceExportTaps({ root = repoRoot } = {}) {
+  const path = "src/lib/bounceExport.ts";
+  const abs = join(root, path);
+  if (!existsSync(abs)) return { path, missing: true, ok: false };
+  const text = readFileSync(abs, "utf8");
+  const destConnect = lineHits(text, /destinationTap\.connect\s*\(/);
+  const destDisconnect = lineHits(text, /destinationTap\.disconnect\s*\(/);
+  const finallyDisconnect = /finally\s*\{[\s\S]{0,500}destinationTap\.disconnect/.test(text);
+  const scriptProcessor = lineHits(text, /\bcreateScriptProcessor\s*\(/);
+  return {
+    path,
+    destConnect,
+    destDisconnect,
+    finallyDisconnect,
+    scriptProcessor,
+    ok: destConnect.length >= 1 && finallyDisconnect && destDisconnect.length >= 1,
+  };
+}
+
 export function scanAnalysers({ root = repoRoot } = {}) {
   const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
   const hits = [];
@@ -345,6 +398,8 @@ export function writeOvernightScan() {
   const measureLive = scanMeasureLive();
   const initStop = scanInitStopMissionState();
   const stageVizLoop = scanStartStageVizLoop();
+  const fireStudio = scanFireStudioTaps();
+  const bounceExport = scanBounceExportTaps();
   const storeEngine = scanStoreEngineCoupling();
   const bridges = scanAudioStoreBridges();
   const bridgePaths = new Set(bridges.hits.map((h) => h.path));
@@ -368,6 +423,8 @@ export function writeOvernightScan() {
     measureLive,
     initStopMissionState: initStop,
     startStageVizLoop: stageVizLoop,
+    fireStudioTaps: fireStudio,
+    bounceExportTaps: bounceExport,
     storeEngineCoupling: storeEngine.hits,
     audioStoreBridges: bridges.hits,
     presentationOnlyStores: presentationOnly,
@@ -384,6 +441,8 @@ export function writeOvernightScan() {
       "measureLive is the Tractor live-tap measurement helper. Callers include Auto-Lock, Tractor UI, Target Lock, Deadflat, and Read & Repair.",
       "initMissionState is called from App.tsx. stopMissionState currently has zero src/ call sites; that is a harness gap, not an overnight production edit.",
       "startStageVizLoop callers are Fire Command *StageViz components. Each must invoke the returned stop function.",
+      "fireStudioTaps: live ScriptProcessor recorders must detach in finally (realtime dry + stems). Offline bounce is a separate dispose path.",
+      "bounceExportTaps: Library/track bounce connects destinationTap to a ScriptProcessor and must disconnect in finally.",
     ],
   };
   const dir = join(dataDir, "overnight");
