@@ -1417,6 +1417,12 @@ ${JSON.stringify({
     (scan.initStopMissionState?.initCallers || []).some((c) => String(c.path).includes("App.tsx"))
       && scan.initStopMissionState?.stopCount === 0,
   );
+  check(
+    "startStageVizLoop has many Fire Command StageViz callers",
+    scan.startStageVizLoop?.definition?.path?.includes("stageVizRaf.ts")
+      && (scan.startStageVizLoop?.count || 0) >= 30
+      && (scan.startStageVizLoop?.callers || []).every((c) => String(c.path).includes("FireCommand")),
+  );
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
   check("Fire Command map finds many UI files", fireMap.count >= 80);

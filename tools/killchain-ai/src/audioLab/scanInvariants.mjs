@@ -298,6 +298,25 @@ export function scanInitStopMissionState({ root = repoRoot } = {}) {
   return { initDef, stopDef, initCallers, stopCallers, initCount: initCallers.length, stopCount: stopCallers.length };
 }
 
+export function scanStartStageVizLoop({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const callers = [];
+  let definition = null;
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    if (!text.includes("startStageVizLoop")) continue;
+    const path = rel(abs);
+    const def = lineHits(text, /export function startStageVizLoop\b/);
+    if (def.length) definition = { path, ...def[0] };
+    for (const h of lineHits(text, /\bstartStageVizLoop\s*\(/)) {
+      if (/export function startStageVizLoop/.test(h.text)) continue;
+      if (/^(\*|\/\/)/.test(h.text)) continue;
+      callers.push({ path, ...h });
+    }
+  }
+  return { definition, callers, count: callers.length };
+}
+
 export function scanAnalysers({ root = repoRoot } = {}) {
   const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
   const hits = [];
@@ -325,6 +344,7 @@ export function writeOvernightScan() {
   const applyChain = scanApplyChain();
   const measureLive = scanMeasureLive();
   const initStop = scanInitStopMissionState();
+  const stageVizLoop = scanStartStageVizLoop();
   const storeEngine = scanStoreEngineCoupling();
   const bridges = scanAudioStoreBridges();
   const bridgePaths = new Set(bridges.hits.map((h) => h.path));
@@ -347,6 +367,7 @@ export function writeOvernightScan() {
     applyChain,
     measureLive,
     initStopMissionState: initStop,
+    startStageVizLoop: stageVizLoop,
     storeEngineCoupling: storeEngine.hits,
     audioStoreBridges: bridges.hits,
     presentationOnlyStores: presentationOnly,
@@ -362,6 +383,7 @@ export function writeOvernightScan() {
       "applyChain restores a chain snapshot; callers include audioStore, missionStateStore, missionLogStore, sessionSnapshotsStore. Extra callers should be reviewed.",
       "measureLive is the Tractor live-tap measurement helper. Callers include Auto-Lock, Tractor UI, Target Lock, Deadflat, and Read & Repair.",
       "initMissionState is called from App.tsx. stopMissionState currently has zero src/ call sites; that is a harness gap, not an overnight production edit.",
+      "startStageVizLoop callers are Fire Command *StageViz components. Each must invoke the returned stop function.",
     ],
   };
   const dir = join(dataDir, "overnight");
