@@ -22,15 +22,19 @@ import { runPreflight } from "./preflight.mjs";
 import { runValidation, validationSummary } from "./validate.mjs";
 import { parseOpenCodeJsonl, runOpenCode, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import {
+  applyRepairPrompt,
   criticPrompt,
   editPrompt,
+  emptyEditRetryPrompt,
   emptyTextRetryPrompt,
   finalPrompt,
   investigatePrompt,
   planPrompt,
   proposalPrompt,
-  repairPrompt,
+  repairDiagnosePrompt,
 } from "./prompts.mjs";
+import { classifyEditOutcome, emptyEditPolicy, shouldExpectEdit } from "./editGate.mjs";
+import { checkChangedTsSyntax, formatDiagnostics } from "./syntax.mjs";
 import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, checkProposalConcrete, proposalScopeCheck, quarantineFitsDest, unionToolNames } from "./critic.mjs";
 import {
   fileSizeOk,
@@ -50,6 +54,7 @@ import {
   loadAttribution,
   persistTotalMissionDiff,
   resolveAdoption,
+  restoreSnapshot,
   saveAttribution,
   writeLosslessCheckpoint,
 } from "./attribution.mjs";
@@ -98,6 +103,14 @@ function composeReport(status, { extra = "" } = {}) {
 - planRetries: ${status.planRetries}
 - editRetries: ${status.editRetries}
 - repairRetries: ${status.repairRetries}
+- emptyEdits: ${status.emptyEdits || 0}
+- emptyEditRetriesSucceeded: ${status.emptyEditRetriesSucceeded || 0}
+- describedButDidNotApply: ${status.describedButDidNotApply || 0}
+- syntaxFailures: ${status.syntaxFailures || 0}
+- syntaxRepairs: ${status.syntaxRepairs || 0}
+- transactionalRollbacks: ${status.transactionalRollbacks || 0}
+- typecheckCycles: ${status.typecheckCycles || 0}
+- buildCycles: ${status.buildCycles || 0}
 - unixViolations: ${status.unixViolations}
 - mcpFirstMisses: ${status.mcpFirstMisses}
 - visibleTextMisses: ${status.visibleTextMisses}
@@ -448,6 +461,73 @@ function writeCheckpoint(ctx, label) {
   appendJournal(ctx.dir, `checkpoint ${n} ${label} files=${lossless.changed.length}`);
 }
 
+function lastInvocation(status, needle) {
+  const inv = status.invocations || [];
+  const n = String(needle || "");
+  for (let i = inv.length - 1; i >= 0; i--) {
+    const p = String(inv[i].phase || "");
+    if (!n || p === n || p.startsWith(n) || p.includes(n)) return inv[i];
+  }
+  return inv[inv.length - 1] || null;
+}
+
+function persistEmptyEdit(dir, status, rec) {
+  const p = join(dir, "empty-edits.json");
+  let list = [];
+  if (existsSync(p)) {
+    try { list = JSON.parse(readFileSync(p, "utf8")); } catch { list = []; }
+  }
+  if (!Array.isArray(list)) list = [];
+  list.push(rec);
+  writeFileSync(p, `${JSON.stringify(list, null, 2)}\n`, "utf8");
+  status.emptyEdits = (status.emptyEdits || 0) + 1;
+  status.emptyEditStreak = (status.emptyEditStreak || 0) + 1;
+  if (rec.kind === "DESCRIBED_BUT_DID_NOT_APPLY") {
+    status.describedButDidNotApply = (status.describedButDidNotApply || 0) + 1;
+  }
+}
+
+function capturePreEdit(ctx) {
+  if (ctx.status.preEditCaptured) return;
+  capturePhaseSnapshot(
+    ctx.dir,
+    "pre-edit",
+    ctx.spec,
+    ctx.attribution || {},
+    repoIo(ctx),
+    currentPorcelain(ctx),
+  );
+  ctx.status.preEditCaptured = true;
+}
+
+function transactionalRestore(ctx) {
+  const io = repoIo(ctx);
+  const r = restoreSnapshot(ctx.dir, "pre-edit", io);
+  ctx.status.transactionalRollbacks = (ctx.status.transactionalRollbacks || 0) + 1;
+  ctx.status.automaticRestores = (ctx.status.automaticRestores || 0) + 1;
+  persistTotalMissionDiff(ctx.dir, ctx.spec, ctx.attribution || {}, io, currentPorcelain(ctx));
+  saveAttribution(ctx.dir, ctx.attribution);
+  writeText(ctx.dir, "transactional-restore.json", JSON.stringify(r, null, 2));
+  appendJournal(ctx.dir, `transactional restore pre-edit ok=${r.ok} restored=${(r.restored || []).join(",")}`);
+  ctx.status.preEditCaptured = false;
+  ctx.lastEnforce = null;
+  return r;
+}
+
+function tallyValidation(status, report) {
+  for (const r of report?.results || []) {
+    if (r.name === "typecheck") status.typecheckCycles = (status.typecheckCycles || 0) + 1;
+    if (r.name === "build") status.buildCycles = (status.buildCycles || 0) + 1;
+  }
+}
+
+function repairFiles(ctx, syntax) {
+  const fromDiag = (syntax?.diagnostics || []).map((d) => d.file).filter(Boolean);
+  const fromDelta = ctx.lastEnforce?.allowed || [];
+  const owned = ctx.attribution?.missionOwned || [];
+  return [...new Set([...fromDiag, ...fromDelta, ...owned])];
+}
+
 export async function runMission({
   specPath,
   resumeId,
@@ -711,6 +791,9 @@ export async function runMission({
           if (!canEdit) {
             transition(dir, status, "FINAL_REVIEW", "dry-run or read-only — no edits");
           } else {
+            if (!readText(dir, "ORIGINAL_PROPOSAL.md").trim()) {
+              writeText(dir, "ORIGINAL_PROPOSAL.md", body);
+            }
             transition(dir, status, "EDITING", "proposal passed scope");
           }
           if (maybeStop(ctx)) return status;
@@ -724,12 +807,25 @@ export async function runMission({
           if (!spec.allowAudioEdits && spec.level === 4) {
             return block(dir, status, "level 4 without allowAudioEdits");
           }
-          log("editing (local Qwen)…");
-          beginPhase(ctx, "edit");
+          capturePreEdit(ctx);
           const proposal = readText(dir, "PROPOSAL.md");
           const plan = readText(dir, "PLAN.md");
-          await invoke(ctx, "edit", editPrompt(spec, status, { proposal, plan }));
+          const expect = shouldExpectEdit(proposal, spec, { dryRun: status.dryRun });
+          const applyN = Number(status.forceApplyRetry) || 0;
+          status.forceApplyRetry = 0;
+          const phaseLabel = applyN >= 2 ? "edit-apply-strong" : (applyN ? "edit-apply" : "edit");
+          log(applyN ? `editing apply-retry ${applyN} (local Qwen)…` : "editing (local Qwen)…");
+          beginPhase(ctx, phaseLabel);
+          const prompt = applyN
+            ? emptyEditRetryPrompt(spec, status, {
+              proposal,
+              expectedFiles: expect.files,
+              stronger: applyN >= 2,
+            })
+            : editPrompt(spec, status, { proposal, plan });
+          await invoke(ctx, phaseLabel, prompt);
           const editGit = endPhase(ctx, { writesApp: true });
+          status.lastWritePhase = "edit";
           if (!editGit.ok && status.editRetries > spec.maxRetriesPerPhase) {
             return block(dir, status, `unauthorized paths: ${(editGit.unauthorized || []).join(", ")}`);
           }
@@ -782,6 +878,95 @@ export async function runMission({
             status.warnings.push(`git diff --check: ${check.output.slice(0, 400)}`);
           }
           status.expectedAppDirty = [...new Set([...(ctx.attribution?.missionOwned || []), ...allowed])];
+
+          const proposal = readText(dir, "PROPOSAL.md");
+          const expect = shouldExpectEdit(proposal, spec, { dryRun: status.dryRun });
+          const last = lastInvocation(status, status.lastWritePhase === "repair-apply" ? "repair-apply" : "edit");
+          const outcome = classifyEditOutcome({
+            expected: expect.expected,
+            expectedFiles: expect.files,
+            allowed,
+            deltaDirty: enforced.delta?.dirty || [],
+            tools: last?.tools || [],
+            invokeOk: last ? last.ok !== false : true,
+          });
+          writeText(dir, "edit-outcome.json", JSON.stringify({
+            ...outcome,
+            phase: status.lastWritePhase,
+            session: last?.title || last?.n || null,
+            tools: last?.tools || [],
+            textChars: last?.textChars || 0,
+          }, null, 2));
+
+          if (outcome.empty) {
+            persistEmptyEdit(dir, status, {
+              at: new Date().toISOString(),
+              phase: status.lastWritePhase || "edit",
+              proposal: (proposal || "").slice(0, 4000),
+              expectedFiles: expect.files,
+              modelSession: last?.title || last?.n || null,
+              tools: last?.tools || [],
+              visibleOutputChars: last?.textChars || 0,
+              zeroDelta: true,
+              kind: outcome.kind,
+              mutation: outcome.mutation,
+            });
+            const policy = emptyEditPolicy(status.emptyEditStreak);
+            appendJournal(dir, `${outcome.kind} streak=${status.emptyEditStreak} action=${policy.action}`);
+            saveStatus(dir, status);
+            if (policy.action === "BLOCK") {
+              return block(dir, status, policy.reason);
+            }
+            if (status.lastWritePhase === "repair-apply") {
+              status.forceApplyRepair = true;
+              transition(dir, status, "REPAIRING", outcome.kind);
+            } else {
+              status.forceApplyRetry = policy.stronger ? 2 : 1;
+              transition(dir, status, "EDITING", outcome.kind);
+            }
+            if (maybeStop(ctx)) return status;
+            break;
+          }
+
+          if ((status.emptyEditStreak || 0) > 0) {
+            status.emptyEditRetriesSucceeded = (status.emptyEditRetriesSucceeded || 0) + 1;
+          }
+          status.emptyEditStreak = 0;
+
+          const syntaxFn = deps.checkChangedTsSyntax || checkChangedTsSyntax;
+          const syntax = syntaxFn(allowed, repoIo(ctx));
+          writeText(dir, "syntax-gate.json", JSON.stringify(syntax, null, 2));
+          if (!syntax.ok) {
+            status.syntaxFailures = (status.syntaxFailures || 0) + 1;
+            status.syntaxGateFailed = true;
+            saveStatus(dir, status);
+            if ((status.syntaxRetries || 0) >= spec.maxRetriesPerPhase) {
+              const rolled = transactionalRestore(ctx);
+              if (!rolled.ok) return block(dir, status, "syntax repair exhausted; pre-edit restore failed");
+              if ((status.transactionalRetries || 0) >= 1) {
+                return block(dir, status, "syntax repair exhausted; transactional retry exhausted");
+              }
+              status.transactionalRetries = (status.transactionalRetries || 0) + 1;
+              status.syntaxRetries = 0;
+              status.syntaxGateFailed = false;
+              status.emptyEditStreak = 0;
+              const original = readText(dir, "ORIGINAL_PROPOSAL.md");
+              if (original.trim()) writeText(dir, "PROPOSAL.md", original);
+              status.forceApplyRetry = 1;
+              transition(dir, status, "EDITING", "transactional restore; fresh apply");
+              if (maybeStop(ctx)) return status;
+              break;
+            }
+            status.syntaxRetries = (status.syntaxRetries || 0) + 1;
+            transition(dir, status, "REPAIRING", "syntax gate");
+            if (maybeStop(ctx)) return status;
+            break;
+          }
+          if (status.syntaxGateFailed) {
+            status.syntaxRepairs = (status.syntaxRepairs || 0) + 1;
+            status.syntaxGateFailed = false;
+          }
+
           saveStatus(dir, status);
           transition(dir, status, "VALIDATING", `${allowed.length} phase-delta files owned=${(ctx.attribution?.missionOwned || []).length}`);
           if (maybeStop(ctx)) return status;
@@ -798,6 +983,7 @@ export async function runMission({
           const report = await (deps.runValidation
             ? deps.runValidation(spec, { snapshot: ctx.snapshot, log })
             : runValidation(spec, { snapshot: ctx.snapshot, log }));
+          tallyValidation(status, report);
           writeText(dir, "validation.json", JSON.stringify({
             ...report,
             summary: validationSummary(report),
@@ -817,19 +1003,46 @@ export async function runMission({
         }
 
         case "REPAIRING": {
-          log("repair diagnosis (local Qwen)…");
-          beginPhase(ctx, "repair");
-          const { text } = await invoke(ctx, "repair", repairPrompt(spec, status, {
-            plan: readText(dir, "PLAN.md"),
-            proposal: readText(dir, "PROPOSAL.md"),
-            validation: readText(dir, "validation.json"),
-            diff: readText(dir, "CURRENT.diff"),
+          let syntax = {};
+          try { syntax = JSON.parse(readText(dir, "syntax-gate.json") || "{}"); } catch { syntax = {}; }
+          const files = repairFiles(ctx, syntax);
+          const diagnostics = (!syntax.ok && (syntax.diagnostics || []).length)
+            ? formatDiagnostics(syntax.diagnostics)
+            : readText(dir, "validation.json");
+          const windows = (syntax.diagnostics || [])
+            .map((d) => `--- ${d.file}:${d.line}:${d.column} ${d.code} ---\n${d.excerpt || ""}`)
+            .join("\n\n");
+          const proposalSummary = readText(dir, "ORIGINAL_PROPOSAL.md") || readText(dir, "PROPOSAL.md");
+          const skipDiagnose = Boolean(status.forceApplyRepair);
+          status.forceApplyRepair = false;
+          if (!skipDiagnose) {
+            log("repair diagnosis (local Qwen)…");
+            beginPhase(ctx, "repair-diagnose");
+            const { text } = await invoke(ctx, "repair-diagnose", repairDiagnosePrompt(spec, status, {
+              proposalSummary,
+              diagnostics,
+              windows,
+              delta: readText(dir, "CURRENT.diff"),
+              invariants: (spec.acceptance || []).join("\n"),
+              files,
+            }));
+            writeText(dir, "REPAIR_DIAGNOSIS.md", text);
+            writeText(dir, "REPAIR_PROPOSAL.md", text);
+            postPhaseGit(ctx, { revertAllApp: true });
+          }
+          log("apply repair (local Qwen)…");
+          beginPhase(ctx, "repair-apply");
+          await invoke(ctx, "repair-apply", applyRepairPrompt(spec, status, {
+            diagnosis: readText(dir, "REPAIR_DIAGNOSIS.md") || readText(dir, "REPAIR_PROPOSAL.md"),
+            files,
+            diagnostics,
           }));
-          writeText(dir, "REPAIR_PROPOSAL.md", text);
-          writeText(dir, "PROPOSAL.md", text);
-          postPhaseGit(ctx, { revertAllApp: false });
-          status.forceEditAfterProposal = true;
-          transition(dir, status, "PROPOSING", "repair proposal");
+          const repairGit = endPhase(ctx, { writesApp: true });
+          status.lastWritePhase = "repair-apply";
+          if (!repairGit.ok && status.editRetries > spec.maxRetriesPerPhase) {
+            return block(dir, status, `unauthorized paths: ${(repairGit.unauthorized || []).join(", ")}`);
+          }
+          transition(dir, status, "DIFF_REVIEW", "repair applied");
           if (maybeStop(ctx)) return status;
           break;
         }

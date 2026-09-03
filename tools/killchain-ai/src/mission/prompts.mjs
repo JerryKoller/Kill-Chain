@@ -149,8 +149,11 @@ export function editPrompt(spec, status, { proposal, plan }) {
 ${missionHeader(spec, status)}
 
 CURRENT PASS: EDIT. Apply ONLY the approved proposal. MCP first before touching code.
+This is an EXECUTION PHASE. USE the edit/write tool on authorized source files.
+Do not only describe the patch. Do not create PLAN.md / findings.md.
 Do not "improve" unrelated files. Do not normalize EOL. Do not add comments unless required.
 Use the existing code style. Prefer the smallest correct change.
+WINDOWS ENVIRONMENT. USE POWERSHELL OR MCP. Do not retry failed Unix grep/sed/awk/bash.
 
 APPROVED PROPOSAL:
 ${clip(proposal, 10000)}
@@ -158,35 +161,118 @@ ${clip(proposal, 10000)}
 PLAN (context):
 ${clip(plan, 4000)}
 
-After edits, summarize what changed in the visible final answer.`;
+WHEN COMPLETE, REPORT WHAT YOU ACTUALLY CHANGED (paths that were written).`;
 }
 
-export function repairPrompt(spec, status, { plan, proposal, validation, diff }) {
+export function emptyEditRetryPrompt(spec, status, { proposal, expectedFiles, stronger = false }) {
+  const extra = stronger
+    ? `
+STRONGER APPLY RETRY:
+Previous consecutive EDITING passes produced ZERO file delta.
+A prose description of a patch is not an application.
+You MUST invoke a mutation tool (edit/write/apply_patch or equivalent) against the authorized files NOW.
+If a tool fails, stop repeating it; switch to OpenCode edit/write or PowerShell Set-Content on the exact path.`
+    : "";
   return `${DISCIPLINE}
 
 ${missionHeader(spec, status)}
 
-CURRENT PASS: REPAIR DIAGNOSIS. Read-only this invocation. Do not edit yet.
-Next runner step will require a repair proposal, then a separate edit.
+THE PROPOSAL IS ALREADY APPROVED.
+THIS IS AN EXECUTION PHASE.
+DO NOT EXPLAIN THE PATCH.
+DO NOT CREATE PLAN FILES.
+USE THE EDIT/WRITE TOOL NOW.
+APPLY THE APPROVED CHANGE TO THE AUTHORIZED SOURCE FILES.
+WHEN COMPLETE, REPORT WHAT YOU ACTUALLY CHANGED.
 
-PLAN:
-${clip(plan, 5000)}
+Expected files (authorized):
+${(expectedFiles || []).map((p) => `- ${p}`).join("\n") || "(see proposal)"}
+${extra}
 
-CURRENT PROPOSAL:
-${clip(proposal, 4000)}
+APPROVED PROPOSAL:
+${clip(proposal, 10000)}`;
+}
 
-DIFF SUMMARY:
-${clip(diff, 5000)}
+export function repairDiagnosePrompt(spec, status, {
+  proposalSummary,
+  diagnostics,
+  windows,
+  delta,
+  invariants,
+  files,
+} = {}) {
+  return `${DISCIPLINE}
 
-VALIDATION FAILURE:
-${clip(validation, 6000)}
+${missionHeader(spec, status)}
 
-Visible answer must include:
-1. HYPOTHESIS
-2. EVIDENCE (path/symbol)
-3. REPAIR PROPOSAL (file-by-file BEFORE/AFTER if small)
-4. What you will not change
-MCP first. Windows only.`;
+CURRENT PASS: REPAIR DIAGNOSIS. Fresh context. READ-ONLY. Do not edit files.
+Do not redesign the feature. For obvious JSX/syntax errors, propose the smallest mechanical fix.
+
+Visible answer MUST start with exactly:
+HYPOTHESIS:
+FAULT LOCATION:
+MINIMAL REPAIR:
+
+Then a short file-by-file BEFORE/AFTER limited to files producing diagnostics (or already-authorized paired files).
+
+MISSION GOAL:
+${clip(spec.goal, 2000)}
+
+APPROVED PROPOSAL SUMMARY:
+${clip(proposalSummary, 3500)}
+
+CURRENT AFFECTED FILES:
+${(files || []).map((p) => `- ${p}`).join("\n") || "(see diagnostics)"}
+
+EXACT COMPILER/PARSER DIAGNOSTICS:
+${clip(diagnostics, 5000)}
+
+SOURCE WINDOWS:
+${clip(windows, 8000)}
+
+CURRENT PHASE DELTA:
+${clip(delta, 2500)}
+
+RELEVANT INVARIANTS:
+${clip(invariants, 2000)}
+
+MCP first if you need a caller. Windows only. Do not dump planning conversation.`;
+}
+
+export function applyRepairPrompt(spec, status, { diagnosis, files, diagnostics }) {
+  return `${DISCIPLINE}
+
+${missionHeader(spec, status)}
+
+CURRENT PASS: APPLY REPAIR. EXECUTION PHASE. Fresh context.
+THE DIAGNOSIS IS ALREADY WRITTEN.
+DO NOT EXPLAIN THE PATCH.
+DO NOT CREATE PLAN FILES.
+USE THE EDIT/WRITE TOOL NOW.
+Apply ONLY the minimal repair to authorized files that currently fail diagnostics.
+Do not redesign the feature. Do not widen scope.
+WHEN COMPLETE, REPORT WHAT YOU ACTUALLY CHANGED.
+
+AUTHORIZED FILES:
+${(files || []).map((p) => `- ${p}`).join("\n") || "(see diagnosis)"}
+
+DIAGNOSTICS:
+${clip(diagnostics, 4000)}
+
+MINIMAL REPAIR DIAGNOSIS:
+${clip(diagnosis, 6000)}`;
+}
+
+/** @deprecated prefer repairDiagnosePrompt + applyRepairPrompt */
+export function repairPrompt(spec, status, { plan, proposal, validation, diff, diagnostics, windows, files, invariants } = {}) {
+  return repairDiagnosePrompt(spec, status, {
+    proposalSummary: proposal || plan || "",
+    diagnostics: diagnostics || validation || "",
+    windows: windows || "",
+    delta: diff || "",
+    invariants: invariants || "",
+    files,
+  });
 }
 
 export function finalPrompt(spec, status, { plan, proposal, critic, investigation, diff }) {

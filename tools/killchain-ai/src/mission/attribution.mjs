@@ -22,10 +22,14 @@ import { missionsDataDir, repoRoot } from "../paths.mjs";
 import { GENERATED_SIDE_EFFECTS, gitShowHead, isAppPath, isToolingPath } from "./gitops.mjs";
 import { ID_RE, matchesAny, pathEditable, toPosixRel } from "./schema.mjs";
 
-export const WRITE_INVOKE_PHASES = new Set(["edit", "repair"]);
+export const WRITE_INVOKE_PHASES = new Set(["edit", "repair-apply"]);
 
 export function phaseWritesApp(phase) {
-  return WRITE_INVOKE_PHASES.has(String(phase || "").split("-")[0]);
+  const p = String(phase || "");
+  const head = p.split("-")[0];
+  if (head === "edit") return true;
+  if (p === "repair-apply" || p.startsWith("repair-apply")) return true;
+  return false;
 }
 
 export function sha256(buf) {

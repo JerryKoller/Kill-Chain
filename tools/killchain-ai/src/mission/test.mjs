@@ -31,12 +31,15 @@ import {
   fingerprintRel,
   loadAttribution,
   persistTotalMissionDiff,
+  phaseWritesApp,
   resolveAdoption,
   restoreCheckpointFiles,
   restoreSnapshot,
   sha256,
   writeLosslessCheckpoint,
 } from "./attribution.mjs";
+import { classifyEditOutcome, emptyEditPolicy, expectedEditFiles, isMutationTool, usedMutationTool } from "./editGate.mjs";
+import { checkTsSyntax } from "./syntax.mjs";
 import { clip } from "./prompts.mjs";
 
 function ok(name, cond, detail = "") {
@@ -534,13 +537,14 @@ Diff class: small UI-only. No Option B. No operator choice.
   const specPath = join(tmp, "mission.md");
   writeFileSync(specPath, VALID_SPEC, "utf8");
 
-  function fakeInvoke(text) {
+  function fakeInvoke(text, tools = ["killchain_search"]) {
     return async ({ outPath }) => {
       mkdirSync(join(outPath, ".."), { recursive: true });
-      const jsonl = [
-        { type: "tool_use", part: { type: "tool", tool: "killchain_search" } },
+      const events = [
+        ...tools.map((tool) => ({ type: "tool_use", part: { type: "tool", tool } })),
         { type: "text", part: { type: "text", text } },
-      ].map((e) => JSON.stringify(e)).join("\n");
+      ];
+      const jsonl = events.map((e) => JSON.stringify(e)).join("\n");
       writeFileSync(outPath, jsonl, "utf8");
       return {
         exitCode: 0,
@@ -1005,6 +1009,311 @@ ${JSON.stringify({
       `state=${planRun.state} bytes=${io.read(FOO)?.toString()} violations=${planRun.readOnlyViolations}`,
     );
   }
+
+  const TARGET = "src/components/FireCommand/PatternSelect.tsx";
+  const VALID_TSX = "export function PatternSelect() {\n  return <div data-testid=\"pattern-select-ready\">hi</div>;\n}\n";
+  const BROKEN_TSX = "export function PatternSelect() {\n  return <div><span>hi</div>;\n}\n";
+  const BROKEN2_TSX = "export function PatternSelect() {\n  return <div><span><b>hi</div>;\n}\n";
+  const MALFORMED_PROP = "export function PatternSelect() {\n  return <div className=\"x\" foo= ></div>;\n}\n";
+  const SEED_TSX = "export function PatternSelect() {\n  return <div>hi</div>;\n}\n";
+
+  const validSyn = checkTsSyntax("a.tsx", VALID_TSX);
+  const unclosedSyn = checkTsSyntax("a.tsx", BROKEN_TSX);
+  const propSyn = checkTsSyntax("a.tsx", MALFORMED_PROP);
+  check("7 valid TSX passes syntax gate", validSyn.ok, JSON.stringify(validSyn.diagnostics));
+  check("8 unclosed JSX fails syntax gate", !unclosedSyn.ok && unclosedSyn.diagnostics.length >= 1, JSON.stringify(unclosedSyn.diagnostics));
+  check("9 malformed prop JSX fails syntax gate", !propSyn.ok && propSyn.diagnostics.length >= 1, JSON.stringify(propSyn.diagnostics));
+
+  check("mutation tool recognizes edit/write without exact vendor name", isMutationTool("edit") && isMutationTool("apply_patch") && isMutationTool("strreplace"));
+  check("prose-only tools are not mutation", !isMutationTool("killchain_search") && !isMutationTool("read") && !usedMutationTool(["killchain_search", "read"]));
+
+  const emptySpec = parseMissionMarkdown(`---
+${JSON.stringify({
+    id: "empty-gate-spec",
+    title: "t",
+    goal: "g",
+    level: 2,
+    allowedPaths: [TARGET],
+    corpus: "never",
+  }, null, 2)}
+---
+`).spec;
+  const namedProposal = `File: ${TARGET}\nSymbol: PatternSelect\nIntended modification: add data-testid on the root element.\nBEFORE: <div>\nAFTER: <div data-testid="x">\n`.repeat(4);
+  const expectFiles = expectedEditFiles(namedProposal, emptySpec);
+  check("proposal names authorized edit files", expectFiles.includes(TARGET), expectFiles.join(","));
+
+  const emptyClass = classifyEditOutcome({
+    expected: true,
+    expectedFiles: [TARGET],
+    allowed: [],
+    deltaDirty: [],
+    tools: ["killchain_search"],
+    invokeOk: true,
+  });
+  check("1 proposed edit + zero delta → EMPTY_EDIT/DESCRIBED", emptyClass.empty && (emptyClass.kind === "DESCRIBED_BUT_DID_NOT_APPLY" || emptyClass.kind === "EMPTY_EDIT"), emptyClass.kind);
+
+  const mutEmpty = classifyEditOutcome({
+    expected: true,
+    expectedFiles: [TARGET],
+    allowed: [],
+    deltaDirty: [],
+    tools: ["killchain_search", "edit"],
+    invokeOk: true,
+  });
+  check("5 mutation tool + zero delta is still empty", mutEmpty.empty && mutEmpty.kind === "EMPTY_EDIT", mutEmpty.kind);
+
+  const proseOnly = classifyEditOutcome({
+    expected: true,
+    expectedFiles: [TARGET],
+    allowed: [],
+    deltaDirty: [],
+    tools: ["killchain_search"],
+    invokeOk: true,
+  });
+  check("6 prose-only output cannot count as edit", proseOnly.kind === "DESCRIBED_BUT_DID_NOT_APPLY");
+
+  check("empty-edit policy retries then blocks", emptyEditPolicy(1).action === "RETRY" && emptyEditPolicy(2).action === "RETRY" && emptyEditPolicy(2).stronger && emptyEditPolicy(3).action === "BLOCK");
+  check("EDITING may retry without leaving the edit loop", ALLOWED_TRANSITIONS.EDITING.includes("EDITING") && ALLOWED_TRANSITIONS.DIFF_REVIEW.includes("EDITING"));
+  check("REPAIRING may apply then return to DIFF_REVIEW", ALLOWED_TRANSITIONS.REPAIRING.includes("DIFF_REVIEW"));
+  check("repair-diagnose is not a write phase", phaseWritesApp("repair-diagnose") === false);
+  check("repair-apply and edit are write phases", phaseWritesApp("repair-apply") && phaseWritesApp("edit-apply") && phaseWritesApp("edit"));
+
+  function padReport(label, file = TARGET) {
+    const lines = [
+      `INSPECTED: ${file}`,
+      "RISK: a later UI edit could change click semantics on pattern controls",
+      "EVIDENCE: this change is presentation-only; no onClick or store writes are proposed",
+      `VERDICT: ${label}`,
+      `- checked ${file} exists and handlers stay the same`,
+      "Also verified no AudioEngine, DSP, or persistence edits are requested.",
+    ];
+    return `${lines.join("\n")}\n${"grounded critic padding. ".repeat(30)}`;
+  }
+
+  function proposalText(file = TARGET) {
+    return `File: ${file}
+Symbol: PatternSelect
+Intended modification: add data-testid="pattern-select-ready" on the root element only.
+BEFORE: return <div>
+AFTER:  return <div data-testid="pattern-select-ready">
+Why: glanceable test hook. Invariants: same onClick, no store writes, no AudioEngine, no sequencer timing.
+Diff class: small UI-only. No Option B. No operator choice.
+`.repeat(5);
+  }
+
+  function planText(file = TARGET) {
+    return `PLAN for ${file}. Files expected to change: ${file}. Files inspected: ${file}. Current behavior: root div has no test id. Target: add data-testid only. Phases: 1. Acceptance: presentation-only. Risk: JSX syntax. Validation: typecheck. Invariants: no store writes. What I will NOT change: AudioEngine, DSP, persistence, sequencer timing.
+`.repeat(6);
+  }
+
+  async function runScriptedEdit({
+    id,
+    onEdit,
+    onRepairApply,
+    onRepairDiagnose,
+    editTools = ["killchain_search"],
+    preserveToggle = false,
+    maxRetriesPerPhase = 3,
+    validation,
+  }) {
+    const world = mkdtempSync(join(tmpdir(), `kc-${id}-`));
+    const io = createFsIo(world);
+    io.write(TARGET, Buffer.from(SEED_TSX));
+    const parked = Buffer.from("PARKED-TOGGLE-BYTES\n");
+    if (preserveToggle) io.write(TOGGLE, parked);
+    const specMd = join(world, "mission.md");
+    writeFileSync(specMd, `---
+${JSON.stringify({
+    id,
+    title: "t",
+    goal: "Add a presentation-only test id on PatternSelect",
+    level: 2,
+    allowedPaths: [TARGET],
+    preserveDirtyPaths: preserveToggle ? [TOGGLE] : [],
+    readOnlyPaths: ["src/state/**"],
+    corpus: "never",
+    maxModelCalls: 40,
+    maxPhases: 1,
+    maxRetriesPerPhase,
+    proposalRounds: 1,
+    validation: { required: ["typecheck"] },
+    acceptance: ["presentation only", "no store writes"],
+  }, null, 2)}
+---
+`, "utf8");
+    let validationCalls = 0;
+    const validationSnapshots = [];
+    let targetDirty = false;
+    const porcelain = () => {
+      const rows = [];
+      if (preserveToggle) rows.push({ xy: " M", path: TOGGLE, untracked: false });
+      if (targetDirty || (io.read(TARGET) && io.read(TARGET).toString() !== SEED_TSX)) {
+        rows.push({ xy: " M", path: TARGET, untracked: false });
+      }
+      return rows;
+    };
+    const result = await runMission({
+      specPath: specMd,
+      dryRun: false,
+      dataRoot: join(world, "data"),
+      log: () => {},
+      deps: {
+        ...liveDeps,
+        createIo: () => io,
+        gitPorcelain: porcelain,
+        gitDiffCheck: () => ({ ok: true, output: "", args: [] }),
+        gitAllowedAppDiffStat: () => ({
+          files: io.read(TARGET)?.toString() !== SEED_TSX ? [TARGET] : [],
+          insertions: 1,
+          deletions: 0,
+          patch: io.read(TARGET)?.toString() !== SEED_TSX ? "diff --git a/x b/x\n" : "",
+        }),
+        runValidation: async () => {
+          validationCalls += 1;
+          validationSnapshots.push(io.read(TARGET)?.toString() || "");
+          if (typeof validation === "function") return validation();
+          return { ok: true, results: [{ name: "typecheck", ok: true, code: 0, stdout: "", stderr: "", durationMs: 1 }] };
+        },
+        runOpenCode: async ({ prompt, outPath }) => {
+          const p = String(prompt);
+          if (p.includes("CURRENT PASS: INVESTIGATE")) {
+            return fakeInvoke(`investigation of ${TARGET} current root div and callers.`)({ outPath });
+          }
+          if (p.includes("CURRENT PASS: PLAN")) {
+            return fakeInvoke(planText())({ outPath });
+          }
+          if (p.includes("CURRENT PASS: CRITIC")) {
+            return fakeInvoke(padReport("PASS"))({ outPath });
+          }
+          if (p.includes("PROPOSAL-BEFORE-WRITE")) {
+            return fakeInvoke(proposalText())({ outPath });
+          }
+          if (p.includes("CURRENT PASS: REPAIR DIAGNOSIS")) {
+            if (onRepairDiagnose) onRepairDiagnose(io);
+            return fakeInvoke("HYPOTHESIS: unclosed JSX\nFAULT LOCATION: PatternSelect.tsx return\nMINIMAL REPAIR: close the span or drop it.\n")({ outPath });
+          }
+          if (p.includes("CURRENT PASS: APPLY REPAIR") || p.includes("APPLY REPAIR")) {
+            if (onRepairApply) onRepairApply(io);
+            targetDirty = true;
+            return fakeInvoke("applied repair to PatternSelect.tsx", ["killchain_search", "edit"])({ outPath });
+          }
+          if (p.includes("THE PROPOSAL IS ALREADY APPROVED") || p.includes("CURRENT PASS: EDIT")) {
+            const tools = p.includes("STRONGER APPLY") ? ["killchain_search", "edit"] : editTools;
+            if (onEdit) onEdit(io, p);
+            if (io.read(TARGET)?.toString() !== SEED_TSX) targetDirty = true;
+            return fakeInvoke("edit pass on PatternSelect.tsx", tools)({ outPath });
+          }
+          if (p.includes("FINAL REVIEW")) {
+            return fakeInvoke(padReport("READY"))({ outPath });
+          }
+          return fakeInvoke("ok")({ outPath });
+        },
+      },
+    });
+    return {
+      result,
+      io,
+      parked,
+      validationCalls,
+      validationSnapshots,
+      missionDir: join(world, "data", id),
+      world,
+    };
+  }
+
+  {
+    let edits = 0;
+    const r = await runScriptedEdit({
+      id: "empty-retry-ok",
+      onEdit: (io) => {
+        edits += 1;
+        if (edits >= 2) io.write(TARGET, Buffer.from(VALID_TSX));
+      },
+    });
+    check("2 one empty edit → retry", r.result.state === "COMPLETE" && edits >= 2 && r.result.emptyEdits >= 1 && r.result.emptyEditRetriesSucceeded >= 1, `state=${r.result.state} edits=${edits} empty=${r.result.emptyEdits}`);
+    check("4 zero delta does not run pointless build", r.validationSnapshots.length >= 1 && r.validationSnapshots.every((s) => s !== SEED_TSX), `snaps=${JSON.stringify(r.validationSnapshots)}`);
+  }
+
+  {
+    let edits = 0;
+    const r = await runScriptedEdit({
+      id: "empty-block",
+      onEdit: () => { edits += 1; },
+    });
+    check("3 repeated empty edits → BLOCK", r.result.state === "BLOCKED" && /EMPTY_EDIT/.test(r.result.blockedReason || "") && edits >= 3 && r.validationCalls === 0, `state=${r.result.state} reason=${r.result.blockedReason} edits=${edits} val=${r.validationCalls}`);
+  }
+
+  {
+    const r = await runScriptedEdit({
+      id: "syntax-repair-ok",
+      onEdit: (io) => io.write(TARGET, Buffer.from(BROKEN_TSX)),
+      onRepairApply: (io) => io.write(TARGET, Buffer.from(VALID_TSX)),
+      editTools: ["killchain_search", "edit"],
+    });
+    check("10 syntax failure enters REPAIR", (r.result.syntaxFailures || 0) >= 1 && r.result.state === "COMPLETE", `state=${r.result.state} synFail=${r.result.syntaxFailures} repairs=${r.result.syntaxRepairs}`);
+    check("12 repair may revisit already mission-owned file", r.io.read(TARGET).toString() === VALID_TSX && r.result.state === "COMPLETE");
+  }
+
+  {
+    let diagnoseWrote = false;
+    const r = await runScriptedEdit({
+      id: "repair-ro-restore",
+      onEdit: (io) => io.write(TARGET, Buffer.from(BROKEN_TSX)),
+      onRepairDiagnose: (io) => {
+        diagnoseWrote = true;
+        io.write(TARGET, Buffer.from("export function PatternSelect() { return <div>DIAGNOSE-MUTATION</div>; }\n"));
+      },
+      onRepairApply: (io) => io.write(TARGET, Buffer.from(VALID_TSX)),
+      editTools: ["killchain_search", "edit"],
+    });
+    check(
+      "11 failed repair restores pre-repair snapshot",
+      diagnoseWrote && r.io.read(TARGET).toString() === VALID_TSX && (r.result.readOnlyViolations || 0) >= 1 && r.result.state === "COMPLETE",
+      `state=${r.result.state} viol=${r.result.readOnlyViolations} bytes=${r.io.read(TARGET)?.toString().slice(0, 80)}`,
+    );
+  }
+
+  {
+    let edits = 0;
+    const r = await runScriptedEdit({
+      id: "txn-retry",
+      maxRetriesPerPhase: 1,
+      onEdit: (io, prompt) => {
+        edits += 1;
+        if (String(prompt).includes("THE PROPOSAL IS ALREADY APPROVED") && edits > 1) {
+          io.write(TARGET, Buffer.from(VALID_TSX));
+        } else {
+          io.write(TARGET, Buffer.from(BROKEN_TSX));
+        }
+      },
+      onRepairApply: (io) => io.write(TARGET, Buffer.from(BROKEN2_TSX)),
+      editTools: ["killchain_search", "edit"],
+    });
+    const restorePath = join(r.missionDir, "transactional-restore.json");
+    const restored = existsSync(restorePath) ? readFileSync(restorePath, "utf8") : "";
+    const attrPath = join(r.missionDir, "attribution", "mission-diff.json");
+    const attr = existsSync(attrPath) ? JSON.parse(readFileSync(attrPath, "utf8")) : { dirty: [], hashes: {} };
+    check("13 transactional failed edit restores PRE_EDIT", (r.result.transactionalRollbacks || 0) >= 1 && restored.includes("true"), `rollbacks=${r.result.transactionalRollbacks} state=${r.result.state} reason=${r.result.blockedReason || ""}`);
+    check("14 second fresh application attempt works", r.result.state === "COMPLETE" && r.io.read(TARGET).toString() === VALID_TSX, `state=${r.result.state} bytes=${r.io.read(TARGET)?.toString()}`);
+    check("17 phase delta remains accurate after rollback", Array.isArray(JSON.parse(readFileSync(join(r.missionDir, "attribution.json"), "utf8")).phaseDeltas), "no phaseDeltas");
+    check("18 total mission diff remains accurate after rollback/resume", attr.dirty.includes(TARGET) && attr.hashes[TARGET].after === sha256(Buffer.from(VALID_TSX)), JSON.stringify(attr.hashes?.[TARGET] || attr));
+  }
+
+  {
+    const r = await runScriptedEdit({
+      id: "parked-preserve",
+      preserveToggle: true,
+      onEdit: (io) => io.write(TARGET, Buffer.from(VALID_TSX)),
+      editTools: ["killchain_search", "edit"],
+    });
+    check(
+      "16 parked preserved dirt remains untouched",
+      r.result.state === "COMPLETE" && r.io.read(TOGGLE).equals(r.parked) && r.io.read(TARGET).toString() === VALID_TSX,
+      `state=${r.result.state} toggle=${r.io.read(TOGGLE)?.toString()}`,
+    );
+  }
+
+  check("15 read-only state still cannot write", phaseWritesApp("repair-diagnose") === false && phaseWritesApp("plan") === false && phaseWritesApp("proposal") === false);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;
