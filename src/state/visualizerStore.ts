@@ -111,8 +111,11 @@ function loadInitialMode(): VisualizerMode {
 function persist(mode: VisualizerMode): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode }));
-  } catch {
+  } catch (err) {
     /* storage full/blocked — non-fatal */
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Visualizer", err),
+    );
   }
 }
 
