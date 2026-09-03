@@ -80,7 +80,11 @@ function loadMappings(): MidiMapping[] {
 function saveMappings(maps: MidiMapping[]): void {
   if (typeof window === "undefined") return;
   try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(maps)); }
-  catch { /* ignore */ }
+  catch (err) {
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("MIDI mappings", err),
+    );
+  }
 }
 
 /** Record a UI-flash timestamp, pruning stale ids so a controller sweep
