@@ -1362,6 +1362,7 @@ ${JSON.stringify({
   check("claimSource scanner finds callers", scan.claimSource.count >= 6);
   check("rewireFront front-gains stay inside rewireFront", scan.rewireFront.ok);
   check("store-engine coupling scan lists fireCommandStore", (scan.storeEngineCoupling || []).some((h) => String(h.path).includes("fireCommandStore")));
+  check("playerStore getEngine sites are line-mapped", (scan.storeEngineCoupling || []).some((h) => h.path.includes("playerStore") && (h.getEngineLines || []).length >= 5));
   check("presentation-only store list is separate from engine-coupled stores", Array.isArray(scan.presentationOnlyStores));
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();

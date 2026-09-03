@@ -146,6 +146,7 @@ export function scanStoreEngineCoupling({ root = repoRoot } = {}) {
       importsAudioEngine: engine,
       getEngineCalls: [...text.matchAll(/\bgetEngine\s*\(/g)].length,
       activeFireEngineCalls: [...text.matchAll(/\bactiveFireEngine\s*\(/g)].length,
+      getEngineLines: lineHits(text, /\bgetEngine\s*\(/),
     });
   }
   const presentationOnly = names
