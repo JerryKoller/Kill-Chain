@@ -1398,6 +1398,13 @@ ${JSON.stringify({
       && (scan.autoLockScan?.callers || []).some((c) => String(c.path).includes("missionStateStore"))
       && (scan.autoLockScan?.callers || []).length === 1,
   );
+  check(
+    "applyChain is defined in chainSnapshot.ts with at least four callers",
+    scan.applyChain?.definition?.path?.includes("chainSnapshot.ts")
+      && (scan.applyChain?.callers || []).length >= 4
+      && (scan.applyChain?.callers || []).some((c) => String(c.path).includes("missionStateStore"))
+      && (scan.applyChain?.callers || []).some((c) => String(c.path).includes("audioStore")),
+  );
 
   const fireMap = (await import("../ui/scanFireCommand.mjs")).scanFireCommandPanels();
   check("Fire Command map finds many UI files", fireMap.count >= 80);

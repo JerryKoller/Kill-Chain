@@ -232,6 +232,25 @@ export function scanAutoLockScan({ root = repoRoot } = {}) {
   return { definition, callers, count: callers.length };
 }
 
+export function scanApplyChain({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const callers = [];
+  let definition = null;
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    if (!text.includes("applyChain")) continue;
+    const path = rel(abs);
+    const def = lineHits(text, /export function applyChain\b/);
+    if (def.length) definition = { path, ...def[0] };
+    for (const h of lineHits(text, /\bapplyChain\s*\(/)) {
+      if (/export function applyChain/.test(h.text)) continue;
+      if (/^(\*|\/\/)/.test(h.text)) continue;
+      callers.push({ path, ...h });
+    }
+  }
+  return { definition, callers, count: callers.length };
+}
+
 export function scanAnalysers({ root = repoRoot } = {}) {
   const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
   const hits = [];
@@ -256,6 +275,7 @@ export function writeOvernightScan() {
   const analysers = scanAnalysers();
   const autoFlatten = scanAutoFlatten();
   const autoLockScan = scanAutoLockScan();
+  const applyChain = scanApplyChain();
   const storeEngine = scanStoreEngineCoupling();
   const bridges = scanAudioStoreBridges();
   const bridgePaths = new Set(bridges.hits.map((h) => h.path));
@@ -275,6 +295,7 @@ export function writeOvernightScan() {
     analysers: analysers.hits,
     autoFlatten,
     autoLockScan,
+    applyChain,
     storeEngineCoupling: storeEngine.hits,
     audioStoreBridges: bridges.hits,
     presentationOnlyStores: presentationOnly,
@@ -287,6 +308,7 @@ export function writeOvernightScan() {
       "presentationOnlyStores excludes both engine-coupled stores and audioStore bridges. Still a heuristic, not Level 2B permission.",
       "autoFlatten lists the DSP helper definition and call sites. Presence of a missionStateStore caller is expected; extra callers would be a dual-orchestrator risk.",
       "autoLockScan is the Tractor fresh-scan helper. Extra callers besides missionStateStore would also be a dual-orchestrator risk.",
+      "applyChain restores a chain snapshot; callers include audioStore, missionStateStore, missionLogStore, sessionSnapshotsStore. Extra callers should be reviewed.",
     ],
   };
   const dir = join(dataDir, "overnight");
