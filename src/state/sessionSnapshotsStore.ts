@@ -58,6 +58,9 @@ function persist(snapshots: SessionSnapshot[]): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshots));
   } catch (err) {
     console.warn("[sessionSnapshots] persist failed:", err);
+    void import("@/lib/appHealth").then(({ reportStorageFailure }) =>
+      reportStorageFailure("Session snapshots", err),
+    );
   }
 }
 
