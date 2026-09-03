@@ -232,6 +232,12 @@ async function main() {
     return;
   }
 
+  if (cmd === "repair-drill") {
+    const { runRepairDrill } = await import("./eval/repairDrill.mjs");
+    await runRepairDrill({ log: console.log });
+    return;
+  }
+
   if (cmd === "eval") {
     if (flags.ab) {
       const { runPhase2, rescorePhase2 } = await import("./eval/ab.mjs");

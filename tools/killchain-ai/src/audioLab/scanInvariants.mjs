@@ -114,11 +114,28 @@ export function scanTimerPairing({ root = repoRoot } = {}) {
   return { gaps, count: gaps.length };
 }
 
+export function scanTapConnects({ root = repoRoot } = {}) {
+  const files = existsSync(join(root, "src")) ? walk(join(root, "src")) : [];
+  const connects = [];
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    if (!text.includes("preTap.connect") && !text.includes("destinationTap.connect")) continue;
+    const path = rel(abs);
+    const hasFinally = /\bfinally\s*\{/.test(text);
+    const disconnects = [...text.matchAll(/\.disconnect\s*\(/g)].length;
+    for (const h of [...lineHits(text, /\bpreTap\.connect\s*\(/), ...lineHits(text, /\bdestinationTap\.connect\s*\(/)]) {
+      connects.push({ ...h, path, hasFinally, disconnectsInFile: disconnects });
+    }
+  }
+  return { connects, count: connects.length };
+}
+
 export function writeOvernightScan() {
   const claim = scanClaimSource();
   const rewire = scanRewireFront();
   const persist = scanPersistenceReports();
   const timers = scanTimerPairing();
+  const taps = scanTapConnects();
   const report = {
     at: new Date().toISOString(),
     claimSource: claim,
@@ -130,6 +147,7 @@ export function writeOvernightScan() {
     },
     persistenceGaps: persist.hits,
     timerPairingGaps: timers.gaps,
+    tapConnects: taps.connects,
     notes: [
       "Read-only scan. Production audio was not modified.",
       "Persistence gaps are same-file heuristics, not proof that a caller lacks reportStorageFailure via import.",
