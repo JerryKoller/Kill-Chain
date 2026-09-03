@@ -6,6 +6,7 @@ import { assertTransition, ALLOWED_TRANSITIONS } from "./machine.mjs";
 import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
 import { scanUnixTools } from "./unix.mjs";
 import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew } from "./critic.mjs";
+import { assertMetrics } from "../ui/metrics.mjs";
 import { assertSafeMissionId } from "./schema.mjs";
 import {
   classifyPorcelain,
@@ -287,6 +288,16 @@ export async function runMissionTests() {
   check("existing file labeled NEW FILE is flagged", markedExisting.includes("src/state/fireCommandStore.ts"));
   const vueGate = evaluateArtifactGate("NEW FILE `src/components/FireCommand/KeyboardHintBar.vue`", { allowedPaths: ["src/components/FireCommand/**"], forbiddenPaths: [], readOnlyPaths: [], level: 0 });
   check("artifact gate rejects .vue", !vueGate.ok && vueGate.errors.some((e) => e.startsWith("wrong-stack")));
+  const metricOk = assertMetrics({
+    viewport: { innerWidth: 1440 },
+    byWidth: { "1440": [{ sel: "#gate-strip", found: true, overflowX: 0, gap: "4.8px", opacity: "1", truncated: false }] },
+  }, [{ sel: "#gate-strip", width: 1440, maxOverflowX: 1, gapEquals: "4.8px", minOpacity: 0.5, notTruncated: true }]);
+  check("UI metric harness accepts matching boxes", metricOk.ok);
+  const metricBad = assertMetrics({
+    viewport: { innerWidth: 1280 },
+    byWidth: { "1280": [{ sel: "#gate-strip", found: true, overflowX: 40, gap: "20px", opacity: "1", truncated: true }] },
+  }, [{ sel: "#gate-strip", width: 1280, maxOverflowX: 1, gapEquals: "4.8px", notTruncated: true }]);
+  check("UI metric harness flags overflow/gap/truncation", !metricBad.ok && metricBad.failures.length >= 2);
 
   const existOk = checkReferencedFilesExist("inspect `src/components/FireCommand/ModuleEnableToggle.tsx`");
   check("valid existing UI file existence", existOk.ok);

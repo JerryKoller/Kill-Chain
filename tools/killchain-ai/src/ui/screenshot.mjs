@@ -275,6 +275,10 @@ export async function captureFireCommand({
       return { ok: true, aria: el.getAttribute("aria-current"), text: (el.innerText || "").slice(0, 80) };
     })()`);
     log.push({ fireClick });
+    await new Promise((r) => setTimeout(r, 800));
+    const gotIt = await evalValue(session.client, clickExactText("Got it"));
+    log.push({ gotIt });
+    await new Promise((r) => setTimeout(r, 600));
 
     const t1 = Date.now();
     let opened = null;
@@ -301,6 +305,7 @@ export async function captureFireCommand({
           raw.onboardingDone = true;
           raw.legalAcceptedVersion = raw.legalAcceptedVersion || "1.0-draft";
           raw.legalAcceptedAt = raw.legalAcceptedAt || new Date().toISOString();
+          raw.lastSeenVersion = raw.lastSeenVersion || "3.5.0";
           localStorage.setItem(key, JSON.stringify(raw));
           localStorage.setItem("killchain.lastView.v1", "fire");
           location.reload();
