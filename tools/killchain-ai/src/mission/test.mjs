@@ -62,7 +62,8 @@ import {
 } from "./attribution.mjs";
 import { classifyEditOutcome, emptyEditPolicy, expectedEditFiles, isMutationTool, usedMutationTool } from "./editGate.mjs";
 import { checkTsSyntax } from "./syntax.mjs";
-import { clip } from "./prompts.mjs";
+import { clip, executePrompt, editPrompt } from "./prompts.mjs";
+import { countFaults } from "../eval/editCurriculum.mjs";
 
 function ok(name, cond, detail = "") {
   if (cond) {
@@ -1305,7 +1306,9 @@ ${JSON.stringify({
             targetDirty = true;
             return fakeInvoke("applied repair to PatternSelect.tsx", ["killchain_search", "edit"])({ outPath });
           }
-          if (p.includes("THE PROPOSAL IS ALREADY APPROVED") || p.includes("CURRENT PASS: EDIT")) {
+          if (p.includes("THE PROPOSAL IS ALREADY APPROVED")
+            || p.includes("CURRENT PASS: EDIT")
+            || p.includes("CURRENT PASS: EXECUTION")) {
             const tools = p.includes("STRONGER APPLY") ? ["killchain_search", "edit"] : editTools;
             if (onEdit) onEdit(io, p);
             if (io.read(TARGET)?.toString() !== SEED_TSX) targetDirty = true;
@@ -1979,6 +1982,39 @@ ${JSON.stringify({
   check(
     "formatted lessons state the corroboration bar",
     /corroborated by at least 2 recorded cases/.test(formatLessons(selectLessons({ phase: "repair" }))),
+  );
+
+  // ---- stripped execution contract ----
+  const execSpec = {
+    id: "x", title: "t", level: 1, levelInfo: { name: "one-file" },
+    goal: "GOAL_SENTINEL should never reach the executor",
+    brief: "BRIEF_SENTINEL should never reach the executor",
+    acceptance: ["ACCEPTANCE_SENTINEL should never reach the executor"],
+    allowedPaths: ["src/components/FireCommand/ModuleEnableToggle.tsx"],
+  };
+  const execP = executePrompt(execSpec, { dryRun: false }, {
+    proposal: "Raise the disabled-state contrast values.",
+    expectedFiles: ["src/components/FireCommand/ModuleEnableToggle.tsx"],
+  });
+  check("execution prompt names the target file", execP.includes("src/components/FireCommand/ModuleEnableToggle.tsx"));
+  check("execution prompt carries the approved change", execP.includes("Raise the disabled-state contrast values."));
+  check("execution prompt withholds the goal", !execP.includes("GOAL_SENTINEL"));
+  check("execution prompt withholds the brief", !execP.includes("BRIEF_SENTINEL"));
+  check("execution prompt withholds acceptance criteria", !execP.includes("ACCEPTANCE_SENTINEL"));
+  check("execution prompt forbids re-planning", /Do not re-plan/.test(execP));
+  check("execution prompt forbids writing plan files", /Do not create PLAN\.md/.test(execP));
+  check("execution prompt demands a written file", /Do not finish without having written a file/.test(execP));
+  const wideP = editPrompt(execSpec, { dryRun: false }, { proposal: "p", plan: "q" });
+  check("stripped execution prompt is smaller than the wide edit prompt", execP.length < wideP.length);
+
+  // ---- restore-on-regression fault counting ----
+  const cleanTsx = "export function A() {\n  return <div><span>x</span></div>;\n}\n";
+  const brokenTsx = "export function A() {\n  return <div><span>x</div>;\n}\n";
+  check("fault count is zero for a clean component", countFaults("a.tsx", cleanTsx) === 0);
+  check("fault count is positive for a broken component", countFaults("a.tsx", brokenTsx) > 0);
+  check(
+    "a worse buffer counts more faults than the original",
+    countFaults("a.tsx", `${brokenTsx}</div>\n`) > countFaults("a.tsx", brokenTsx),
   );
 
   // ---- regression guard: the analyzers must stay quiet on real sources ----

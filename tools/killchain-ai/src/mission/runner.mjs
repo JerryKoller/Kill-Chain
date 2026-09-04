@@ -25,7 +25,7 @@ import { parseOpenCodeJsonl, runOpenCode, visibleReportTooThin, buriedVerdict } 
 import {
   applyRepairPrompt,
   criticPrompt,
-  editPrompt,
+  executePrompt,
   emptyEditRetryPrompt,
   emptyTextRetryPrompt,
   finalPrompt,
@@ -874,7 +874,9 @@ export async function runMission({
               expectedFiles: expect.files,
               stronger: applyN >= 2,
             })
-            : editPrompt(spec, status, { proposal, plan });
+            // Stripped execution contract: the approved change and the target
+            // files, with no goal/acceptance/plan context to re-litigate.
+            : executePrompt(spec, status, { proposal, expectedFiles: expect.files });
           await invoke(ctx, phaseLabel, prompt);
           const editGit = endPhase(ctx, { writesApp: true });
           status.lastWritePhase = "edit";

@@ -146,6 +146,50 @@ Do not change AudioEngine/DSP unless this is an authorized level-4 mission.
 Windows only. MCP first.`;
 }
 
+/**
+ * Stripped execution contract.
+ *
+ * The planner and the executor should not feel like the same agent. The old
+ * edit prompt carried the mission header (goal, acceptance criteria, up to 6k
+ * of brief), 10k of proposal and 4k of plan "context" — everything needed to
+ * re-litigate the feature instead of applying it. Empty visible output
+ * accounted for 147 retries, 22.5% of all archived model calls.
+ *
+ * This prompt carries only: the target files, the approved change, and the
+ * requirement to mutate. The equivalent shape scored 3/3 first-try in the edit
+ * curriculum at 10-17s per task with zero empty edits.
+ *
+ * `editPrompt` is kept for callers that still want the wider context.
+ */
+export function executePrompt(spec, status, { proposal, expectedFiles = [] } = {}) {
+  const files = (expectedFiles.length ? expectedFiles : spec.allowedPaths || []);
+  return `${DISCIPLINE}
+
+CURRENT PASS: EXECUTION. The change below is ALREADY APPROVED. Your only job is to apply it.
+
+THE ONLY FILES YOU MAY MODIFY:
+${files.map((p) => `- ${p}`).join("\n") || "(see the approved change)"}
+
+APPROVED CHANGE:
+${clip(proposal, 6000)}
+
+REQUIREMENTS:
+- Use the edit/write tool now. A description of the patch is not a deliverable.
+- Modify only the files listed above.
+- Make the smallest edit that satisfies the approved change.
+
+DO NOT:
+- Do not re-plan, re-design, or reconsider whether the change is correct.
+- Do not explain your reasoning.
+- Do not create PLAN.md, findings.md, or any summary file.
+- Do not reformat, normalize EOL, add comments, or touch unrelated code.
+- Do not finish without having written a file.
+
+WINDOWS ENVIRONMENT. Use Kill Chain MCP or PowerShell. Do not retry Unix grep/sed/awk/bash.
+
+When finished, state in one sentence which paths you wrote.`;
+}
+
 export function editPrompt(spec, status, { proposal, plan }) {
   return `${DISCIPLINE}
 
