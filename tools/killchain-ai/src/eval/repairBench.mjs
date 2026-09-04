@@ -258,10 +258,35 @@ async function attempt({ arm, n, model, rounds, log }) {
     }
     const after = existsSync(fixtureAbs) ? readFileSync(fixtureAbs, "utf8") : null;
     const parsed = result?.parsed || parseOpenCodeJsonl("");
-    const g = grade(before, after, original);
+    let g = grade(before, after, original);
     totalMs += result?.durationMs ?? Date.now() - started;
     totalUnix += (parsed.unixViolations || []).length;
     if (g.regressed) sawRegression = true;
+
+    // Feature-preservation guard. Deleting feature-bearing JSX until the
+    // parser is satisfied is vandalism, not repair, and the sequential arm
+    // provoked it in 2 of 6 attempts. A round that drops a marker the file
+    // started with is rejected and rolled back rather than accepted.
+    if (g.lostFeatureMarkers?.length) {
+      writeFileSync(fixtureAbs, before, "utf8");
+      log(
+        `    r${round}: REJECTED — deleted ${g.lostFeatureMarkers.length} feature marker(s)`
+        + ` (${g.lineDelta} lines); rolled back to the round's starting bytes`,
+      );
+      // The file is back to `before`, so the recorded row must describe that
+      // state rather than the discarded edit.
+      g = {
+        ...g,
+        rejectedForFeatureLoss: true,
+        repaired: false,
+        changed: false,
+        progressed: false,
+        regressed: false,
+        divergencesAfter: g.divergencesBefore,
+        lineDelta: 0,
+        byteDelta: 0,
+      };
+    }
     roundRows.push({
       round,
       error,
