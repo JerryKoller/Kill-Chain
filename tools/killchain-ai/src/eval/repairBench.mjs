@@ -14,8 +14,9 @@
  * before and after.
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { dataDir, repoRoot } from "../paths.mjs";
 import { runOpenCode, parseOpenCodeJsonl } from "../mission/opencode.mjs";
 import { DEFAULT_MISSION_MODEL, normalizeModelId } from "../mission/model.mjs";
@@ -115,7 +116,7 @@ ${target}
 THE ONLY FILE YOU MAY EDIT:
 ${fixtureRel}
 
-This is an isolated fixture copy. Do NOT open, read, or edit anything under src/.
+This is an isolated sandbox copy of the file. There is no other work to do here.
 USE THE EDIT/WRITE TOOL ON THAT PATH NOW. Do not only describe the patch.
 
 RULES FOR THIS ROUND:
@@ -147,7 +148,7 @@ Repair it with the SMALLEST possible mechanical edit.
 THE ONLY FILE YOU MAY EDIT:
 ${fixtureRel}
 
-This is an isolated fixture copy. Do NOT open, read, or edit anything under src/.
+This is an isolated sandbox copy of the file. There is no other work to do here.
 USE THE EDIT/WRITE TOOL ON THAT PATH NOW. Do not only describe the patch.
 
 RULES:
@@ -236,13 +237,29 @@ function grade(before, after, original) {
  * shot would understate both arms.
  */
 async function attempt({ arm, n, model, rounds, log }) {
-  const workDir = join(benchRoot, "work", arm, `attempt-${n}`);
+  // Sandbox lives OUTSIDE the repository. Running with cwd = repoRoot gave the
+  // session write access to the repo: one run left UTF-16 tmp.txt (114 KB),
+  // temp_restore.txt and temp.txt behind via PowerShell redirection. A session
+  // whose only job is repairing a fixture must be physically unable to reach
+  // production, not merely instructed not to.
+  const workDir = join(tmpdir(), "kc-repair-bench", arm, `attempt-${n}`);
   rmSync(workDir, { recursive: true, force: true });
   mkdirSync(workDir, { recursive: true });
-  const fixtureAbs = join(workDir, "DrumMachine.tsx");
+  // Mirror the real path inside the sandbox so the model's tools behave
+  // normally and the prompt does not have to carry a contradictory
+  // "edit this file but stay out of src/" instruction.
+  const fixtureRel = REL;
+  const fixtureAbs = join(workDir, fixtureRel);
+  mkdirSync(join(fixtureAbs, ".."), { recursive: true });
   cpSync(ARCHIVED_BROKEN, fixtureAbs);
   const original = readFileSync(fixtureAbs, "utf8");
-  const fixtureRel = relative(repoRoot, fixtureAbs).replace(/\\/g, "/");
+  // Minimal project shell so tooling resolves inside the sandbox.
+  for (const f of ["tsconfig.json", "package.json", "opencode.json", "AGENTS.md"]) {
+    const src = join(repoRoot, f);
+    if (existsSync(src)) cpSync(src, join(workDir, f));
+  }
+  const artifactDir = join(benchRoot, "work", arm, `attempt-${n}`);
+  mkdirSync(artifactDir, { recursive: true });
   mkdirSync(join(benchRoot, "sessions"), { recursive: true });
 
   const roundRows = [];
@@ -257,7 +274,7 @@ async function attempt({ arm, n, model, rounds, log }) {
     const prompt = arm === "sequential"
       ? sequentialPrompt({ fixtureRel, source: before, round, rounds })
       : repairPrompt({ fixtureRel, source: before, assisted: arm === "assisted" });
-    writeFileSync(join(workDir, `PROMPT.round${round}.txt`), prompt);
+    writeFileSync(join(artifactDir, `PROMPT.round${round}.txt`), prompt);
     promptChars += prompt.length;
     const outPath = join(benchRoot, "sessions", `${arm}-${n}-r${round}.jsonl`);
     let result = null;
@@ -269,7 +286,7 @@ async function attempt({ arm, n, model, rounds, log }) {
         title: `repair-bench ${arm} ${n} r${round}`,
         outPath,
         timeoutMs: 10 * 60 * 1000,
-        cwd: repoRoot,
+        cwd: workDir,
         model,
       });
     } catch (err) {
