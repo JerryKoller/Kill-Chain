@@ -64,6 +64,8 @@ import { classifyEditOutcome, emptyEditPolicy, expectedEditFiles, isMutationTool
 import { checkTsSyntax } from "./syntax.mjs";
 import { clip, executePrompt, editPrompt } from "./prompts.mjs";
 import { countFaults } from "../eval/editCurriculum.mjs";
+import { parseHunks, reverseApplyHunk, classifyHunk, selfTest } from "../eval/mineHunks.mjs";
+import { FAMILIES } from "../eval/mineEpisodes.mjs";
 
 function ok(name, cond, detail = "") {
   if (cond) {
@@ -2015,6 +2017,53 @@ ${JSON.stringify({
   check(
     "a worse buffer counts more faults than the original",
     countFaults("a.tsx", `${brokenTsx}</div>\n`) > countFaults("a.tsx", brokenTsx),
+  );
+
+  // ---- hunk mining: the patcher must be exact or its exercises are junk ----
+  const sampleDiff = [
+    "@@ -10,5 +10,6 @@",
+    " const a = 1;",
+    " const b = 2;",
+    "-const c = 3;",
+    "+const c = 4;",
+    "+const d = 5;",
+    " const e = 6;",
+    " const f = 7;",
+  ].join("\n");
+  const hs = parseHunks(sampleDiff);
+  check("parseHunks finds one hunk", hs.length === 1);
+  check("parseHunks reads the new-side start and count", hs[0].newStart === 10 && hs[0].newCount === 6);
+
+  const afterText = [
+    ...Array.from({ length: 9 }, (_, i) => `line${i + 1}`),
+    "const a = 1;", "const b = 2;", "const c = 4;", "const d = 5;", "const e = 6;", "const f = 7;",
+    "tail",
+  ].join("\n");
+  const undone = reverseApplyHunk(afterText, hs[0]);
+  check("reverseApplyHunk restores the removed line", undone?.includes("const c = 3;"));
+  check("reverseApplyHunk drops the added lines", undone && !undone.includes("const c = 4;") && !undone.includes("const d = 5;"));
+  check("reverseApplyHunk preserves surrounding context", undone?.startsWith("line1") && undone?.endsWith("tail"));
+  check(
+    "reverseApplyHunk refuses to splice when the new side does not match",
+    reverseApplyHunk(afterText.replace("const b = 2;", "const b = 99;"), hs[0]) === null,
+  );
+
+  check(
+    "classifyHunk routes an import change to mechanical correction",
+    classifyHunk({ lines: ["+import { x } from \"./y\";"] }, "a.tsx") === FAMILIES.MECHANICAL_IMPORT,
+  );
+  check(
+    "classifyHunk routes a tailwind gap change to UI layout",
+    classifyHunk({ lines: ["-  <div className=\"gap-1\">", "+  <div className=\"gap-[0.3rem]\">"] }, "a.tsx") === FAMILIES.UI_LAYOUT,
+  );
+
+  // Live invariant: undoing every hunk of a file must reproduce its parent
+  // blob byte-for-byte. If this ever fails, every mined exercise is suspect.
+  const hunkSelfTest = selfTest({ commits: 3 });
+  check(
+    `hunk patcher reproduces the parent blob exactly (${hunkSelfTest.exact}/${hunkSelfTest.checked} files)`,
+    hunkSelfTest.checked > 0 && hunkSelfTest.mismatched.length === 0,
+    JSON.stringify(hunkSelfTest.mismatched.slice(0, 3)),
   );
 
   // ---- regression guard: the analyzers must stay quiet on real sources ----

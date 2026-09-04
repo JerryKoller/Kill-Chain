@@ -34,6 +34,7 @@ import { checkTsSyntax, formatDiagnostics } from "../mission/syntax.mjs";
 import { scanStructure, jsxRepairPacket } from "../mission/jsxStructure.mjs";
 import { DISCIPLINE } from "../mission/prompts.mjs";
 import { emptyEditPacket, validationPacket } from "../mission/tutor.mjs";
+import { mineHunkExercises } from "./mineHunks.mjs";
 
 const root = join(dataDir, "overnight", "edit-curriculum");
 
@@ -175,8 +176,65 @@ export function buildApplyTasks() {
   return out;
 }
 
-export function buildTasks({ tiers = null } = {}) {
-  const all = [...buildApplyTasks(), ...buildMechanicalTasks()];
+/**
+ * Exercises mined from real Git history at hunk granularity.
+ *
+ * Acceptance is decided against the shipped diff: every line the real change
+ * added must be present and every line it removed must be gone. Exact byte
+ * equality with the gold is recorded separately but not required, since a
+ * different-but-equivalent edit is still a correct edit.
+ */
+export function buildHunkTasks({ limit = 20, families = null, kinds = null } = {}) {
+  let mined;
+  try {
+    mined = mineHunkExercises({ commits: 25 }).exercises;
+  } catch {
+    return [];
+  }
+  const picked = [];
+  const perFamily = new Map();
+  // Round-robin across families so one family cannot swamp the sample.
+  const cap = Math.max(1, Math.ceil(limit / Math.max(1, new Set(mined.map((e) => e.family)).size)));
+  for (const e of mined) {
+    if (picked.length >= limit) break;
+    if (families && !families.includes(e.family)) continue;
+    if (kinds && !kinds.includes(e.kind)) continue;
+    if ((perFamily.get(e.family) || 0) >= cap) continue;
+    perFamily.set(e.family, (perFamily.get(e.family) || 0) + 1);
+    picked.push({
+      id: e.id,
+      tier: e.tier,
+      rel: e.rel,
+      kind: e.kind === "repair" ? "mechanical" : "apply",
+      family: e.family,
+      source: "git-hunk",
+      sha: e.sha,
+      goal: e.goal,
+      fixtureSource: e.fixtureSource,
+      goldSource: e.goldSource,
+      accept: (after) => {
+        if (after === e.goldSource) return true;
+        const present = e.addedLines.every((l) => after.includes(l));
+        const gone = e.removedLines.every((l) => !after.includes(l));
+        return present && gone && e.addedLines.length > 0;
+      },
+      guard: (before, after) => {
+        // Reject wholesale deletion dressed up as an edit.
+        const bl = before.split(/\r?\n/).length;
+        const al = after.split(/\r?\n/).length;
+        return al >= bl * 0.8;
+      },
+    });
+  }
+  return picked;
+}
+
+export function buildTasks({ tiers = null, hunks = 0, families = null } = {}) {
+  const all = [
+    ...buildApplyTasks(),
+    ...buildMechanicalTasks(),
+    ...(hunks ? buildHunkTasks({ limit: hunks, families }) : []),
+  ];
   return tiers ? all.filter((t) => tiers.includes(t.tier)) : all;
 }
 
@@ -502,18 +560,20 @@ export async function runEditCurriculum({
   model = DEFAULT_MISSION_MODEL,
   timeoutMs = 240000,
   tiers = null,
+  hunks = 0,
+  families = null,
   only = null,
   assisted = true,
   tutor = true,
   log = console.log,
 } = {}) {
-  const tasks = buildTasks({ tiers }).filter((t) => (only ? t.id.includes(only) : true));
+  const tasks = buildTasks({ tiers, hunks, families }).filter((t) => (only ? t.id.includes(only) : true));
   const guardPaths = [...new Set(tasks.map((t) => t.rel))];
   const before = Object.fromEntries(guardPaths.map((r) => [r, hashFile(join(repoRoot, r))]));
 
   mkdirSync(root, { recursive: true });
   log(`edit curriculum: ${tasks.length} tasks | model ${normalizeModelId(model)}`);
-  for (const t of tasks) log(`  [tier ${t.tier}] ${t.id}  (${t.kind})  ${t.rel}`);
+  for (const t of tasks) log(`  [tier ${t.tier}] ${t.id.padEnd(46)} ${String(t.family || t.kind).padEnd(30)} ${t.rel}`);
   log("");
 
   // Every production file the curriculum draws from, hashed up front. Checked

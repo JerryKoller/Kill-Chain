@@ -315,6 +315,8 @@ async function main() {
     const tiers = flags.tiers ? String(flags.tiers).split(",").map(Number) : null;
     const { summary } = await runEditCurriculum({
       tiers,
+      hunks: Number(flags.hunks || 0),
+      families: flags.families ? String(flags.families).split(",") : null,
       only: flags.only ? String(flags.only) : null,
       tutor: flags.tutor !== "false",
       assisted: flags.assisted !== "false",
