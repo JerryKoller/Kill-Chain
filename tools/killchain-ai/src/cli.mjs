@@ -288,6 +288,21 @@ async function main() {
     return;
   }
 
+  if (cmd === "puppy") {
+    const { puppyStatus, renderTerminal } = await import("./puppy/status.mjs");
+    const { writeCard } = await import("./puppy/card.mjs");
+    const missionId = pos[0] || flags.mission || null;
+    const s = puppyStatus({ missionId });
+    console.log(renderTerminal(s));
+    if (flags.card !== "false") {
+      const { out, avatarFound } = writeCard({ missionId });
+      console.log(`
+  card: ${out}`);
+      if (!avatarFound) console.log("  (avatar missing at tools/killchain-ai/assets/robo-puppy.jpg)");
+    }
+    return;
+  }
+
   if (cmd === "editing-evidence") {
     const { report } = await import("./eval/editingEvidence.mjs");
     report({ log: console.log });

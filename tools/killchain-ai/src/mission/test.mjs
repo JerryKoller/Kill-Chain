@@ -66,6 +66,9 @@ import { clip, executePrompt, editPrompt } from "./prompts.mjs";
 import { countFaults } from "../eval/editCurriculum.mjs";
 import { parseHunks, reverseApplyHunk, classifyHunk, selfTest } from "../eval/mineHunks.mjs";
 import { FAMILIES } from "../eval/mineEpisodes.mjs";
+import { checkSingularity, formatSingularityGuard } from "./singularityGuard.mjs";
+import { puppyStatus, renderTerminal, PUPPY_STATES } from "../puppy/status.mjs";
+import { screenVerdict, compareScreens } from "../ui/visualCritic.mjs";
 
 function ok(name, cond, detail = "") {
   if (cond) {
@@ -2065,6 +2068,66 @@ ${JSON.stringify({
     hunkSelfTest.checked > 0 && hunkSelfTest.mismatched.length === 0,
     JSON.stringify(hunkSelfTest.mismatched.slice(0, 3)),
   );
+
+  // ================= Robo Puppy + Singularity mission =====================
+
+  // ---- Singularity preservation guard ----
+  const realSingularity = existsSync(join(repoRoot, "src/components/Visualizer/singularity.ts"))
+    ? readFileSync(join(repoRoot, "src/components/Visualizer/singularity.ts"), "utf8")
+    : null;
+  if (realSingularity) {
+    const g = checkSingularity(realSingularity, { baseline: realSingularity });
+    check("singularity guard passes the real production renderer", g.ok, JSON.stringify(g.errors));
+    check("singularity guard sees all four shader stages", g.stages.scene && g.stages.bright && g.stages.blur && g.stages.composite);
+  }
+  const gutted = checkSingularity("export function createSingularity(){return{resize(){},draw(){}};}", { baseline: realSingularity || "x\n".repeat(500) });
+  check("singularity guard rejects a gutted renderer", !gutted.ok);
+  check("singularity guard flags the collapse explicitly", gutted.errors.some((e) => /^collapsed:/.test(e)));
+  check(
+    "singularity guard names the lost fallback",
+    gutted.errors.some((e) => /missing:fallback-path/.test(e)),
+  );
+  const audioReach = checkSingularity(`${realSingularity || ""}\nimport { AudioEngine } from "@/audio/AudioEngine";`);
+  check("singularity guard rejects reaching into AudioEngine", !audioReach.ok && audioReach.forbidden.some((f) => f.id === "audio-engine"));
+  const ownAnalyser = checkSingularity(`${realSingularity || ""}\nconst a = ctx.createAnalyser();`);
+  check("singularity guard rejects a renderer-owned analyser", ownAnalyser.forbidden.some((f) => f.id === "own-analyser"));
+  check(
+    "singularity guard rejection text tells the model not to delete more",
+    /do not delete more/i.test(formatSingularityGuard(gutted)),
+  );
+
+  // ---- Robo Puppy status: real state only, never invented ----
+  const st = puppyStatus({});
+  check("puppy status reports a known display state", PUPPY_STATES.includes(st.state));
+  check("puppy status carries the agent identity", st.agent === "ROBO PUPPY" && /Autonomous Development Agent/.test(st.title));
+  check(
+    "every puppy field declares whether it is real or derived",
+    st.fields.every((f) => typeof f.real === "boolean" && typeof f.from === "string" && f.from.length > 0),
+  );
+  check(
+    "puppy status never fabricates a value it cannot source",
+    st.fields.every((f) => f.real || f.value === null || f.label === "STATUS" || f.label === "MODEL"),
+  );
+  const card = renderTerminal(st);
+  check("puppy terminal card renders the identity and a data row", /ROBO PUPPY/.test(card) && /STATUS/.test(card));
+  check("puppy terminal card shows unknown values as an em dash, not a guess", !/BUILD\s+PASS/.test(card) || Boolean(st.fields.find((f) => f.label === "BUILD")?.real));
+
+  // ---- visual critic verdicts are mechanical, not aesthetic ----
+  const goodScreen = { ok: true, visible: true, brightCore: true, blownOut: false, detail: "HIGH", depth: true };
+  check("visual verdict passes a healthy frame", screenVerdict(goodScreen).pass);
+  check(
+    "visual verdict fails a frame that lost the core",
+    screenVerdict({ ...goodScreen, brightCore: false }).fails.some((f) => /bright focal core/.test(f)),
+  );
+  check("visual verdict fails an empty frame", !screenVerdict({ ...goodScreen, visible: false }).pass);
+  check("visual verdict fails a blown-out frame", !screenVerdict({ ...goodScreen, blownOut: true }).pass);
+  check(
+    "visual verdict reports unavailable vision rather than passing by default",
+    screenVerdict({ ok: false, reason: "ollama down" }).fails.some((f) => /vision unavailable/.test(f)),
+  );
+  const cmp = compareScreens(goodScreen, { ...goodScreen, brightCore: false, detail: "LOW" });
+  check("screen comparison reports what a candidate lost", cmp.regressed && cmp.lost.includes("bright core") && cmp.lost.includes("fine detail"));
+  check("screen comparison reports gains too", compareScreens({ ...goodScreen, depth: false }, goodScreen).gained.includes("depth cue"));
 
   // ---- regression guard: the analyzers must stay quiet on real sources ----
   const repoScan = scanRepoFiles(join(repoRoot, "src"));
