@@ -55,13 +55,13 @@ Write a structured investigation in the visible final answer with:
 This is not a trivial glance. Be concrete. Cite paths and symbols.`;
 }
 
-export function planPrompt(spec, status, investigation) {
+export function planPrompt(spec, status, investigation, { correction = "" } = {}) {
   return `${DISCIPLINE}
 
 ${missionHeader(spec, status)}
 
 CURRENT PASS: PLAN (read-only). Fresh conversation. Do not edit files.
-
+${correction ? `\nA deterministic gate rejected your previous plan. Correct exactly what it identifies; do not restart the plan from scratch.\n\n${correction}\n` : ""}
 Prior investigation (from mission disk):
 ${clip(investigation, 9000)}
 
@@ -200,6 +200,8 @@ export function repairDiagnosePrompt(spec, status, {
   proposalSummary,
   diagnostics,
   windows,
+  structure,
+  failureClass,
   delta,
   invariants,
   files,
@@ -209,8 +211,8 @@ export function repairDiagnosePrompt(spec, status, {
 ${missionHeader(spec, status)}
 
 CURRENT PASS: REPAIR DIAGNOSIS. Fresh context. READ-ONLY. Do not edit files.
-Do not redesign the feature. For obvious JSX/syntax errors, propose the smallest mechanical fix.
-
+Do not redesign the feature. Propose the smallest mechanical fix.
+${failureClass ? `\nDETERMINISTIC FAILURE CLASS: ${failureClass}\n` : ""}
 Visible answer MUST start with exactly:
 HYPOTHESIS:
 FAULT LOCATION:
@@ -229,7 +231,14 @@ ${(files || []).map((p) => `- ${p}`).join("\n") || "(see diagnostics)"}
 
 EXACT COMPILER/PARSER DIAGNOSTICS:
 ${clip(diagnostics, 5000)}
+${structure ? `
+${clip(structure, 12000)}
 
+TRUST THE ANALYSIS ABOVE. It was produced by a scanner that counted every
+delimiter and resolved every identifier against this file's real imports and
+declarations. Do not re-derive it by reading the source and guessing, and do not
+contradict it. Your job is to choose the smallest edit consistent with it.
+` : ""}
 SOURCE WINDOWS:
 ${clip(windows, 8000)}
 
@@ -242,7 +251,7 @@ ${clip(invariants, 2000)}
 MCP first if you need a caller. Windows only. Do not dump planning conversation.`;
 }
 
-export function applyRepairPrompt(spec, status, { diagnosis, files, diagnostics }) {
+export function applyRepairPrompt(spec, status, { diagnosis, files, diagnostics, structure }) {
   return `${DISCIPLINE}
 
 ${missionHeader(spec, status)}
@@ -261,7 +270,7 @@ ${(files || []).map((p) => `- ${p}`).join("\n") || "(see diagnosis)"}
 
 DIAGNOSTICS:
 ${clip(diagnostics, 4000)}
-
+${structure ? `\n${clip(structure, 10000)}\n` : ""}
 MINIMAL REPAIR DIAGNOSIS:
 ${clip(diagnosis, 6000)}`;
 }

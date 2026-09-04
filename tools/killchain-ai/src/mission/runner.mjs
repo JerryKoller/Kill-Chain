@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { missionsDataDir, repoRoot } from "../paths.mjs";
 import { gitCapture } from "../git.mjs";
 import { buildCorpus } from "../corpus/build.mjs";
+import { DEFAULT_MISSION_MODEL, normalizeModelId } from "./model.mjs";
 import { parseMissionFile, pathEditable } from "./schema.mjs";
 import { isTerminal } from "./machine.mjs";
 import {
@@ -34,8 +35,12 @@ import {
   repairDiagnosePrompt,
 } from "./prompts.mjs";
 import { classifyEditOutcome, emptyEditPolicy, shouldExpectEdit } from "./editGate.mjs";
-import { checkChangedTsSyntax, formatDiagnostics } from "./syntax.mjs";
+import { checkChangedTsSyntax, formatDiagnostics, formatStructures } from "./syntax.mjs";
+import { checkChangedIdentifiers, formatIdentifierPacket } from "./identifierGate.mjs";
+import { ACTIONS, classifyFailure, describeFailure, escalate } from "./failureClass.mjs";
+import { buildTeacherPacket, writeTeacherPacket } from "./teacherPacket.mjs";
 import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, checkProposalConcrete, proposalScopeCheck, quarantineFitsDest, unionToolNames } from "./critic.mjs";
+import { classifyGateFailure, criticFormatPacket, referencePacket, emptyEditPacket, locateSymbols, nearestValidReferences } from "./tutor.mjs";
 import {
   fileSizeOk,
   gitDiffCheck,
@@ -98,7 +103,7 @@ function composeReport(status, { extra = "" } = {}) {
 - started: ${status.startedAt}
 - ended: ${status.endedAt || "(running)"}
 - durationMs: ${elapsed(status)}
-- model: ollama/qwen3.5:9b
+- model: ${status.model || DEFAULT_MISSION_MODEL}
 - modelCalls: ${status.modelCalls}
 - planRetries: ${status.planRetries}
 - editRetries: ${status.editRetries}
@@ -160,6 +165,7 @@ async function invoke(ctx, phase, prompt) {
       outPath,
       timeoutMs: spec.sessionTimeoutMs,
       cwd: repoRoot,
+      model: status.model || spec.model || DEFAULT_MISSION_MODEL,
     });
   } catch (err) {
     const rec = {
@@ -203,6 +209,7 @@ async function invoke(ctx, phase, prompt) {
           outPath: retryPath,
           timeoutMs: spec.sessionTimeoutMs,
           cwd: repoRoot,
+          model: status.model || spec.model || DEFAULT_MISSION_MODEL,
         });
         if (retry.text?.trim()) text = retry.text.trim();
         if (retry.parsed?.tools?.length) {
@@ -535,6 +542,7 @@ export async function runMission({
   stopAfter = null,
   approveAudioEdit = false,
   retry = false,
+  model = null,
   dataRoot = missionsDataDir,
   log = console.log,
   deps = {},
@@ -569,6 +577,9 @@ export async function runMission({
   }
 
   spec.dryRun = Boolean(status.dryRun);
+  const chosen = model || deps.model || spec.model || status.model || DEFAULT_MISSION_MODEL;
+  spec.model = normalizeModelId(chosen);
+  status.model = spec.model;
   status._spec = spec;
   acquireLock(dir);
 
@@ -640,7 +651,7 @@ export async function runMission({
 
         case "PREFLIGHT": {
           log("preflight…");
-          const pf = await runPreflight(spec, deps);
+          const pf = await runPreflight(spec, { ...deps, model: status.model });
           ctx.preflight = pf;
           ctx.snapshot = pf.snapshot;
           writeText(dir, "preflight.json", JSON.stringify({
@@ -668,7 +679,7 @@ export async function runMission({
         }
 
         case "INVESTIGATING": {
-          log("investigating (local Qwen)…");
+          log(`investigating (${status.model})…`);
           beginPhase(ctx, "investigate");
           const { text } = await invoke(ctx, "investigate", investigatePrompt(spec, status));
           writeText(dir, "INVESTIGATION.md", text);
@@ -682,10 +693,14 @@ export async function runMission({
         }
 
         case "PLANNING": {
-          log("planning (local Qwen)…");
+          log(`planning (${status.model})…`);
           beginPhase(ctx, "plan");
           const investigation = readText(dir, "INVESTIGATION.md");
-          const { text } = await invoke(ctx, "plan", planPrompt(spec, status, investigation));
+          // A correction written by the plan-critic gate is consumed once, so a
+          // later clean retry is not re-litigating a stale rejection.
+          const planCorrection = readText(dir, "PLAN_CORRECTION.md");
+          if (planCorrection) writeText(dir, "PLAN_CORRECTION.md", "");
+          const { text } = await invoke(ctx, "plan", planPrompt(spec, status, investigation, { correction: planCorrection }));
           writeText(dir, "PLAN.md", text);
           const git = postPhaseGit(ctx, { revertAllApp: true });
           ingestThinDump(dir, text, git, "PLAN.md");
@@ -695,7 +710,7 @@ export async function runMission({
         }
 
         case "PLAN_REVIEW": {
-          log("plan critic (local Qwen)…");
+          log(`plan critic (${status.model})…`);
           beginPhase(ctx, "plan-critic");
           ingestThinDump(dir, readText(dir, "PLAN.md"), {}, "PLAN.md");
           const plan = readText(dir, "PLAN.md");
@@ -710,11 +725,24 @@ export async function runMission({
           });
           if ((!gate.toolsGate.ok || gate.missingVerdict) && (status.criticRetries || 0) < 1) {
             status.criticRetries = (status.criticRetries || 0) + 1;
-            appendJournal(dir, "critic format/tools weak; retrying critic once");
+            // Tutoring retry: hand back the exact missing fields and the
+            // critic's own prior text to reshape, rather than re-running the
+            // whole critic prompt and hoping for a different shape.
+            const cls = classifyGateFailure(gate);
+            const packet = criticFormatPacket({
+              gate,
+              criticText: text,
+              missingFields: cls.missingFields.length ? cls.missingFields : ["VERDICT"],
+              retriesUsed: status.criticRetries,
+              retryBudget: 1,
+              verdictWords: "PASS or FAIL",
+            });
+            appendJournal(dir, `critic contract failure (${cls.kind}: ${cls.missingFields.join(",") || gate.errors.join(",")}); tutoring retry`);
+            writeText(dir, "CRITIC_CORRECTION_1.md", packet);
             beginPhase(ctx, "plan-critic-retry");
             const retry = await invoke(ctx, "plan-critic", criticPrompt(spec, status, {
               plan,
-              extra: "Previous critic output was missing a one-line VERDICT: PASS|FAIL|BLOCK or used zero retrieval tools. Inspect real files, then output INSPECTED, RISK, EVIDENCE, and VERDICT: PASS (or FAIL) on its own line.",
+              extra: packet,
             }));
             text = retry.text;
             parsed = { ...(retry.parsed || {}), tools: unionToolNames(parsed.tools, retry.parsed?.tools) };
@@ -739,7 +767,27 @@ export async function runMission({
             if (status.planRetries > spec.maxRetriesPerPhase) {
               return block(dir, status, `plan critic gate failed: ${gate.errors.join("; ") || gate.modelVerdict}`);
             }
-            appendJournal(dir, `plan critic gate ${gate.modelVerdict} ${gate.errors.join(",")}; revising plan`);
+            // Localize before sending the plan back. An invented path is
+            // returned with the verified symbol location and the real
+            // candidates, so the retry corrects a reference instead of
+            // re-deriving the whole plan.
+            const cls = classifyGateFailure(gate);
+            const invalid = [
+              ...(gate.planFiles?.missing || []),
+              ...(gate.artifacts?.innerPanels || []),
+            ];
+            if (invalid.length) {
+              const symbolNames = invalid.map((p) => String(p).split("/").pop().replace(/\.(tsx|ts)$/, ""));
+              writeText(dir, "PLAN_CORRECTION.md", referencePacket({
+                invalid,
+                nearest: invalid.flatMap((p) => nearestValidReferences(p, { candidates: spec.readOnlyPaths || [] })),
+                symbols: await locateSymbols(symbolNames),
+                allowedPaths: spec.allowedPaths || [],
+                retriesUsed: status.planRetries,
+                retryBudget: spec.maxRetriesPerPhase,
+              }));
+            }
+            appendJournal(dir, `plan critic gate ${gate.modelVerdict} [${cls.kind}] ${gate.errors.join(",")}; revising plan`);
             transition(dir, status, "PLANNING", `critic ${gate.errors.join(",") || gate.modelVerdict}`);
             break;
           }
@@ -971,6 +1019,25 @@ export async function runMission({
             status.syntaxGateFailed = false;
           }
 
+          // Scope gate. The syntax gate cannot see missing names (a single
+          // buffer cannot resolve imports), so invented identifiers used to
+          // survive until the project typecheck. Catching them here turns a
+          // ~15s validation failure into an immediate, precise repair packet.
+          // Deliberately never blocks: if it cannot be satisfied we fall
+          // through and let the real typecheck be the authority.
+          const identFn = deps.checkChangedIdentifiers || checkChangedIdentifiers;
+          const idents = identFn(allowed, repoIo(ctx));
+          writeText(dir, "ident-gate.json", JSON.stringify(idents, null, 2));
+          if (!idents.ok && (status.identRetries || 0) < spec.maxRetriesPerPhase) {
+            status.identRetries = (status.identRetries || 0) + 1;
+            status.identFailures = (status.identFailures || 0) + 1;
+            const names = idents.results.flatMap((r) => r.unresolved.map((u) => u.name));
+            saveStatus(dir, status);
+            transition(dir, status, "REPAIRING", `scope gate: unresolved ${[...new Set(names)].join(", ")}`);
+            if (maybeStop(ctx)) return status;
+            break;
+          }
+
           saveStatus(dir, status);
           transition(dir, status, "VALIDATING", `${allowed.length} phase-delta files owned=${(ctx.attribution?.missionOwned || []).length}`);
           if (maybeStop(ctx)) return status;
@@ -1009,14 +1076,86 @@ export async function runMission({
         case "REPAIRING": {
           let syntax = {};
           try { syntax = JSON.parse(readText(dir, "syntax-gate.json") || "{}"); } catch { syntax = {}; }
+          let identGate = {};
+          try { identGate = JSON.parse(readText(dir, "ident-gate.json") || "{}"); } catch { identGate = {}; }
           const files = repairFiles(ctx, syntax);
+          const validationText = readText(dir, "validation.json");
           const diagnostics = (!syntax.ok && (syntax.diagnostics || []).length)
             ? formatDiagnostics(syntax.diagnostics)
-            : readText(dir, "validation.json");
+            : validationText;
           const windows = (syntax.diagnostics || [])
             .map((d) => `--- ${d.file}:${d.line}:${d.column} ${d.code} ---\n${d.excerpt || ""}`)
             .join("\n\n");
           const proposalSummary = readText(dir, "ORIGINAL_PROPOSAL.md") || readText(dir, "PROPOSAL.md");
+
+          // Classify the failure deterministically, then choose the response by
+          // failure TYPE rather than by retry count alone. Repeated mechanical
+          // failures restore the pre-edit bytes instead of mutating a file that
+          // previous repair attempts already damaged.
+          const classification = classifyFailure({
+            syntax: syntax.ok === false ? syntax : undefined,
+            validation: syntax.ok === false ? "" : validationText,
+            proposalText: proposalSummary,
+          });
+          status.failureClassCounts = status.failureClassCounts || {};
+          const seen = status.failureClassCounts[classification.failureClass] || 0;
+          const decision = escalate(classification, {
+            attemptsForClass: seen,
+            teacherAvailable: Boolean(spec.teacher?.enabled),
+            level: spec.level,
+          });
+          status.failureClassCounts[classification.failureClass] = seen + 1;
+          status.lastFailureClass = classification.failureClass;
+          status.lastEscalation = decision.action;
+          writeText(dir, "failure-class.json", JSON.stringify({ classification, decision, at: new Date().toISOString() }, null, 2));
+          appendJournal(dir, describeFailure(classification, decision));
+          saveStatus(dir, status);
+
+          if (decision.action === ACTIONS.BLOCK) {
+            return block(dir, status, `${classification.failureClass}: ${decision.reason}`);
+          }
+
+          // Teacher escalation. The foreman assembles the evidence packet and
+          // stops; a senior model (Cursor/Opus today, a remote teacher later)
+          // answers using the contract, and its answer is validated against the
+          // repository before it can influence an execution phase.
+          if (decision.action === ACTIONS.TEACHER) {
+            const packet = buildTeacherPacket({ missionDir: dir, spec, status, classification, files });
+            const dest = join(dir, "teacher", `${String(status.phaseIndex).padStart(3, "0")}-${classification.failureClass}`);
+            writeTeacherPacket(dest, packet);
+            appendJournal(dir, `teacher packet written: ${dest} (${packet.totalChars} chars, withinBudget=${packet.withinBudget})`);
+            status.teacherEscalations = (status.teacherEscalations || 0) + 1;
+            saveStatus(dir, status);
+            return block(dir, status, `${classification.failureClass}: escalated to teacher — packet at ${dest}`);
+          }
+
+          // Structural and scope facts computed by the analyzers, not inferred
+          // by the model. This is the difference between "unexpected token" and
+          // "line 372 closes nothing; the stack expects </EditorToolbarGroup>".
+          const structure = [
+            formatStructures(syntax.structures),
+            formatIdentifierPacket(identGate.results),
+          ].filter((s) => s && s.trim()).join("\n\n---\n\n");
+
+          if (decision.action === ACTIONS.RESTORE_AND_REAPPLY) {
+            const rolled = transactionalRestore(ctx);
+            if (rolled.ok) {
+              status.transactionalRetries = (status.transactionalRetries || 0) + 1;
+              status.syntaxRetries = 0;
+              status.identRetries = 0;
+              status.syntaxGateFailed = false;
+              status.emptyEditStreak = 0;
+              const original = readText(dir, "ORIGINAL_PROPOSAL.md");
+              if (original.trim()) writeText(dir, "PROPOSAL.md", original);
+              status.forceApplyRetry = 1;
+              saveStatus(dir, status);
+              transition(dir, status, "EDITING", `${classification.failureClass}: restored pre-edit bytes, re-applying approved patch`);
+              if (maybeStop(ctx)) return status;
+              break;
+            }
+            appendJournal(dir, "pre-edit restore unavailable; continuing with focused repair");
+          }
+
           const skipDiagnose = Boolean(status.forceApplyRepair);
           status.forceApplyRepair = false;
           if (!skipDiagnose) {
@@ -1026,6 +1165,8 @@ export async function runMission({
               proposalSummary,
               diagnostics,
               windows,
+              structure,
+              failureClass: classification.failureClass,
               delta: readText(dir, "CURRENT.diff"),
               invariants: (spec.acceptance || []).join("\n"),
               files,
@@ -1040,6 +1181,7 @@ export async function runMission({
             diagnosis: readText(dir, "REPAIR_DIAGNOSIS.md") || readText(dir, "REPAIR_PROPOSAL.md"),
             files,
             diagnostics,
+            structure,
           }));
           const repairGit = endPhase(ctx, { writesApp: true });
           status.lastWritePhase = "repair-apply";
