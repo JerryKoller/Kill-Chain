@@ -77,7 +77,42 @@ decision.
 
 ---
 
-## Experiment 2 — restore-then-reapply: **IMPLEMENTED, UNMEASURED**
+## Experiment 2 — restore-then-reapply: **NOT EXERCISED** (rerun completed)
+
+The Tier-5 rerun was run with the policy active. Same 6 tasks, same model, same
+budgets.
+
+| | Before (no restore) | After (policy active) |
+|---|---|---|
+| First-try accepted | 2/6 | 3/6 |
+| **Final accepted** | **4/6** | **4/6** |
+| Empty edits | 2 | 2 |
+| Tutor-recovered | 2 | 1 |
+| Production drift | 0 | 0 |
+
+**The policy never fired.** `restoredBeforeTutor` is `false` for all six tasks
+and the restore log line appears zero times: no attempt regressed in this run,
+so there was nothing to roll back. In the earlier run `mech-03` went 1 → 2
+diagnostics and *would* have triggered it; this time `mech-03` made no edit at
+all on round one.
+
+So this is **not** evidence that rollback-on-regression fails to help. It is
+evidence that the rerun did not reproduce the condition the policy exists for.
+Reporting it as "no benefit" would be wrong.
+
+The first-try difference (2/6 → 3/6) cannot be attributed to the policy either,
+since the first attempt happens before any restore logic runs. That is
+nondeterminism again — the same variance that sank Experiment 1.
+
+The one genuinely reassuring signal: **final acceptance was 4/6 in both runs**,
+so the tier-5 endpoint is stable across two independent runs even while
+individual tasks move around.
+
+To actually test the policy, the fixture set needs tasks that reliably provoke
+regression — or the archived two-fault fixture, where the baseline arm regressed
+in 2 of 6 attempts.
+
+### Original note (retained)
 
 `countFaults()` measures independent structural faults plus compiler
 diagnostics, excluding cascade noise. In the curriculum harness, if a first
