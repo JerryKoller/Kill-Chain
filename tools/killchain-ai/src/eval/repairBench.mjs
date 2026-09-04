@@ -64,6 +64,54 @@ function baselineEvidence(source) {
   };
 }
 
+/**
+ * Sequential arm: name ONE divergence and forbid fixing anything else.
+ *
+ * Tests the hypothesis the edit curriculum produced — that the limit on the
+ * archived two-fault fixture is multi-edit execution, not diagnosis. Qwen
+ * scored 1/6 there and 4/6 on single-fault fixtures, so this arm converts the
+ * hard case into a series of single-fault cases.
+ */
+function sequentialPrompt({ fixtureRel, source, round, rounds }) {
+  const diags = checkTsSyntax(REL, source).diagnostics;
+  const packet = jsxRepairPacket({ fileName: fixtureRel, source, diagnostics: diags, jsx: true });
+  const scan = scanStructure(source, { jsx: true });
+  const first = scan.firstDivergence;
+  const remaining = divergenceCount(source).total;
+
+  const target = first
+    ? `LINE ${first.line}, COLUMN ${first.column} — ${first.kind}`
+    : "the single remaining imbalance reported below";
+
+  return `${DISCIPLINE}
+
+CURRENT PASS: SINGLE-FAULT REPAIR (round ${round} of ${rounds}). EXECUTION PHASE. Fresh context.
+
+A scanner has already counted every delimiter in this file. It reports
+${remaining} independent structural fault(s) remaining.
+
+YOUR ENTIRE JOB THIS ROUND IS ONE FAULT:
+${target}
+
+THE ONLY FILE YOU MAY EDIT:
+${fixtureRel}
+
+This is an isolated fixture copy. Do NOT open, read, or edit anything under src/.
+USE THE EDIT/WRITE TOOL ON THAT PATH NOW. Do not only describe the patch.
+
+RULES FOR THIS ROUND:
+- Fix EXACTLY the one fault named above. Nothing else.
+- Do NOT fix other faults even if you can see them. They are the next round's job.
+- Do NOT reformat, rename, add comments, or delete working JSX.
+- The file will be re-scanned after your edit and you will be given the next fault.
+- If the named fault is a surplus closer, DELETE it. If it is an unclosed opener, ADD its closer.
+
+${packet.markdown}
+TRUST THE ANALYSIS ABOVE. Do not re-count delimiters by eye.
+
+REPORT ONLY THE SINGLE LINE YOU CHANGED.`;
+}
+
 function repairPrompt({ fixtureRel, source, assisted }) {
   const ev = baselineEvidence(source);
   const structure = assisted
@@ -187,7 +235,9 @@ async function attempt({ arm, n, model, rounds, log }) {
   for (let round = 1; round <= rounds; round++) {
     const before = readFileSync(fixtureAbs, "utf8");
     if (scanStructure(before, { jsx: true }).ok && checkTsSyntax(REL, before).ok) break;
-    const prompt = repairPrompt({ fixtureRel, source: before, assisted: arm === "assisted" });
+    const prompt = arm === "sequential"
+      ? sequentialPrompt({ fixtureRel, source: before, round, rounds })
+      : repairPrompt({ fixtureRel, source: before, assisted: arm === "assisted" });
     writeFileSync(join(workDir, `PROMPT.round${round}.txt`), prompt);
     promptChars += prompt.length;
     const outPath = join(benchRoot, "sessions", `${arm}-${n}-r${round}.jsonl`);
@@ -269,7 +319,12 @@ export async function runRepairBench({ attempts = 3, rounds = 2, model = DEFAULT
 
   const rows = [];
   for (const arm of arms) {
-    log(`\n== arm: ${arm} (${arm === "assisted" ? "with structural packet" : "compiler diagnostics only"})`);
+    const armLabel = {
+      assisted: "with structural packet",
+      sequential: "one named divergence per round",
+      baseline: "compiler diagnostics only",
+    }[arm] || arm;
+    log(`\n== arm: ${arm} (${armLabel})`);
     for (let n = 1; n <= attempts; n++) {
       rows.push(await attempt({ arm, n, model, rounds, log }));
       const drift = guardDrifted(guard);
