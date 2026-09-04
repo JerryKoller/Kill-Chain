@@ -3,10 +3,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseMissionMarkdown, pathEditable, matchPath } from "./schema.mjs";
 import { assertTransition, ALLOWED_TRANSITIONS } from "./machine.mjs";
-import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict } from "./opencode.mjs";
+import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict, openCodeRunArgs, parseOpenCodeTokens } from "./opencode.mjs";
+import { DEFAULT_MISSION_MODEL, LIGHTNING_MODEL, normalizeModelId, ollamaHasModel } from "./model.mjs";
 import { scanUnixTools } from "./unix.mjs";
-import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew, findInventedInnerPanelFiles } from "./critic.mjs";
+import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew, findInventedInnerPanelFiles, criticGroundingOk } from "./critic.mjs";
+import {
+  TUTOR,
+  classifyGateFailure,
+  kindForError,
+  hasSubstanceFor,
+  criticFormatPacket,
+  referencePacket,
+  scopePacket,
+  emptyEditPacket,
+  validationPacket,
+  substantivePacket,
+  nearestValidReferences,
+} from "./tutor.mjs";
+import { LESSONS, PHASES, MIN_SUPPORT, eligibleLessons, selectLessons, formatLessons } from "./lessons.mjs";
 import { assertMetrics } from "../ui/metrics.mjs";
+import { scanStructure, jsxRepairPacket, fingerprintDelta } from "./jsxStructure.mjs";
+import { checkIdentifiers, formatIdentifierPacket } from "./identifierGate.mjs";
+import { ACTIONS, classifyFailure, escalate } from "./failureClass.mjs";
+import { scanRepoFiles } from "./scanRepo.mjs";
+import { repoRoot } from "../paths.mjs";
+import { buildTeacherPacket, validateTeacherResponse, PACKET_BUDGET } from "./teacherPacket.mjs";
 import { assertSafeMissionId } from "./schema.mjs";
 import {
   classifyPorcelain,
@@ -82,6 +103,26 @@ export async function runMissionTests() {
   const parsed = parseMissionMarkdown(VALID_SPEC);
   check("valid spec parses", parsed.ok && parsed.spec.id === "test-valid", parsed.errors?.join("; "));
   check("spec body captured", parsed.spec.brief.includes("Body brief"));
+
+  const withModel = parseMissionMarkdown(`---
+{
+  "id": "model-override-spec",
+  "title": "model",
+  "goal": "g",
+  "level": 0,
+  "model": "ollama/nemotron-3.5-lightning:30b-a3b"
+}
+---
+`);
+  check("mission spec accepts model override", withModel.ok && withModel.spec.model === "ollama/nemotron-3.5-lightning:30b-a3b");
+  check("default model id is Qwen", DEFAULT_MISSION_MODEL === "ollama/qwen3.5:9b");
+  check("normalizeModelId prefixes ollama", normalizeModelId("nemotron-3.5-lightning:30b-a3b") === LIGHTNING_MODEL);
+  check("ollamaHasModel does not treat Qwen as Lightning", !ollamaHasModel(["qwen3.5:9b"], LIGHTNING_MODEL));
+  check("ollamaHasModel matches Lightning tag", ollamaHasModel(["nemotron-3.5-lightning:30b-a3b"], LIGHTNING_MODEL));
+  const qwenArgs = openCodeRunArgs({ prompt: "p", title: "t", cwd: "C:/repo" });
+  check("OpenCode default args omit -m so opencode.json Qwen remains default", !qwenArgs.includes("-m"));
+  const litArgs = openCodeRunArgs({ prompt: "p", title: "t", cwd: "C:/repo", model: LIGHTNING_MODEL });
+  check("OpenCode Lightning args pass -m", litArgs.includes("-m") && litArgs.includes(LIGHTNING_MODEL));
 
   const bad = parseMissionMarkdown("# no frontmatter\n");
   check("invalid spec rejected", !bad.ok);
@@ -260,6 +301,11 @@ export async function runMissionTests() {
     `${JSON.stringify({ type: "tool_use", part: { type: "tool", tool: "killchain_symbol" } })}\n${JSON.stringify({ type: "text", part: { type: "text", text: "hello" } })}\n`,
   );
   check("MCP first + visible text", mcpParsed.mcpFirst && mcpParsed.text === "hello");
+  const tokParsed = parseOpenCodeJsonl(
+    `${JSON.stringify({ type: "step_finish", part: { type: "step-finish", tokens: { total: 100, input: 80, output: 20, reasoning: 0 } } })}\n${JSON.stringify({ type: "step_finish", part: { type: "step-finish", tokens: { total: 250, input: 200, output: 50, reasoning: 4 } } })}\n`,
+  );
+  check("OpenCode tokens take last cumulative step_finish", tokParsed.tokens?.total === 250 && tokParsed.tokens?.output === 50);
+  check("parseOpenCodeTokens standalone", parseOpenCodeTokens(`${JSON.stringify({ type: "step_finish", part: { type: "step-finish", tokens: { total: 9, input: 8, output: 1 } } })}\n`).total === 9);
 
   check("thin final TEXT is too thin", visibleReportTooThin("final", "I will inspect files now.", {}));
   check("long final TEXT is not thin", !visibleReportTooThin("final", "x".repeat(500), {}));
@@ -1465,6 +1511,481 @@ ${JSON.stringify({
     (scan.tapLifetimes || []).some((h) => String(h.path).includes("bounceExport.ts") && h.kind === "finally")
       && (scan.tapLifetimes || []).some((h) => String(h.path).includes("ScopeView.tsx") && h.kind === "effect-cleanup")
       && (scan.tapLifetimes || []).some((h) => String(h.path).includes("visualIntel.ts") && h.kind === "start-stop"),
+  );
+
+  // ---- deterministic TSX structural analysis (jsxStructure.mjs) ----------
+  const balancedTsx = `export function A() {\n  return (\n    <div className="x">\n      {cond && (\n        <span>hi</span>\n      )}\n    </div>\n  );\n}\n`;
+  check("scanner: balanced TSX is balanced", scanStructure(balancedTsx, { jsx: true }).ok === true);
+
+  // The archived DrumMachine shape: a duplicated `)}` closing nothing.
+  const surplusTsx = `export function A() {\n  return (\n    <div>\n      {cond && (\n        <span>hi</span>\n      )}\n      )}\n    </div>\n  );\n}\n`;
+  const surplusScan = scanStructure(surplusTsx, { jsx: true });
+  check(
+    "scanner: surplus JSX closer is localized to its exact line",
+    surplusScan.ok === false
+      && surplusScan.firstDivergence?.line === 7
+      && surplusScan.unclosed.length === 0,
+  );
+
+  const missingCloser = `export function A() {\n  return (\n    <div>\n      <span>hi</span>\n  );\n}\n`;
+  const missingScan = scanStructure(missingCloser, { jsx: true });
+  check(
+    "scanner: unclosed opener is reported as missing, not surplus",
+    missingScan.ok === false && missingScan.unclosed.some((u) => u.name === "div"),
+  );
+
+  const swapped = `export function A() {\n  return (\n    <div>\n      <section>\n        <span>hi</span>\n      </div>\n    </section>\n  );\n}\n`;
+  const swappedScan = scanStructure(swapped, { jsx: true });
+  check(
+    "scanner: transposed closing tags are detected as a pair",
+    (swappedScan.swappedClosers || []).length === 1
+      && swappedScan.tagMismatches[0].openedAtLine === 4,
+  );
+
+  // Constructs that must NOT be mistaken for JSX or for stray delimiters.
+  check(
+    "scanner: template literal containing // is not a comment",
+    scanStructure("const u = `proto:///load?p=${encodeURIComponent(x)}`;\n", { jsx: false }).ok === true,
+  );
+  check(
+    "scanner: regex literal containing quotes and brackets is skipped",
+    scanStructure('const s = String(v).replace(/"/g, "%22");\nconst r = /^A \\((?:[^,]+,)?([^,]+)\\)$/.exec(s);\n', { jsx: false }).ok === true,
+  );
+  check(
+    "scanner: generic type parameter list is not a JSX element",
+    scanStructure("type P = { onChange: <K extends keyof T>(k: K) => void };\n", { jsx: true }).ok === true,
+  );
+  check(
+    "scanner: JSX element with explicit type arguments is balanced",
+    scanStructure("const A = () => (\n  <Strip<Mode> eyebrow=\"x\" value={m} />\n);\n", { jsx: true }).ok === true,
+  );
+  check(
+    "scanner: fragment after a block comment is recognized",
+    scanStructure("const A = cond ? (\n  /* note */\n  <>\n    <b>x</b>\n  </>\n) : null;\n", { jsx: true }).ok === true,
+  );
+  check(
+    "scanner: fragment as an attribute value is recognized",
+    scanStructure("const A = (\n  <Shell right={\n    <>\n      <b>x</b>\n    </>\n  } />\n);\n", { jsx: true }).ok === true,
+  );
+  check(
+    "scanner: comparison operators are not JSX",
+    scanStructure("const ok = a < b && c > d;\nconst n = total / count;\n", { jsx: false }).ok === true,
+  );
+
+  const packet = jsxRepairPacket({ fileName: "x.tsx", source: surplusTsx, diagnostics: [] });
+  check(
+    "structural packet names the fault line, the shape, and the expected closers",
+    /FIRST STRUCTURAL DIVERGENCE: line 7/.test(packet.markdown)
+      && /TOO MANY closers/.test(packet.markdown)
+      && /EXPECTED CLOSER SEQUENCE/.test(packet.markdown)
+      && /OPEN FRAME STACK/.test(packet.markdown),
+  );
+  check(
+    "fingerprint delta reports a repair that only removed the surplus closer",
+    fingerprintDelta(surplusTsx, balancedTsx, { jsx: true }).nowBalanced === true,
+  );
+
+  // ---- identifier scope gate (identifierGate.mjs) ------------------------
+  const scopedOk = "import { useStore } from './s';\nexport function A() {\n  const v = useStore();\n  return v;\n}\n";
+  check("scope gate: fully resolved file is clean", checkIdentifiers("a.ts", scopedOk).ok === true);
+
+  // The exact archived failure: store name used where the hook was imported.
+  const invented = "import { useFireSequencerStore } from './s';\nexport function A() {\n  setActiveSectionId('x');\n  return fireSequencerStore.getState();\n}\n";
+  const identRes = checkIdentifiers("a.ts", invented);
+  check(
+    "scope gate: identifiers declared nowhere are reported",
+    identRes.ok === false
+      && identRes.unresolved.map((u) => u.name).sort().join(",") === "fireSequencerStore,setActiveSectionId",
+  );
+  check(
+    "scope gate: suggests the real in-scope hook for a bare store name",
+    (identRes.unresolved.find((u) => u.name === "fireSequencerStore")?.candidates || [])
+      .includes("useFireSequencerStore"),
+  );
+  check(
+    "scope gate: destructured, catch, and type-param bindings all count as declared",
+    checkIdentifiers(
+      "a.ts",
+      "export function A<T>(input: T) {\n  const { a, b: [c] } = obj();\n  try { a(); } catch (e) { c(e); }\n  return input;\n}\nfunction obj() { return { a: () => 0, b: [() => 0] }; }\n",
+    ).unresolved.length === 0,
+  );
+  check(
+    "scope gate: lowercase JSX tags and attribute names are not references",
+    checkIdentifiers("a.tsx", "export const A = () => <div className=\"x\" data-y=\"1\" />;\n").ok === true,
+  );
+  check(
+    "scope gate packet tells the model to use existing names",
+    /DECLARED NOWHERE/.test(formatIdentifierPacket([identRes]))
+      && /Do not introduce new identifiers/.test(formatIdentifierPacket([identRes])),
+  );
+
+  // ---- failure classification + escalation (failureClass.mjs) ------------
+  const mech = classifyFailure({
+    syntax: { ok: false, structures: [{ file: "a.tsx", balanced: false, faultLine: 372, surplus: 1, unclosed: 0, mismatches: 2 }] },
+  });
+  check("classifier: broken delimiters classify as MECHANICAL_SYNTAX", mech.failureClass === "MECHANICAL_SYNTAX");
+  check(
+    "escalation: a repeated mechanical failure restores pre-edit instead of mutating again",
+    escalate(mech, { attemptsForClass: 0 }).action === ACTIONS.STRUCTURAL_REPAIR
+      && escalate(mech, { attemptsForClass: 1 }).action === ACTIONS.RESTORE_AND_REAPPLY,
+  );
+
+  const invClass = classifyFailure({ validation: "error TS2552: Cannot find name 'fireSequencerStore'. Did you mean 'useFireSequencerStore'?" });
+  check(
+    "classifier: TS2552 classifies as INVENTED_SYMBOL and extracts both names",
+    invClass.failureClass === "INVENTED_SYMBOL"
+      && invClass.detail.names.includes("fireSequencerStore")
+      && invClass.detail.suggested.includes("useFireSequencerStore"),
+  );
+
+  check(
+    "classifier: zero delta plus a 'no changes required' proposal is PRODUCT_AMBIGUITY, not an apply retry",
+    classifyFailure({
+      editOutcome: { empty: true, kind: "DESCRIBED_BUT_DID_NOT_APPLY" },
+      proposalText: "PROPOSAL: NO CHANGES REQUIRED\nThe UI ambiguity does not exist.",
+    }).action === ACTIONS.BLOCK,
+  );
+  check(
+    "classifier: plain zero delta is an apply-discipline retry that blocks on the third",
+    (() => {
+      const c = classifyFailure({ editOutcome: { empty: true, kind: "EMPTY_EDIT" }, proposalText: "change borderColor to 0.30" });
+      return c.failureClass === "APPLY_EMPTY"
+        && escalate(c, { attemptsForClass: 0 }).action === ACTIONS.STRONG_APPLY
+        && escalate(c, { attemptsForClass: 2 }).action === ACTIONS.BLOCK;
+    })(),
+  );
+  check(
+    "classifier: a missing-verdict critic is a REPORTING_FAILURE, not a replan",
+    (() => {
+      const c = classifyFailure({ criticErrors: ["missing-verdict"] });
+      return c.failureClass === "REPORTING_FAILURE" && c.action === ACTIONS.REEMIT_REPORT;
+    })(),
+  );
+  check(
+    "classifier: substantive critic errors force a replan",
+    classifyFailure({ criticErrors: ["invented-files:src/x.tsx"], inventedFiles: [] }).failureClass === "CRITIC_SUBSTANTIVE",
+  );
+  check(
+    "classifier: writing outside allowedPaths always blocks",
+    classifyFailure({ unauthorized: ["src/audio/AudioEngine.ts"] }).action === ACTIONS.BLOCK,
+  );
+  check(
+    "escalation: audio-level missions never get blind local retries",
+    escalate(classifyFailure({ validation: "boom" }), { attemptsForClass: 2, level: 4, teacherAvailable: false }).action === ACTIONS.BLOCK,
+  );
+
+  // ---- teacher packet + response contract (teacherPacket.mjs) -----------
+  const tSpec = {
+    id: "t1",
+    title: "toggle contrast",
+    level: 1,
+    levelInfo: { name: "single-file UI" },
+    goal: "raise disabled contrast",
+    acceptance: ["disabled tokens are more legible"],
+    allowedPaths: ["src/components/FireCommand/ModuleEnableToggle.tsx"],
+  };
+  const tDir = mkdtempSync(join(tmpdir(), "kc-teacher-"));
+  const brokenFixture = "export function A() {\n  return (\n    <div>\n      {c && (\n        <span>x</span>\n      )}\n      )}\n    </div>\n  );\n}\n";
+  const tPacket = buildTeacherPacket({
+    missionDir: tDir,
+    spec: tSpec,
+    status: { state: "REPAIRING", modelCalls: 9, failureClassCounts: { MECHANICAL_SYNTAX: 2 } },
+    classification: { failureClass: "MECHANICAL_SYNTAX", evidence: ["surplus closer"] },
+    files: ["src/components/FireCommand/ModuleEnableToggle.tsx"],
+    readRepo: () => brokenFixture,
+  });
+  check(
+    "teacher packet carries task, invariants, questions and the structural analysis",
+    Boolean(tPacket.sections["TASK.md"] && tPacket.sections["INVARIANTS.md"]
+      && tPacket.sections["QUESTIONS.md"] && tPacket.sections["STRUCTURE.md"]),
+  );
+  check(
+    "teacher packet stays inside its size budget and never dumps whole files",
+    tPacket.withinBudget === true && tPacket.totalChars < PACKET_BUDGET.totalChars,
+  );
+  check(
+    "teacher packet asks failure-class-specific questions",
+    /DELETE a surplus closer or to RESTORE a deleted opener/.test(tPacket.sections["QUESTIONS.md"]),
+  );
+  check(
+    "teacher packet selects UI invariants for a components path, not audio ones",
+    /interaction behaviour or focus order/.test(tPacket.sections["INVARIANTS.md"])
+      && !/claimSource/.test(tPacket.sections["INVARIANTS.md"]),
+  );
+
+  const goodTeacher = [
+    "DIAGNOSIS: A duplicated JSX expression closer was left behind by an earlier edit.",
+    "EVIDENCE: The scanner reports surplus=1 unclosed=0 with the first divergence at line 7.",
+    "ROOT_CAUSE: The apply pass re-emitted a closer that already existed.",
+    "FAILED_STUDENT_ASSUMPTION: That the parser error line was the line to rewrite.",
+    "RECOMMENDED_REPAIR: Delete the surplus closer line; change nothing else.",
+    "FILES: src/components/FireCommand/ModuleEnableToggle.tsx",
+    "SYMBOLS: NONE",
+    "RISKS: Deleting the wrong closer would unbalance the element stack.",
+    "VALIDATION: syntax gate, then typecheck.",
+    "CONFIDENCE: HIGH",
+  ].join("\n");
+  const okTeacher = validateTeacherResponse(goodTeacher, { spec: tSpec, readRepo: () => brokenFixture });
+  check("teacher contract: a complete, in-scope response validates", okTeacher.ok === true && okTeacher.confidence === "HIGH");
+  check("teacher output is always marked advisory", okTeacher.advisory === true);
+
+  check(
+    "teacher contract: an unstructured prose answer is rejected",
+    validateTeacherResponse("Just delete the extra paren, should be fine.", { spec: tSpec, readRepo: () => brokenFixture })
+      .errors.some((e) => e.startsWith("missing-fields")),
+  );
+  check(
+    "teacher contract: a confident answer citing a non-existent file is rejected",
+    validateTeacherResponse(
+      goodTeacher.replace("FILES: src/components/FireCommand/ModuleEnableToggle.tsx", "FILES: src/components/FireCommand/ModuleEnableToggleBase.tsx"),
+      { spec: tSpec, readRepo: (rel) => (rel.includes("Base") ? null : brokenFixture) },
+    ).errors.some((e) => e.startsWith("invented-files")),
+  );
+  check(
+    "teacher contract: a recommendation outside allowedPaths is rejected",
+    validateTeacherResponse(
+      goodTeacher.replace("FILES: src/components/FireCommand/ModuleEnableToggle.tsx", "FILES: src/audio/AudioEngine.ts"),
+      { spec: tSpec, readRepo: () => brokenFixture },
+    ).errors.some((e) => e.startsWith("outside-allowed")),
+  );
+  check(
+    "teacher contract: symbols that do not appear in the cited files are rejected",
+    validateTeacherResponse(
+      goodTeacher.replace("SYMBOLS: NONE", "SYMBOLS: useNonExistentHook"),
+      { spec: tSpec, readRepo: () => brokenFixture },
+    ).errors.some((e) => e.startsWith("symbols-not-found")),
+  );
+
+  // ================= tutoring gates: detect -> localize -> explain =========
+
+  // ---- failure-kind routing ----
+  check("kindForError: missing-verdict is a format failure", kindForError("missing-verdict") === TUTOR.CRITIC_FORMAT);
+  check("kindForError: invented-files is a reference failure", kindForError("invented-files:src/x.tsx") === TUTOR.INVALID_REFERENCE);
+  check("kindForError: outside-allowed is a scope failure", kindForError("outside-allowed:src/y.tsx") === TUTOR.SCOPE);
+  check("kindForError: unresolved-design is product ambiguity", kindForError("unresolved-design") === TUTOR.PRODUCT_AMBIGUITY);
+
+  const fmtOnly = classifyGateFailure({ errors: ["missing-verdict"], modelVerdict: "PASS" });
+  check("format-only failure is classified format-only", fmtOnly.formatOnly && fmtOnly.kind === TUTOR.CRITIC_FORMAT);
+  check("format-only failure names the exact missing field", fmtOnly.missingFields.includes("VERDICT"));
+
+  const refWins = classifyGateFailure({ errors: ["missing-verdict", "invented-files:src/nope.tsx"], modelVerdict: "PASS" });
+  check(
+    "an invented reference outranks a formatting problem",
+    refWins.kind === TUTOR.INVALID_REFERENCE && !refWins.formatOnly,
+  );
+
+  const negative = classifyGateFailure({ errors: [], modelVerdict: "FAIL" });
+  check(
+    "a clean negative verdict is substantive, not a contract failure",
+    negative.kind === TUTOR.CRITIC_SUBSTANTIVE && !negative.formatOnly,
+  );
+
+  const ambiguity = classifyGateFailure({ errors: ["unresolved-design", "missing-verdict"], modelVerdict: "PASS" });
+  check("product ambiguity outranks every other class", ambiguity.kind === TUTOR.PRODUCT_AMBIGUITY);
+
+  // ---- substance detection decides whether a cheap reshape is even safe ----
+  const richCritic = [
+    "I inspected src/components/FireCommand/ModuleEnableToggle.tsx around line 110.",
+    "The contrast change could break the enabled styling, which would be a regression.",
+    "I verified onClick still calls setModuleEnable because the handler is untouched.",
+    "I recommend we proceed.",
+  ].join("\n");
+  check("substance detected for INSPECTED when a real path is cited", hasSubstanceFor("INSPECTED", richCritic));
+  check("substance detected for RISK when a regression is discussed", hasSubstanceFor("RISK", richCritic));
+  check("substance detected for VERDICT when a recommendation is stated", hasSubstanceFor("VERDICT", richCritic));
+
+  const emptyish = "Complete. Let me now emit the report.";
+  check("no substance claimed for a stub output", !hasSubstanceFor("RISK", emptyish) && !hasSubstanceFor("VERDICT", emptyish));
+
+  // ---- critic format packet: reshape only, never fabricate ----
+  const fmtPacket = criticFormatPacket({
+    gate: { errors: ["missing-verdict"] },
+    criticText: richCritic,
+    missingFields: ["VERDICT"],
+  });
+  check("critic format packet names the missing field", /EXACT_MISSING_FIELDS: VERDICT/.test(fmtPacket));
+  check("critic format packet forbids re-investigation", /Do not re-investigate/.test(fmtPacket));
+  check("critic format packet forbids inventing evidence", /Do not invent evidence/.test(fmtPacket));
+  check("critic format packet returns the model's own output to reshape", fmtPacket.includes("I inspected src/components/FireCommand/ModuleEnableToggle.tsx"));
+  check("critic format packet carries a retry budget", /RETRY_BUDGET: 0 of 1 used/.test(fmtPacket));
+
+  const noSubstancePacket = criticFormatPacket({
+    gate: { errors: ["no-risk"] },
+    criticText: emptyish,
+    missingFields: ["RISK"],
+  });
+  check(
+    "format repair demands MISSING rather than a fabricated field",
+    /write the label followed by MISSING/i.test(noSubstancePacket),
+  );
+
+  // ---- grounded vs ungrounded zero-tool critics ----
+  const l1 = { level: 1, allowedPaths: ["src/components/FireCommand/ModuleEnableToggle.tsx"] };
+  const citing = "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx\nRISK: contrast\nEVIDENCE: diff shows only style values changed\nVERDICT: PASS";
+  const groundedNoTools = criticGroundingOk({
+    criticText: citing,
+    tools: [],
+    spec: l1,
+    suppliedEvidence: "diff --git a/src/components/FireCommand/ModuleEnableToggle.tsx b/src/components/FireCommand/ModuleEnableToggle.tsx\n+ borderColor",
+  });
+  check(
+    "zero-tool critic is grounded when the diff it cites was supplied",
+    groundedNoTools.ok && groundedNoTools.via === "supplied-evidence",
+  );
+
+  const ungroundedNoTools = criticGroundingOk({ criticText: citing, tools: [], spec: l1, suppliedEvidence: "" });
+  check(
+    "zero-tool critic with no supplied evidence is ungrounded",
+    !ungroundedNoTools.ok && ungroundedNoTools.reason === "critic-no-tools",
+  );
+
+  const partlyGrounded = criticGroundingOk({
+    criticText: `${citing}\nAlso inspected src/components/FireCommand/Invented.tsx`,
+    tools: [],
+    spec: l1,
+    suppliedEvidence: "diff --git a/src/components/FireCommand/ModuleEnableToggle.tsx b/src/components/FireCommand/ModuleEnableToggle.tsx",
+  });
+  check(
+    "citing a path absent from the supplied evidence is still ungrounded",
+    !partlyGrounded.ok,
+  );
+
+  check(
+    "tool count is not required when the level does not demand it",
+    criticGroundingOk({ criticText: citing, tools: [], spec: { level: 0 } }).ok,
+  );
+
+  // ---- the archived colonless verdict must parse ----
+  const colonless = parseCritic("## INSPECTED\n- src/state/coverStore.ts\n\n## VERDICT READY");
+  check("`## VERDICT READY` parses as a verdict", !colonless.missingVerdict && colonless.verdict === "READY");
+  check("`VERDICT - PASS` parses as a verdict", parseCritic("VERDICT - PASS").verdict === "PASS");
+  check(
+    "a bare mention of the word verdict is not a verdict",
+    parseCritic("I will now produce the verdict for this mission.").missingVerdict,
+  );
+
+  // ---- reference tutoring uses verified alternatives, never guesses ----
+  const near = nearestValidReferences("src/components/FireCommand/ModuleEnableToggleBase.tsx", {
+    candidates: ["src/components/FireCommand/ModuleEnableToggle.tsx", "src/components/FireCommand/fcChip.tsx"],
+  });
+  check(
+    "nearest-reference finds the real sibling for an invented name",
+    near.some((n) => n.path === "src/components/FireCommand/ModuleEnableToggle.tsx"),
+  );
+  check(
+    "nearest-reference offers nothing when no candidate is close",
+    nearestValidReferences("src/totally/Unrelated.tsx", { candidates: ["src/components/FireCommand/fcChip.tsx"] }).length === 0,
+  );
+  check(
+    "nearest-reference never proposes a path that does not exist",
+    nearestValidReferences("src/components/FireCommand/DrivePanel.tsx", {
+      candidates: ["src/components/FireCommand/DrivePanelXYZ.tsx"],
+    }).length === 0,
+  );
+
+  const refPack = referencePacket({
+    invalid: ["src/components/FireCommand/HomeBandContent.tsx"],
+    nearest: [{ path: "src/components/FireCommand/fcChip.tsx", why: "sibling with related name" }],
+    symbols: [{ symbol: "FireBandLabel", path: "src/components/FireCommand/FireSegTabs.tsx" }],
+    allowedPaths: ["src/components/FireCommand/fcChip.tsx"],
+  });
+  check("reference packet lists the invalid path", refPack.includes("HomeBandContent.tsx"));
+  check("reference packet names the verified symbol location", /FireBandLabel is defined in src\/components\/FireCommand\/FireSegTabs\.tsx/.test(refPack));
+  check("reference packet forbids inventing a replacement", /Do not invent a replacement path/.test(refPack));
+  check("reference packet explains a real symbol implies no file", /does not imply a same-named file/.test(refPack));
+
+  // ---- scope tutoring never widens the allowlist ----
+  const scopePack = scopePacket({
+    unauthorized: ["src/components/FireCommand/WidthPanel.tsx"],
+    allowedPaths: ["src/components/FireCommand/GatePanel.tsx"],
+    delta: "M src/components/FireCommand/WidthPanel.tsx",
+  });
+  check("scope packet shows the unauthorized path", scopePack.includes("WidthPanel.tsx"));
+  check("scope packet shows the authorized paths", scopePack.includes("GatePanel.tsx"));
+  check("scope packet forbids editing outside scope", /Do not edit any path not listed/.test(scopePack));
+  check(
+    "scope packet blocks rather than expanding when the goal needs more",
+    /requires additional authorization and stop/.test(scopePacket({ unauthorized: ["a"], goalRequiresExpansion: true })),
+  );
+
+  // ---- empty-edit tutoring is execution-only ----
+  const emptyPack = emptyEditPacket({
+    proposalSummary: "raise disabled contrast values",
+    expectedFiles: ["src/components/FireCommand/ModuleEnableToggle.tsx"],
+  });
+  check("empty-edit packet states the delta was zero", /ACTUAL DELTA: ZERO BYTES/.test(emptyPack));
+  check("empty-edit packet demands a mutation tool", /Do not finish without calling a mutation tool/.test(emptyPack));
+  check("empty-edit packet forbids writing plan files", /Do not write a PLAN, PROPOSAL, or summary file/.test(emptyPack));
+  check("empty-edit packet forbids re-deriving the change", /already approved/.test(emptyPack));
+
+  // ---- validation tutoring is localized, not a build dump ----
+  const valPack = validationPacket({
+    primary: "SequencerPanel.tsx(486,15): error TS2552",
+    related: Array.from({ length: 40 }, (_, i) => `diag ${i}`),
+    files: ["src/components/FireCommand/SequencerPanel.tsx"],
+    windows: "484 |   const x = 1;",
+    repairScope: ["src/components/FireCommand/SequencerPanel.tsx"],
+  });
+  check("validation packet leads with the primary failure", /PRIMARY FAILURE:\s*\n?SequencerPanel\.tsx\(486,15\)/.test(valPack));
+  check("validation packet caps related diagnostics", /showing 8/.test(valPack) && !valPack.includes("diag 20"));
+  check("validation packet forbids refactoring", /Do not refactor/.test(valPack));
+
+  const subPack = substantivePacket({ verdict: "FAIL", findings: ["focus ring removed"], acceptanceGaps: ["keyboard nav unproven"] });
+  check("substantive packet carries the findings", subPack.includes("focus ring removed"));
+  check("substantive packet requires evidence to dismiss a finding", /Do not dismiss a finding without evidence/.test(subPack));
+  check(
+    "substantive packet is not treated as a format problem",
+    /FAILURE_CLASS: CRITIC_SUBSTANTIVE/.test(subPack),
+  );
+
+  // ---- lesson store: evidence-gated, phase-scoped, never over-injected ----
+  check(
+    "every eligible lesson has corroborating support",
+    eligibleLessons().every((l) => l.supportCount >= MIN_SUPPORT && l.evidenceCases.length >= MIN_SUPPORT),
+  );
+  check(
+    "no lesson claims more support than it lists evidence for",
+    LESSONS.every((l) => l.supportCount <= l.evidenceCases.length),
+  );
+  check(
+    "every lesson targets at least one real mission phase",
+    LESSONS.every((l) => l.promptTargets.length > 0 && l.promptTargets.every((p) => PHASES.includes(p))),
+  );
+
+  const editLessons = selectLessons({ phase: "edit" });
+  check(
+    "edit phase gets apply-discipline lessons",
+    editLessons.some((l) => l.id === "execution-is-mutation"),
+  );
+  check(
+    "edit phase is not given critic-contract lessons",
+    !editLessons.some((l) => l.id === "one-verdict-line"),
+  );
+
+  const criticLessons = selectLessons({ phase: "plan-critic" });
+  check(
+    "critic phase gets the verdict-contract lesson",
+    criticLessons.some((l) => l.id === "one-verdict-line"),
+  );
+
+  const repairLessons = selectLessons({ phase: "repair", failureClass: "REPAIR_DEGRADATION" });
+  check(
+    "a known failure class ranks its own lesson first",
+    repairLessons[0]?.id === "restore-before-reapply",
+  );
+
+  check("lesson selection is capped to keep context lean", selectLessons({ phase: "repair", max: 2 }).length <= 2);
+  check("selecting for an unused phase injects nothing", formatLessons(selectLessons({ phase: "investigate", max: 0 })) === "");
+  check(
+    "formatted lessons state the corroboration bar",
+    /corroborated by at least 2 recorded cases/.test(formatLessons(selectLessons({ phase: "repair" }))),
+  );
+
+  // ---- regression guard: the analyzers must stay quiet on real sources ----
+  const repoScan = scanRepoFiles(join(repoRoot, "src"));
+  check(
+    `structural scanner has no false positives across ${repoScan.total} repo sources`,
+    repoScan.offenders.length === 0,
   );
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -44,7 +44,8 @@ Corpus
 Mission runner (local Qwen / OpenCode; no app edits unless a mission allows them)
   mission create --template ui-feature --id <id>
   mission validate <file>
-  mission run <file> [--dry-run] [--stop-after STATE]
+  mission run <file> [--dry-run] [--stop-after STATE] [--model ollama/qwen3.5:9b]
+  mission resume <id> [--dry-run] [--model ...]
   mission status [id]
   mission resume <id> [--dry-run]
   mission report <id>
@@ -68,6 +69,10 @@ Eval (holdout; no training)
   eval [--mode retrieval|no-rag|rag|ft-rag] [--model qwen3.5:9b]
   eval --ab [--model qwen3.5:9b] [--limit N] [--ids id1,id2]
   eval --ab --skip-generate   Retrieval ranking + packs only (no Ollama)
+
+  lightning-bench [--only all|smoke|jsx|empty|facts|ui]
+  repair-bench [--attempts N] [--only baseline|assisted]
+                              Fair Qwen vs Lightning OpenCode worker bench (fixtures only)
 
   ui capture-fire             Diagnostic Chrome: license, skip tour, Fire Command shot
   ui diagnose                 GPU on/off Vite screenshot probe
@@ -280,6 +285,83 @@ async function main() {
   if (cmd === "overnight-metrics") {
     const { summarizeOvernightMissions } = await import("./eval/overnightMetrics.mjs");
     console.log(JSON.stringify(summarizeOvernightMissions(), null, 2));
+    return;
+  }
+
+  if (cmd === "editing-evidence") {
+    const { report } = await import("./eval/editingEvidence.mjs");
+    report({ log: console.log });
+    return;
+  }
+
+  if (cmd === "teacher-round") {
+    const mod = await import("./eval/editCurriculum.mjs");
+    const { DEFAULT_MISSION_MODEL } = await import("./mission/model.mjs");
+    const level = Number(flags.level || 1);
+    const tasks = mod.buildTasks().filter((t) => mod.TEACHER_LEVEL1[t.id]);
+    const out = [];
+    for (const t of tasks) {
+      const r = await mod.runTeacherRound(t, { model: DEFAULT_MISSION_MODEL, timeoutMs: 240000, level });
+      if (!r) continue;
+      out.push(r);
+      console.log(`${r.id.padEnd(24)} L${level} accepted=${r.accepted ? "PASS" : "fail"} valid=${r.mechanicallyValid ? "y" : "n"} diag=${r.diagnostics} empty=${r.emptyEdit} ${(r.ms / 1000).toFixed(0)}s`);
+    }
+    console.log(`\nteacher L${level}: ${out.filter((r) => r.accepted).length}/${out.length} rescued`);
+    return;
+  }
+
+  if (cmd === "edit-curriculum") {
+    const { runEditCurriculum } = await import("./eval/editCurriculum.mjs");
+    const tiers = flags.tiers ? String(flags.tiers).split(",").map(Number) : null;
+    const { summary } = await runEditCurriculum({
+      tiers,
+      only: flags.only ? String(flags.only) : null,
+      tutor: flags.tutor !== "false",
+      assisted: flags.assisted !== "false",
+      log: console.log,
+    });
+    console.log(`\n${JSON.stringify(summary, null, 2)}`);
+    if (summary.productionDrift.length) process.exitCode = 1;
+    return;
+  }
+
+  if (cmd === "critic-replay") {
+    const { runCriticReplay } = await import("./eval/criticReplay.mjs");
+    const { summary } = await runCriticReplay({ log: console.log });
+    console.log(`\n${JSON.stringify(summary, null, 2)}`);
+    return;
+  }
+
+  if (cmd === "repair-bench") {
+    const { runRepairBench } = await import("./eval/repairBench.mjs");
+    const attempts = Number(flags.attempts || 3);
+    const rounds = Number(flags.rounds || 2);
+    const arms = flags.only ? [String(flags.only)] : ["baseline", "assisted"];
+    const report = await runRepairBench({ attempts, rounds, arms, log: console.log });
+    console.log(JSON.stringify({
+      at: report.at,
+      model: report.model,
+      summary: report.summary,
+      productionDrift: report.productionDrift,
+      reportMd: "tools/killchain-ai/data/overnight/repair-bench/REPORT.md",
+    }, null, 2));
+    if (report.productionDrift.length) process.exitCode = 1;
+    return;
+  }
+
+  if (cmd === "lightning-bench") {
+    const { runLightningBench } = await import("./eval/lightningBench.mjs");
+    const only = String(flags.only || pos[0] || "all");
+    const report = await runLightningBench({ log: console.log, only });
+    console.log(JSON.stringify({
+      at: report.at,
+      only,
+      productionTouched: report.productionTouched,
+      smokeOk: report.smoke?.integrationOk ?? null,
+      winner: report.scorecard?.winner ?? null,
+      reportMd: "tools/killchain-ai/data/overnight/lightning-bench/REPORT.md",
+    }, null, 2));
+    if (report.productionTouched) process.exitCode = 1;
     return;
   }
 
