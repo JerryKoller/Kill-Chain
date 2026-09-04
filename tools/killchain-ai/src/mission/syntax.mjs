@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { repoRoot } from "../paths.mjs";
+import { jsxRepairPacket, scanStructure } from "./jsxStructure.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -124,6 +125,7 @@ export function checkChangedTsSyntax(paths, io) {
   const files = [...new Set(paths || [])].filter(isTsLikePath);
   const diagnostics = [];
   const checked = [];
+  const structures = [];
   for (const rel of files) {
     const buf = io?.read ? io.read(rel) : null;
     if (!buf) {
@@ -137,15 +139,52 @@ export function checkChangedTsSyntax(paths, io) {
       });
       continue;
     }
-    const result = checkTsSyntax(rel, buf.toString("utf8"));
+    const source = buf.toString("utf8");
+    const result = checkTsSyntax(rel, source);
     checked.push(rel);
     diagnostics.push(...result.diagnostics);
+    // Enrich (never gate on) failing files with mechanical structure facts so
+    // the repair pass does not have to re-derive delimiter balance by eye.
+    if (!result.ok) {
+      structures.push(buildStructurePacket(rel, source, result.diagnostics));
+    }
   }
   return {
     ok: diagnostics.length === 0,
     files: checked,
     diagnostics,
+    structures,
   };
+}
+
+/** Deterministic structural evidence for one failing file. */
+export function buildStructurePacket(rel, source, diagnostics = []) {
+  const jsx = /\.(tsx|jsx)$/i.test(rel);
+  const packet = jsxRepairPacket({ fileName: rel, source, diagnostics, jsx });
+  const scan = packet.scan;
+  return {
+    file: rel,
+    faultLine: packet.faultLine,
+    balanced: scan.balanced && scan.ok,
+    surplus: scan.surplusClosers.filter((s) => !s.cascade).length,
+    unclosed: scan.unclosed.length,
+    mismatches: scan.tagMismatches.filter((m) => !m.cascade).length,
+    markdown: packet.markdown,
+  };
+}
+
+/** Structural facts for the repair prompts; empty string when nothing to add. */
+export function formatStructures(structures, limit = 2) {
+  return (structures || [])
+    .slice(0, limit)
+    .map((s) => s.markdown)
+    .join("\n\n---\n\n");
+}
+
+/** True when the buffer's delimiter/JSX skeleton is sound. */
+export function structureOk(rel, source) {
+  const jsx = /\.(tsx|jsx)$/i.test(String(rel || ""));
+  return scanStructure(source, { jsx }).ok;
 }
 
 export function formatDiagnostics(diagnostics, limit = 12) {
