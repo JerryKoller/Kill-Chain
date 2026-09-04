@@ -230,6 +230,11 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
     return n;
   };
 
+  const modelRaw = String(raw.model || "").trim();
+  if (modelRaw && (modelRaw.includes("..") || /[\n\r]/.test(modelRaw) || modelRaw.length > 120)) {
+    errors.push("model must be a short provider/model id without path escape");
+  }
+
   const commitPolicy = String(raw.commitPolicy || "none").trim();
   if (commitPolicy !== "none") {
     errors.push("commitPolicy must be \"none\" in this runner version (no auto-commits)");
@@ -305,6 +310,7 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
     checkpointPolicy,
     commitPolicy: "none",
     corpus,
+    model: modelRaw || "",
     allowAudioEdits,
     allowDependencyChange: false,
     dryRun: Boolean(raw.dryRun),

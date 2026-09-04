@@ -12,6 +12,7 @@ import {
   resolveAdoption,
 } from "./attribution.mjs";
 import { findOpenCodeBin, opencodeMcpList, opencodeVersion } from "./opencode.mjs";
+import { ollamaHasModel } from "./model.mjs";
 
 const EXPECTED_BRANCH = process.env.KC_MISSION_BRANCH || "ai/kill-chain-agent";
 
@@ -36,7 +37,7 @@ export async function checkOllama(model = "qwen3.5:9b") {
   try {
     const tags = await ollamaTags();
     const names = (tags.models || tags.tags || []).map((m) => m.name || m.model || m);
-    const ok = names.some((n) => n === model || n.startsWith(`${model}`) || n.includes("qwen3.5:9b"));
+    const ok = ollamaHasModel(names, model);
     return { ok, names, error: ok ? null : `model ${model} not in ollama tags` };
   } catch (err) {
     return { ok: false, names: [], error: String(err.message || err) };

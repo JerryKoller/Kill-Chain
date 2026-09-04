@@ -13,7 +13,12 @@
           "name": "Qwen 2.5 Coder 14B"
         },
         "qwen3.5:9b": {
-          "name": "Qwen 3.5 9B"
+          "name": "Qwen 3.5 9B",
+          "limit": { "context": 65536, "output": 8192 }
+        },
+        "nemotron-3.5-lightning:30b-a3b": {
+          "name": "Nemotron 3.5 Lightning 30B-A3B",
+          "limit": { "context": 65536, "output": 8192 }
         }
       }
     }

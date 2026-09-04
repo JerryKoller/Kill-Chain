@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoRoot } from "../paths.mjs";
+import { normalizeModelId } from "./model.mjs";
 import { isKillchainMcpTool, scanUnixTools } from "./unix.mjs";
 
 const OPENCODE_CANDIDATES = [
@@ -59,6 +60,35 @@ export function parseOpenCodeJsonl(raw) {
     visibleTextMissing: text.length === 0,
     mcpFirst: isKillchainMcpTool(firstTool),
     unixViolations,
+    tokens: parseOpenCodeTokens(raw),
+  };
+}
+
+/** Last step_finish token snapshot (OpenCode totals are cumulative). */
+export function parseOpenCodeTokens(raw) {
+  let last = null;
+  for (const line of String(raw || "").split(/\n/)) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    let e;
+    try {
+      e = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    const p = e.part || e;
+    const type = p.type || e.type;
+    if (type === "step_finish" || type === "step-finish") {
+      const tok = p.tokens || e.tokens;
+      if (tok && typeof tok === "object") last = tok;
+    }
+  }
+  if (!last) return null;
+  return {
+    total: Number(last.total || 0) || null,
+    input: Number(last.input || 0) || null,
+    output: Number(last.output || 0) || null,
+    reasoning: Number(last.reasoning || 0) || 0,
   };
 }
 
@@ -98,6 +128,27 @@ export function killTree(child) {
   }
 }
 
+export function openCodeRunArgs({
+  prompt,
+  title,
+  cwd = repoRoot,
+  model,
+} = {}) {
+  const args = [
+    "run",
+    "--format", "json",
+    "--auto",
+    "--thinking",
+    "--title", title || "kc-mission",
+    "--dir", cwd,
+  ];
+  if (model) {
+    args.push("-m", normalizeModelId(model));
+  }
+  args.push(prompt);
+  return args;
+}
+
 export function runOpenCode({
   prompt,
   title,
@@ -105,21 +156,14 @@ export function runOpenCode({
   timeoutMs = 12 * 60 * 1000,
   cwd = repoRoot,
   bin = findOpenCodeBin(),
+  model,
 } = {}) {
   return new Promise((resolve, reject) => {
     mkdirSync(join(outPath, ".."), { recursive: true });
     const errPath = outPath.replace(/\.jsonl?$/i, ".err");
     const out = createWriteStream(outPath);
     const err = createWriteStream(errPath);
-    const args = [
-      "run",
-      "--format", "json",
-      "--auto",
-      "--thinking",
-      "--title", title || "kc-mission",
-      "--dir", cwd,
-      prompt,
-    ];
+    const args = openCodeRunArgs({ prompt, title, cwd, model });
     const child = spawn(bin, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],

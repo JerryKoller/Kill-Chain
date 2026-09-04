@@ -31,9 +31,8 @@ Usage:
 Commands:
   create --template ui-feature|audio-critical|read-only|single-patch --id <kebab-id>
   validate <file>
-  run <file> [--dry-run] [--stop-after STATE] [--approve-audio-edit]
-  status [id]
-  resume <id> [--dry-run] [--stop-after STATE] [--retry] [--approve-audio-edit]
+  run <file> [--dry-run] [--stop-after STATE] [--approve-audio-edit] [--model ollama/qwen3.5:9b]
+  resume <id> [--dry-run] [--stop-after STATE] [--retry] [--approve-audio-edit] [--model ...]
   report <id>
   test
 
@@ -141,6 +140,7 @@ export async function missionMain({ flags, pos, log = console.log }) {
       dryRun: Boolean(flags["dry-run"]),
       stopAfter: flags["stop-after"] || null,
       approveAudioEdit: Boolean(flags["approve-audio-edit"]),
+      model: flags.model || null,
       log,
     });
     log(`mission ${status.missionId} → ${status.state}`);
@@ -159,6 +159,7 @@ export async function missionMain({ flags, pos, log = console.log }) {
       stopAfter: flags["stop-after"] || null,
       approveAudioEdit: Boolean(flags["approve-audio-edit"]),
       retry: Boolean(flags.retry),
+      model: flags.model || null,
       log,
     });
     log(`mission ${status.missionId} → ${status.state}`);
