@@ -11,7 +11,11 @@ export function parseCritic(text) {
   const raw = String(text || "").trim();
   const m = raw.match(/VERDICT:\s*\**\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/i)
     || raw.match(/#{1,3}\s*VERDICT\s*\n+\s*\**\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/i)
-    || raw.match(/\*\*VERDICT:\*\*\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/i);
+    || raw.match(/\*\*VERDICT:\*\*\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/i)
+    // `## VERDICT READY` / `VERDICT - READY`: label and value on one line with
+    // no colon. Archived `cover-store-readonly-overnight` lost a fully
+    // grounded review to this alone.
+    || raw.match(/^#{0,3}\s*\**\s*VERDICT\**\s*[-—]?\s+\**\s*`*(PASS|FAIL|BLOCK|READY|NOT_READY)`*/im);
   const verdict = m ? m[1].toUpperCase() : null;
   const findings = [];
   for (const line of raw.split(/\r?\n/)) {
@@ -210,6 +214,46 @@ export function criticToolsOk(toolNames, spec) {
   return { ok: !requireTools || used, used, requireTools, names };
 }
 
+/**
+ * Tool count is telemetry; evidence quality is the requirement.
+ *
+ * A critic handed the real diff, source excerpts and validation output in its
+ * prompt has authoritative evidence already. Forcing it to re-read those files
+ * only to satisfy a counter produced expensive retries and at least one
+ * archived false BLOCK (`critic-no-tools`).
+ *
+ * So a critic is grounded when EITHER it inspected the repo itself, OR every
+ * path it cites is corroborated verbatim by the authoritative evidence it was
+ * given. Citing a path that appears nowhere — neither read nor supplied — is
+ * still ungrounded, which is the case the original rule was really protecting
+ * against.
+ */
+export function criticGroundingOk({ criticText = "", tools = [], spec, suppliedEvidence = "" } = {}) {
+  const toolsGate = criticToolsOk(tools, spec);
+  if (!toolsGate.requireTools || toolsGate.used) {
+    return { ok: true, via: toolsGate.used ? "tools" : "not-required", toolsGate, corroborated: [], uncorroborated: [] };
+  }
+
+  const supplied = String(suppliedEvidence || "");
+  const cited = parseMentionedPaths(criticText);
+  if (!supplied.trim() || !cited.length) {
+    return { ok: false, via: "none", reason: "critic-no-tools", toolsGate, corroborated: [], uncorroborated: cited };
+  }
+
+  const corroborated = cited.filter((p) => supplied.includes(p));
+  const uncorroborated = cited.filter((p) => !supplied.includes(p));
+  // Every cited path must be traceable to the supplied evidence.
+  const ok = corroborated.length >= 1 && uncorroborated.length === 0;
+  return {
+    ok,
+    via: ok ? "supplied-evidence" : "none",
+    reason: ok ? null : "critic-no-tools",
+    toolsGate,
+    corroborated,
+    uncorroborated,
+  };
+}
+
 export function unionToolNames(...lists) {
   const out = [];
   const seen = new Set();
@@ -282,7 +326,7 @@ export function evaluateArtifactGate(text, spec) {
   return { ok: errors.length === 0, errors, files, scope, vue, markedNew, innerPanels };
 }
 
-export function evaluateCriticGate({ criticText, planText = "", proposalText = "", spec, tools = [], phase = "" } = {}) {
+export function evaluateCriticGate({ criticText, planText = "", proposalText = "", spec, tools = [], phase = "", suppliedEvidence = "" } = {}) {
   const parsed = parseCritic(criticText);
   const artifacts = evaluateArtifactGate(proposalText || planText || criticText, spec);
   const planFiles = checkReferencedFilesExist(planText || "");
@@ -290,12 +334,17 @@ export function evaluateCriticGate({ criticText, planText = "", proposalText = "
   const toolsGate = criticToolsOk(tools, spec);
   const named = parseMentionedPaths(criticText || "");
   const finalDiffInPrompt = String(phase) === "final" && evidence.ok && named.length >= 1;
+  // Authoritative evidence handed to the critic counts as grounding even when
+  // it made zero tool calls. Only an explicit bundle qualifies: a plan that
+  // merely *names* a file proves nothing about that file's contents, so
+  // planText/proposalText are deliberately NOT treated as evidence here.
+  const grounding = criticGroundingOk({ criticText, tools, spec, suppliedEvidence });
 
   const rawErrors = [];
   if (parsed.missingVerdict) rawErrors.push("missing-verdict");
   if (parsed.verdict === "PASS" || parsed.verdict === "READY") {
     if (!evidence.ok) rawErrors.push(evidence.reason);
-    if (!toolsGate.ok && !finalDiffInPrompt) rawErrors.push("critic-no-tools");
+    if (!grounding.ok && !finalDiffInPrompt) rawErrors.push("critic-no-tools");
   }
   if (!planFiles.ok) rawErrors.push(`invented-files:${planFiles.missing.join(",")}`);
   const criticFiles = checkReferencedFilesExist(criticText || "");
@@ -320,6 +369,11 @@ export function evaluateCriticGate({ criticText, planText = "", proposalText = "
     artifacts,
     planFiles,
     evidence,
-    toolsGate: { ...toolsGate, waived: Boolean(finalDiffInPrompt && !toolsGate.ok) },
+    grounding,
+    toolsGate: {
+      ...toolsGate,
+      waived: Boolean((finalDiffInPrompt || grounding.ok) && !toolsGate.ok),
+      groundedVia: grounding.via,
+    },
   };
 }
