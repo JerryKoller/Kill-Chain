@@ -13,7 +13,7 @@
  * copy under data/overnight/repair-bench/work/. Production hashes are checked
  * before and after.
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, relative } from "node:path";
 import { dataDir, repoRoot } from "../paths.mjs";
@@ -48,6 +48,25 @@ function guardSnapshot() {
 
 function guardDrifted(snap) {
   return GUARDED.filter((rel) => hashFile(join(repoRoot, rel)) !== snap[rel]);
+}
+
+/**
+ * Scratch files the session left in the repository root.
+ *
+ * This arm runs with cwd = repoRoot so the model has real repo context, which
+ * also lets it write there. Observed: PowerShell redirection produced UTF-16
+ * `tmp.txt` (114 KB, the whole component), `temp_restore.txt` and `temp.txt`
+ * while the model worked around the edit tool. Production source was never
+ * touched, but unreported litter in a guarded run is still a containment gap.
+ */
+const STRAY_RE = /^(tmp|temp|out|output|scratch|dump)[-_.0-9]*\.(txt|json|tsx|ts|log)$/i;
+
+function strayRootFiles() {
+  try {
+    return readdirSync(repoRoot).filter((f) => STRAY_RE.test(f));
+  } catch {
+    return [];
+  }
 }
 
 /** Evidence the old repair prompt had: compiler text plus ±6-line windows. */
@@ -356,6 +375,11 @@ export async function runRepairBench({ attempts = 3, rounds = 2, model = DEFAULT
       if (drift.length) {
         log(`!! production drift detected: ${drift.join(", ")} — aborting`);
         break;
+      }
+      const strays = strayRootFiles();
+      if (strays.length) {
+        for (const f of strays) rmSync(join(repoRoot, f), { force: true });
+        log(`   cleaned ${strays.length} scratch file(s) the session left in the repo root: ${strays.join(", ")}`);
       }
     }
   }
