@@ -343,6 +343,19 @@ function collateral(before, after, gold) {
   return { changed, goldChanged, excess: Math.max(0, changed - goldChanged) };
 }
 
+/**
+ * Independent structural faults plus compiler diagnostics, used to decide
+ * whether an attempt regressed. Cascade noise is excluded so one real fault
+ * does not read as several.
+ */
+export function countFaults(rel, source) {
+  const scan = scanStructure(source, { jsx: true });
+  const structural = scan.surplusClosers.filter((s) => !s.cascade).length
+    + scan.tagMismatches.filter((m) => !m.cascade).length
+    + scan.unclosed.length;
+  return structural + checkTsSyntax(rel, source).diagnostics.length;
+}
+
 export function gradeAttempt(task, afterSource, { wrote = true } = {}) {
   const before = task.fixtureSource;
   const changedAtAll = afterSource !== before;
@@ -426,7 +439,20 @@ async function runTask(task, { model, timeoutMs, assisted, log, attempt = 1, tut
 
   // One tutored round when the first attempt failed, mirroring the runner's
   // failure-aware retry rather than a generic re-run.
+  let restored = false;
   if (tutorRound && !grade.accepted) {
+    // RESTORE_AND_REAPPLY: if the attempt made the file worse, do not repair
+    // the repair. Restore the original bytes and reapply from clean.
+    // Progress is kept — only regression is rolled back.
+    const faultsBefore = countFaults(task.rel, task.fixtureSource);
+    const faultsAfter = countFaults(task.rel, after);
+    if (faultsAfter > faultsBefore) {
+      writeFileSync(target, task.fixtureSource, "utf8");
+      after = task.fixtureSource;
+      restored = true;
+      log(`  ${task.id}: attempt regressed (${faultsBefore} -> ${faultsAfter} faults); restored pre-edit bytes`);
+      grade = gradeAttempt(task, after, { wrote: false });
+    }
     const tutor = grade.emptyEdit
       ? emptyEditPacket({ proposalSummary: task.goal, expectedFiles: [task.rel], retriesUsed: 1, retryBudget: 1 })
       : validationPacket({
@@ -452,7 +478,7 @@ async function runTask(task, { model, timeoutMs, assisted, log, attempt = 1, tut
       const parsed2 = parseOpenCodeJsonl(r2.raw || "");
       after = existsSync(target) ? readFileSync(target, "utf8") : after;
       grade = gradeAttempt(task, after, { wrote: (parsed2.tools || []).length > 0 });
-      rounds.push({ round: 2, ...grade, tools: (parsed2.tools || []).length, tutored: true });
+      rounds.push({ round: 2, ...grade, tools: (parsed2.tools || []).length, tutored: true, restoredBefore: restored });
     } catch (e) {
       log(`  ${task.id}: tutor round error ${e.message}`);
     }
@@ -467,6 +493,7 @@ async function runTask(task, { model, timeoutMs, assisted, log, attempt = 1, tut
     firstRound: rounds[0],
     finalRound: rounds[rounds.length - 1],
     rounds,
+    restoredBeforeTutor: restored,
     tutorRecovered: rounds.length > 1 && !rounds[0].accepted && rounds[rounds.length - 1].accepted,
   };
 }
