@@ -140,14 +140,24 @@ export function normalizeLevel(value) {
   return null;
 }
 
-function asStringArray(v, field, errors) {
-  if (v == null) return [];
+function asStringList(v, field, errors) {
+  if (v == null) return null;
   if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
     errors.push(`${field} must be an array of strings`);
-    return [];
+    return null;
   }
+  return v;
+}
+
+/**
+ * Path array. Repo-relative, normalized, and rejected outright if it looks like
+ * traversal, an absolute path, or a drive letter.
+ */
+function asPathArray(v, field, errors) {
+  const list = asStringList(v, field, errors);
+  if (!list) return [];
   const out = [];
-  for (const raw of v) {
+  for (const raw of list) {
     const x = toPosixRel(String(raw).trim());
     if (!x) continue;
     if (x.includes("..") || /^[a-zA-Z]:/.test(x) || x.startsWith("/")) {
@@ -157,6 +167,22 @@ function asStringArray(v, field, errors) {
     out.push(x);
   }
   return out;
+}
+
+/**
+ * Prose array. Ordinary mission language — acceptance criteria, stop conditions,
+ * validation command names.
+ *
+ * These are NOT paths and must not be run through path validation. Doing so
+ * rejected perfectly good criteria: a live Mediator-generated criterion reading
+ * "declare vec3 ro = ... before line 61" was refused because the ellipsis
+ * matched the traversal check. Hand-authored missions only passed by
+ * coincidence. Text is preserved verbatim apart from trimming.
+ */
+function asProseArray(v, field, errors) {
+  const list = asStringList(v, field, errors);
+  if (!list) return [];
+  return list.map((raw) => String(raw).trim()).filter(Boolean);
 }
 
 export function defaultForbidden(level) {
@@ -183,13 +209,13 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
   const level = normalizeLevel(raw.level);
   if (level == null) errors.push("level must be 0–4 or a known alias (read-only, single-patch, bounded-feature, multi-phase, audio-critical)");
 
-  const allowedPaths = asStringArray(raw.allowedPaths, "allowedPaths", errors);
-  const readOnlyPaths = asStringArray(raw.readOnlyPaths, "readOnlyPaths", errors);
-  const forbiddenPaths = asStringArray(raw.forbiddenPaths, "forbiddenPaths", errors);
-  const baselineDirtyPaths = asStringArray(raw.baselineDirtyPaths, "baselineDirtyPaths", errors);
-  const adoptDirtyPaths = asStringArray(raw.adoptDirtyPaths, "adoptDirtyPaths", errors);
-  const preserveDirtyPaths = asStringArray(raw.preserveDirtyPaths, "preserveDirtyPaths", errors);
-  const acceptance = asStringArray(raw.acceptance, "acceptance", errors);
+  const allowedPaths = asPathArray(raw.allowedPaths, "allowedPaths", errors);
+  const readOnlyPaths = asPathArray(raw.readOnlyPaths, "readOnlyPaths", errors);
+  const forbiddenPaths = asPathArray(raw.forbiddenPaths, "forbiddenPaths", errors);
+  const baselineDirtyPaths = asPathArray(raw.baselineDirtyPaths, "baselineDirtyPaths", errors);
+  const adoptDirtyPaths = asPathArray(raw.adoptDirtyPaths, "adoptDirtyPaths", errors);
+  const preserveDirtyPaths = asPathArray(raw.preserveDirtyPaths, "preserveDirtyPaths", errors);
+  const acceptance = asProseArray(raw.acceptance, "acceptance", errors);
   const baseMissionId = String(raw.baseMissionId || "").trim();
   if (baseMissionId && !ID_RE.test(baseMissionId)) {
     errors.push(`baseMissionId must be kebab-case: ${baseMissionId}`);
@@ -209,8 +235,8 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
     errors.push("validation must be an object");
     validation = {};
   }
-  const requiredVal = asStringArray(validation.required, "validation.required", errors);
-  const optionalVal = asStringArray(validation.optional, "validation.optional", errors);
+  const requiredVal = asProseArray(validation.required, "validation.required", errors);
+  const optionalVal = asProseArray(validation.optional, "validation.optional", errors);
 
   const knownVal = new Set([
     "typecheck", "build", "smoke", "distort-hunt", "leak-check",
@@ -305,6 +331,9 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
     maxRetriesPerPhase: Math.max(0, num(raw.maxRetriesPerPhase, 3, "maxRetriesPerPhase")),
     maxWallClockMs: num(raw.maxWallClockMs, 2 * 60 * 60 * 1000, "maxWallClockMs"),
     maxModelCalls: Math.max(1, num(raw.maxModelCalls, 24, "maxModelCalls")),
+    implementationReserveCalls: raw.implementationReserveCalls == null
+      ? null
+      : Math.round(num(raw.implementationReserveCalls, 2, "implementationReserveCalls")),
     sessionTimeoutMs: num(raw.sessionTimeoutMs, 12 * 60 * 1000, "sessionTimeoutMs"),
     proposalRounds: Math.max(1, num(raw.proposalRounds, 1, "proposalRounds")),
     checkpointPolicy,
@@ -319,7 +348,7 @@ export function normalizeMission(raw, { brief = "", source = "" } = {}) {
       maxInsertions: num(raw.diff?.maxInsertions, 2500, "diff.maxInsertions"),
       warnOnly: raw.diff?.warnOnly !== false,
     },
-    stopOn: asStringArray(raw.stopOn, "stopOn", errors),
+    stopOn: asProseArray(raw.stopOn, "stopOn", errors),
     ux: raw.ux && typeof raw.ux === "object" ? raw.ux : null,
     audio: raw.audio && typeof raw.audio === "object" ? raw.audio : null,
   };

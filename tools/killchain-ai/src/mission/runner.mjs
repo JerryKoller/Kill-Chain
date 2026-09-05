@@ -25,6 +25,9 @@ import { parseOpenCodeJsonl, runOpenCode, visibleReportTooThin, buriedVerdict } 
 import {
   applyRepairPrompt,
   criticPrompt,
+  criticFormatRepairPrompt,
+  criticNeedsEvidencePrompt,
+  criticEvidenceGatherPrompt,
   executePrompt,
   emptyEditRetryPrompt,
   emptyTextRetryPrompt,
@@ -35,12 +38,13 @@ import {
   repairDiagnosePrompt,
 } from "./prompts.mjs";
 import { classifyEditOutcome, emptyEditPolicy, shouldExpectEdit } from "./editGate.mjs";
+import { callBudgetHit, canEnterEditing, refuseEditingReason } from "./callBudget.mjs";
 import { checkChangedTsSyntax, formatDiagnostics, formatStructures } from "./syntax.mjs";
 import { checkChangedIdentifiers, formatIdentifierPacket } from "./identifierGate.mjs";
 import { ACTIONS, classifyFailure, describeFailure, escalate } from "./failureClass.mjs";
 import { buildTeacherPacket, writeTeacherPacket } from "./teacherPacket.mjs";
-import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, checkProposalConcrete, proposalScopeCheck, quarantineFitsDest, unionToolNames } from "./critic.mjs";
-import { classifyGateFailure, criticFormatPacket, referencePacket, emptyEditPacket, locateSymbols, nearestValidReferences } from "./tutor.mjs";
+import { evaluateArtifactGate, evaluateCriticGate, checkInventedSymbolsAsync, checkProposalConcrete, proposalScopeCheck, quarantineFitsDest, unionToolNames, mergeCriticRepair } from "./critic.mjs";
+import { classifyGateFailure, criticFormatPacket, criticEvidenceGatherPacket, criticNeedsEvidencePacket, planCriticDisposition, PLAN_CRITIC_ACTION, referencePacket, emptyEditPacket, locateSymbols, nearestValidReferences } from "./tutor.mjs";
 import {
   fileSizeOk,
   gitDiffCheck,
@@ -87,11 +91,10 @@ function fail(dir, status, reason) {
   return status;
 }
 
-function budgetHit(spec, status) {
-  if (status.modelCalls >= spec.maxModelCalls) return `maxModelCalls ${spec.maxModelCalls}`;
+function budgetHit(spec, status, extra = {}) {
   if (elapsed(status) >= spec.maxWallClockMs) return `maxWallClockMs ${spec.maxWallClockMs}`;
   if (status.phaseIndex > spec.maxPhases) return `maxPhases ${spec.maxPhases}`;
-  return null;
+  return callBudgetHit(spec, status, extra);
 }
 
 function composeReport(status, { extra = "" } = {}) {
@@ -146,7 +149,7 @@ export function acquireLock(dir) {
 
 async function invoke(ctx, phase, prompt) {
   const { spec, status, dir, deps } = ctx;
-  const hit = budgetHit(spec, status);
+  const hit = budgetHit(spec, status, { phase });
   if (hit) throw Object.assign(new Error(hit), { budget: true });
 
   status.modelCalls += 1;
@@ -198,7 +201,7 @@ async function invoke(ctx, phase, prompt) {
       appendJournal(dir, `visible TEXT missing on ${title}; retrying once`);
     }
     if (!parsed.visibleTextMissing && thin) status.visibleTextMisses += 1;
-    if (status.modelCalls < spec.maxModelCalls || phase === "final" || phase === "plan-critic") {
+    if (!budgetHit(spec, status, { phase: `${phase}-empty-retry` }) || phase === "final") {
       status.modelCalls += 1;
       const retryN = status.modelCalls;
       const retryPath = join(dir, "sessions", `${String(retryN).padStart(3, "0")}-${phase}-empty-retry.jsonl`);
@@ -711,87 +714,148 @@ export async function runMission({
 
         case "PLAN_REVIEW": {
           log(`plan critic (${status.model})…`);
+          // Each new critic cycle gets one cheap contract repair. Do not leak
+          // criticRetries from a previous plan — that is what blocked the live
+          // singularity resume after a successful FAIL → replan.
+          status.criticRetries = 0;
           beginPhase(ctx, "plan-critic");
           ingestThinDump(dir, readText(dir, "PLAN.md"), {}, "PLAN.md");
           const plan = readText(dir, "PLAN.md");
           let { text, parsed } = await invoke(ctx, "plan-critic", criticPrompt(spec, status, { plan }));
           writeText(dir, "PLAN_CRITIC.md", text);
           postPhaseGit(ctx, { revertAllApp: true });
-          let gate = evaluateCriticGate({
-            criticText: text,
+          const trustedEvidence = String(spec.brief || "");
+          const evalGate = (criticText, tools) => evaluateCriticGate({
+            criticText,
             planText: plan,
             spec,
-            tools: parsed.tools || [],
+            tools: tools || [],
+            suppliedEvidence: trustedEvidence,
           });
-          if ((!gate.toolsGate.ok || gate.missingVerdict) && (status.criticRetries || 0) < 1) {
-            status.criticRetries = (status.criticRetries || 0) + 1;
-            // Tutoring retry: hand back the exact missing fields and the
-            // critic's own prior text to reshape, rather than re-running the
-            // whole critic prompt and hoping for a different shape.
+          let gate = evalGate(text, parsed.tools || []);
+
+          const applyLocalNormalize = () => {
+            const disp = planCriticDisposition(gate, text, { spec });
+            if (disp.action !== PLAN_CRITIC_ACTION.LOCAL_NORMALIZE) return disp;
+            text = disp.normalizedText;
+            writeText(dir, "PLAN_CRITIC.md", text);
+            appendJournal(dir, "plan critic: mechanical verdict normalize (token already present; not inferred)");
+            gate = evalGate(text, parsed.tools || []);
+            return planCriticDisposition(gate, text, { spec });
+          };
+
+          let disp = applyLocalNormalize();
+          // Cheap contract repairs. Never wrap them in the full critic
+          // investigation prompt — that is what burned the live mission.
+          // Budget is 2 so a stamp-only `VERDICT: PASS` can be merged and a
+          // remaining INSPECTED/RISK gap can still be asked for.
+          while (
+            (
+              disp.action === PLAN_CRITIC_ACTION.FORMAT_REPAIR
+              || disp.action === PLAN_CRITIC_ACTION.NEEDS_MORE_EVIDENCE
+              // Exactly one tool-enabled evidence pass, budgeted separately so it
+              // never competes with (or is starved by) the prose-repair budget.
+              || (disp.action === PLAN_CRITIC_ACTION.EVIDENCE_REPAIR && (status.criticEvidenceRepairs || 0) < 1)
+            )
+            && (disp.action === PLAN_CRITIC_ACTION.EVIDENCE_REPAIR || (status.criticRetries || 0) < 2)
+            && !gate.pass
+          ) {
+            const evidenceRepair = disp.action === PLAN_CRITIC_ACTION.EVIDENCE_REPAIR;
+            if (evidenceRepair) status.criticEvidenceRepairs = (status.criticEvidenceRepairs || 0) + 1;
+            else status.criticRetries = (status.criticRetries || 0) + 1;
             const cls = classifyGateFailure(gate);
-            const packet = criticFormatPacket({
-              gate,
-              criticText: text,
-              missingFields: cls.missingFields.length ? cls.missingFields : ["VERDICT"],
-              retriesUsed: status.criticRetries,
-              retryBudget: 1,
-              verdictWords: "PASS or FAIL",
-            });
-            appendJournal(dir, `critic contract failure (${cls.kind}: ${cls.missingFields.join(",") || gate.errors.join(",")}); tutoring retry`);
-            writeText(dir, "CRITIC_CORRECTION_1.md", packet);
-            beginPhase(ctx, "plan-critic-retry");
-            const retry = await invoke(ctx, "plan-critic", criticPrompt(spec, status, {
-              plan,
-              extra: packet,
-            }));
-            text = retry.text;
+            const packet = evidenceRepair
+              ? criticEvidenceGatherPacket({
+                gate,
+                criticText: text,
+                targets: disp.targets || [],
+                retriesUsed: status.criticEvidenceRepairs,
+                retryBudget: 1,
+              })
+              : disp.action === PLAN_CRITIC_ACTION.FORMAT_REPAIR
+                ? criticFormatPacket({
+                  gate,
+                  criticText: text,
+                  missingFields: cls.missingFields.length ? cls.missingFields : ["VERDICT"],
+                  retriesUsed: status.criticRetries,
+                  retryBudget: 2,
+                  verdictWords: "PASS, FAIL, or BLOCK",
+                })
+                : criticNeedsEvidencePacket({
+                  gate,
+                  criticText: text,
+                  retriesUsed: status.criticRetries,
+                  retryBudget: 2,
+                });
+            const prompt = evidenceRepair
+              ? criticEvidenceGatherPrompt({ packet, plan, targets: disp.targets || [] })
+              : disp.action === PLAN_CRITIC_ACTION.FORMAT_REPAIR
+                ? criticFormatRepairPrompt(packet)
+                : criticNeedsEvidencePrompt({ packet, plan });
+            const label = evidenceRepair
+              ? "evidence-gather"
+              : disp.action === PLAN_CRITIC_ACTION.FORMAT_REPAIR ? "format-repair" : "needs-evidence";
+            appendJournal(dir, `critic contract ${disp.action} (${cls.kind}: ${cls.missingFields.join(",") || gate.errors.join(",")}); cheap ${label}`);
+            writeText(dir, `CRITIC_CORRECTION_${status.criticRetries}.md`, packet);
+            beginPhase(ctx, `plan-critic-${label}`);
+            const retry = await invoke(ctx, `plan-critic-${label}`, prompt);
+            text = mergeCriticRepair(text, retry.text);
             parsed = { ...(retry.parsed || {}), tools: unionToolNames(parsed.tools, retry.parsed?.tools) };
             writeText(dir, "PLAN_CRITIC.md", text);
             postPhaseGit(ctx, { revertAllApp: true });
-            gate = evaluateCriticGate({
-              criticText: text,
-              planText: plan,
-              spec,
-              tools: parsed.tools || [],
-            });
+            gate = evalGate(text, parsed.tools || []);
+            disp = applyLocalNormalize();
           }
+
           writeText(dir, "critic-gate.json", JSON.stringify({
             errors: gate.errors,
             pass: gate.pass,
             modelVerdict: gate.modelVerdict,
             missing: gate.planFiles?.missing,
+            disposition: disp.action,
           }, null, 2));
-          if (gate.modelVerdict === "BLOCK") return block(dir, status, `plan critic BLOCK: ${gate.errors.join("; ") || "unspecified"}`);
-          if (!gate.pass) {
-            status.planRetries += 1;
-            if (status.planRetries > spec.maxRetriesPerPhase) {
-              return block(dir, status, `plan critic gate failed: ${gate.errors.join("; ") || gate.modelVerdict}`);
-            }
-            // Localize before sending the plan back. An invented path is
-            // returned with the verified symbol location and the real
-            // candidates, so the retry corrects a reference instead of
-            // re-deriving the whole plan.
-            const cls = classifyGateFailure(gate);
-            const invalid = [
-              ...(gate.planFiles?.missing || []),
-              ...(gate.artifacts?.innerPanels || []),
-            ];
-            if (invalid.length) {
-              const symbolNames = invalid.map((p) => String(p).split("/").pop().replace(/\.(tsx|ts)$/, ""));
-              writeText(dir, "PLAN_CORRECTION.md", referencePacket({
-                invalid,
-                nearest: invalid.flatMap((p) => nearestValidReferences(p, { candidates: spec.readOnlyPaths || [] })),
-                symbols: await locateSymbols(symbolNames),
-                allowedPaths: spec.allowedPaths || [],
-                retriesUsed: status.planRetries,
-                retryBudget: spec.maxRetriesPerPhase,
-              }));
-            }
-            appendJournal(dir, `plan critic gate ${gate.modelVerdict} [${cls.kind}] ${gate.errors.join(",")}; revising plan`);
-            transition(dir, status, "PLANNING", `critic ${gate.errors.join(",") || gate.modelVerdict}`);
+          if (disp.action === PLAN_CRITIC_ACTION.BLOCK || (gate.modelVerdict === "BLOCK" && !gate.missingVerdict)) {
+            return block(dir, status, `plan critic BLOCK: ${gate.errors.join("; ") || "unspecified"}`);
+          }
+          if (gate.pass) {
+            transition(dir, status, "PROPOSING", "plan critic PASS");
+            if (maybeStop(ctx)) return status;
             break;
           }
-          transition(dir, status, "PROPOSING", "plan critic PASS");
+
+          // Format-only / missing-verdict must not replan. The live singularity
+          // mission spent ~24 calls looping PLANNING because this fell through.
+          if (
+            disp.action === PLAN_CRITIC_ACTION.FORMAT_REPAIR
+            || disp.action === PLAN_CRITIC_ACTION.NEEDS_MORE_EVIDENCE
+            || disp.action === PLAN_CRITIC_ACTION.LOCAL_NORMALIZE
+            || (gate.missingVerdict && classifyGateFailure(gate).formatOnly)
+          ) {
+            return block(dir, status, `plan critic gate failed: ${gate.errors.join("; ") || gate.modelVerdict}`);
+          }
+
+          status.planRetries += 1;
+          if (status.planRetries > spec.maxRetriesPerPhase) {
+            return block(dir, status, `plan critic gate failed: ${gate.errors.join("; ") || gate.modelVerdict}`);
+          }
+          const cls = classifyGateFailure(gate);
+          const invalid = [
+            ...(gate.planFiles?.missing || []),
+            ...(gate.artifacts?.innerPanels || []),
+          ];
+          if (invalid.length) {
+            const symbolNames = invalid.map((p) => String(p).split("/").pop().replace(/\.(tsx|ts)$/, ""));
+            writeText(dir, "PLAN_CORRECTION.md", referencePacket({
+              invalid,
+              nearest: invalid.flatMap((p) => nearestValidReferences(p, { candidates: spec.readOnlyPaths || [] })),
+              symbols: await locateSymbols(symbolNames),
+              allowedPaths: spec.allowedPaths || [],
+              retriesUsed: status.planRetries,
+              retryBudget: spec.maxRetriesPerPhase,
+            }));
+          }
+          appendJournal(dir, `plan critic gate ${gate.modelVerdict} [${cls.kind}] ${gate.errors.join(",")}; revising plan`);
+          transition(dir, status, "PLANNING", `critic ${gate.errors.join(",") || gate.modelVerdict}`);
           if (maybeStop(ctx)) return status;
           break;
         }
@@ -842,6 +906,8 @@ export async function runMission({
           } else if (!expect.expected) {
             appendJournal(dir, "proposal is inspect-only (no authorized edit targets); skipping EDITING");
             transition(dir, status, "FINAL_REVIEW", "inspect-only proposal");
+          } else if (!canEnterEditing(spec, status)) {
+            return block(dir, status, refuseEditingReason(spec, status));
           } else {
             if (!readText(dir, "ORIGINAL_PROPOSAL.md").trim()) {
               writeText(dir, "ORIGINAL_PROPOSAL.md", body);

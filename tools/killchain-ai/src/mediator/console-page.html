@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Robo Puppy Mediator — Autonomous Training Console</title>
+<style>
+/* ---------------------------------------------------------------------------
+   Theme variables are injected at runtime from the Mediator's own identity
+   manifest. Every value has already been re-parsed into a canonical hex literal
+   server-side, so nothing here can be a CSS injection vector.
+
+   Two aesthetics share this window on purpose:
+   - The Mediator side follows the identity it chose for itself.
+   - Robo Puppy's bay keeps his established copper-and-green personality.
+   Engineering data stays readable in both.
+--------------------------------------------------------------------------- */
+:root{
+  --primary:#6b3fa0; --secondary:#c7a0e8; --bg:#0d0814; --surface:#1a1226;
+  --text:#f0e8fa; --warning:#f5a623; --success:#3dffb0;
+  --hair:rgba(199,160,232,.22);
+  --dim:rgba(240,232,250,.55);
+  /* Robo Puppy's own palette — deliberately not themed by the Mediator. */
+  --pup-copper:#c4894a; --pup-mid:#7a4a24; --pup-dark:#3d2414;
+  --pup-light:#e0b070; --pup-eye:#39ff88; --pup-accent:#3dffb0;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font:13px/1.45 "IBM Plex Sans Condensed","Roboto Condensed","Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:"JetBrains Mono","Cascadia Mono",Consolas,"Courier New",monospace}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+
+/* Prism's geometry: hard edges, 1px hairlines, no gradients, no rounding. */
+.band{border-top:1px solid var(--hair);padding:10px 14px}
+.band>.band-label{
+  font-size:10px;letter-spacing:.18em;color:var(--secondary);
+  text-transform:uppercase;margin-bottom:6px;display:flex;gap:10px;align-items:center
+}
+.band-label .spacer{flex:1;height:1px;background:var(--hair)}
+
+#app{display:flex;flex-direction:column;min-height:100%}
+
+/* ---- top: the two characters sharing a workstation ---- */
+.crew{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:0;border-bottom:1px solid var(--hair)}
+.mediator-id{display:flex;gap:14px;padding:14px;align-items:flex-start;min-width:0}
+.mediator-id img{width:76px;height:76px;display:block;flex:none;background:var(--bg)}
+.mid-meta{min-width:0;flex:1}
+.mid-name{font-size:22px;letter-spacing:.1em;text-transform:uppercase;line-height:1.1}
+.mid-tag{color:var(--secondary);font-size:12px;margin-top:2px}
+.mid-rowset{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.chip{
+  border:1px solid var(--hair);padding:2px 7px;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim)
+}
+.chip.on{border-color:var(--secondary);color:var(--text)}
+.chip.gear-FAST_SUPERVISOR{border-color:var(--success);color:var(--success)}
+.chip.gear-DEEP_SUPERVISOR{border-color:var(--warning);color:var(--warning)}
+.chip.gear-VISUAL_REVIEW{border-color:var(--secondary);color:var(--secondary)}
+.chip.gear-HUMAN{border-color:var(--warning);color:var(--warning)}
+
+/* ---- handoff chain: who currently holds the work ---- */
+.chain{display:flex;align-items:stretch;gap:0;margin-top:12px;flex-wrap:wrap}
+.cnode{
+  border:1px solid var(--hair);padding:5px 10px;min-width:118px;
+  display:flex;flex-direction:column;gap:1px;background:rgba(0,0,0,.2)
+}
+.cnode b{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.cnode span{font-size:11.5px;color:var(--dim);font-family:"JetBrains Mono",Consolas,monospace}
+.cnode.active{border-color:var(--secondary);background:var(--surface)}
+.cnode.active b{color:var(--secondary)}
+.cnode.active span{color:var(--text)}
+.cnode[data-node="PUPPY"].active{border-color:var(--pup-accent)}
+.cnode[data-node="PUPPY"].active b{color:var(--pup-accent)}
+.clink{
+  display:flex;align-items:center;padding:0 7px;color:var(--hair);font-size:12px;
+  border-top:1px solid var(--hair);border-bottom:1px solid var(--hair)
+}
+.clink.flow{color:var(--secondary)}
+
+/* ---- Robo Puppy's bay ---- */
+.bay{border-left:1px solid var(--hair);padding:10px 12px;background:rgba(0,0,0,.25);min-width:0}
+.bay-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.bay-title{font-size:11px;letter-spacing:.16em;color:var(--pup-accent)}
+.bay-state{font-size:10px;letter-spacing:.12em;color:var(--dim)}
+.pup-stage{position:relative;height:132px;display:flex;align-items:flex-end;justify-content:center}
+.pup-speech{
+  font-size:11px;color:var(--dim);margin-top:6px;min-height:2.4em;
+  border-left:2px solid var(--pup-accent);padding-left:7px
+}
+.pup-facts{margin-top:8px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px;font-size:11px}
+.pup-facts dt{color:var(--dim);text-transform:uppercase;font-size:9.5px;letter-spacing:.1em;align-self:center}
+.pup-facts dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- Puppy animation. Layers move independently; CSS only, no engine. ---- */
+#puppy{width:190px;height:132px;overflow:visible}
+#pup-body{transform-origin:80px 110px;animation:pup-breathe 4.6s ease-in-out infinite}
+#pup-head{transform-origin:80px 76px;transition:transform 220ms}
+#pup-ear-l{transform-origin:62px 44px}
+#pup-ear-r{transform-origin:98px 44px}
+#pup-tail{transform-origin:118px 92px}
+.pup-lid{transform-origin:center;transform:scaleY(0);transition:transform 140ms}
+.pup-eye{filter:none}
+#pup-zzz{opacity:0}
+#pup-led{transition:fill 160ms}
+#pup-term-glow{opacity:.15;transition:opacity 200ms}
+
+@keyframes pup-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.022)}}
+@keyframes pup-breathe-slow{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+@keyframes pup-wag{0%,100%{transform:rotate(-20deg)}50%{transform:rotate(26deg)}}
+@keyframes pup-wag-fast{0%,100%{transform:rotate(-30deg)}50%{transform:rotate(36deg)}}
+@keyframes pup-ear-twitch{0%,92%,100%{transform:rotate(0)}95%{transform:rotate(-11deg)}}
+@keyframes pup-ear-perk{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(5deg)}}
+@keyframes pup-zzz{0%{opacity:0;transform:translate(0,0) scale(.7)}
+  30%{opacity:.85}100%{opacity:0;transform:translate(13px,-24px) scale(1.15)}}
+@keyframes pup-scan{0%,100%{transform:translateX(-4px)}50%{transform:translateX(4px)}}
+@keyframes pup-type{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
+@keyframes pup-glow{0%,100%{opacity:.18}50%{opacity:.62}}
+@keyframes pup-tilt{0%,100%{transform:rotate(0)}50%{transform:rotate(-9deg)}}
+@keyframes pup-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-2px)}75%{transform:translateX(2px)}}
+
+/* Asleep: eyes shut, ears down, tail curled still, breathing slows, Z's drift. */
+[data-pup="SLEEPING"] #pup-body{animation:pup-breathe-slow 6.5s ease-in-out infinite}
+[data-pup="SLEEPING"] .pup-lid{transform:scaleY(1)}
+[data-pup="SLEEPING"] #pup-ear-l{transform:rotate(26deg)}
+[data-pup="SLEEPING"] #pup-ear-r{transform:rotate(-26deg)}
+[data-pup="SLEEPING"] #pup-tail{transform:rotate(34deg)}
+[data-pup="SLEEPING"] #pup-head{transform:translateY(5px) rotate(-4deg)}
+[data-pup="SLEEPING"] #pup-zzz{animation:pup-zzz 3.4s ease-out infinite}
+[data-pup="SLEEPING"] #pup-term-glow{opacity:.05}
+
+[data-pup="WAKING"] #pup-ear-l{animation:pup-ear-perk .5s ease-out 2}
+[data-pup="WAKING"] #pup-ear-r{animation:pup-ear-perk .5s ease-out 2}
+[data-pup="WAKING"] #pup-tail{animation:pup-wag .7s ease-in-out 3}
+[data-pup="WAKING"] #pup-head{transform:translateY(-2px)}
+
+[data-pup="READING"] #pup-head{animation:pup-scan 2.6s ease-in-out infinite}
+[data-pup="READING"] #pup-ear-l{animation:pup-ear-twitch 5s infinite}
+
+[data-pup="PLANNING"] #pup-head{transform:rotate(-5deg)}
+[data-pup="PLANNING"] #pup-tail{animation:pup-wag 2.4s ease-in-out infinite}
+
+[data-pup="THINKING"] #pup-head{animation:pup-tilt 3.2s ease-in-out infinite}
+
+[data-pup="WORKING"] #pup-body{animation:pup-type .42s ease-in-out infinite}
+[data-pup="WORKING"] #pup-tail{animation:pup-wag 1.1s ease-in-out infinite}
+[data-pup="WORKING"] #pup-term-glow{animation:pup-glow 1.3s ease-in-out infinite}
+
+[data-pup="VALIDATING"] #pup-body{animation:none}
+[data-pup="VALIDATING"] #pup-tail{transform:rotate(4deg)}
+[data-pup="VALIDATING"] #pup-head{transform:translateY(-2px)}
+
+[data-pup="REPAIRING"] #pup-head{animation:pup-scan 1.5s ease-in-out infinite}
+[data-pup="REPAIRING"] #pup-tail{animation:pup-wag 2s ease-in-out infinite}
+
+[data-pup="REVERTING"] #pup-body{animation:pup-shake .5s ease-in-out infinite}
+[data-pup="REVERTING"] #pup-ear-l{transform:rotate(20deg)}
+[data-pup="REVERTING"] #pup-ear-r{transform:rotate(-20deg)}
+
+[data-pup="CONFUSED"] #pup-head{animation:pup-tilt 2.1s ease-in-out infinite}
+[data-pup="CONFUSED"] #pup-ear-l{transform:rotate(16deg)}
+
+[data-pup="HAPPY"] #pup-tail{animation:pup-wag-fast .34s ease-in-out infinite}
+[data-pup="HAPPY"] #pup-ear-l{animation:pup-ear-perk .8s ease-in-out infinite}
+[data-pup="HAPPY"] #pup-ear-r{animation:pup-ear-perk .8s ease-in-out infinite}
+
+[data-pup="WAITING_FOR_TEACHER"] #pup-head{transform:translateY(-4px) rotate(3deg)}
+[data-pup="WAITING_FOR_TEACHER"] #pup-tail{transform:rotate(10deg)}
+
+[data-pup="BLOCKED"] #pup-body{animation:none}
+[data-pup="BLOCKED"] #pup-ear-l{transform:rotate(22deg)}
+[data-pup="BLOCKED"] #pup-ear-r{transform:rotate(-22deg)}
+[data-pup="BLOCKED"] #pup-tail{transform:rotate(30deg)}
+[data-pup="BLOCKED"] #pup-head{transform:translateY(4px)}
+
+[data-pup="ERROR"] #pup-body{animation:pup-shake .3s ease-in-out infinite}
+[data-pup="ERROR"] #pup-head{transform:translateY(3px)}
+
+@media (prefers-reduced-motion: reduce){
+  #pup-body,#pup-head,#pup-ear-l,#pup-ear-r,#pup-tail,#pup-zzz,#pup-term-glow{animation:none !important}
+}
+
+/* ---- main grid ---- */
+.cols{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);flex:1;min-height:0}
+.col{min-width:0;display:flex;flex-direction:column}
+.col+.col{border-left:1px solid var(--hair)}
+
+textarea{
+  width:100%;min-height:104px;resize:vertical;background:var(--surface);color:var(--text);
+  border:1px solid var(--hair);padding:8px;font:12px/1.5 "JetBrains Mono",Consolas,monospace
+}
+.objective{
+  background:var(--surface);border-left:2px solid var(--primary);padding:8px 10px;
+  font-size:13px;min-height:2.6em
+}
+.brief-view{
+  background:var(--surface);border:1px solid var(--hair);padding:8px;max-height:150px;
+  overflow:auto;white-space:pre-wrap;font-size:11.5px;color:var(--dim)
+}
+
+/* Prism asked for instant transitions and shutter-blade band insertion. */
+.tl{display:flex;flex-direction:column-reverse;overflow:auto;max-height:340px}
+.tl-row{
+  display:grid;grid-template-columns:62px 118px 1fr auto;gap:8px;padding:5px 0;
+  border-bottom:1px solid var(--hair);animation:band-in 80ms linear
+}
+@keyframes band-in{from{transform:translateY(-6px);opacity:0}to{transform:none;opacity:1}}
+.tl-time{color:var(--dim);font-size:10.5px}
+.tl-actor{font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+.tl-what{font-size:12px;min-width:0;overflow-wrap:anywhere}
+.tl-lat{color:var(--dim);font-size:10.5px;text-align:right;white-space:nowrap}
+.a-FAST_SUPERVISOR{color:var(--success)}
+.a-DEEP_SUPERVISOR{color:var(--warning)}
+.a-ROBO_PUPPY{color:var(--pup-copper)}
+.a-ROUTER{color:var(--secondary)}
+.a-SYSTEM{color:var(--dim)}
+.a-HUMAN{color:var(--warning)}
+
+table.grid{width:100%;border-collapse:collapse;font-size:11.5px}
+table.grid th{
+  text-align:left;font-size:9.5px;letter-spacing:.12em;color:var(--secondary);
+  text-transform:uppercase;padding:4px 6px;border-bottom:1px solid var(--hair);font-weight:600
+}
+table.grid td{padding:4px 6px;border-bottom:1px solid var(--hair);vertical-align:top}
+td.num{text-align:right}
+.muted{color:var(--dim)}
+.unknown{color:var(--dim);font-style:italic}
+
+button{
+  background:transparent;color:var(--text);border:1px solid var(--hair);
+  padding:6px 10px;font:600 10.5px/1 "IBM Plex Sans Condensed",system-ui,sans-serif;
+  letter-spacing:.12em;text-transform:uppercase;cursor:pointer
+}
+button:hover:not(:disabled){border-color:var(--secondary)}
+button:disabled{opacity:.35;cursor:not-allowed}
+button.on{background:var(--primary);border-color:var(--primary);color:#fff}
+button.danger{border-color:var(--warning);color:var(--warning)}
+button.go{border-color:var(--success);color:var(--success)}
+.ctl-row{display:flex;flex-wrap:wrap;gap:6px}
+
+.warn-flash{animation:warn-flash 120ms steps(1) 2}
+@keyframes warn-flash{0%,100%{background:transparent}50%{background:var(--warning)}}
+
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--hair)}
+.tab{
+  padding:7px 13px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  cursor:pointer;color:var(--dim);border-right:1px solid var(--hair)
+}
+.tab.on{color:var(--text);background:var(--surface);box-shadow:inset 0 -2px 0 var(--primary)}
+.view{display:none}
+.view.on{display:block}
+.sw{display:inline-block;width:15px;height:15px;border:1px solid var(--hair);vertical-align:-3px;margin-right:5px}
+.foot{padding:6px 14px;border-top:1px solid var(--hair);color:var(--dim);font-size:10.5px;
+  display:flex;gap:14px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<audio id="barkSrc" src="/bark.mp3?v=1" preload="auto"></audio>
+<div id="app">
+
+  <!-- ══ the two characters ══ -->
+  <div class="crew">
+    <div class="mediator-id">
+      <img id="mid-avatar" src="/assets/mediator-avatar.svg" alt="Mediator avatar"/>
+      <div class="mid-meta">
+        <div class="mid-name" id="mid-name">MEDIATOR</div>
+        <div class="mid-tag" id="mid-tag"></div>
+        <div class="mid-rowset">
+          <span class="chip" id="chip-gear">GEAR —</span>
+          <span class="chip" id="chip-model">MODEL —</span>
+          <span class="chip" id="chip-run">IDLE</span>
+          <span class="chip" id="chip-tasks">TASKS 0</span>
+          <span class="chip" id="chip-esc">ESCALATIONS 0</span>
+        </div>
+
+        <!-- Who currently holds the work. Makes the chain readable at a glance. -->
+        <div class="chain" id="chain">
+          <div class="cnode" data-node="BRIEF"><b>Human + ChatGPT</b><span id="cn-brief">no brief</span></div>
+          <div class="clink" id="cl-1">&#9656;</div>
+          <div class="cnode" data-node="MEDIATOR"><b id="cn-med-t">Mediator</b><span id="cn-med">idle</span></div>
+          <div class="clink" id="cl-2">&#9656;</div>
+          <div class="cnode" data-node="PUPPY"><b>Robo Puppy</b><span id="cn-pup">sleeping</span></div>
+          <div class="clink" id="cl-3">&#9656;</div>
+          <div class="cnode" data-node="REALITY"><b>Compiler &amp; tests</b><span id="cn-val">idle</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Robo Puppy's little work bay -->
+    <div class="bay">
+      <div class="bay-head">
+        <span class="bay-title">ROBO PUPPY</span>
+        <span class="bay-state mono" id="pup-state">SLEEPING</span>
+      </div>
+      <div class="pup-stage" id="pup-stage" data-pup="SLEEPING">
+        <!-- Layered so ears, eyes and tail animate independently. -->
+        <svg id="puppy" viewBox="0 0 160 132" aria-hidden="true">
+          <!-- workstation -->
+          <rect x="20" y="112" width="120" height="4" fill="#241a12"/>
+          <rect x="34" y="92" width="34" height="21" fill="#181f1c" stroke="#2f4a3e"/>
+          <rect id="pup-term-glow" x="36" y="94" width="30" height="17" fill="var(--pup-accent)"/>
+          <g id="pup-body">
+            <!-- tail -->
+            <g id="pup-tail">
+              <path d="M116 92 q16 -5 20 -20 q2 -8 -4 -9 q-6 -1 -8 8 q-3 12 -12 15 z" fill="var(--pup-mid)"/>
+              <circle cx="134" cy="64" r="4" fill="var(--pup-light)"/>
+            </g>
+            <!-- torso -->
+            <path d="M58 112 q-12 0 -12 -14 l0 -14 q0 -12 14 -12 l40 0 q14 0 14 12 l0 14 q0 14 -12 14 z" fill="var(--pup-copper)"/>
+            <rect x="62" y="86" width="36" height="15" fill="var(--pup-mid)" opacity=".45"/>
+            <rect x="52" y="104" width="12" height="9" fill="var(--pup-dark)"/>
+            <rect x="96" y="104" width="12" height="9" fill="var(--pup-dark)"/>
+            <!-- head -->
+            <g id="pup-head">
+              <g id="pup-ear-l"><path d="M62 46 q-9 -19 -2 -25 q8 -5 12 12 z" fill="var(--pup-mid)"/></g>
+              <g id="pup-ear-r"><path d="M98 46 q9 -19 2 -25 q-8 -5 -12 12 z" fill="var(--pup-mid)"/></g>
+              <rect x="78" y="20" width="4" height="12" fill="var(--pup-dark)"/>
+              <circle id="pup-led" cx="80" cy="18" r="4" fill="var(--pup-eye)"/>
+              <path d="M56 74 q0 -30 24 -30 q24 0 24 30 q0 12 -24 12 q-24 0 -24 -12 z" fill="var(--pup-copper)"/>
+              <path d="M56 74 q0 -30 24 -30 q24 0 24 30 z" fill="var(--pup-light)" opacity=".22"/>
+              <!-- eyes: iris + lid, lid scales down to close -->
+              <g>
+                <circle class="pup-eye" cx="70" cy="62" r="6.5" fill="var(--pup-eye)"/>
+                <circle class="pup-eye" cx="90" cy="62" r="6.5" fill="var(--pup-eye)"/>
+                <circle cx="70" cy="62" r="2.4" fill="#04240f"/>
+                <circle cx="90" cy="62" r="2.4" fill="#04240f"/>
+                <rect class="pup-lid" x="63" y="55" width="14" height="14" fill="var(--pup-copper)"/>
+                <rect class="pup-lid" x="83" y="55" width="14" height="14" fill="var(--pup-copper)"/>
+              </g>
+              <!-- muzzle -->
+              <ellipse cx="80" cy="78" rx="13" ry="8" fill="var(--pup-light)"/>
+              <ellipse cx="80" cy="74" rx="4" ry="3" fill="var(--pup-dark)"/>
+            </g>
+          </g>
+          <!-- restrained sleep indicator -->
+          <g id="pup-zzz" fill="var(--pup-accent)" font-family="monospace" font-size="12">
+            <text x="108" y="42">z</text>
+          </g>
+        </svg>
+      </div>
+      <div class="pup-speech" id="pup-speech">Waiting by the door.</div>
+      <dl class="pup-facts">
+        <dt id="l-task">Task</dt><dd id="pf-task" class="muted">—</dd>
+        <dt id="l-mission">Mission</dt><dd id="pf-mission" class="mono muted">—</dd>
+        <dt id="l-phase">Phase</dt><dd id="pf-phase" class="mono muted">—</dd>
+        <dt>Model</dt><dd id="pf-model" class="mono muted">—</dd>
+        <dt>Calls</dt><dd id="pf-calls" class="mono muted">—</dd>
+        <dt>Validation</dt><dd id="pf-valid" class="mono muted">—</dd>
+        <dt>Checkpoint</dt><dd id="pf-ckpt" class="mono muted">—</dd>
+        <dt>Why</dt><dd id="pf-why" class="muted">—</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab on" data-view="console">Console</div>
+    <div class="tab" data-view="identity">Mediator Identity</div>
+    <div class="tab" data-view="profile">Puppy Profile</div>
+    <div class="tab" data-view="models">Model Router</div>
+  </div>
+
+  <!-- ══ console ══ -->
+  <div class="view on" id="view-console">
+    <div class="cols">
+      <div class="col">
+        <div class="band">
+          <div class="band-label">Mission Brief<span class="spacer"></span><span id="brief-state" class="muted"></span></div>
+          <textarea id="brief" placeholder="Paste the plan you and ChatGPT worked out. It is stored exactly as written and is never silently rewritten."></textarea>
+          <div class="brief-view" id="brief-view" hidden></div>
+        </div>
+        <div class="band">
+          <div class="band-label">Current Operational Objective</div>
+          <div class="objective" id="objective">—</div>
+        </div>
+        <div class="band">
+          <div class="band-label">Controls</div>
+          <div class="ctl-row" style="margin-bottom:6px">
+            <button id="b-start" class="go">Train the Puppy</button>
+            <button id="b-pause">Pause after current task</button>
+            <button id="b-resume">Resume</button>
+            <button id="b-stop" class="danger">Stop safely</button>
+            <button id="b-escalate">Escalate now</button>
+          </div>
+          <div class="ctl-row">
+            <button class="mode on" data-mode="AUTO_ROUTE">Auto route</button>
+            <button class="mode" data-mode="FAST_ONLY">Fast only</button>
+            <button class="mode" data-mode="DEEP_ONLY">Deep only</button>
+          </div>
+        </div>
+        <div class="band">
+          <div class="band-label">Validation<span class="spacer"></span></div>
+          <div id="validation" class="mono muted" style="font-size:11.5px">No validation has run in this session.</div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="band" style="border-top:none">
+          <div class="band-label">Supervisor Timeline<span class="spacer"></span><span id="tl-count" class="muted"></span></div>
+          <div class="tl" id="timeline"></div>
+        </div>
+        <div class="band">
+          <div class="band-label">Performance</div>
+          <table class="grid"><tbody id="perf"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ identity ══ -->
+  <div class="view" id="view-identity">
+    <div class="band" style="border-top:none">
+      <div class="band-label">Mediator Identity</div>
+      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
+        <img src="/assets/mediator-avatar.svg" alt="Mediator avatar" style="width:128px;height:128px"/>
+        <div style="flex:1;min-width:280px">
+          <table class="grid"><tbody id="id-table"></tbody></table>
+        </div>
+      </div>
+      <div style="margin-top:10px" id="id-swatches"></div>
+      <p class="muted" style="max-width:70ch;margin-top:12px">
+        Robo Puppy and the Mediator are interface metaphors representing different software-agent
+        roles. A sleeping puppy is a readable way to show that the worker is idle. The Mediator's
+        self-selected identity is a design exercise — “what representation would this model choose
+        for this function?” — and is not a claim about consciousness, preference, or experience.
+      </p>
+      <div class="ctl-row" style="margin-top:10px">
+        <button id="b-regen" class="danger">Regenerate identity…</button>
+        <span class="muted" style="align-self:center">Requires explicit confirmation on the CLI. The identity is never replaced automatically.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ puppy profile ══ -->
+  <div class="view" id="view-profile">
+    <div class="band" style="border-top:none">
+      <div class="band-label">Robo Puppy — Report Card<span class="spacer"></span><span class="muted" id="pp-note"></span></div>
+      <table class="grid"><tbody id="pp-overall"></tbody></table>
+      <div class="band-label" style="margin-top:14px">By Task Family</div>
+      <table class="grid">
+        <thead><tr><th>Family</th><th class="num">Tasks</th><th class="num">First pass</th><th class="num">Empty edit</th><th class="num">Scope viol.</th><th class="num">Deep escal.</th><th class="num">Med. calls</th></tr></thead>
+        <tbody id="pp-families"></tbody>
+      </table>
+      <p class="muted" style="margin-top:10px">
+        Rates are withheld until a family has at least 3 recorded tasks. Fixture-demo tasks are
+        recorded as simulated and are marked as such — they measure the Mediator, not the worker.
+      </p>
+    </div>
+  </div>
+
+  <!-- ══ models ══ -->
+  <div class="view" id="view-models">
+    <div class="band" style="border-top:none">
+      <div class="band-label">Model Router<span class="spacer"></span><span class="muted" id="cat-src"></span></div>
+      <table class="grid">
+        <thead><tr><th>Role</th><th>Model</th><th>Cost</th><th>Status</th><th class="num">Calls</th><th class="num">Med. latency</th><th class="num">Success</th><th class="num">Structured</th></tr></thead>
+        <tbody id="role-table"></tbody>
+      </table>
+      <div class="band-label" style="margin-top:14px">Discovered Models</div>
+      <table class="grid">
+        <thead><tr><th>Model</th><th>Cost</th><th class="num">Context</th><th>Tools</th><th>Image</th><th>Eligible for</th><th>Assigned</th><th class="num">Observed calls</th></tr></thead>
+        <tbody id="model-table"></tbody>
+      </table>
+      <p class="muted" style="margin-top:10px">
+        “Free” appears only where the provider's own metadata reports zero input and output cost.
+        Anything else reads UNKNOWN. Latency and success rates come only from calls actually made.
+      </p>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span id="f-conn">connecting…</span>
+    <span id="f-run" class="mono"></span>
+    <span id="f-heat" class="mono"></span>
+    <span class="muted">Tooling only · port 5185 · the application on 5173 is untouched</span>
+  </div>
+</div>
+
+<script>
+/* eslint-disable */
+"use strict";
+const $ = (id) => document.getElementById(id);
+let LAST = null;
+let mode = "AUTO_ROUTE";
+let briefLocked = false;
+let lastWorking = null;
+const barkAudio = $("barkSrc") || new Audio("/bark.mp3?v=1");
+barkAudio.preload = "auto";
+let lastBarkAt = 0;
+function bark(force) {
+  const now = Date.now();
+  if (!force && now - lastBarkAt < 1200) return;
+  lastBarkAt = now;
+  try {
+    barkAudio.currentTime = 0;
+    const p = barkAudio.play();
+    if (p && p.catch) p.catch(function () {});
+  } catch (e) {}
+}
+
+function txt(el, s){ el.textContent = (s === null || s === undefined || s === "") ? "—" : String(s); }
+function pct(v){ return v == null ? null : Math.round(v*100) + "%"; }
+function secs(ms){ return ms == null ? "—" : (ms/1000).toFixed(1) + "s"; }
+function dur(ms){
+  if (ms == null) return "—";
+  if (ms < 1000) return ms + "ms";
+  if (ms < 60000) return (ms/1000).toFixed(1) + "s";
+  const m = Math.floor(ms/60000), s = Math.round((ms%60000)/1000);
+  return m + "m " + String(s).padStart(2,"0") + "s";
+}
+function clock(at){ const d = new Date(at); return d.toTimeString().slice(0,8); }
+function cell(v, cls){ const td = document.createElement("td"); if(cls) td.className = cls;
+  if (v == null){ td.className = (cls?cls+" ":"") + "unknown"; td.textContent = "unknown"; } else td.textContent = String(v);
+  return td; }
+function row(cells){ const tr = document.createElement("tr"); for(const c of cells) tr.appendChild(c); return tr; }
+function th(s){ const t = document.createElement("td"); t.className="muted"; t.textContent = s; return t; }
+
+/* ---- theme injection: values are canonical hex from the server ---- */
+function applyTheme(identity){
+  const t = identity.theme, r = document.documentElement.style;
+  r.setProperty("--primary", t.primary);
+  r.setProperty("--secondary", t.secondary);
+  r.setProperty("--bg", t.background);
+  r.setProperty("--surface", t.surface);
+  r.setProperty("--text", t.text);
+  r.setProperty("--warning", t.warning);
+  r.setProperty("--success", t.success);
+  txt($("mid-name"), identity.displayName);
+  txt($("mid-tag"), identity.tagline);
+  document.title = identity.displayName + " — Robo Puppy Mediator";
+}
+
+/* ---- actor attribution for the timeline ---- */
+function actorFor(e){
+  if (e.kind === "ROUTE" || e.kind === "GEAR_CHANGE") return "ROUTER";
+  if (e.kind === "SUPERVISOR_CALL" || e.kind === "SUPERVISOR_DECISION" || e.kind === "ESCALATION" || e.kind === "ESCALATION_RESOLVED") return e.role || "MEDIATOR";
+  if (e.kind === "TASK_DISPATCHED" || e.kind === "WORKER_RESULT" || e.kind === "VALIDATION") return "ROBO_PUPPY";
+  return "SYSTEM";
+}
+function describe(e){
+  switch(e.kind){
+    case "RUN_STARTED": return "Run started (" + e.dispatch + " dispatch, " + e.mode + ").";
+    case "BRIEF_RECEIVED": return "Human brief stored verbatim (" + e.chars + " chars).";
+    case "ROUTE": return (e.role === "HUMAN" ? "PAUSE FOR HUMAN" : e.role.replace(/_/g," ")) + " — " + (e.reason||"");
+    case "GEAR_CHANGE": return e.from.replace(/_/g," ") + " → " + e.to.replace(/_/g," ") + (e.reason ? " · " + e.reason : "");
+    case "SUPERVISOR_CALL": return (e.ok ? "Call ok" : "Call failed: " + (e.error||"")) + " · " + (e.model||"");
+    case "SUPERVISOR_DECISION": return e.decision + (e.confidence!=null ? " (confidence " + e.confidence + ")" : "") + " — " + (e.reason||"");
+    case "TASK_DISPATCHED": return "Task: " + (e.workerObjective||"");
+    case "WORKER_RESULT": return e.summary || "worker returned";
+    case "VALIDATION": return "Validation: " + JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k])=>!["kind","at","taskId"].includes(k))));
+    case "ESCALATION": return "Escalated — " + (e.reason||"");
+    case "ESCALATION_RESOLVED": return "Escalation resolved — " + (e.reason||"");
+    case "PROVIDER_FAILURE": return "Provider failure: " + (e.error||"");
+    case "STOPPED": return "Stopped — " + (e.reason||"") + (e.needsHuman ? " (needs a human)" : "");
+    case "PAUSED": return "Paused after " + (e.tasksCompleted||0) + " task(s).";
+    case "RUN_FINISHED": return "Run finished after " + (e.tasksCompleted||0) + " task(s).";
+    default: return e.note || e.reason || e.kind;
+  }
+}
+
+function renderTimeline(events){
+  const tl = $("timeline");
+  tl.textContent = "";
+  txt($("tl-count"), events.length + " events");
+  for (const e of events){
+    const a = actorFor(e);
+    const tr = document.createElement("div");
+    tr.className = "tl-row";
+    const c1 = document.createElement("div"); c1.className="tl-time mono"; c1.textContent = clock(e.at);
+    const c2 = document.createElement("div"); c2.className="tl-actor a-"+a; c2.textContent = a.replace(/_/g," ");
+    const c3 = document.createElement("div"); c3.className="tl-what"; c3.textContent = describe(e);
+    const c4 = document.createElement("div"); c4.className="tl-lat mono";
+    c4.textContent = e.durationMs!=null ? dur(e.durationMs) : (e.latencyMs!=null ? dur(e.latencyMs) : "");
+    tr.append(c1,c2,c3,c4);
+    tl.appendChild(tr);
+  }
+}
+
+function renderPuppy(p, run){
+  const stage = $("pup-stage");
+  const state = p.visualState || "SLEEPING";
+  if (stage.getAttribute("data-pup") !== state) stage.setAttribute("data-pup", state);
+  txt($("pup-state"), state.replace(/_/g," "));
+  txt($("pup-speech"), p.speech || p.visualMood);
+
+  // With no live run, mission detail on disk is history. Label it rather than
+  // letting a previous mission's phase read as current activity.
+  const hist = p.historical;
+  txt($("l-mission"), hist ? "Last mission" : "Mission");
+  txt($("l-phase"), hist ? "Ended at" : "Phase");
+  txt($("pf-task"), run && run.operationalObjective ? run.operationalObjective : "No task assigned.");
+  txt($("pf-mission"), hist ? (p.lastMission ? p.lastMission.missionId : null)
+    : (p.unbound ? "fixture (no mission on disk)" : p.missionId));
+  txt($("pf-phase"), hist ? (p.lastMission ? p.lastMission.state : null) : p.canonicalState);
+  txt($("pf-model"), p.model);
+  const c = p.counters || {};
+  txt($("pf-calls"), hist ? null : (c.modelCalls==null ? null : (c.modelCalls + (c.maxModelCalls?(" / "+c.maxModelCalls):""))));
+  txt($("pf-valid"), hist ? null : (p.lastError ? "error" : (p.finished ? "finished" : (p.working ? "pending" : "idle"))));
+  txt($("pf-ckpt"), run && run.lastDecision ? run.lastDecision : "—");
+  txt($("pf-why"), p.visualReason);
+  const led = $("pup-led");
+  if (led) led.setAttribute("fill",
+    state === "BLOCKED" || state === "ERROR" ? "#ff6b6b" :
+    state === "WAITING_FOR_TEACHER" ? "#7ba7e0" :
+    state === "SLEEPING" ? "#1d5c3a" : "var(--pup-eye)");
+}
+
+function renderRun(run, identity){
+  const gear = run ? run.currentGear : "FAST_SUPERVISOR";
+  const chip = $("chip-gear");
+  chip.className = "chip gear-" + gear;
+  chip.textContent = "GEAR · " + gear.replace(/_/g," ");
+  const roles = LAST && LAST.models ? LAST.models.roles : {};
+  txt($("chip-model"), "MODEL · " + (roles[gear] || "unassigned"));
+  txt($("chip-run"), run ? run.state : "IDLE");
+  txt($("chip-tasks"), "TASKS " + (run ? run.taskCount + "/" + run.maxTasks : 0));
+  txt($("chip-esc"), "ESCALATIONS " + (run ? run.escalationCount : 0));
+  txt($("objective"), run && run.operationalObjective ? run.operationalObjective : "—");
+  txt($("f-run"), run ? (run.runId + " · " + run.state) : "no run");
+
+  if (run && run.humanBrief && !briefLocked){
+    briefLocked = true;
+    $("brief").hidden = true;
+    const bv = $("brief-view"); bv.hidden = false; bv.textContent = run.humanBrief;
+    txt($("brief-state"), "stored verbatim · " + run.humanBrief.length + " chars");
+  }
+  const active = run && ["RUNNING","PAUSING","STOPPING"].includes(run.state);
+  $("b-start").disabled = !!active;
+  $("b-pause").disabled = !active;
+  $("b-resume").disabled = !(run && run.state === "PAUSED");
+  $("b-stop").disabled = !active;
+  $("b-escalate").disabled = !active;
+  if (run && run.blockedReason) {
+    $("chip-run").classList.add("warn-flash");
+    setTimeout(()=>$("chip-run").classList.remove("warn-flash"), 400);
+  }
+
+  const perf = $("perf"); perf.textContent = "";
+  const t = run ? run.timings : null;
+  perf.appendChild(row([th("Routing"), cell(t?dur(t.routingMs):null,"num mono")]));
+  perf.appendChild(row([th("Supervisor model time"), cell(t?dur(t.supervisorMs):null,"num mono")]));
+  perf.appendChild(row([th("Worker time"), cell(t?dur(t.workerMs):null,"num mono")]));
+  perf.appendChild(row([th("Validation time"), cell(t?dur(t.validationMs):null,"num mono")]));
+  perf.appendChild(row([th("Wall clock"), cell(run&&run.startedAt?dur((run.endedAt||Date.now())-run.startedAt):null,"num mono")]));
+}
+
+function renderIdentity(identity){
+  const tb = $("id-table"); tb.textContent = "";
+  const rows = [
+    ["Display name", identity.displayName],
+    ["Tagline", identity.tagline],
+    ["Avatar concept", identity.avatar.concept],
+    ["Shape language", identity.avatar.shapeLanguage],
+    ["Symbols", (identity.avatar.symbols||[]).join("  ")],
+    ["Visual style", identity.visualStyle],
+    ["Motion style", identity.motionStyle],
+    ["Personality", identity.personality],
+    ["Rationale", identity.rationale],
+    ["Created by", identity.creatingModel],
+    ["Created at", identity.createdAt ? new Date(identity.createdAt).toLocaleString() : null],
+    ["Identity version", identity.version],
+  ];
+  for (const [k,v] of rows) tb.appendChild(row([th(k), cell(v)]));
+  const sw = $("id-swatches"); sw.textContent = "";
+  for (const [k,v] of Object.entries(identity.theme)){
+    const s = document.createElement("span");
+    s.style.marginRight = "14px"; s.style.fontSize = "11px";
+    const b = document.createElement("span"); b.className = "sw"; b.style.background = v;
+    s.appendChild(b);
+    s.appendChild(document.createTextNode(k + " " + v));
+    sw.appendChild(s);
+  }
+}
+
+function renderProfile(pr){
+  txt($("pp-note"), pr.note ? pr.note : (pr.totalTasks + " recorded tasks"));
+  const o = $("pp-overall"); o.textContent = "";
+  const ov = pr.overall;
+  o.appendChild(row([th("Total tasks"), cell(pr.totalTasks,"num mono")]));
+  o.appendChild(row([th("First-pass success"), cell(pct(ov.firstPassSuccess),"num mono")]));
+  o.appendChild(row([th("Success after tutoring"), cell(pct(ov.successAfterTutoring),"num mono")]));
+  o.appendChild(row([th("Empty-edit rate"), cell(pct(ov.emptyEditRate),"num mono")]));
+  o.appendChild(row([th("Scope-violation rate"), cell(pct(ov.scopeViolationRate),"num mono")]));
+  o.appendChild(row([th("Median worker calls"), cell(ov.medianWorkerCalls,"num mono")]));
+  o.appendChild(row([th("Deep-escalation rate"), cell(pct(ov.deepEscalationRate),"num mono")]));
+  o.appendChild(row([th("Puppy implemented / senior took over"), cell(ov.puppyImplementedCount + " / " + ov.seniorTookOverCount,"num mono")]));
+  o.appendChild(row([th("Share implemented by Puppy"), cell(pct(pr.puppyImplementedShare),"num mono")]));
+  const f = $("pp-families"); f.textContent = "";
+  for (const fam of pr.families){
+    f.appendChild(row([th(fam.family), cell(fam.tasks,"num mono"), cell(pct(fam.firstPassSuccess),"num mono"),
+      cell(pct(fam.emptyEditRate),"num mono"), cell(pct(fam.scopeViolationRate),"num mono"),
+      cell(pct(fam.deepEscalationRate),"num mono"), cell(fam.medianWorkerCalls,"num mono")]));
+  }
+}
+
+function renderModels(m){
+  txt($("cat-src"), m.catalogSource ? ("source: " + m.catalogSource + (m.catalogStale ? " (stale)" : "")) : "no catalog yet");
+  const rt = $("role-table"); rt.textContent = "";
+  for (const [role, id] of Object.entries(m.roles || {})){
+    const info = (m.models||[]).find(x=>x.id===id);
+    const ob = info ? info.observed : null;
+    rt.appendChild(row([
+      th(role.replace(/_/g," ")), cell(id), cell(info?info.costClass:null), cell(info?info.status:null),
+      cell(ob?ob.calls:null,"num mono"), cell(ob&&ob.medianLatencyMs!=null?dur(ob.medianLatencyMs):null,"num mono"),
+      cell(ob?pct(ob.successRate):null,"num mono"), cell(ob?pct(ob.structuredOutputRate):null,"num mono"),
+    ]));
+  }
+  const mt = $("model-table"); mt.textContent = "";
+  for (const x of (m.models||[])){
+    const elig = Object.entries(x.eligible||{}).filter(([,v])=>v).map(([k])=>k.split("_")[0]);
+    mt.appendChild(row([
+      th(x.id), cell(x.local ? "LOCAL" : x.costClass), cell(x.contextLimit,"num mono"),
+      cell(x.toolcall==null?null:(x.toolcall?"yes":"no")), cell(x.image==null?null:(x.image?"yes":"no")),
+      cell(elig.length ? elig.join(", ") : "—"),
+      cell(x.roles && x.roles.length ? x.roles.map(r=>r.split("_")[0]).join(", ") : "—"),
+      cell(x.observed?x.observed.calls:null,"num mono"),
+    ]));
+  }
+}
+
+/* Which node currently holds the work. Derived from real state only. */
+function renderChain(run, puppy){
+  const pupState = puppy.visualState || "SLEEPING";
+  const running = run && ["RUNNING","PAUSING","STOPPING"].includes(run.state);
+  const pupBusy = ["WAKING","READING","PLANNING","THINKING","WORKING","REPAIRING","REVERTING","CONFUSED"].includes(pupState);
+  const validating = pupState === "VALIDATING";
+  // The Mediator holds the work when a run is live but the worker is not busy.
+  const medBusy = Boolean(running) && !pupBusy && !validating;
+
+  txt($("cn-brief"), run && run.humanBrief ? (run.humanBrief.length + " chars stored") : "no brief");
+  txt($("cn-med"), run ? (medBusy ? (run.currentGear === "DEEP_SUPERVISOR" ? "deep reasoning" : "reviewing") : run.state.toLowerCase()) : "idle");
+  txt($("cn-med-t"), run && run.currentGear ? "Mediator · " + run.currentGear.split("_")[0] : "Mediator");
+  txt($("cn-pup"), pupState.toLowerCase().replace(/_/g," "));
+  txt($("cn-val"), validating ? "running" : "idle");
+
+  set2("BRIEF", Boolean(run && run.humanBrief) && !running);
+  set2("MEDIATOR", medBusy);
+  set2("PUPPY", pupBusy);
+  set2("REALITY", validating);
+  $("cl-1").classList.toggle("flow", Boolean(running));
+  $("cl-2").classList.toggle("flow", pupBusy || medBusy);
+  $("cl-3").classList.toggle("flow", validating);
+}
+function set2(node, on){
+  const el = document.querySelector('.cnode[data-node="' + node + '"]');
+  if (el) el.classList.toggle("active", Boolean(on));
+}
+
+function render(s){
+  LAST = s;
+  applyTheme(s.identity);
+  renderRun(s.run, s.identity);
+  renderPuppy(s.puppy, s.run);
+  renderChain(s.run, s.puppy);
+  renderTimeline(s.events || []);
+  renderIdentity(s.identity);
+  renderProfile(s.profile);
+  renderModels(s.models);
+  const working = Boolean(s.puppy && s.puppy.working);
+  const finished = Boolean(s.puppy && s.puppy.finished);
+  if (lastWorking === false && working) bark();
+  if (lastWorking === true && !working && finished) bark(true);
+  lastWorking = working;
+  const v = (s.events||[]).slice().reverse().find(e=>e.kind==="VALIDATION");
+  txt($("validation"), v ? describe(v) : "No validation has run in this session.");
+  const h = s.heat || {};
+  const bits = [];
+  if (h.ram && h.ram.real) bits.push("RAM " + h.ram.pct + "%");
+  if (h.gpu && h.gpu.real) bits.push("GPU " + (h.gpu.utilPct!=null?h.gpu.utilPct+"%":"?") + (h.gpu.tempC!=null?" "+h.gpu.tempC+"C":""));
+  txt($("f-heat"), bits.join("  ") || "");
+}
+
+async function control(body){
+  const r = await fetch("/api/control", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const j = await r.json();
+  if (!j.ok && j.error) alert(j.error);
+  return j;
+}
+
+$("b-start").onclick = () => control({action:"start", brief:$("brief").value, mode});
+$("b-pause").onclick = () => control({action:"pause"});
+$("b-resume").onclick = () => control({action:"resume"});
+$("b-stop").onclick = () => control({action:"stop"});
+$("b-escalate").onclick = () => control({action:"escalate"});
+$("b-regen").onclick = () => alert(
+  "Regenerating the Mediator's identity replaces a deliberate one-time choice.\n\n" +
+  "Run this on the CLI, which requires an explicit confirmation flag:\n\n" +
+  "  node tools/killchain-ai/src/cli.mjs mediator reset-identity --confirm"
+);
+for (const b of document.querySelectorAll("button.mode")){
+  b.onclick = () => {
+    mode = b.dataset.mode;
+    for (const o of document.querySelectorAll("button.mode")) o.classList.toggle("on", o === b);
+    if (LAST && LAST.run && ["RUNNING","PAUSING","PAUSED"].includes(LAST.run.state)) control({action:"mode", mode});
+  };
+}
+for (const t of document.querySelectorAll(".tab")){
+  t.onclick = () => {
+    for (const o of document.querySelectorAll(".tab")) o.classList.toggle("on", o === t);
+    for (const v of document.querySelectorAll(".view")) v.classList.remove("on");
+    $("view-" + t.dataset.view).classList.add("on");
+  };
+}
+
+/* Server-Sent Events: no poll loop, so an idle console costs nothing. */
+function connect(){
+  const es = new EventSource("/api/stream");
+  es.onopen = () => txt($("f-conn"), "live");
+  es.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch(e){} };
+  es.onerror = () => { txt($("f-conn"), "reconnecting…"); es.close(); setTimeout(connect, 1500); };
+}
+document.addEventListener("pointerdown", () => {
+  if (!barkAudio.paused) return;
+  barkAudio.muted = true;
+  barkAudio.play().then(() => {
+    barkAudio.pause();
+    barkAudio.currentTime = 0;
+    barkAudio.muted = false;
+  }).catch(() => { barkAudio.muted = false; });
+});
+connect();
+setTimeout(() => bark(true), 180);
+</script>
+</body>
+</html>

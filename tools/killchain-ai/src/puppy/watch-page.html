@@ -1,0 +1,457 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ROBO PUPPY</title>
+<link rel="icon" href="/avatar.jpg?v=copper">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --ink:#030908; --panel:#071411; --text:#d7f3ea; --dim:#6f8f86; --accent:#3dffb0; --bad:#ff6b6b; --warn:#e0b45c; --eye:#39ff88; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; min-height:100%; background:
+    radial-gradient(ellipse at 50% -10%, #0d2e24 0%, var(--ink) 55%);
+    color:var(--text); font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  body { display:flex; justify-content:center; }
+  .wrap { width:100%; max-width:500px; padding:16px 16px 22px; display:flex; flex-direction:column; gap:11px; }
+  .hero { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .stage { position:relative; width:220px; height:210px; display:flex; align-items:flex-end; justify-content:center; }
+  .ears { position:absolute; top:-6px; left:22px; right:22px; display:flex; justify-content:space-between; pointer-events:none; z-index:2; }
+  .ears i { width:30px; height:40px; background:linear-gradient(180deg,#c4894a 0%,#7a4a24 58%,#3d2414 100%);
+    border:1px solid #e0b070; border-radius:16px 16px 8px 8px; transform-origin:50% 100%;
+    box-shadow:inset 0 -12px 0 #5a3018, 0 0 10px rgba(196,137,74,.28); }
+  .ears i:last-child { transform:scaleX(-1); }
+  .stage.working .ears i { animation: ear 1.7s ease-in-out infinite; }
+  .stage.finished.bad .ears i { transform:rotate(18deg) translateY(8px); }
+  .stage.finished.bad .ears i:last-child { transform:scaleX(-1) rotate(18deg) translateY(8px); }
+  .tail { position:absolute; right:2px; bottom:52px; width:18px; height:50px; border-radius:9px;
+    background:linear-gradient(180deg,#c4894a,#3d2414); transform-origin:50% 90%; opacity:.92;
+    box-shadow:0 0 8px rgba(196,137,74,.25); }
+  .stage.working .tail { animation: wag .28s ease-in-out infinite; }
+  .stage.finished.bad .tail { opacity:.25; transform:rotate(40deg); }
+  .avatar-ring { width:196px; height:196px; border-radius:32px; padding:7px; position:relative;
+    background:#04110e; border:1px solid #174338; overflow:hidden; z-index:1; }
+  .avatar-ring img { width:100%; height:100%; object-fit:cover; object-position:center 48%; border-radius:26px; display:block; filter:saturate(1.08); }
+  .avatar-ring.working { animation: breathe 1.7s ease-in-out infinite; border-color:var(--eye);
+    box-shadow:0 0 0 1px rgba(57,255,136,.35), 0 0 40px rgba(57,255,136,.22), inset 0 0 24px rgba(57,255,136,.08); }
+  .avatar-ring.working::after { content:""; position:absolute; inset:28% 12% 36% 12%; pointer-events:none;
+    background:radial-gradient(circle, rgba(57,255,136,.22), transparent 72%); animation: glow 1.7s ease-in-out infinite; }
+  .avatar-ring.heat-warm { box-shadow:0 0 28px rgba(224,180,92,.28); }
+  .avatar-ring.heat-hot { border-color:var(--bad); box-shadow:0 0 32px rgba(255,107,107,.32); }
+  .avatar-ring.finished.ok { border-color:var(--accent); }
+  .avatar-ring.finished.bad { border-color:var(--bad); filter:saturate(.55); box-shadow:0 0 28px rgba(255,107,107,.18); }
+  .avatar-ring.idle { opacity:.92; }
+  .who { text-align:center; }
+  .who h1 { margin:0; letter-spacing:.28em; font-size:17px; color:#eafff6; }
+  .who p { margin:3px 0 0; color:var(--dim); font-size:10px; letter-spacing:.12em; }
+  .badge { display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:999px;
+    border:1px solid var(--accent); color:var(--accent); font-size:11px; letter-spacing:.18em; }
+  .badge .dot { width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .badge.working .dot { animation: blink 1s step-end infinite; }
+  .badge.finished.bad { border-color:var(--bad); color:var(--bad); }
+  .speech { position:relative; background:#0b1f1a; border:1px solid #1c4a3e; border-radius:14px 14px 14px 4px;
+    padding:10px 12px; color:#c8ffe8; font-size:13px; }
+  .speech:empty { display:none; }
+  .leash { display:flex; align-items:center; gap:8px; color:#3d6a5e; font-size:10px; letter-spacing:.14em; cursor:pointer; }
+  .leash .wire { flex:1; height:1px; background:repeating-linear-gradient(90deg, #2a5a4c 0 6px, transparent 6px 10px); }
+  .leash:hover { color:#7ed0b8; }
+  .panel { background:var(--panel); border:1px solid #12332c; border-radius:14px; padding:12px 14px; }
+  .k { color:var(--dim); font-size:9px; letter-spacing:.18em; margin-bottom:6px; }
+  .now { font-size:15px; color:#eafff8; }
+  .eta-row { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+  .eta { font-size:26px; letter-spacing:.04em; color:var(--accent); }
+  .eta.done { color:var(--dim); font-size:20px; }
+  .elapsed { color:#7ea89c; font-size:12px; text-align:right; }
+  .src { margin-top:6px; color:#3d5e57; font-size:10px; }
+  .bones { display:flex; gap:3px; margin-top:8px; }
+  .bones i { flex:1; height:6px; border-radius:99px; background:#12332c; }
+  .bones i.on { background:var(--accent); box-shadow:0 0 6px rgba(61,255,176,.45); }
+  .bones i.now { background:var(--warn); }
+  .vitals { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .vital { background:#061310; border:1px solid #12332c; border-radius:10px; padding:8px 10px; }
+  .vital .k { margin-bottom:2px; }
+  .vital .v { font-size:15px; color:#eafff8; }
+  .vital .v.pass { color:var(--accent); }
+  .vital .v.fail, .vital .v.block { color:var(--bad); }
+  .vital .v.unknown { color:#44605a; }
+  .heat { display:flex; flex-direction:column; gap:9px; }
+  .heat-row { display:grid; grid-template-columns:64px 1fr 52px; gap:8px; align-items:center; }
+  .heat-row .lab { color:var(--dim); font-size:9px; letter-spacing:.16em; }
+  .heat-row .n { font-size:13px; color:#eafff8; text-align:right; }
+  .heat-row .n.warn { color:var(--warn); }
+  .heat-row .n.hot { color:var(--bad); }
+  .heat-row .n.unknown { color:#44605a; }
+  .hbar { height:7px; background:#12332c; border-radius:99px; overflow:hidden; }
+  .hbar i { display:block; height:100%; border-radius:99px; background:var(--accent); box-shadow:0 0 6px rgba(61,255,176,.4); }
+  .hbar i.warn { background:var(--warn); box-shadow:0 0 6px rgba(224,180,92,.4); }
+  .hbar i.hot { background:var(--bad); box-shadow:0 0 6px rgba(255,107,107,.45); }
+  .hbar i.unknown { width:0 !important; box-shadow:none; }
+  .tools { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+  .chip { padding:2px 7px; border-radius:999px; border:1px solid #1e4a40; color:#9fdcc8; font-size:10px; letter-spacing:.04em; }
+  .chip.warn { border-color:#5a3e12; color:var(--warn); }
+  .chip.bad { border-color:#5a2020; color:#ffb0b0; }
+  .log { max-height:168px; overflow:auto; font-size:11px; color:#9fcec0; }
+  .log div { padding:3px 0; border-bottom:1px dashed #0e2621; }
+  .log .t { color:#4d7368; margin-right:6px; }
+  .trail { display:flex; flex-wrap:wrap; gap:5px; }
+  .pill { padding:2px 8px; border-radius:999px; background:#0a1c18; border:1px solid #1a3c34; color:#9fcec0; font-size:10px; }
+  .pill.now { border-color:var(--warn); color:var(--warn); }
+  .banner { display:none; padding:11px 12px; border-radius:12px; letter-spacing:.08em; font-size:12px; text-align:center; }
+  .banner.show { display:block; }
+  .banner.ok { background:#0c2a22; border:1px solid var(--accent); color:var(--accent); }
+  .banner.bad { background:#2a1010; border:1px solid var(--bad); color:#ffb0b0; }
+  .mood { color:var(--accent); font-size:12px; text-align:center; }
+  .stamp { color:#2d4a45; font-size:10px; text-align:center; }
+  .reason, .bite { color:#e0913c; font-size:12px; word-break:break-word; }
+  .aside { color:#e0b45c; font-size:11px; text-align:center; }
+  .paths { color:#7ea89c; font-size:11px; word-break:break-all; }
+  .spark { display:flex; align-items:flex-end; gap:3px; height:44px; margin-top:8px; }
+  .spark b { flex:1; min-width:6px; border-radius:2px 2px 0 0; background:rgba(61,255,176,.55); }
+  .spark b.fail { background:rgba(255,107,107,.7); }
+  .spark b.last { outline:1px solid #eafff8; }
+  @keyframes breathe { 0%,100% { transform:scale(1); } 50% { transform:scale(1.02); } }
+  @keyframes glow { 0%,100% { opacity:.35; } 50% { opacity:1; } }
+  @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:.2; } }
+  @keyframes wag { 0%,100% { transform:rotate(-18deg); } 50% { transform:rotate(28deg); } }
+  @keyframes ear { 0%,100% { transform:rotate(-6deg); } 50% { transform:rotate(8deg); } }
+</style>
+<div class="wrap">
+  <div class="hero">
+    <div id="stage" class="stage">
+      <div class="ears"><i></i><i></i></div>
+      <div id="ring" class="avatar-ring idle"><img src="/avatar.jpg?v=copper" alt="Robo Puppy"></div>
+      <div class="tail"></div>
+    </div>
+    <div class="who">
+      <h1>ROBO PUPPY</h1>
+      <p>Kill Chain Autonomous Development Agent</p>
+    </div>
+    <div id="badge" class="badge"><span class="dot"></span><span id="badgeText">IDLE</span></div>
+  </div>
+  <div id="speech" class="speech"></div>
+  <div class="leash" id="leashRow" title="click to copy mission id"><span>LEASH</span><span class="wire"></span><span id="leash">no mission</span></div>
+  <div id="banner" class="banner"></div>
+  <div class="panel">
+    <div class="k">WORKING ON</div>
+    <div id="now" class="now">Waiting for a job.</div>
+    <div id="detail" class="src"></div>
+  </div>
+  <div class="panel">
+    <div class="k">VITALS</div>
+    <div id="vitals" class="vitals"></div>
+  </div>
+  <div class="panel">
+    <div class="k">HEAT</div>
+    <div id="heat" class="heat"></div>
+    <div id="heatSrc" class="src"></div>
+  </div>
+  <div class="panel">
+    <div class="k">HIS ETA</div>
+    <div class="eta-row">
+      <div id="eta" class="eta">—</div>
+      <div id="elapsed" class="elapsed"></div>
+    </div>
+    <div id="bones" class="bones"></div>
+    <div id="spark" class="spark"></div>
+    <div id="etaSrc" class="src"></div>
+  </div>
+  <div class="panel">
+    <div class="k">LAST FETCH</div>
+    <div id="lastCall" class="src">—</div>
+    <div id="tools" class="tools"></div>
+  </div>
+  <div class="panel" id="disciplineBox" style="display:none">
+    <div class="k">DISCIPLINE</div>
+    <div id="discipline" class="tools"></div>
+  </div>
+  <div class="panel">
+    <div class="k">SCOPED TO</div>
+    <div id="paths" class="paths">—</div>
+  </div>
+  <div class="panel">
+    <div class="k">TRAIL</div>
+    <div id="trail" class="trail">—</div>
+  </div>
+  <div class="panel">
+    <div class="k">JOURNAL</div>
+    <div id="log" class="log"></div>
+  </div>
+  <div class="panel" id="reasonBox" style="display:none">
+    <div class="k">REASON</div>
+    <div id="reason" class="reason"></div>
+  </div>
+  <div class="panel" id="biteBox" style="display:none">
+    <div class="k">LAST BITE</div>
+    <div id="bite" class="bite"></div>
+  </div>
+  <div id="aside" class="aside"></div>
+  <div id="mood" class="mood"></div>
+  <div id="stamp" class="stamp"></div>
+  <audio id="barkSrc" src="/bark.mp3?v=1" preload="auto"></audio>
+</div>
+<script>
+  const PAGE_VERSION = "%%PAGE_VERSION%%";
+  let lastWorking = null;
+  let snap = null;
+  const born = Date.now();
+  const tabId = born + "-" + Math.random().toString(36).slice(2);
+  let duplicate = false;
+  try {
+    const ch = new BroadcastChannel("robo-puppy-watch");
+    ch.onmessage = (ev) => {
+      const d = ev.data || {};
+      if (d.type !== "announce" || d.tabId === tabId) return;
+      if (d.born < born || (d.born === born && d.tabId < tabId)) {
+        duplicate = true;
+        window.close();
+      }
+    };
+    ch.postMessage({ type: "announce", born, tabId });
+  } catch (e) {}
+  const $ = (id) => document.getElementById(id);
+  const barkAudio = $("barkSrc") || new Audio("/bark.mp3?v=1");
+  barkAudio.preload = "auto";
+  let lastBarkAt = 0;
+  function bark(force) {
+    if (duplicate) return;
+    const now = Date.now();
+    if (!force && now - lastBarkAt < 1200) return;
+    lastBarkAt = now;
+    try {
+      barkAudio.currentTime = 0;
+      const p = barkAudio.play();
+      if (p && p.catch) p.catch(function () {});
+    } catch (e) {}
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+  function fmt(ms) {
+    if (ms == null || !isFinite(ms)) return "—";
+    if (ms <= 0) return "done";
+    const s = Math.round(ms / 1000);
+    if (s < 90) return "~" + s + "s";
+    const m = Math.round(s / 60);
+    if (m < 60) return "~" + m + " min";
+    const h = Math.floor(m / 60), rm = m % 60;
+    return rm ? "~" + h + "h " + rm + "m" : "~" + h + "h";
+  }
+  function clock(ms) {
+    if (ms == null || !isFinite(ms) || ms < 0) return "";
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    if (h) return h + "h " + (m % 60) + "m in";
+    if (m) return m + "m " + (s % 60) + "s in";
+    return s + "s in";
+  }
+  function notify(s) {
+    const title = s.state === "COMPLETE" ? "Robo Puppy finished" : "Robo Puppy stopped";
+    const body = (s.speech || s.workingOn || s.state) + (s.blockedReason ? " — " + s.blockedReason : "");
+    document.title = title;
+    bark(true);
+    if (window.Notification && Notification.permission === "granted") {
+      try { new Notification(title, { body, silent: true }); } catch (e) {}
+    }
+  }
+  function bones(s) {
+    const used = s.counters && s.counters.modelCalls != null ? s.counters.modelCalls : 0;
+    const max = s.counters && s.counters.maxModelCalls ? s.counters.maxModelCalls : 0;
+    const n = Math.min(24, max || 12);
+    if (!max) { $("bones").innerHTML = ""; return; }
+    const filled = Math.round((used / max) * n);
+    let html = "";
+    for (let i = 0; i < n; i++) html += "<i class='" + (i < filled ? "on" : "") + (i === filled && s.working ? " now" : "") + "'></i>";
+    $("bones").innerHTML = html;
+  }
+  function spark(s) {
+    const hist = s.callHistory || [];
+    const el = $("spark");
+    if (!hist.length) { el.innerHTML = ""; return; }
+    const max = Math.max(1, ...hist.map((h) => h.durationMs || 0));
+    el.innerHTML = hist.map((h, i) => {
+      const pct = Math.max(8, Math.round(((h.durationMs || 0) / max) * 100));
+      const cls = (h.ok === false ? "fail" : "") + (i === hist.length - 1 ? " last" : "");
+      const title = "#" + (h.n || "?") + " " + (h.phase || "") + " " + fmt(h.durationMs);
+      return "<b class='" + cls.trim() + "' style='height:" + pct + "%' title='" + esc(title) + "'></b>";
+    }).join("");
+  }
+  function vitalClass(v) {
+    const t = String(v || "").toUpperCase();
+    if (t === "PASS") return "pass";
+    if (t === "FAIL" || t === "BLOCK") return "fail";
+    if (!v) return "unknown";
+    return "";
+  }
+  function vitals(s) {
+    const want = ["BUILD", "CRITIC", "CHECKPOINT", "MODEL CALLS"];
+    const by = {};
+    (s.fields || []).forEach((f) => { by[f.label] = f; });
+    $("vitals").innerHTML = want.map((label) => {
+      const f = by[label] || { value: null };
+      const v = f.value == null ? "—" : f.value;
+      return "<div class='vital'><div class='k'>" + esc(label) + "</div><div class='v " + vitalClass(v) + "'>" + esc(v) + "</div></div>";
+    }).join("");
+  }
+  function heatTone(kind, n) {
+    if (n == null || !isFinite(n)) return "unknown";
+    if (kind === "temp") {
+      if (n >= 80) return "hot";
+      if (n >= 65) return "warn";
+      return "ok";
+    }
+    if (n >= 80) return "hot";
+    if (n >= 55) return "warn";
+    return "ok";
+  }
+  function heatRow(lab, n, kind) {
+    const tone = heatTone(kind, n);
+    const shown = n == null || !isFinite(n) ? "—" : (kind === "temp" ? n + "°C" : n + "%");
+    const width = n == null || !isFinite(n) ? 0 : Math.max(0, Math.min(100, n));
+    return "<div class='heat-row'><div class='lab'>" + esc(lab) + "</div>"
+      + "<div class='hbar'><i class='" + tone + "' style='width:" + width + "%'></i></div>"
+      + "<div class='n " + tone + "'>" + esc(shown) + "</div></div>";
+  }
+  function heat(s) {
+    const h = s.heat || {};
+    const gpu = h.gpu || {};
+    const ram = h.ram || {};
+    $("heat").innerHTML =
+      heatRow("GPU", gpu.utilPct, "util")
+      + heatRow("TEMP", gpu.tempC, "temp")
+      + heatRow("RAM", ram.pct, "util");
+    $("heatSrc").textContent = [
+      gpu.name,
+      gpu.from,
+      ram.from,
+    ].filter(Boolean).join(" · ");
+  }
+  function paint(s) {
+    snap = s;
+    const working = !!s.working;
+    const finished = !!s.finished;
+    const bad = s.state === "BLOCKED" || s.runnerState === "FAILED";
+    const ring = $("ring");
+    const gpuTemp = s.heat && s.heat.gpu ? s.heat.gpu.tempC : null;
+    const heatCls = heatTone("temp", gpuTemp) === "hot" ? " heat-hot" : (heatTone("temp", gpuTemp) === "warn" ? " heat-warm" : "");
+    ring.className = "avatar-ring" + (working ? " working" : finished ? " finished" + (bad ? " bad" : " ok") : " idle") + heatCls;
+    $("stage").className = "stage" + (working ? " working" : finished ? " finished" + (bad ? " bad" : " ok") : "");
+    const badge = $("badge");
+    badge.className = "badge" + (working ? " working" : "") + (finished ? " finished" + (bad ? " bad" : "") : "");
+    $("badgeText").textContent = working ? "WORKING" : (finished ? (bad ? "STOPPED" : "FINISHED") : (s.state || "IDLE"));
+    $("speech").textContent = s.speech || "";
+    $("leash").textContent = s.missionId || "no mission";
+    $("now").textContent = s.workingOn || s.activity || "—";
+    $("detail").textContent = s.detail || "";
+    $("etaSrc").textContent = [
+      s.eta && s.eta.from,
+      s.eta && s.eta.typicalCallMs ? ("typical fetch " + fmt(s.eta.typicalCallMs)) : null,
+    ].filter(Boolean).join(" · ");
+    $("mood").textContent = s.mood || "";
+    $("aside").textContent = s.aside || "";
+    $("stamp").textContent = [s.model, s.runnerState, s.counters && s.counters.modelCalls != null
+      ? (s.counters.modelCalls + (s.counters.maxModelCalls ? "/" + s.counters.maxModelCalls : "") + " calls")
+      : null].filter(Boolean).join(" · ");
+    $("paths").textContent = (s.allowedPaths && s.allowedPaths.length) ? s.allowedPaths.join("  ·  ") : "—";
+    const lc = s.lastCall;
+    $("lastCall").textContent = lc
+      ? ("#" + (lc.n || "?") + "  " + (lc.phase || "—") + (lc.durationMs != null ? "  " + fmt(lc.durationMs) : "")
+        + (lc.textChars != null ? "  " + lc.textChars + " chars" : "")
+        + (lc.firstTool ? "  via " + lc.firstTool : "")
+        + (lc.mcpFirst === false ? "  (not MCP-first)" : "")
+        + (lc.unix ? "  unix×" + lc.unix : ""))
+      : "—";
+    $("tools").innerHTML = (lc && lc.tools && lc.tools.length)
+      ? lc.tools.map((t) => "<span class='chip'>" + esc(t) + "</span>").join("")
+      : "";
+    const chips = s.discipline || [];
+    $("disciplineBox").style.display = chips.length ? "block" : "none";
+    $("discipline").innerHTML = chips.map((c) =>
+      "<span class='chip " + (c.label.indexOf("unix") >= 0 || c.label.indexOf("yank") >= 0 ? "warn" : "") + "'>" + esc(c.n + " " + c.label) + "</span>"
+    ).join("");
+    $("trail").innerHTML = (s.phaseTrail && s.phaseTrail.length)
+      ? s.phaseTrail.map((t, i) => {
+        const last = i === s.phaseTrail.length - 1;
+        const note = t.note ? " — " + t.note : "";
+        return "<span class='pill" + (last ? " now" : "") + "' title='" + esc(note.trim()) + "'>" + esc(t.from + " → " + t.to) + "</span>";
+      }).join("")
+      : "—";
+    const log = $("log");
+    log.innerHTML = (s.journal && s.journal.length)
+      ? s.journal.map((j) => "<div><span class='t'>" + esc((j.at || "").slice(11, 19)) + "</span>" + esc(j.text) + "</div>").join("")
+      : "<div>—</div>";
+    log.scrollTop = log.scrollHeight;
+    const banner = $("banner");
+    if (finished) {
+      banner.className = "banner show " + (bad ? "bad" : "ok");
+      banner.textContent = bad
+        ? ("STOPPED · " + (s.blockedReason || s.state))
+        : "FINISHED · good puppy";
+    } else {
+      banner.className = "banner";
+      banner.textContent = "";
+    }
+    const rb = $("reasonBox");
+    if (s.blockedReason) { rb.style.display = "block"; $("reason").textContent = s.blockedReason; }
+    else rb.style.display = "none";
+    const bb = $("biteBox");
+    if (s.lastError) { bb.style.display = "block"; $("bite").textContent = s.lastError; }
+    else bb.style.display = "none";
+    bones(s);
+    spark(s);
+    vitals(s);
+    heat(s);
+    document.title = (working ? "WORKING" : finished ? (bad ? "STOPPED" : "FINISHED") : "IDLE") + " · ROBO PUPPY";
+    tickEta();
+  }
+  function tickEta() {
+    if (!snap) return;
+    const eta = snap.eta || {};
+    const el = $("eta");
+    if (snap.finished || eta.label === "done") {
+      el.textContent = "done";
+      el.className = "eta done";
+    } else if (eta.remainingMs == null) {
+      el.textContent = "—";
+      el.className = "eta";
+    } else {
+      el.className = "eta";
+      el.textContent = fmt(eta.remainingMs - (Date.now() - (snap.fetchedAt || Date.now())));
+    }
+    const started = Date.parse(snap.startedAt);
+    const end = snap.endedAt ? Date.parse(snap.endedAt) : Date.now();
+    $("elapsed").textContent = Number.isFinite(started) ? clock(end - started) : "";
+  }
+  async function poll() {
+    try {
+      const s = await (await fetch("/api/status?window=1", { cache: "no-store" })).json();
+      if (s.pageVersion && s.pageVersion !== PAGE_VERSION) {
+        location.reload();
+        return;
+      }
+      const wasWorking = lastWorking;
+      paint(s);
+      if (wasWorking === false && s.working === true) bark();
+      if (wasWorking === true && s.working === false && s.finished) notify(s);
+      lastWorking = !!s.working;
+    } catch (e) {}
+  }
+  $("leashRow").addEventListener("click", () => {
+    const id = snap && snap.missionId;
+    if (!id || !navigator.clipboard) return;
+    navigator.clipboard.writeText(id).catch(() => {});
+  });
+  if (window.Notification && Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+  document.addEventListener("pointerdown", () => {
+    if (duplicate || !barkAudio.paused) return;
+    barkAudio.muted = true;
+    barkAudio.play().then(() => {
+      barkAudio.pause();
+      barkAudio.currentTime = 0;
+      barkAudio.muted = false;
+    }).catch(() => { barkAudio.muted = false; });
+  }, { once: true });
+  setTimeout(() => { if (!duplicate) bark(true); }, 180);
+  poll();
+  setInterval(poll, 1000);
+  setInterval(tickEta, 1000);
+</script>

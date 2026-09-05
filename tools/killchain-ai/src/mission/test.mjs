@@ -6,25 +6,38 @@ import { assertTransition, ALLOWED_TRANSITIONS } from "./machine.mjs";
 import { parseOpenCodeJsonl, visibleReportTooThin, buriedVerdict, openCodeRunArgs, parseOpenCodeTokens } from "./opencode.mjs";
 import { DEFAULT_MISSION_MODEL, LIGHTNING_MODEL, normalizeModelId, ollamaHasModel } from "./model.mjs";
 import { scanUnixTools } from "./unix.mjs";
-import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew, findInventedInnerPanelFiles, criticGroundingOk } from "./critic.mjs";
+import { parseCritic, parseMentionedPaths, proposalScopeCheck, checkReferencedFilesExist, evaluateArtifactGate, evaluateCriticGate, checkProposalConcrete, quarantineFitsDest, findWrongStackPaths, existingMarkedNew, findInventedInnerPanelFiles, criticGroundingOk, tryLocalVerdictNormalize, mergeCriticRepair,
+  checkEditTargetsAllowed,
+} from "./critic.mjs";
 import {
   TUTOR,
   classifyGateFailure,
   kindForError,
   hasSubstanceFor,
   criticFormatPacket,
+  criticNeedsEvidencePacket,
+  planCriticDisposition,
+  PLAN_CRITIC_ACTION,
   referencePacket,
   scopePacket,
   emptyEditPacket,
   validationPacket,
   substantivePacket,
   nearestValidReferences,
+  criticEvidenceGatherPacket,
 } from "./tutor.mjs";
 import { LESSONS, PHASES, MIN_SUPPORT, eligibleLessons, selectLessons, formatLessons } from "./lessons.mjs";
 import { assertMetrics } from "../ui/metrics.mjs";
 import { scanStructure, jsxRepairPacket, fingerprintDelta } from "./jsxStructure.mjs";
 import { checkIdentifiers, formatIdentifierPacket } from "./identifierGate.mjs";
 import { ACTIONS, classifyFailure, escalate } from "./failureClass.mjs";
+import {
+  allocateMicroMissionCallBudget,
+  callBudgetHit,
+  canEnterEditing,
+  IMPLEMENTATION_RESERVE_CALLS,
+  MIN_PRE_EDIT_CALLS,
+} from "./callBudget.mjs";
 import { scanRepoFiles } from "./scanRepo.mjs";
 import { repoRoot } from "../paths.mjs";
 import { buildTeacherPacket, validateTeacherResponse, PACKET_BUDGET } from "./teacherPacket.mjs";
@@ -34,6 +47,7 @@ import {
   parsePorcelain,
   unauthorizedChanges,
   unexpectedJunk,
+  isSidecarPath,
   diffCheckArgs,
   allowedAppDiffFiles,
   appDiffFiles,
@@ -62,13 +76,25 @@ import {
 } from "./attribution.mjs";
 import { classifyEditOutcome, emptyEditPolicy, expectedEditFiles, isMutationTool, usedMutationTool } from "./editGate.mjs";
 import { checkTsSyntax } from "./syntax.mjs";
-import { clip, executePrompt, editPrompt } from "./prompts.mjs";
+import { clip, executePrompt, editPrompt, criticPrompt, criticFormatRepairPrompt, criticNeedsEvidencePrompt, criticEvidenceGatherPrompt, PLAN_VERDICT_STAMP } from "./prompts.mjs";
 import { countFaults } from "../eval/editCurriculum.mjs";
 import { parseHunks, reverseApplyHunk, classifyHunk, selfTest } from "../eval/mineHunks.mjs";
 import { FAMILIES } from "../eval/mineEpisodes.mjs";
 import { checkSingularity, formatSingularityGuard } from "./singularityGuard.mjs";
-import { puppyStatus, renderTerminal, PUPPY_STATES } from "../puppy/status.mjs";
-import { screenVerdict, compareScreens } from "../ui/visualCritic.mjs";
+import { puppyStatus, renderTerminal, PUPPY_STATES, estimateEta, formatDuration, barkLine, asideLine } from "../puppy/status.mjs";
+import { WATCH_PORT as PUPPY_WATCH_PORT, APP_PORT as PUPPY_APP_PORT, HARNESS_PORT, shouldSpawnWatchWindow, autoOpenWatchWindow, WATCH_WINDOW_DEFAULT_OPEN } from "../puppy/watch.mjs";
+import { ramHeat, parseNvidiaSmi, gpuHeat, heatBand, unknownGpu, machineHeat } from "../puppy/heat.mjs";
+import { screenVerdict, compareScreens, parseScreen } from "../ui/visualCritic.mjs";
+import { syntheticFrame, resolvePhase, fillSpectrum, PHASES as HARNESS_PHASES, FRAME_DT } from "../../harness/syntheticIntel.mjs";
+import { APP_PORT, PREFERRED_PORT, PORT_SCAN, WATCH_PORT_RESERVED } from "../ui/captureHarness.mjs";
+import { truthFromProbe, sanitizeGlText, sanitizeGlTree } from "../overnight/probeShape.mjs";
+import {
+  compareDiagnostics,
+  diagnosticFingerprint,
+  OVERNIGHT_LET_LOG,
+  OVERNIGHT_RO_DT_LOG,
+} from "../overnight/diagnosticFingerprint.mjs";
+import { CALLS_PER_MISSION } from "../overnight/compilerRescue.mjs";
 
 function ok(name, cond, detail = "") {
   if (cond) {
@@ -109,6 +135,85 @@ export async function runMissionTests() {
   const parsed = parseMissionMarkdown(VALID_SPEC);
   check("valid spec parses", parsed.ok && parsed.spec.id === "test-valid", parsed.errors?.join("; "));
   check("spec body captured", parsed.spec.brief.includes("Body brief"));
+
+  // ---- prose fields must not be validated as paths ----
+  // A path validator was applied to acceptance/stopOn. Hand-authored missions
+  // passed by coincidence; a generated criterion containing "..." did not.
+  const proseSpec = (accept, stop = []) => parseMissionMarkdown(`---
+{
+  "id": "prose-spec",
+  "title": "prose",
+  "goal": "prose fields accept ordinary mission language",
+  "level": 1,
+  "allowedPaths": ["src/components/Visualizer/singularity.ts"],
+  "acceptance": ${JSON.stringify(accept)},
+  "stopOn": ${JSON.stringify(stop)}
+}
+---
+
+Body.`);
+
+  const proseCases = [
+    "Compiler advances from ro/dt to the next diagnostic.",
+    "Do not continue if validation fails.",
+    "declare vec3 ro = ... before the current use",
+    "Expected output may contain ../ text inside a human explanation.",
+  ];
+  const proseParsed = proseSpec(proseCases, ["Do not continue if validation fails."]);
+  check("prose acceptance parses", proseParsed.ok, proseParsed.errors?.join("; "));
+  check("acceptance prose is preserved verbatim",
+    JSON.stringify(proseParsed.spec?.acceptance) === JSON.stringify(proseCases),
+    JSON.stringify(proseParsed.spec?.acceptance));
+  check("an ellipsis in acceptance is not read as path traversal",
+    proseParsed.ok && proseParsed.spec.acceptance.some((a) => a.includes("...")));
+  check("../ inside an explanation is allowed as prose",
+    proseParsed.ok && proseParsed.spec.acceptance.some((a) => a.includes("../")));
+  check("stopOn accepts prose", proseParsed.ok && proseParsed.spec.stopOn.length === 1);
+  check("non-string acceptance is still rejected",
+    !proseSpec([{ nope: true }]).ok);
+
+  // ---- path fields keep every existing protection ----
+  const pathSpec = (paths) => parseMissionMarkdown(`---
+{
+  "id": "path-spec",
+  "title": "path",
+  "goal": "path fields keep path safety",
+  "level": 1,
+  "allowedPaths": ${JSON.stringify(paths)}
+}
+---
+
+Body.`);
+  check("allowedPaths still rejects ../escape", !pathSpec(["../escape"]).ok);
+  check("allowedPaths still rejects a drive letter", !pathSpec(["C:/Windows/system32"]).ok);
+  check("allowedPaths still rejects an absolute path", !pathSpec(["/etc/passwd"]).ok);
+  check("allowedPaths still rejects nested traversal", !pathSpec(["src/../../etc"]).ok);
+  check("allowedPaths still accepts a repo-relative path",
+    pathSpec(["src/components/Visualizer/singularity.ts"]).ok);
+  check("forbiddenPaths still rejects traversal", (() => {
+    const p = parseMissionMarkdown(`---
+{"id":"fp","title":"t","goal":"g","level":1,"allowedPaths":["src/a.ts"],"forbiddenPaths":["../x"]}
+---
+
+Body.`);
+    return !p.ok;
+  })());
+  check("validation names are still allowlisted", (() => {
+    const p = parseMissionMarkdown(`---
+{"id":"vv","title":"t","goal":"g","level":1,"allowedPaths":["src/a.ts"],"validation":{"required":["rm -rf"]}}
+---
+
+Body.`);
+    return !p.ok && p.errors.some((e) => /unknown validation command/.test(e));
+  })());
+  check("known validation names still parse", (() => {
+    const p = parseMissionMarkdown(`---
+{"id":"vk","title":"t","goal":"g","level":1,"allowedPaths":["src/a.ts"],"validation":{"required":["typecheck","build"]}}
+---
+
+Body.`);
+    return p.ok && p.spec.validation.required.join(",") === "typecheck,build";
+  })());
 
   const withModel = parseMissionMarkdown(`---
 {
@@ -190,6 +295,30 @@ export async function runMissionTests() {
   ], specL2, { dryRun: true });
   check("junk findings.md detected", junk.some((j) => j.path === "findings.md"));
   check("mission data not junk", !junk.some((j) => j.path.includes("tools/killchain-ai")));
+
+  check("sidecar bak is detected", isSidecarPath("src/components/Visualizer/singularity.ts.bak"));
+  check("sidecar tmp is detected", isSidecarPath("src/foo.tmp"));
+  check("copy.ts is a sidecar", isSidecarPath("src/components/Visualizer/copy.ts"));
+  check("backup.ts is a sidecar", isSidecarPath("src/backup.ts"));
+  check("production ts is not a sidecar", !isSidecarPath("src/components/Visualizer/singularity.ts"));
+  const specViz = parseMissionMarkdown(`---
+{
+  "id": "sidecar-scope",
+  "title": "scope",
+  "goal": "g",
+  "level": 1,
+  "allowedPaths": ["src/components/Visualizer/**"]
+}
+---
+`).spec;
+  const bakHit = unauthorizedChanges([
+    { path: "src/components/Visualizer/singularity.ts", xy: " M", untracked: false },
+    { path: "src/components/Visualizer/singularity.ts.bak", xy: "??", untracked: true },
+  ], specViz, { dryRun: false });
+  check(
+    "sidecar bak is unauthorized even under a visualizer glob",
+    bakHit.unauthorized.some((r) => r.path.endsWith(".bak")) && bakHit.allowed.some((r) => r.path.endsWith("singularity.ts")),
+  );
 
   const val = await runValidation(
     { validation: { required: ["typecheck"], restoreTsbuildinfo: false } },
@@ -540,6 +669,236 @@ export async function runMissionTests() {
   });
   check("final critic may use prompt diff without tools", finalNoTools.pass, JSON.stringify(finalNoTools.errors));
 
+  // ===== no-inspected-files: ONE targeted, tool-enabled evidence recovery =====
+  // The cheap needs-evidence repair forbids tools, so asking it for inspected
+  // files is unwinnable. That blocked the first live production mission.
+  const singSpec = { level: 1, allowedPaths: ["src/components/Visualizer/singularity.ts"] };
+  const inspectedText = [
+    "INSPECTED: src/components/Visualizer/singularity.ts",
+    "RISK: shader edit could break the fallback path",
+    "EVIDENCE: createSingularity still returns a ModeRenderer",
+    "VERDICT: PASS",
+  ].join("\n");
+  const noInspectedText = [
+    "RISK: shader edit could break the fallback path",
+    "EVIDENCE: the plan looks reasonable",
+    "VERDICT: PASS",
+  ].join("\n");
+
+  const goodGate = evaluateCriticGate({ criticText: inspectedText, planText: "inspect src/components/Visualizer/singularity.ts", spec: singSpec, tools: ["killchain_search"] });
+  check("1 critic with a valid inspected file passes normally", goodGate.pass, JSON.stringify(goodGate.errors));
+
+  const noInspGate = evaluateCriticGate({ criticText: noInspectedText, planText: "inspect src/components/Visualizer/singularity.ts", spec: singSpec, tools: ["killchain_search"] });
+  const noInspDisp = planCriticDisposition(noInspGate, noInspectedText, { spec: singSpec });
+  check("2 missing INSPECTED routes to targeted evidence repair",
+    noInspDisp.action === PLAN_CRITIC_ACTION.EVIDENCE_REPAIR, `${noInspDisp.action} :: ${noInspGate.errors.join(",")}`);
+  check("2b the evidence repair names the mission's authorized target",
+    (noInspDisp.targets || []).includes("src/components/Visualizer/singularity.ts"));
+
+  check("3 a repaired critic with a real inspected file may proceed",
+    planCriticDisposition(goodGate, inspectedText, { spec: singSpec }).action === PLAN_CRITIC_ACTION.CONTINUE);
+
+  check("4 still no inspected file after repair does not loop forever", (() => {
+    // The runner budgets EVIDENCE_REPAIR at exactly one via criticEvidenceRepairs.
+    let repairs = 0;
+    let d = planCriticDisposition(noInspGate, noInspectedText, { spec: singSpec });
+    for (let i = 0; i < 5; i += 1) {
+      if (d.action !== PLAN_CRITIC_ACTION.EVIDENCE_REPAIR || repairs >= 1) break;
+      repairs += 1;
+      d = planCriticDisposition(noInspGate, noInspectedText, { spec: singSpec });
+    }
+    return repairs === 1;
+  })());
+
+  const inventedInspected = evaluateCriticGate({
+    criticText: "INSPECTED: src/fake/NotReal.ts\nRISK: r\nEVIDENCE: e\nVERDICT: PASS",
+    planText: "inspect src/fake/NotReal.ts",
+    spec: singSpec,
+    tools: ["killchain_search"],
+  });
+  check("5 an invented file in INSPECTED still fails", !inventedInspected.pass, JSON.stringify(inventedInspected.errors));
+
+  // Safety preserved: an edit target outside the authorized scope is still
+  // refused, whether it is merely unlisted or explicitly forbidden.
+  const scopeSpec = {
+    level: 1,
+    allowedPaths: ["src/components/Visualizer/singularity.ts"],
+    readOnlyPaths: [],
+    forbiddenPaths: ["src/audio/**"],
+    levelInfo: { edits: true },
+  };
+  const forbiddenEdit = checkEditTargetsAllowed("EDIT: src/audio/AudioEngine.ts", scopeSpec);
+  check("6 an edit target outside allowedPaths still fails",
+    !forbiddenEdit.ok && forbiddenEdit.problems.some((p) => p.path === "src/audio/AudioEngine.ts"),
+    JSON.stringify(forbiddenEdit.problems));
+  check("6b the authorized target is still editable",
+    checkEditTargetsAllowed("EDIT: src/components/Visualizer/singularity.ts", scopeSpec).ok);
+  check("6c evidence repair never widens the authorized target set",
+    (noInspDisp.targets || []).every((t) => singSpec.allowedPaths.includes(t)));
+
+  check("8 missing INSPECTED does not trigger a full replan",
+    noInspDisp.action !== PLAN_CRITIC_ACTION.PLAN_CORRECTION && noInspDisp.action !== PLAN_CRITIC_ACTION.BLOCK);
+  check("9 the evidence repair is budgeted separately from prose retries",
+    PLAN_CRITIC_ACTION.EVIDENCE_REPAIR !== PLAN_CRITIC_ACTION.NEEDS_MORE_EVIDENCE
+    && PLAN_CRITIC_ACTION.EVIDENCE_REPAIR !== PLAN_CRITIC_ACTION.FORMAT_REPAIR);
+
+  // The recovery prompt must permit the very thing the failure demands.
+  const evPrompt = criticEvidenceGatherPrompt({
+    packet: criticEvidenceGatherPacket({ gate: noInspGate, criticText: noInspectedText, targets: singSpec.allowedPaths }),
+    plan: "inspect the shader",
+    targets: singSpec.allowedPaths,
+  });
+  check("10 the evidence prompt allows tools", !/Do not call tools/i.test(evPrompt));
+  check("10b the evidence prompt directs to Kill Chain MCP first", /Kill Chain MCP/.test(evPrompt) && /killchain_search/.test(evPrompt));
+  check("10c the evidence prompt names the real authorized file",
+    evPrompt.includes("src/components/Visualizer/singularity.ts"));
+  check("10d the evidence prompt forbids re-planning", /Do not re-plan/i.test(evPrompt));
+  check("10e the evidence prompt forbids fabricating inspection",
+    /only if you actually opened it/i.test(evPrompt));
+  check("10f the evidence prompt still forbids inventing a PASS", /never invent a PASS/i.test(evPrompt));
+  check("10g the evidence prompt does not replay the whole mission history", evPrompt.length < 9000, String(evPrompt.length));
+  check("7 the needs-evidence prompt still forbids tools (unchanged)",
+    /Do not call tools/i.test(criticNeedsEvidencePrompt({ packet: "p", plan: "PLAN" })));
+
+  // ===== FOCUSED TESTS: CRITIC GROUNDING WITH TRUSTED EVIDENCE =====
+
+  // Test 1: TRUSTED EVIDENCE + NO TOOLS + VALID PASS
+  // Mission supplies an existing path and literal source excerpt.
+  // Critic cites that evidence. No critic tool call. Expected: PASS.
+  const specWithBrief = { ...specUi, brief: "Trusted evidence: src/components/FireCommand/ModuleEnableToggle.tsx exists and exports ModuleEnableToggle component." };
+  const trustedEvidencePass = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: click semantics could change",
+      "EVIDENCE: onClick still calls setModuleEnable; trusted brief confirms file exists",
+      "VERDICT: PASS",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx",
+    spec: specWithBrief,
+    tools: [],
+    suppliedEvidence: specWithBrief.brief,
+  });
+  check("trusted evidence + no tools + valid PASS", trustedEvidencePass.pass, JSON.stringify(trustedEvidencePass.errors));
+
+  // Test 2: MODEL PLAN INVENTS FILE + NO TOOLS
+  // Plan claims nonexistent src/fake/InventedThing.ts. Critic cites it.
+  // Trusted evidence does NOT contain that path. Expected: FAIL/BLOCK grounding.
+  const inventedPlan = "inspect src/fake/InventedThing.ts";
+  const inventedFileCritic = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/fake/InventedThing.ts",
+      "RISK: new file adds surface area",
+      "EVIDENCE: plan says to create it",
+      "VERDICT: PASS",
+    ].join("\n"),
+    planText: inventedPlan,
+    spec: specUi,
+    tools: [],
+    suppliedEvidence: "Trusted evidence only mentions real files.",
+  });
+  check("model plan invents file + no tools fails grounding", !inventedFileCritic.pass && inventedFileCritic.errors.includes("critic-no-tools"), JSON.stringify(inventedFileCritic.errors));
+
+  // Test 3: MODEL PLAN INVENTS SOURCE FACT IN REAL FILE
+  // Existing file path is valid, but planner claims a code fact not present in trusted evidence.
+  // Critic repeats the invented fact without tools.
+  // Expected: grounding passes (path is corroborated), but other gates catch invented content.
+  // This test verifies the grounding layer does NOT reject based on content alone.
+  const specWithSpecificBrief = { ...specUi, brief: "Trusted evidence: src/components/FireCommand/ModuleEnableToggle.tsx exists. It has an onClick handler calling setModuleEnable." };
+  const inventedFactCritic = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: the new glow animation changes layout timing",
+      "EVIDENCE: plan confirms glow uses spring physics with 300ms duration",
+      "VERDICT: PASS",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx — glow uses spring physics with 300ms duration",
+    spec: specWithSpecificBrief,
+    tools: [],
+    suppliedEvidence: specWithSpecificBrief.brief,
+  });
+  check("model plan invents source fact in real file — grounding passes (path corroborated)", inventedFactCritic.grounding.ok, JSON.stringify(inventedFactCritic.grounding));
+
+  // Test 4: REAL TOOL INSPECTION (existing behavior)
+  // Critic uses tools and provides valid inspected evidence. Expected: unchanged.
+  const toolInspectCritic = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: glow styling could look like a larger hit target and change click feel",
+      "EVIDENCE: proposal keeps the same onClick and setModuleEnable; inspected ModuleEnableToggle.tsx exists",
+      "VERDICT: READY",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx",
+    proposalText: "inspect-only `src/components/FireCommand/ModuleEnableToggle.tsx`",
+    spec: specUi,
+    tools: ["bash"],
+    suppliedEvidence: "",
+  });
+  check("real tool inspection passes", toolInspectCritic.pass, JSON.stringify(toolInspectCritic.errors));
+
+  // Test 5: TRUSTED EVIDENCE + INVENTED EXTRA FILE
+  // Critic cites one legitimate supplied file and one invented file.
+  // Expected: FAIL. Do not let partial grounding hide invented references.
+  const mixedCritic = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx, src/fake/InventedThing.ts",
+      "RISK: new file adds surface area",
+      "EVIDENCE: plan says to create both",
+      "VERDICT: PASS",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx and src/fake/InventedThing.ts",
+    spec: specUi,
+    tools: [],
+    suppliedEvidence: "Trusted evidence: src/components/FireCommand/ModuleEnableToggle.tsx exists.",
+  });
+  check("trusted evidence + invented extra file fails grounding", !mixedCritic.pass && mixedCritic.errors.includes("critic-no-tools"), JSON.stringify(mixedCritic.errors));
+
+  // Test 6: EMPTY/MINIMAL TRUSTED EVIDENCE
+  // No meaningful source evidence supplied. Critic uses no tools and says PASS.
+  // Expected: critic-no-tools / evidence failure.
+  const emptyEvidenceCritic = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: something",
+      "EVIDENCE: it looks fine",
+      "VERDICT: PASS",
+    ].join("\n"),
+    planText: "inspect src/components/FireCommand/ModuleEnableToggle.tsx",
+    spec: specUi,
+    tools: [],
+    suppliedEvidence: "",
+  });
+  check("empty trusted evidence + no tools fails grounding", !emptyEvidenceCritic.pass && emptyEvidenceCritic.errors.includes("critic-no-tools"), JSON.stringify(emptyEvidenceCritic.errors));
+
+  // Test 7: FAIL AND BLOCK SEMANTICS
+  // Grounded critic returns FAIL or BLOCK. Expected: existing semantics unchanged.
+  const groundedFailCritic = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: click handler removed",
+      "EVIDENCE: proposal deletes onClick",
+      "VERDICT: FAIL",
+    ].join("\n"),
+    planText: "delete onClick from src/components/FireCommand/ModuleEnableToggle.tsx",
+    spec: specWithBrief,
+    tools: [],
+    suppliedEvidence: specWithBrief.brief,
+  });
+  check("grounded critic FAIL passes gate", groundedFailCritic.ok && groundedFailCritic.modelVerdict === "FAIL", JSON.stringify(groundedFailCritic.errors));
+
+  const groundedBlockCritic = evaluateCriticGate({
+    criticText: [
+      "INSPECTED: src/components/FireCommand/ModuleEnableToggle.tsx",
+      "RISK: forbidden path edited",
+      "EVIDENCE: proposal edits AudioEngine",
+      "VERDICT: BLOCK",
+    ].join("\n"),
+    planText: "edit src/audio/AudioEngine.ts",
+    spec: specWithBrief,
+    tools: [],
+    suppliedEvidence: specWithBrief.brief,
+  });
+  check("grounded critic BLOCK passes gate", groundedBlockCritic.ok && groundedBlockCritic.modelVerdict === "BLOCK", JSON.stringify(groundedBlockCritic.errors));
+
   const startSnap = { porcelain: parsePorcelain(" M src/components/FireCommand/fireUiKit.tsx") };
   const phaseSnap = { porcelain: parsePorcelain(" M src/components/FireCommand/fireUiKit.tsx\n M src/components/FireCommand/fcChip.tsx") };
   const nowPorc = parsePorcelain(" M src/components/FireCommand/fireUiKit.tsx\n M src/components/FireCommand/fcChip.tsx\n M src/components/FireCommand/GatePanel.tsx");
@@ -726,6 +1085,170 @@ Diff class: small UI-only. No Option B. No operator choice.
   check("durable investigation exists", existsSync(join(tmp, "test-valid", "INVESTIGATION.md")));
   check("durable PLAN exists", existsSync(join(tmp, "test-valid", "PLAN.md")));
   check("durable FINAL_REPORT exists", existsSync(join(tmp, "test-valid", "FINAL_REPORT.md")));
+
+  {
+    const fmtTmp = mkdtempSync(join(tmpdir(), "kc-fmt-critic-"));
+    const fmtSpecPath = join(fmtTmp, "mission.md");
+    writeFileSync(fmtSpecPath, VALID_SPEC.replace('"id": "test-valid"', '"id": "fmt-pass-repair"'), "utf8");
+    const passBody = [
+      "I inspected src/components/FireCommand/FireCommandView.tsx around line 110.",
+      "The contrast change could break the enabled styling, which would be a regression.",
+      "I verified onClick still calls setModuleEnable because the handler is untouched.",
+      "I recommend we proceed.",
+      "This is a real critic review of the plan, not an investigation dump.",
+    ].join(" ").repeat(2);
+    let fullCritics = 0;
+    let formatRepairs = 0;
+    let formatPrompt = "";
+    const fmtRun = await runMission({
+      specPath: fmtSpecPath,
+      dryRun: true,
+      stopAfter: "PROPOSING",
+      dataRoot: fmtTmp,
+      log: () => {},
+      deps: {
+        ...liveDeps,
+        runOpenCode: async ({ prompt, outPath }) => {
+          let text = "investigation of Fire Command src/components/FireCommand/FireCommandView.tsx";
+          if (prompt.includes("CURRENT PASS: PLAN")) {
+            text = "PLAN: phases\nfiles inspected: src/components/FireCommand/FireCommandView.tsx";
+          } else if (prompt.includes("CURRENT PASS: CRITIC FORMAT-REPAIR")) {
+            formatRepairs += 1;
+            formatPrompt = prompt;
+            text = "VERDICT: PASS";
+          } else if (prompt.includes("CURRENT PASS: CRITIC (read-only)")) {
+            fullCritics += 1;
+            text = passBody;
+          } else if (prompt.includes("PROPOSAL-BEFORE-WRITE")) {
+            text = `${"FILE-BY-FILE: inspect-only `src/components/FireCommand/FireCommandView.tsx`. Dry-run, no production writes. Confirm enable-toggle callers. No AudioEngine. No store writes. ".repeat(6)}`;
+          }
+          return fakeInvoke(text)({ outPath });
+        },
+      },
+    });
+    check(
+      "runner: missing-verdict PASS analysis format-repairs then continues",
+      fmtRun.state === "PROPOSING" && fullCritics === 1 && formatRepairs === 1,
+      `state=${fmtRun.state} full=${fullCritics} repair=${formatRepairs} reason=${fmtRun.blockedReason || ""}`,
+    );
+    check(
+      "runner: format-repair prompt is cheap (no re-investigation contract)",
+      /FORMAT-REPAIR/.test(formatPrompt) && !/You MUST inspect/i.test(formatPrompt),
+    );
+  }
+
+  {
+    const okTmp = mkdtempSync(join(tmpdir(), "kc-ok-critic-"));
+    const okPath = join(okTmp, "mission.md");
+    writeFileSync(okPath, VALID_SPEC.replace('"id": "test-valid"', '"id": "fmt-already-valid"'), "utf8");
+    let formatRepairs = 0;
+    const okRun = await runMission({
+      specPath: okPath,
+      dryRun: true,
+      stopAfter: "PROPOSING",
+      dataRoot: okTmp,
+      log: () => {},
+      deps: {
+        ...liveDeps,
+        runOpenCode: async ({ prompt, outPath }) => {
+          if (prompt.includes("CURRENT PASS: CRITIC FORMAT-REPAIR") || prompt.includes("NEEDS-EVIDENCE")) formatRepairs += 1;
+          return liveDeps.runOpenCode({ prompt, outPath });
+        },
+      },
+    });
+    check(
+      "runner: valid VERDICT does not call format repair",
+      okRun.state === "PROPOSING" && formatRepairs === 0,
+      `state=${okRun.state} repairs=${formatRepairs}`,
+    );
+  }
+
+  {
+    const stubTmp = mkdtempSync(join(tmpdir(), "kc-stub-critic-"));
+    const stubPath = join(stubTmp, "mission.md");
+    writeFileSync(stubPath, VALID_SPEC.replace('"id": "test-valid"', '"id": "fmt-needs-evidence"'), "utf8");
+    const stub = "Still gathering notes. Not a review yet. No recommendation. ".repeat(12);
+    let needs = 0;
+    const stubRun = await runMission({
+      specPath: stubPath,
+      dryRun: true,
+      dataRoot: stubTmp,
+      log: () => {},
+      deps: {
+        ...liveDeps,
+        runOpenCode: async ({ prompt, outPath }) => {
+          let text = stub;
+          if (prompt.includes("CURRENT PASS: PLAN") && !prompt.includes("NEEDS-EVIDENCE") && !prompt.includes("FORMAT-REPAIR")) {
+            text = "PLAN: phases\nfiles inspected: src/components/FireCommand/FireCommandView.tsx";
+          } else if (prompt.includes("CURRENT PASS: CRITIC NEEDS-EVIDENCE")) {
+            needs += 1;
+            text = stub;
+          } else if (prompt.includes("CURRENT PASS: CRITIC (read-only)")) {
+            text = stub;
+          } else if (prompt.includes("PROPOSAL-BEFORE-WRITE") || prompt.includes("FINAL REVIEW")) {
+            text = "VERDICT: PASS\nINSPECTED: src/components/FireCommand/FireCommandView.tsx\nRISK: x\nEVIDENCE: y";
+          }
+          return fakeInvoke(text)({ outPath });
+        },
+      },
+    });
+    check(
+      "runner: insufficient critic does not replan or invent PASS",
+      stubRun.state === "BLOCKED" && needs >= 1 && needs <= 2 && (stubRun.planRetries || 0) === 0 && /missing-verdict/.test(stubRun.blockedReason || ""),
+      `state=${stubRun.state} needs=${needs} planRetries=${stubRun.planRetries} reason=${stubRun.blockedReason || ""}`,
+    );
+  }
+
+  {
+    const leakTmp = mkdtempSync(join(tmpdir(), "kc-retry-leak-"));
+    const leakPath = join(leakTmp, "mission.md");
+    writeFileSync(leakPath, VALID_SPEC.replace('"id": "test-valid"', '"id": "fmt-retry-budget-reset"').replace('"maxModelCalls": 8', '"maxModelCalls": 20'), "utf8");
+    const stub = "Still gathering notes. Not a review yet. No recommendation. ".repeat(12);
+    const passBody = [
+      "I inspected src/components/FireCommand/FireCommandView.tsx around line 110.",
+      "The contrast change could break the enabled styling, which would be a regression.",
+      "I verified onClick still calls setModuleEnable because the handler is untouched.",
+      "I recommend we proceed.",
+      "This is a real critic review of the plan, not an investigation dump.",
+    ].join(" ").repeat(2);
+    let formatRepairs = 0;
+    let needs = 0;
+    let plans = 0;
+    const leakRun = await runMission({
+      specPath: leakPath,
+      dryRun: true,
+      stopAfter: "PROPOSING",
+      dataRoot: leakTmp,
+      log: () => {},
+      deps: {
+        ...liveDeps,
+        runOpenCode: async ({ prompt, outPath }) => {
+          let text = "investigation of Fire Command src/components/FireCommand/FireCommandView.tsx";
+          if (prompt.includes("CURRENT PASS: PLAN") && !prompt.includes("NEEDS-EVIDENCE") && !prompt.includes("FORMAT-REPAIR")) {
+            plans += 1;
+            text = `PLAN: phases ${plans}\nfiles inspected: src/components/FireCommand/FireCommandView.tsx\n`
+              + "acceptance mapping: inspect-only of FireCommandView. structured phases and risks. ".repeat(8);
+          } else if (prompt.includes("CURRENT PASS: CRITIC FORMAT-REPAIR")) {
+            formatRepairs += 1;
+            text = `${passBody}\nINSPECTED: src/components/FireCommand/FireCommandView.tsx\nRISK: enabled styling regression\nEVIDENCE: onClick handler is untouched\nVERDICT: PASS`;
+          } else if (prompt.includes("CURRENT PASS: CRITIC NEEDS-EVIDENCE")) {
+            needs += 1;
+            text = `${stub}\nINSPECTED: src/components/FireCommand/FireCommandView.tsx\nRISK: plan is not a structured plan\nEVIDENCE: no files/phases/acceptance mapping\nVERDICT: FAIL`;
+          } else if (prompt.includes("CURRENT PASS: CRITIC (read-only)")) {
+            text = plans <= 1 ? stub : passBody;
+          } else if (prompt.includes("PROPOSAL-BEFORE-WRITE")) {
+            text = `${"FILE-BY-FILE: inspect-only `src/components/FireCommand/FireCommandView.tsx`. Dry-run, no production writes. Confirm enable-toggle callers. No AudioEngine. No store writes. ".repeat(6)}`;
+          }
+          return fakeInvoke(text)({ outPath });
+        },
+      },
+    });
+    check(
+      "runner: FAIL replan still gets a fresh format-repair budget",
+      leakRun.state === "PROPOSING" && needs === 1 && formatRepairs === 1 && plans >= 2,
+      `state=${leakRun.state} needs=${needs} repairs=${formatRepairs} plans=${plans} reason=${leakRun.blockedReason || ""}`,
+    );
+  }
 
   const retryPath = join(tmp, "retry.md");
   writeFileSync(retryPath, `---
@@ -1228,6 +1751,7 @@ Diff class: small UI-only. No Option B. No operator choice.
     editTools = ["killchain_search"],
     preserveToggle = false,
     maxRetriesPerPhase = 3,
+    maxModelCalls = 40,
     validation,
   }) {
     const world = mkdtempSync(join(tmpdir(), `kc-${id}-`));
@@ -1246,7 +1770,7 @@ ${JSON.stringify({
     preserveDirtyPaths: preserveToggle ? [TOGGLE] : [],
     readOnlyPaths: ["src/state/**"],
     corpus: "never",
-    maxModelCalls: 40,
+    maxModelCalls,
     maxPhases: 1,
     maxRetriesPerPhase,
     proposalRounds: 1,
@@ -1348,6 +1872,47 @@ ${JSON.stringify({
     });
     check("2 one empty edit → retry", r.result.state === "COMPLETE" && edits >= 2 && r.result.emptyEdits >= 1 && r.result.emptyEditRetriesSucceeded >= 1, `state=${r.result.state} edits=${edits} empty=${r.result.emptyEdits}`);
     check("4 zero delta does not run pointless build", r.validationSnapshots.length >= 1 && r.validationSnapshots.every((s) => s !== SEED_TSX), `snaps=${JSON.stringify(r.validationSnapshots)}`);
+  }
+
+  {
+    let edits = 0;
+    const r = await runScriptedEdit({
+      id: "budget-reserve-edit",
+      maxModelCalls: 6,
+      editTools: ["killchain_search", "edit"],
+      onEdit: (io) => {
+        edits += 1;
+        io.write(TARGET, Buffer.from(VALID_TSX));
+      },
+    });
+    check(
+      "field-sized maxModelCalls=6 still reaches an implementation invoke",
+      r.result.state === "COMPLETE" && edits >= 1,
+      `state=${r.result.state} edits=${edits} calls=${r.result.modelCalls} reason=${r.result.blockedReason || ""}`,
+    );
+    check(
+      "reaching EDITING left a real implementation call",
+      edits >= 1 && (r.result.invocations || []).some((i) => String(i.phase || "").startsWith("edit")),
+      JSON.stringify((r.result.invocations || []).map((i) => i.phase)),
+    );
+  }
+
+  {
+    let edits = 0;
+    const r = await runScriptedEdit({
+      id: "budget-starvation-refuse",
+      maxModelCalls: 3,
+      onEdit: () => { edits += 1; },
+    });
+    check(
+      "an impossible pre-edit budget refuses EDITING as BUDGET_STARVATION",
+      r.result.state === "BLOCKED" && /BUDGET_STARVATION/.test(r.result.blockedReason || "") && edits === 0,
+      `state=${r.result.state} edits=${edits} reason=${r.result.blockedReason || ""}`,
+    );
+    check(
+      "BUDGET_STARVATION never pretends to enter implementation",
+      !(r.result.invocations || []).some((i) => String(i.phase || "").startsWith("edit")),
+    );
   }
 
   {
@@ -1662,6 +2227,29 @@ ${JSON.stringify({
         && escalate(c, { attemptsForClass: 2 }).action === ACTIONS.BLOCK;
     })(),
   );
+
+  const starveSpec = { maxModelCalls: 8, levelInfo: { edits: true }, dryRun: false };
+  check("field recommended 6 is floored to planning+reserve",
+    allocateMicroMissionCallBudget(6, 20, { edits: true }) === MIN_PRE_EDIT_CALLS + IMPLEMENTATION_RESERVE_CALLS);
+  check("already-large recommendations are not inflated",
+    allocateMicroMissionCallBudget(20, 20, { edits: true }) === 20);
+  check("read-only micro-missions are not given an edit reserve floor",
+    allocateMicroMissionCallBudget(6, 12, { edits: false }) === 6);
+  check("planning cannot spend the last reserved implementation calls",
+    Boolean(callBudgetHit(starveSpec, { modelCalls: 6, dryRun: false, state: "PROPOSING" })?.includes("BUDGET_STARVATION")));
+  check("EDITING may still use the reserved calls",
+    callBudgetHit(starveSpec, { modelCalls: 6, dryRun: false, state: "EDITING" }, { phase: "edit" }) == null);
+  check("cannot enter EDITING with zero remaining calls",
+    canEnterEditing(starveSpec, { modelCalls: 8, dryRun: false }) === false);
+  check("can enter EDITING when at least one implementation call remains",
+    canEnterEditing(starveSpec, { modelCalls: 6, dryRun: false }) === true);
+  check("dry-run does not reserve implementation calls",
+    callBudgetHit({ ...starveSpec, dryRun: true }, { modelCalls: 6, dryRun: true, state: "PROPOSING" }) == null);
+  check(
+    "classifier: BUDGET_STARVATION is distinct from generic BUDGET_EXHAUSTED",
+    classifyFailure({ blockedReason: "BUDGET_STARVATION planning used 6 of 8 (2 reserved for implementation)" }).failureClass === "BUDGET_STARVATION"
+      && classifyFailure({ blockedReason: "maxModelCalls 6" }).failureClass === "BUDGET_EXHAUSTED",
+  );
   check(
     "classifier: a missing-verdict critic is a REPORTING_FAILURE, not a replan",
     (() => {
@@ -1825,6 +2413,112 @@ ${JSON.stringify({
   check(
     "format repair demands MISSING rather than a fabricated field",
     /write the label followed by MISSING/i.test(noSubstancePacket),
+  );
+
+  const gateSpec = { level: 0, allowedPaths: ["src/components/FireCommand/**"], readOnlyPaths: ["src/components/FireCommand/**"] };
+  const toolsOk = ["killchain_search"];
+  const evalBody = (body) => evaluateCriticGate({ criticText: body, planText: "PLAN: inspect FireCommandView.tsx", spec: gateSpec, tools: toolsOk });
+
+  const passAnalysis = [
+    "I inspected src/components/FireCommand/FireCommandView.tsx around line 110.",
+    "The contrast change could break the enabled styling, which would be a regression.",
+    "I verified onClick still calls setModuleEnable because the handler is untouched.",
+    "I recommend we proceed.",
+  ].join("\n");
+  const failAnalysis = [
+    "I inspected src/components/FireCommand/FireCommandView.tsx around line 110.",
+    "The plan reaches into AudioEngine, which is a regression against the allowlist.",
+    "I checked allowedPaths. Do not proceed. This should be rejected.",
+  ].join("\n");
+  const stubCritic = "Still gathering notes. Not a review yet. No recommendation. ".repeat(6);
+
+  const passGate = evalBody(passAnalysis);
+  check("substantive PASS analysis + missing verdict is format-only", passGate.missingVerdict && classifyGateFailure(passGate).formatOnly);
+  check(
+    "substantive PASS analysis + missing verdict → format repair",
+    planCriticDisposition(passGate, passAnalysis).action === PLAN_CRITIC_ACTION.FORMAT_REPAIR,
+  );
+  const passRepaired = `${passAnalysis}\nINSPECTED: src/components/FireCommand/FireCommandView.tsx\nRISK: enabled styling regression\nEVIDENCE: onClick handler is untouched\nVERDICT: PASS`;
+  const passRepairedGate = evalBody(passRepaired);
+  check(
+    "format repair of PASS analysis continues",
+    passRepairedGate.pass && planCriticDisposition(passRepairedGate, passRepaired).action === PLAN_CRITIC_ACTION.CONTINUE,
+  );
+
+  const failGate = evalBody(failAnalysis);
+  check(
+    "substantive FAIL analysis + missing verdict → format repair",
+    failGate.missingVerdict && planCriticDisposition(failGate, failAnalysis).action === PLAN_CRITIC_ACTION.FORMAT_REPAIR,
+  );
+  const failRepaired = `${failAnalysis}\nINSPECTED: src/components/FireCommand/FireCommandView.tsx\nRISK: AudioEngine scope break\nEVIDENCE: allowedPaths do not include AudioEngine\nVERDICT: FAIL`;
+  const failRepairedGate = evalBody(failRepaired);
+  check(
+    "format repair of FAIL analysis yields VERDICT FAIL and is not a silent PASS",
+    failRepairedGate.modelVerdict === "FAIL" && !failRepairedGate.pass && !failRepairedGate.missingVerdict,
+  );
+  check(
+    "explicit FAIL after repair is a plan correction, not another format repair",
+    planCriticDisposition(failRepairedGate, failRepaired).action === PLAN_CRITIC_ACTION.PLAN_CORRECTION,
+  );
+
+  const stubGate = evalBody(stubCritic);
+  check("ambiguous critic has no verdict substance", !hasSubstanceFor("VERDICT", stubCritic));
+  check(
+    "ambiguous/insufficient critic + missing verdict → NEEDS_MORE_EVIDENCE, no invented verdict",
+    planCriticDisposition(stubGate, stubCritic).action === PLAN_CRITIC_ACTION.NEEDS_MORE_EVIDENCE
+      && !/VERDICT:\s*PASS/i.test(stubCritic)
+      && tryLocalVerdictNormalize(stubCritic).repaired === false,
+  );
+  check(
+    "needs-evidence packet forbids inventing PASS",
+    /Do not invent a PASS/.test(criticNeedsEvidencePacket({ gate: stubGate, criticText: stubCritic })),
+  );
+
+  const validBody = `${passAnalysis}\nINSPECTED: src/components/FireCommand/FireCommandView.tsx\nRISK: enabled styling regression\nEVIDENCE: onClick handler is untouched\nVERDICT: PASS`;
+  const validGate = evalBody(validBody);
+  check("valid existing VERDICT parses", validGate.pass && !validGate.missingVerdict);
+  check(
+    "valid existing VERDICT → continue, no redundant repair",
+    planCriticDisposition(validGate, validBody).action === PLAN_CRITIC_ACTION.CONTINUE,
+  );
+
+  const jsonWrapped = `${passAnalysis}\n{"verdict":"PASS","inspected":"src/components/FireCommand/FireCommandView.tsx"}`;
+  const localJson = tryLocalVerdictNormalize(jsonWrapped);
+  check(
+    "malformed JSON verdict is a cheap local correction, not an inferred PASS",
+    localJson.repaired && localJson.verdict === "PASS" && /VERDICT: PASS/.test(localJson.text),
+  );
+  check(
+    "malformed verdict disposition is LOCAL_NORMALIZE",
+    planCriticDisposition(evalBody(jsonWrapped), jsonWrapped).action === PLAN_CRITIC_ACTION.LOCAL_NORMALIZE,
+  );
+
+  const mixedBody = `${passAnalysis}\nAlso inspect src/this-file-does-not-exist-zzzz.tsx as an edit target.`;
+  const mixedGate = evalBody(mixedBody);
+  check("invented path is detected even when VERDICT is missing", mixedGate.errors.some((e) => String(e).startsWith("invented-files:")));
+  check(
+    "invented-file + missing verdict MUST NOT be format-only",
+    planCriticDisposition(mixedGate, mixedBody).action === PLAN_CRITIC_ACTION.PLAN_CORRECTION
+      && planCriticDisposition(mixedGate, mixedBody).kind === TUTOR.INVALID_REFERENCE
+      && planCriticDisposition(mixedGate, mixedBody).formatOnly === false,
+  );
+
+  const stampPrompt = criticPrompt(gateSpec, { dryRun: true }, { plan: "PLAN" });
+  check("plan-critic prompt stamps VERDICT at the beginning", stampPrompt.indexOf(PLAN_VERDICT_STAMP) >= 0 && stampPrompt.indexOf(PLAN_VERDICT_STAMP) < stampPrompt.indexOf("CURRENT PASS: CRITIC"));
+  check("plan-critic prompt stamps VERDICT at the end", stampPrompt.trimEnd().endsWith("VERDICT: BLOCK"));
+  const cheapPrompt = criticFormatRepairPrompt("packet");
+  check("format-repair prompt is not a full re-investigation", !/You MUST inspect/i.test(cheapPrompt) && /FORMAT-REPAIR/.test(cheapPrompt));
+  check("format-repair prompt forbids tools", /Do not call tools/i.test(cheapPrompt));
+  check("needs-evidence prompt forbids inventing PASS", /Never invent a PASS/.test(criticNeedsEvidencePrompt({ packet: "p", plan: "PLAN" })));
+  check("a missing verdict is never locally stamped PASS from praise", tryLocalVerdictNormalize("looks good, approved, safe, solid plan").repaired === false);
+  check(
+    "stamp-only format repair is merged onto the prior review",
+    mergeCriticRepair(passAnalysis, "VERDICT: PASS").includes(passAnalysis)
+      && /VERDICT: PASS/.test(mergeCriticRepair(passAnalysis, "VERDICT: PASS")),
+  );
+  check(
+    "a full format-repair reply replaces the prior text",
+    mergeCriticRepair("old review", passRepaired) === passRepaired,
   );
 
   // ---- grounded vs ungrounded zero-tool critics ----
@@ -2111,6 +2805,90 @@ ${JSON.stringify({
   const card = renderTerminal(st);
   check("puppy terminal card renders the identity and a data row", /ROBO PUPPY/.test(card) && /STATUS/.test(card));
   check("puppy terminal card shows unknown values as an em dash, not a guess", !/BUILD\s+PASS/.test(card) || Boolean(st.fields.find((f) => f.label === "BUILD")?.real));
+  check("puppy watch port is 5176 and never collides with the app or harness", PUPPY_WATCH_PORT === 5176 && PUPPY_WATCH_PORT !== PUPPY_APP_PORT && PUPPY_WATCH_PORT !== HARNESS_PORT && PUPPY_APP_PORT === 5173);
+  check("formatDuration of a finished clock is done", formatDuration(0) === "done");
+  const etaDone = estimateEta({ state: "BLOCKED", startedAt: new Date().toISOString() });
+  check("ETA of a blocked mission is done, not a guess", etaDone.label === "done" && etaDone.remainingMs === 0);
+  const etaCalls = estimateEta({
+    state: "EDITING",
+    startedAt: new Date(Date.now() - 60_000).toISOString(),
+    invocations: [{ durationMs: 10_000 }, { durationMs: 10_000 }, { durationMs: 12_000 }],
+    modelCalls: 3,
+    maxModelCalls: 13,
+    maxWallClockMs: 3_600_000,
+  });
+  check("ETA is derived from his call times", etaCalls.derived && etaCalls.confidence === "from-his-calls" && etaCalls.callsLeft === 10);
+  check("ETA remaining is about ten typical calls", etaCalls.remainingMs >= 90_000 && etaCalls.remainingMs <= 130_000);
+  check("ETA is labeled as derived, not as something he wrote", /median|calls/.test(etaCalls.from));
+  check("puppy status reports working as a boolean, never a guess", typeof st.working === "boolean");
+  check("a finished mission is not marked working", st.finished ? st.working === false : true);
+  check("terminal card includes NOW and ETA rows", /NOW/.test(card) && /ETA/.test(card));
+  check(
+    "bark line for a missing-verdict block is about VERDICT, not a fake pass",
+    /VERDICT/.test(barkLine({ missionId: "x", state: "BLOCKED", blockedReason: "plan critic gate failed: missing-verdict", working: false, finished: true }))
+      && !/Build passed/i.test(barkLine({ missionId: "x", state: "BLOCKED", blockedReason: "plan critic gate failed: missing-verdict" })),
+  );
+  check("bark line does not invent a working puppy from an idle payload", /door|Waiting/.test(barkLine({ missionId: null, state: "IDLE" })));
+  check("puppy status journal is an array", Array.isArray(st.journal));
+  check("puppy status speech is populated", typeof st.speech === "string" && st.speech.length > 0);
+  check("puppy status callHistory is an array", Array.isArray(st.callHistory));
+  check("puppy status discipline is an array", Array.isArray(st.discipline));
+  check(
+    "asideLine names unix nips from real counters",
+    /unix/i.test(asideLine({ counters: { unixViolations: 44 } })) && !/Build passed/i.test(asideLine({ counters: { unixViolations: 44 } })),
+  );
+  check(
+    "bark line with a read-only lastError still names VERDICT",
+    /VERDICT/.test(barkLine({
+      missionId: "x",
+      state: "BLOCKED",
+      blockedReason: "plan critic gate failed: missing-verdict",
+      lastError: "read-only phase wrote application source: src/components/Visualizer/singularity.ts",
+    })),
+  );
+
+  const ramFake = ramHeat({ totalmem: () => 16_000_000_000, freemem: () => 4_000_000_000 });
+  check("RAM heat is a real percentage from os totals", ramFake.real && ramFake.pct === 75 && ramFake.usedBytes === 12_000_000_000);
+  const ramLive = ramHeat();
+  check("live RAM heat stays in 0-100 and never invents", ramLive.real && ramLive.pct >= 0 && ramLive.pct <= 100 && ramLive.usedBytes + ramLive.freeBytes === ramLive.totalBytes);
+  const gpuSample = parseNvidiaSmi("NVIDIA GeForce RTX 5080, 11, 41, 10339, 16303\n");
+  check("nvidia-smi parse keeps util and temp as numbers", gpuSample.real && gpuSample.utilPct === 11 && gpuSample.tempC === 41 && gpuSample.name.includes("5080"));
+  check("nvidia-smi N/A does not become 0%", parseNvidiaSmi("GPU, [N/A], [N/A]\n").utilPct == null && parseNvidiaSmi("GPU, [N/A], [N/A]\n").tempC == null && parseNvidiaSmi("GPU, [N/A], [N/A]\n").real === false);
+  check("empty nvidia-smi stdout is unknown, not idle 0", parseNvidiaSmi("").utilPct == null && parseNvidiaSmi("").real === false);
+  check("garbage nvidia-smi stdout is unknown", parseNvidiaSmi("driver not loaded").real === false && parseNvidiaSmi("driver not loaded").utilPct == null);
+  const missingGpu = gpuHeat({
+    now: Date.now(),
+    cacheMs: 0,
+    cacheStore: { at: 0, value: null },
+    spawn: () => ({ error: { code: "ENOENT", message: "not found" }, status: 1, stdout: "", stderr: "" }),
+  });
+  check("missing nvidia-smi reports nulls, never a fabricated 0", missingGpu.real === false && missingGpu.utilPct == null && missingGpu.tempC == null && /not found/.test(missingGpu.from));
+  const injectedGpu = gpuHeat({
+    now: Date.now() + 1,
+    cacheMs: 0,
+    cacheStore: { at: 0, value: null },
+    spawn: () => ({ status: 0, stdout: "NVIDIA GeForce RTX 5080, 22, 47, 1000, 16000\n", stderr: "" }),
+  });
+  check("injected nvidia-smi reading is used as-is", injectedGpu.real && injectedGpu.utilPct === 22 && injectedGpu.tempC === 47);
+  check("heat bands stay honest about missing numbers", heatBand("util", null) === "unknown" && heatBand("temp", 81) === "hot" && heatBand("util", 10) === "ok");
+  const heatCard = renderTerminal({ ...st, heat: machineHeat({ osApi: { totalmem: () => 8e9, freemem: () => 2e9 }, spawn: () => ({ error: { code: "ENOENT" }, status: 1, stdout: "" }), cacheStore: { at: 0, value: null }, cacheMs: 0 }) });
+  check("terminal heat rows show RAM and an em dash for missing GPU", /RAM/.test(heatCard) && /GPU TEMP/.test(heatCard) && /GPU\s+—/.test(heatCard));
+  const watchHtml = readFileSync(join(repoRoot, "tools/killchain-ai/src/puppy/watch-page.html"), "utf8");
+  check("watch page has a HEAT panel for GPU, TEMP, and RAM", /HEAT/.test(watchHtml) && /heatRow\("GPU"/.test(watchHtml) && /heatRow\("TEMP"/.test(watchHtml) && /heatRow\("RAM"/.test(watchHtml));
+  check("watch avatar is cache-busted so the new face loads", /avatar\.jpg\?v=copper/.test(watchHtml));
+  check("unknownGpu never fills util or temp", unknownGpu("x").utilPct == null && unknownGpu("x").tempC == null && unknownGpu("x").real === false);
+  check("a live puppy window is not spawned again", shouldSpawnWatchWindow({ windowLive: true }).spawn === false);
+  check("an existing puppy HWND is not spawned again", shouldSpawnWatchWindow({ hwndLive: true }).spawn === false);
+  check("a missing puppy window may spawn one", shouldSpawnWatchWindow({ windowLive: false, hwndLive: false }).spawn === true);
+  check("open-disabled never spawns a puppy window", shouldSpawnWatchWindow({ open: false, windowLive: false }).spawn === false);
+  check("mission run does not open the 5176 window by default", autoOpenWatchWindow({}) === false && WATCH_WINDOW_DEFAULT_OPEN === false);
+  check("mission --watch still requests the old window", autoOpenWatchWindow({ watch: true }) === true);
+  check("mission --no-watch still suppresses the old window", autoOpenWatchWindow({ "no-watch": true, watch: true }) === false);
+  check("watch page plays the bark file, not a beep", /bark\.mp3/.test(watchHtml) && !/createOscillator/.test(watchHtml));
+  check("watch page closes duplicate windows", /BroadcastChannel/.test(watchHtml) && /window\.close/.test(watchHtml));
+  check("watch heartbeat marks the live window", /api\/status\?window=1/.test(watchHtml));
+  check("bark asset is on disk", existsSync(join(repoRoot, "tools/killchain-ai/assets/robo-puppy-bark.mp3")));
+
 
   // ---- visual critic verdicts are mechanical, not aesthetic ----
   const goodScreen = { ok: true, visible: true, brightCore: true, blownOut: false, detail: "HIGH", depth: true };
@@ -2125,9 +2903,85 @@ ${JSON.stringify({
     "visual verdict reports unavailable vision rather than passing by default",
     screenVerdict({ ok: false, reason: "ollama down" }).fails.some((f) => /vision unavailable/.test(f)),
   );
+  const jsonScreen = parseScreen('{"VISIBLE":"YES","BRIGHT_CORE":"YES","BLOWN_OUT":"NO","COLOR":"cyan violet","DETAIL":"MEDIUM","DEPTH":"YES","NOTE":"a glowing core"}');
+  check("visual critic parses a JSON-wrapped screen", jsonScreen.visible === true && jsonScreen.brightCore === true && jsonScreen.detail === "MEDIUM");
+  check(
+    "visual verdict fails an unparseable screen instead of passing",
+    !screenVerdict({ ok: true, visible: null, brightCore: null, blownOut: null }).pass,
+  );
   const cmp = compareScreens(goodScreen, { ...goodScreen, brightCore: false, detail: "LOW" });
   check("screen comparison reports what a candidate lost", cmp.regressed && cmp.lost.includes("bright core") && cmp.lost.includes("fine detail"));
   check("screen comparison reports gains too", compareScreens({ ...goodScreen, depth: false }, goodScreen).gained.includes("depth cue"));
+
+  // ---- Singularity tooling harness: synthetic intel + isolation ----
+  check("harness preferred port is 5174, never the app port", PREFERRED_PORT === 5174 && APP_PORT === 5173 && PREFERRED_PORT !== APP_PORT);
+  check(
+    "harness port scan never collides with the app or puppy watch",
+    PORT_SCAN.includes(5174) && !PORT_SCAN.includes(5173) && !PORT_SCAN.includes(WATCH_PORT_RESERVED) && WATCH_PORT_RESERVED === 5176,
+  );
+  const fakeFallback = truthFromProbe({
+    WEBGL2_CONTEXT_OK: true,
+    SCENE_PASS_EXECUTED: false,
+    BRIGHT_PASS_EXECUTED: false,
+    BLUR_PASS_EXECUTED: false,
+    COMPOSITE_PASS_EXECUTED: false,
+    FALLBACK_USED: true,
+    firstFail: { stage: "SCENE_SHADER_COMPILE", log: "let : unexpected token" },
+  }, { webgl2Got: true });
+  check("probe treats context-ok + no passes as FALLBACK", fakeFallback.label === "FALLBACK" && fakeFallback.contextOk && !fakeFallback.realPipeline);
+  const fakeReal = truthFromProbe({
+    WEBGL2_CONTEXT_OK: true,
+    SCENE_PASS_EXECUTED: true,
+    BRIGHT_PASS_EXECUTED: true,
+    BLUR_PASS_EXECUTED: true,
+    COMPOSITE_PASS_EXECUTED: true,
+    FALLBACK_USED: false,
+  }, { webgl2Got: true });
+  check("probe requires all four passes for REAL_WEBGL2", fakeReal.label === "REAL_WEBGL2" && fakeReal.realPipeline);
+  check("GL log NUL bytes are stripped before prompts", sanitizeGlText("ERROR let\u0000") === "ERROR let");
+  check("GL sanitizer keeps printable compiler diagnostics", sanitizeGlText("ERROR: 0:58: 'let' : undeclared identifier") === "ERROR: 0:58: 'let' : undeclared identifier");
+  check("GL sanitizer keeps newlines and tabs", sanitizeGlText("a\nb\tc") === "a\nb\tc");
+  const nestedNul = sanitizeGlTree({ log: "ERROR let\u0000", inner: { window: "ro\u0000dt" } });
+  check("GL tree sanitizer strips nested NULs", nestedNul.log === "ERROR let" && nestedNul.inner.window === "rodt" && !JSON.stringify(nestedNul).includes("\u0000"));
+  const nulArgs = openCodeRunArgs({ prompt: "ERROR let\u0000", title: "t", cwd: "C:/repo" });
+  check("OpenCode argv prompt has no NUL", !nulArgs.some((a) => String(a).includes("\u0000")) && nulArgs.includes("ERROR let"));
+  const letFp = diagnosticFingerprint({ stage: "SCENE_SHADER_COMPILE", log: OVERNIGHT_LET_LOG, compileOk: false });
+  const roFp = diagnosticFingerprint({ stage: "SCENE_SHADER_COMPILE", log: OVERNIGHT_RO_DT_LOG, compileOk: false });
+  const letToRo = compareDiagnostics(letFp, roFp);
+  check(
+    "overnight let→ro/dt is PROGRESS despite same SCENE_SHADER_COMPILE stage",
+    letToRo.kind === "PROGRESS" && letToRo.progress && !letToRo.success && letFp.stage === roFp.stage,
+    letToRo.kind,
+  );
+  check("overnight let fingerprint records let/targetX", letFp.idents.includes("let") && letFp.idents.includes("targetX"));
+  check("overnight ro/dt fingerprint records ro and dt", roFp.idents.includes("ro") && roFp.idents.includes("dt"));
+  check("identical let diagnostics are UNCHANGED", compareDiagnostics(letFp, letFp).kind === "UNCHANGED");
+  check("compileOk is SUCCESS even if a log remains", compareDiagnostics(letFp, { ...roFp, compileOk: true }).kind === "SUCCESS");
+  check("compiler micro-repair budget is 16–20", CALLS_PER_MISSION >= 16 && CALLS_PER_MISSION <= 20);
+  const idle = syntheticFrame({ phase: "idle", frame: 0 });
+  const idle2 = syntheticFrame({ phase: "idle", frame: 0 });
+  check("synthetic idle is silent and idle-section", idle.intel.section === "idle" && idle.intel.energy === 0 && idle.intel.kickHit === false && idle.rms < 0.05);
+  check("synthetic idle is deterministic", JSON.stringify(idle) === JSON.stringify(idle2));
+  const bassKick = syntheticFrame({ phase: "bass", frame: 0, dt: FRAME_DT });
+  const bassHold = syntheticFrame({ phase: "bass", frame: 1, dt: FRAME_DT });
+  check("synthetic bass fires a kick on the first beat boundary", bassKick.intel.kickHit === true && bassKick.low > 0.7);
+  check("synthetic bass does not hold kickHit on the next frame", bassHold.intel.kickHit === false);
+  const peak = syntheticFrame({ phase: "peak", frame: Math.round(4 / FRAME_DT) });
+  check("synthetic peak is a drop with high energy", peak.intel.section === "drop" && peak.intel.energy > 0.8 && peak.intel.bpm === 128);
+  check("cycle phase at t=0 is idle and at t=2 is low", resolvePhase("cycle", 0).name === "idle" && resolvePhase("cycle", 2.1).name === "low");
+  const freq = new Uint8Array(16);
+  const time = new Uint8Array(16);
+  fillSpectrum(freq, time, peak);
+  check("fillSpectrum writes a deterministic low-band spectrum", freq[0] > 100 && freq[0] === Math.round(peak.low * 255));
+  const harnessMain = readFileSync(join(repoRoot, "tools/killchain-ai/harness/main.ts"), "utf8");
+  const harnessImports = harnessMain.split(/\r?\n/).filter((l) => /^\s*(import\b|.*\bimport\s*\()/.test(l)).join("\n");
+  check(
+    "harness imports production createSingularity, not a copy",
+    /Visualizer\/singularity/.test(harnessImports),
+  );
+  check("harness does not import visualIntel (AudioEngine)", !/visualIntel/.test(harnessImports));
+  check("harness does not import AudioEngine or modeFactory", !/AudioEngine|modeFactory/.test(harnessImports));
+  check("harness phases cover idle through peak", ["idle", "low", "bass", "highfreq", "peak"].every((p) => HARNESS_PHASES.includes(p)));
 
   // ---- regression guard: the analyzers must stay quiet on real sources ----
   const repoScan = scanRepoFiles(join(repoRoot, "src"));

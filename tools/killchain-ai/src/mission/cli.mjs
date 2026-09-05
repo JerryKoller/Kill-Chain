@@ -36,6 +36,9 @@ Commands:
   report <id>
   test
 
+  Mission run/resume does not open the 5176 watch window (Puppy lives in Prism).
+  Pass --watch only if you still want the old standalone Chrome window.
+
 Examples:
   .\\tools\\killchain-ai\\kc-ai.ps1 mission validate .\\tools\\killchain-ai\\missions\\pilot-fire-ux-plan.md
   .\\tools\\killchain-ai\\kc-ai.ps1 mission run .\\tools\\killchain-ai\\missions\\pilot-fire-ux-plan.md --dry-run
@@ -135,6 +138,13 @@ export async function missionMain({ flags, pos, log = console.log }) {
 
   if (sub === "run") {
     const file = resolveSpec(pos[1]);
+    const { autoOpenWatchWindow, ensureWatchWindow } = await import("../puppy/watch.mjs");
+    if (autoOpenWatchWindow(flags)) {
+      const parsed = parseMissionFile(file);
+      await ensureWatchWindow({ missionId: parsed.spec?.id || null, open: true, log }).catch((e) => {
+        log(`puppy watch skipped: ${e.message}`);
+      });
+    }
     const status = await runMission({
       specPath: file,
       dryRun: Boolean(flags["dry-run"]),
@@ -153,6 +163,12 @@ export async function missionMain({ flags, pos, log = console.log }) {
   if (sub === "resume") {
     const id = pos[1];
     if (!id) throw new Error("mission resume <id>");
+    const { autoOpenWatchWindow, ensureWatchWindow } = await import("../puppy/watch.mjs");
+    if (autoOpenWatchWindow(flags)) {
+      await ensureWatchWindow({ missionId: id, open: true, log }).catch((e) => {
+        log(`puppy watch skipped: ${e.message}`);
+      });
+    }
     const status = await runMission({
       resumeId: id,
       dryRun: Boolean(flags["dry-run"]),

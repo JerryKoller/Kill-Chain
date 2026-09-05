@@ -51,6 +51,15 @@ Mission runner (local Qwen / OpenCode; no app edits unless a mission allows them
   mission report <id>
   mission test
 
+Mediator (supervises and trains Robo Puppy; tooling only, port 5177)
+  mediator                       launch the autonomous training console
+  mediator models [--refresh]    discover models from the live OpenCode install
+  mediator autoconfig            assign FAST / DEEP / VISUAL / PUPPY roles
+  mediator benchmark             score FAST candidates on fixtures
+  mediator identity              have the deep supervisor design its own identity
+  mediator demo                  safe fixture demo, no production access
+  mediator status | profile | test
+
 Retrieval (works without embeddings)
   search <query> [--k 12] [--mode full|lexical|lexical-graph]
   symbol <name>
@@ -80,6 +89,14 @@ Eval (holdout; no training)
   ui metrics                  Assert saved Fire Command capture metrics (no Chrome unless --live)
   audio-lab scan              Static claimSource/rewireFront/persistence scan
   audio-lab                   Retrieval-grounded Qwen invariant notes (read-only)
+
+  singularity-harness serve   Tooling-only Singularity canvas (port 5174+, never 5173)
+  singularity-harness capture [--phase peak] [--freeze-at 4] [--out path]
+  singularity-harness prove   Capture 00-baseline.png + local visual screen
+  puppy [mission-id]          Real-state Robo Puppy status card
+  puppy watch [--mission id]  Optional standalone avatar window (port 5176+). Prism is the GUI.
+  overnight singularity       Supervisor chain: tiny Qwen jobs overnight (no giant prompt)
+  compiler-rescue singularity Compiler-mechanic: one GLSL error family at a time (no creative work)
 
   status                    Paths, git, AGENTS.md
 
@@ -178,6 +195,12 @@ async function main() {
   if (cmd === "mission") {
     const { missionMain } = await import("./mission/cli.mjs");
     await missionMain({ flags, pos, log: console.log });
+    return;
+  }
+
+  if (cmd === "mediator") {
+    const { mediatorMain } = await import("./mediator/cli.mjs");
+    await mediatorMain({ flags, pos, log: console.log });
     return;
   }
 
@@ -288,11 +311,49 @@ async function main() {
     return;
   }
 
+  if (cmd === "overnight" && (pos[0] === "singularity" || flags.singularity)) {
+    const { runSingularityNight } = await import("./overnight/singularityNight.mjs");
+    const state = await runSingularityNight({
+      log: console.log,
+      maxCalls: Number(flags["max-calls"] || 100),
+      maxMs: Number(flags["max-ms"] || 7 * 60 * 60 * 1000),
+      stopAfter: flags["stop-after"] || pos[1] || null,
+      continueNight: Boolean(flags.continue),
+    });
+    if (state.fatal) process.exitCode = 1;
+    return;
+  }
+
+  if (cmd === "compiler-rescue" && (pos[0] === "singularity" || flags.singularity)) {
+    const { runCompilerRescue } = await import("./overnight/compilerRescue.mjs");
+    const state = await runCompilerRescue({
+      log: console.log,
+      maxCalls: Number(flags["max-calls"] || 40),
+      maxFamilies: Number(flags["max-families"] || 4),
+      idPrefix: flags["id-prefix"] || "singularity-glsl",
+    });
+    if (state.fatal) process.exitCode = 1;
+    return;
+  }
+
+  if (cmd === "singularity-harness") {
+    const { harnessCli } = await import("./ui/captureHarness.mjs");
+    await harnessCli({ pos, flags, log: console.log });
+    return;
+  }
+
   if (cmd === "puppy") {
+    if (pos[0] === "watch") {
+      const { watchCli } = await import("./puppy/watch.mjs");
+      await watchCli({ pos: pos.slice(1), flags, log: console.log });
+      return;
+    }
     const { puppyStatus, renderTerminal } = await import("./puppy/status.mjs");
     const { writeCard } = await import("./puppy/card.mjs");
+    const { machineHeat } = await import("./puppy/heat.mjs");
     const missionId = pos[0] || flags.mission || null;
     const s = puppyStatus({ missionId });
+    s.heat = machineHeat();
     console.log(renderTerminal(s));
     if (flags.card !== "false") {
       const { out, avatarFound } = writeCard({ missionId });

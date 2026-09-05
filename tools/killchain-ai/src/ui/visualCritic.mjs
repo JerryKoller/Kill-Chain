@@ -49,6 +49,7 @@ export async function visionAvailable({ model = VISION_MODEL } = {}) {
  * "is this beautiful".
  */
 export const SCREEN_CONTRACT = `Answer EXACTLY these lines and nothing else.
+Do not wrap the answer in JSON or markdown.
 
 VISIBLE: <YES or NO — is there any clearly visible subject, or is the frame essentially empty/black?>
 BRIGHT_CORE: <YES or NO — is there a bright concentrated core or focal point?>
@@ -58,21 +59,40 @@ DETAIL: <LOW, MEDIUM or HIGH — how much fine structure/detail is present?>
 DEPTH: <YES or NO — does the image read as three-dimensional rather than flat?>
 NOTE: <one short sentence describing what you actually see>`;
 
-function parseScreen(text) {
+function field(obj, k) {
+  if (!obj || typeof obj !== "object") return null;
+  if (obj[k] != null) return String(obj[k]).trim();
+  const hit = Object.keys(obj).find((key) => key.toLowerCase() === k.toLowerCase());
+  return hit != null ? String(obj[hit]).trim() : null;
+}
+
+export function parseScreen(text) {
+  const raw = String(text || "");
+  let fromJson = null;
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try { fromJson = JSON.parse(jsonMatch[0]); } catch { fromJson = null; }
+  }
   const get = (k) => {
-    const m = String(text || "").match(new RegExp(`^${k}:\\s*(.+)$`, "im"));
+    if (fromJson) {
+      const v = field(fromJson, k);
+      if (v != null) return v.replace(/^["']|["']$/g, "");
+    }
+    const m = raw.match(new RegExp(`^${k}:\\s*(.+)$`, "im"));
     return m ? m[1].trim() : null;
   };
   const yn = (v) => (v == null ? null : /^y/i.test(v));
+  const detailRaw = (get("DETAIL") || "").toUpperCase();
+  const detailHit = detailRaw.match(/^(LOW|MEDIUM|HIGH)\b/);
   return {
     visible: yn(get("VISIBLE")),
     brightCore: yn(get("BRIGHT_CORE")),
     blownOut: yn(get("BLOWN_OUT")),
     color: get("COLOR"),
-    detail: (get("DETAIL") || "").toUpperCase() || null,
+    detail: detailHit ? detailHit[1] : (detailRaw || null),
     depth: yn(get("DEPTH")),
     note: get("NOTE"),
-    raw: String(text || ""),
+    raw,
   };
 }
 
@@ -108,6 +128,10 @@ export async function screenImage(pngPath, { model = VISION_MODEL, prompt = SCRE
 export function screenVerdict(screen, { requireCore = true } = {}) {
   const fails = [];
   if (!screen?.ok) return { pass: false, fails: [`vision unavailable: ${screen?.reason || "unknown"}`] };
+  if (screen.visible == null && screen.brightCore == null && screen.blownOut == null) {
+    fails.push("vision response did not match SCREEN_CONTRACT");
+    return { pass: false, fails, screen };
+  }
   if (screen.visible === false) fails.push("frame appears empty or black");
   if (requireCore && screen.brightCore === false) fails.push("no bright focal core — Singularity's defining feature may be gone");
   if (screen.blownOut === true) fails.push("large clipped/blown-out region");

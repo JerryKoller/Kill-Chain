@@ -29,6 +29,7 @@ export const FAILURE_CLASSES = [
   "REPORTING_FAILURE",   // work happened but the visible contract was not met
   "CRITIC_SUBSTANTIVE",  // critic raised a real, evidenced objection
   "VALIDATION_OTHER",    // tests/build failed for another reason
+  "BUDGET_STARVATION",   // reached implementation with no implementation calls left, or planning ate the reserve
   "BUDGET_EXHAUSTED",    // model calls / wall clock / phases
   "INFRASTRUCTURE",      // tool, provider, or process failure
   "UNKNOWN",
@@ -158,6 +159,10 @@ export function classifyFailure(signal = {}) {
     return mk("CRITIC_SUBSTANTIVE", ACTIONS.REPLAN, [`critic returned ${criticVerdict}`], {});
   }
 
+  if (/BUDGET_STARVATION/i.test(String(blockedReason || ""))) {
+    return mk("BUDGET_STARVATION", ACTIONS.TEACHER, [String(blockedReason)], {});
+  }
+
   if (/maxModelCalls|maxWallClock|maxPhases|budget/i.test(String(blockedReason || ""))) {
     return mk("BUDGET_EXHAUSTED", ACTIONS.TEACHER, [String(blockedReason)], {});
   }
@@ -236,6 +241,10 @@ export function escalate(classification, { attemptsForClass = 0, teacherAvailabl
     return teacherAvailable
       ? { action: ACTIONS.TEACHER, reason: "semantic failure survived local repair", escalated: true }
       : { action: ACTIONS.BLOCK, reason: "semantic failure survived local repair", escalated: true };
+  }
+
+  if (failureClass === "BUDGET_STARVATION") {
+    return { action: teacherAvailable ? ACTIONS.TEACHER : ACTIONS.BLOCK, reason: "implementation budget was not reserved", escalated: true };
   }
 
   if (failureClass === "BUDGET_EXHAUSTED") {
