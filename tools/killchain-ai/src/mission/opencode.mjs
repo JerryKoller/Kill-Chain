@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { repoRoot } from "../paths.mjs";
 import { normalizeModelId } from "./model.mjs";
 import { isKillchainMcpTool, scanUnixTools } from "./unix.mjs";
+import { sanitizeGlText } from "../overnight/probeShape.mjs";
 
 const OPENCODE_CANDIDATES = [
   process.env.OPENCODE_BIN,
@@ -145,7 +146,7 @@ export function openCodeRunArgs({
   if (model) {
     args.push("-m", normalizeModelId(model));
   }
-  args.push(prompt);
+  args.push(sanitizeGlText(prompt));
   return args;
 }
 

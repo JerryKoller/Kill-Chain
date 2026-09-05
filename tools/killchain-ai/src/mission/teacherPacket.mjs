@@ -17,6 +17,7 @@ import { readText } from "./store.mjs";
 import { checkTsSyntax, formatDiagnostics, buildStructurePacket } from "./syntax.mjs";
 import { checkIdentifiers, formatIdentifierPacket } from "./identifierGate.mjs";
 import { scanStructure } from "./jsxStructure.mjs";
+import { sanitizeGlText } from "../overnight/probeShape.mjs";
 
 /** Hard ceiling so escalation never degenerates into "send the repo". */
 export const PACKET_BUDGET = {
@@ -352,16 +353,16 @@ export function writeTeacherPacket(destDir, packet) {
   for (const [name, body] of Object.entries(packet.sections)) {
     const abs = join(destDir, name);
     mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, typeof body === "string" ? body : JSON.stringify(body, null, 2));
+    writeFileSync(abs, sanitizeGlText(typeof body === "string" ? body : JSON.stringify(body, null, 2)));
   }
-  writeFileSync(join(destDir, "CONTRACT.md"), teacherContractTemplate());
-  writeFileSync(join(destDir, "MANIFEST.json"), JSON.stringify({
+  writeFileSync(join(destDir, "CONTRACT.md"), sanitizeGlText(teacherContractTemplate()));
+  writeFileSync(join(destDir, "MANIFEST.json"), sanitizeGlText(JSON.stringify({
     failureClass: packet.failureClass,
     subsystem: packet.subsystem,
     targets: packet.targets,
     totalChars: packet.totalChars,
     withinBudget: packet.withinBudget,
     sections: Object.keys(packet.sections),
-  }, null, 2));
+  }, null, 2)));
   return destDir;
 }

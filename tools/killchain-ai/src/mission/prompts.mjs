@@ -81,10 +81,17 @@ Write PLAN.md in the visible final answer with:
 No production edits this pass.`;
 }
 
+export const PLAN_VERDICT_STAMP = `YOUR FINAL LINE MUST BE EXACTLY ONE OF:
+VERDICT: PASS
+VERDICT: FAIL
+VERDICT: BLOCK`;
+
 export function criticPrompt(spec, status, { plan, proposal, extra }) {
   return `${DISCIPLINE}
 
 ${missionHeader(spec, status)}
+
+${PLAN_VERDICT_STAMP}
 
 CURRENT PASS: CRITIC (read-only). You are not the executor. Do not praise. Do not edit files.
 Look for: unmet acceptance, unsupported claims, missing callers/files, invented paths, scope creep, unsafe architecture, invariant violations, missing validation, unrelated diff.
@@ -102,6 +109,8 @@ or
 VERDICT: BLOCK
 
 Write the verdict on its own line as VERDICT: PASS (or FAIL/BLOCK) with no backticks around the word.
+Do not write READY, NOT_READY, "looks good", "approved", or "safe" as a substitute. The parser only accepts VERDICT: PASS|FAIL|BLOCK.
+Do not wrap the report in JSON.
 
 A PASS without INSPECTED, RISK, and EVIDENCE is invalid.
 A PASS that only says the plan looks good / is comprehensive is invalid.
@@ -111,7 +120,80 @@ PLAN:
 ${clip(plan, 9000)}
 
 ${proposal ? `PROPOSAL:\n${clip(proposal, 8000)}\n` : ""}
-${extra ? `EXTRA:\n${clip(extra, 4000)}\n` : ""}`;
+${extra ? `EXTRA:\n${clip(extra, 4000)}\n` : ""}
+${PLAN_VERDICT_STAMP}`;
+}
+
+/** Cheap reshape. Must never include the full critic investigation contract. */
+export function criticFormatRepairPrompt(packet) {
+  return `CURRENT PASS: CRITIC FORMAT-REPAIR (no tools).
+You are not the investigator. You are not the executor. You are reshaping your own previous critic output so it satisfies the machine-readable contract.
+
+Do not call tools. Do not read files. Do not edit files. Do not re-investigate. Do not revise your judgement. Do not add findings. Do not wrap the answer in JSON.
+
+${packet}
+
+${PLAN_VERDICT_STAMP}
+
+Do not use READY or NOT_READY. Do not use backticks around the verdict word.`;
+}
+
+/** Prior output had no verdict substance. Include the plan; do not invent PASS. */
+/**
+ * Targeted evidence gathering for a critic that inspected nothing.
+ *
+ * This is the one critic repair that MUST allow tools. The needs-evidence
+ * prompt forbids them, which is correct when a verdict is missing but
+ * unwinnable when the missing thing is inspected-file evidence.
+ *
+ * Deliberately narrow: one named target, minimal MCP call, no re-planning, and
+ * no replay of the mission history.
+ */
+export function criticEvidenceGatherPrompt({ packet, plan, targets = [] }) {
+  return `CURRENT PASS: CRITIC EVIDENCE GATHER.
+Your previous review lacked verified inspected-file evidence.
+
+Use the Kill Chain MCP tools to inspect the authorized target(s) for this mission:
+${targets.map((t) => `- ${t}`).join("\n")}
+
+Your FIRST tool call must be a Kill Chain MCP tool (killchain_search, killchain_symbol,
+killchain_context_pack). Do not start with bash, grep, sed, awk, head, tail or find.
+Gather only the evidence needed to review this plan. Do not survey the repository.
+Do not re-plan and do not propose a different approach.
+
+${packet}
+
+PLAN:
+${clip(plan, 6000)}
+
+Then re-emit the review with these labelled lines:
+INSPECTED: <files you actually opened>
+RISK: <the concrete risk>
+EVIDENCE: <what you saw that supports the verdict>
+
+List a file under INSPECTED only if you actually opened it. Never invent evidence and
+never invent a PASS. If after inspecting you still cannot support a verdict, say so and
+VERDICT must be FAIL.
+
+${PLAN_VERDICT_STAMP}`;
+}
+
+export function criticNeedsEvidencePrompt({ packet, plan }) {
+  return `CURRENT PASS: CRITIC NEEDS-EVIDENCE (no tools).
+Your previous output was not a usable critic review: it had no parseable VERDICT and no clear approve/reject.
+
+Do not call tools. Do not re-investigate the repository. Do not edit files. Do not wrap the answer in JSON.
+Review the PLAN text below (already on disk).
+
+${packet}
+
+PLAN:
+${clip(plan, 9000)}
+
+If the PLAN is not a real structured plan (no files, no phases, no acceptance mapping), VERDICT must be FAIL.
+Never invent a PASS. Never invent evidence; write MISSING on unsupported fields.
+
+${PLAN_VERDICT_STAMP}`;
 }
 
 export function proposalPrompt(spec, status, { plan, critic, round }) {

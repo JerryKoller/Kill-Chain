@@ -28,6 +28,19 @@ export function isToolingPath(rel) {
   return p === "tools/killchain-ai" || p.startsWith("tools/killchain-ai/") || p.includes("killchain-ai/");
 }
 
+/**
+ * Production-adjacent scratch files are never an authorized write, even if
+ * allowedPaths is a directory glob. The runner/checkpoint system is the backup.
+ */
+export function isSidecarPath(rel) {
+  const p = toPosixRel(rel);
+  const base = (p.split("/").pop() || "").toLowerCase();
+  if (!base) return false;
+  if (/\.(bak|tmp|old|orig)$/i.test(base)) return true;
+  if (/^(copy|backup)\.(ts|tsx|js|mjs|jsx)$/i.test(base)) return true;
+  return false;
+}
+
 export function parsePorcelain(text) {
   const rows = [];
   for (const line of String(text || "").split(/\r?\n/).filter(Boolean)) {
@@ -287,6 +300,10 @@ export function unauthorizedChanges(rows, spec, { dryRun = false } = {}) {
   for (const row of rows) {
     if (isToolingPath(row.path)) continue;
     if (GENERATED_SIDE_EFFECTS.includes(row.path)) continue;
+    if (isSidecarPath(row.path)) {
+      unauthorized.push(row);
+      continue;
+    }
     if (pathEditable(row.path, spec, { dryRun })) allowed.push(row);
     else unauthorized.push(row);
   }

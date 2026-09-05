@@ -10,7 +10,7 @@
  * Packets are deliberately small. They never re-send the mission brief.
  */
 
-import { repoFileExists, parseMentionedPaths } from "./critic.mjs";
+import { repoFileExists, parseMentionedPaths, tryLocalVerdictNormalize } from "./critic.mjs";
 
 /** Failure kinds. Each maps to exactly one recovery path. */
 export const TUTOR = {
@@ -92,6 +92,107 @@ export function classifyGateFailure(gate = {}) {
     return { kind: TUTOR.CRITIC_FORMAT, formatOnly: true, errors, kinds, missingFields: missingFieldsFrom(kinds) };
   }
   return { kind: null, formatOnly: false, errors, kinds, missingFields: [] };
+}
+
+/** What PLAN_REVIEW should do. Pure. Never stamps PASS itself. */
+/**
+ * EVIDENCE_REPAIR is tracked separately from generic critic retries so a missing
+ * INSPECTED field gets exactly one tool-enabled recovery rather than competing
+ * for the prose-repair budget.
+ */
+export const PLAN_CRITIC_ACTION = {
+  EVIDENCE_REPAIR: "EVIDENCE_REPAIR",
+  CONTINUE: "CONTINUE",
+  LOCAL_NORMALIZE: "LOCAL_NORMALIZE",
+  FORMAT_REPAIR: "FORMAT_REPAIR",
+  NEEDS_MORE_EVIDENCE: "NEEDS_MORE_EVIDENCE",
+  PLAN_CORRECTION: "PLAN_CORRECTION",
+  BLOCK: "BLOCK",
+};
+
+/**
+ * Route a plan-critic gate failure.
+ *
+ * missing-verdict with real review substance → cheap format repair.
+ * missing-verdict with no approve/reject substance → NEEDS_MORE_EVIDENCE
+ *   (do not invent a verdict).
+ * invented-files / scope / ambiguity outrank format, even when VERDICT is also
+ * missing — that mix must not take the cheap path.
+ */
+/**
+ * Concrete files the critic could actually be told to inspect.
+ * Globs are skipped — we only name paths a model can open directly.
+ */
+export function evidenceTargets(spec) {
+  const allowed = spec?.allowedPaths || [];
+  return allowed.filter((p) => typeof p === "string" && p && !p.includes("*")).slice(0, 4);
+}
+
+export function planCriticDisposition(gate = {}, criticText = "", { spec = null } = {}) {
+  if (gate.pass) {
+    return { action: PLAN_CRITIC_ACTION.CONTINUE, kind: null, formatOnly: false };
+  }
+
+  const cls = classifyGateFailure(gate);
+  const verdict = String(gate.modelVerdict || "").toUpperCase();
+
+  if (!gate.missingVerdict && (verdict === "BLOCK")) {
+    return { action: PLAN_CRITIC_ACTION.BLOCK, kind: cls.kind, formatOnly: false };
+  }
+
+  if (cls.kind === TUTOR.PRODUCT_AMBIGUITY || cls.kind === TUTOR.INVALID_REFERENCE || cls.kind === TUTOR.SCOPE) {
+    return { action: PLAN_CRITIC_ACTION.PLAN_CORRECTION, kind: cls.kind, formatOnly: false };
+  }
+
+  // A missing INSPECTED field is an evidence problem, not a formatting one. The
+  // cheap needs-evidence repair explicitly forbids tools, so asking for
+  // inspected files that way is unwinnable — it consumed two calls and blocked
+  // the first live production mission. Route it to one targeted, tool-enabled
+  // evidence pass aimed at the mission's own authorized files.
+  const targets = evidenceTargets(spec);
+  if ((gate.errors || []).includes("no-inspected-files") && targets.length) {
+    return {
+      action: PLAN_CRITIC_ACTION.EVIDENCE_REPAIR,
+      kind: TUTOR.CRITIC_FORMAT,
+      formatOnly: false,
+      targets,
+    };
+  }
+
+  if (gate.missingVerdict) {
+    const local = tryLocalVerdictNormalize(criticText);
+    if (local.repaired) {
+      return {
+        action: PLAN_CRITIC_ACTION.LOCAL_NORMALIZE,
+        kind: TUTOR.CRITIC_FORMAT,
+        formatOnly: true,
+        normalizedText: local.text,
+        verdict: local.verdict,
+      };
+    }
+    if (!cls.formatOnly && cls.kind) {
+      return { action: PLAN_CRITIC_ACTION.PLAN_CORRECTION, kind: cls.kind, formatOnly: false };
+    }
+    if (hasSubstanceFor("VERDICT", criticText)) {
+      return { action: PLAN_CRITIC_ACTION.FORMAT_REPAIR, kind: TUTOR.CRITIC_FORMAT, formatOnly: true };
+    }
+    return { action: PLAN_CRITIC_ACTION.NEEDS_MORE_EVIDENCE, kind: TUTOR.CRITIC_SUBSTANTIVE, formatOnly: false };
+  }
+
+  if (cls.formatOnly) {
+    const fields = cls.missingFields.length ? cls.missingFields : ["VERDICT"];
+    const allHaveSubstance = fields.every((f) => hasSubstanceFor(f, criticText));
+    if (allHaveSubstance) {
+      return { action: PLAN_CRITIC_ACTION.FORMAT_REPAIR, kind: TUTOR.CRITIC_FORMAT, formatOnly: true };
+    }
+    return { action: PLAN_CRITIC_ACTION.NEEDS_MORE_EVIDENCE, kind: TUTOR.CRITIC_SUBSTANTIVE, formatOnly: false };
+  }
+
+  if (verdict === "FAIL" || verdict === "NOT_READY" || cls.kind === TUTOR.CRITIC_SUBSTANTIVE) {
+    return { action: PLAN_CRITIC_ACTION.PLAN_CORRECTION, kind: TUTOR.CRITIC_SUBSTANTIVE, formatOnly: false };
+  }
+
+  return { action: PLAN_CRITIC_ACTION.PLAN_CORRECTION, kind: cls.kind, formatOnly: false };
 }
 
 function missingFieldsFrom(kinds) {
@@ -253,14 +354,14 @@ export function buildCorrectionPacket({
 export const CRITIC_CONTRACT = `INSPECTED: <real repo paths or symbols you examined, comma separated>
 RISK: <one plausible regression you actually investigated>
 EVIDENCE: <what you checked that makes the risk acceptable, or why it is not>
-VERDICT: <PASS or FAIL>   (plan/final review uses READY or NOT_READY)`;
+VERDICT: PASS|FAIL|BLOCK`;
 
 /**
  * Format-only correction. The model keeps its own analysis and only reshapes
  * it. It is explicitly told to write MISSING rather than invent evidence,
  * which keeps a cheap reformat from becoming a fabrication vector.
  */
-export function criticFormatPacket({ gate, criticText, missingFields = [], retriesUsed = 0, retryBudget = 1, verdictWords = "PASS or FAIL" } = {}) {
+export function criticFormatPacket({ gate, criticText, missingFields = [], retriesUsed = 0, retryBudget = 1, verdictWords = "PASS, FAIL, or BLOCK" } = {}) {
   const fields = missingFields.length ? missingFields : ["VERDICT"];
   const withSubstance = fields.filter((f) => hasSubstanceFor(f, criticText));
   const withoutSubstance = fields.filter((f) => !withSubstance.includes(f));
@@ -288,8 +389,75 @@ export function criticFormatPacket({ gate, criticText, missingFields = [], retri
     requiredAction:
       `Re-emit your SAME review, unchanged in substance, with the missing field(s) added as labelled lines: ${fields.join(", ")}.`
       + (withoutSubstance.length ? `\nFor ${withoutSubstance.join(", ")} you have no supporting content — write the label followed by MISSING.` : "")
-      + `\nWrite the verdict on its own line with no backticks.`,
+      + `\nWrite the verdict on its own line with no backticks.`
+      + `\nYOUR FINAL LINE MUST BE EXACTLY ONE OF:\nVERDICT: PASS\nVERDICT: FAIL\nVERDICT: BLOCK`,
     prohibited,
+    retriesUsed,
+    retryBudget,
+    priorOutput: criticText,
+  });
+}
+
+/** When there is no approve/reject substance, do not invent a verdict. */
+/**
+ * Correction for a critic that produced no inspected-file evidence.
+ *
+ * Unlike the needs-evidence packet, this one REQUIRES tool use — the failure is
+ * that nothing was inspected, so forbidding inspection makes it unwinnable.
+ * Targets come from the mission's own authorized paths so the critic does not
+ * survey the repository.
+ */
+export function criticEvidenceGatherPacket({ gate, criticText, targets = [], retriesUsed = 0, retryBudget = 1 } = {}) {
+  return buildCorrectionPacket({
+    kind: PLAN_CRITIC_ACTION.EVIDENCE_REPAIR,
+    failedGate: "critic inspected-file evidence",
+    expected: "A critic review naming at least one repository file it actually inspected, under INSPECTED.",
+    observed: [
+      (gate?.errors || []).length ? `gate errors: ${gate.errors.join(", ")}` : "",
+      "The review named no inspected file, so its evidence could not be verified.",
+    ].filter(Boolean).join("\n"),
+    missingFields: ["INSPECTED"],
+    allowedPaths: targets,
+    requiredAction:
+      `Inspect the authorized target(s) with Kill Chain MCP first (killchain_search, killchain_symbol, or killchain_context_pack): ${targets.join(", ")}. `
+      + "Gather only the evidence needed to review this plan. "
+      + "Then re-emit the review with labelled INSPECTED, RISK, EVIDENCE and VERDICT lines. "
+      + "List a file under INSPECTED only if you actually opened it — do not guess, and do not invent a PASS.",
+    prohibited: [
+      "Do not re-plan or propose a different approach.",
+      "Do not survey the whole repository.",
+      "Do not start with bash, grep, sed, awk, head, tail or find.",
+      "Do not list a file under INSPECTED that you did not open.",
+      "Do not invent a PASS.",
+    ],
+    retriesUsed,
+    retryBudget,
+    priorOutput: criticText,
+  });
+}
+
+export function criticNeedsEvidencePacket({ gate, criticText, retriesUsed = 0, retryBudget = 1 } = {}) {
+  return buildCorrectionPacket({
+    kind: PLAN_CRITIC_ACTION.NEEDS_MORE_EVIDENCE,
+    failedGate: "critic verdict substance",
+    expected: "A critic review of the plan with INSPECTED, RISK, EVIDENCE, and a final line VERDICT: PASS|FAIL|BLOCK.",
+    observed: [
+      (gate?.errors || []).length ? `gate errors: ${gate.errors.join(", ")}` : "",
+      "Previous output had no parseable VERDICT and no approve/reject recommendation.",
+      "Format-repair would have to invent a verdict, which is forbidden.",
+    ].filter(Boolean).join("\n"),
+    missingFields: ["VERDICT"],
+    requiredAction:
+      "Review the PLAN already provided. Emit labelled INSPECTED, RISK, EVIDENCE, and VERDICT lines. "
+      + "If the PLAN is not a real structured plan, VERDICT must be FAIL. "
+      + "If a field has no support, write MISSING. Never invent a PASS.",
+    prohibited: [
+      "Do not re-investigate the repository.",
+      "Do not call tools.",
+      "Do not edit files.",
+      "Do not invent a PASS.",
+      "Do not restart the plan from scratch.",
+    ],
     retriesUsed,
     retryBudget,
     priorOutput: criticText,

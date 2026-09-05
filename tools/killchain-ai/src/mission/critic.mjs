@@ -33,6 +33,41 @@ export function parseCritic(text) {
   };
 }
 
+/**
+ * Mechanical near-miss only. Copies a verdict token that is already present
+ * in a non-contract form (JSON key, etc.). Never infers PASS from praise.
+ */
+export function tryLocalVerdictNormalize(text) {
+  const raw = String(text || "");
+  const parsed = parseCritic(raw);
+  if (!parsed.missingVerdict) {
+    return { text: raw, repaired: false, verdict: parsed.verdict };
+  }
+  const json = raw.match(/["']verdict["']\s*:\s*["'](PASS|FAIL|BLOCK|READY|NOT_READY)["']/i);
+  if (json) {
+    const v = json[1].toUpperCase();
+    return { text: `${raw.trim()}\nVERDICT: ${v}`, repaired: true, verdict: v };
+  }
+  return { text: raw, repaired: false, verdict: null };
+}
+
+/**
+ * Format-repair models often emit only `VERDICT: PASS` and drop the review.
+ * Never let a stamp-only reply replace a longer prior critic.
+ */
+export function mergeCriticRepair(prior, next) {
+  const p = String(prior || "").trim();
+  const n = String(next || "").trim();
+  if (!n) return p;
+  if (!p) return n;
+  const lineCount = n.split(/\r?\n/).filter((l) => l.trim()).length;
+  const stampOnly = n.length < 800 && lineCount <= 12
+    && /VERDICT:\s*(PASS|FAIL|BLOCK|READY|NOT_READY)/i.test(n)
+    && parseMentionedPaths(n).length === 0;
+  if (stampOnly) return `${p}\n\n${n}`;
+  return n;
+}
+
 function field(raw, name) {
   const same = String(raw).match(new RegExp(`^(?:#{1,3}\\s*)?${name}:\\s*(.+)$`, "im"));
   if (same && !/^#{1,3}/.test(same[0])) return same[1].trim();
@@ -222,11 +257,18 @@ export function criticToolsOk(toolNames, spec) {
  * only to satisfy a counter produced expensive retries and at least one
  * archived false BLOCK (`critic-no-tools`).
  *
- * So a critic is grounded when EITHER it inspected the repo itself, OR every
- * path it cites is corroborated verbatim by the authoritative evidence it was
- * given. Citing a path that appears nowhere — neither read nor supplied — is
- * still ungrounded, which is the case the original rule was really protecting
- * against.
+ * A critic is grounded when EITHER it inspected the repo itself, OR every path
+ * it cites is corroborated verbatim by the authoritative evidence it was given.
+ * Citing a path that appears nowhere — neither read nor supplied — is still
+ * ungrounded, which is the case the original rule was really protecting against.
+ *
+ * Grounding deliberately does NOT reject on content. A corroborated path means
+ * the critic was looking at a real file; inventing *facts* about a real file is
+ * caught downstream by checkReferencedFilesExist, findInventedInnerPanelFiles
+ * and checkInventedSymbolsAsync. Gating here on identifier overlap rejected
+ * ordinary prose — "plan confirms glow uses spring physics with 300ms duration"
+ * reads as seven unsupported identifiers — so those identifiers are reported as
+ * telemetry (`unsupportedIdentifiers`) and do not affect the verdict.
  */
 export function criticGroundingOk({ criticText = "", tools = [], spec, suppliedEvidence = "" } = {}) {
   const toolsGate = criticToolsOk(tools, spec);
@@ -236,14 +278,26 @@ export function criticGroundingOk({ criticText = "", tools = [], spec, suppliedE
 
   const supplied = String(suppliedEvidence || "");
   const cited = parseMentionedPaths(criticText);
+
+  // Also parse the critic's structured fields to check evidence content
+  const parsedCritic = parseCritic(criticText);
+  const evidenceText = String(parsedCritic.evidence || "");
+
   if (!supplied.trim() || !cited.length) {
     return { ok: false, via: "none", reason: "critic-no-tools", toolsGate, corroborated: [], uncorroborated: cited };
   }
 
   const corroborated = cited.filter((p) => supplied.includes(p));
   const uncorroborated = cited.filter((p) => !supplied.includes(p));
-  // Every cited path must be traceable to the supplied evidence.
+
+  // Path grounding: every cited path must be in supplied evidence
   const ok = corroborated.length >= 1 && uncorroborated.length === 0;
+
+  // Telemetry only — see the note above. Reported so a future gate (or the
+  // Mediator) can reason about claim support without this function rejecting on it.
+  const evidenceIdentifiers = extractEvidenceIdentifiers(evidenceText);
+  const unsupportedIdentifiers = evidenceIdentifiers.filter((id) => !supplied.includes(id));
+
   return {
     ok,
     via: ok ? "supplied-evidence" : "none",
@@ -251,8 +305,52 @@ export function criticGroundingOk({ criticText = "", tools = [], spec, suppliedE
     toolsGate,
     corroborated,
     uncorroborated,
+    unsupportedIdentifiers,
   };
 }
+
+/**
+ * Extract substantive identifiers from critic evidence text that should be
+ * verifiable against trusted supplied evidence.
+ * Includes: GLSL/TypeScript identifiers, diagnostic symbols, uniform names,
+ * function names, variable names (3+ chars to avoid noise).
+ */
+function extractEvidenceIdentifiers(text) {
+  const raw = String(text || "");
+  if (!raw.trim()) return [];
+
+  const ids = new Set();
+
+  // GLSL/TS identifiers: camelCase, snake_case, PascalCase (3+ chars)
+  const idRe = /\b(?:[a-z]+[A-Z][a-zA-Z0-9]*|[A-Z][a-zA-Z0-9]*|[a-z_][a-z0-9_]{2,})\b/g;
+  let m;
+  while ((m = idRe.exec(raw))) {
+    const id = m[0];
+    // Filter out common English words and very short tokens
+    if (id.length >= 3 && !COMMON_WORDS.has(id.toLowerCase())) {
+      ids.add(id);
+    }
+  }
+
+  // Also catch specific patterns: uniform names (uCamelCase), diagnostic terms
+  const uniformRe = /\b(u[A-Z][a-zA-Z0-9]*)\b/g;
+  while ((m = uniformRe.exec(raw))) {
+    ids.add(m[1]);
+  }
+
+  // Diagnostic/error identifiers: quoted or bare identifiers from compiler logs
+  const quotedRe = /['"`]([a-zA-Z_][a-zA-Z0-9_]{2,})['"`]/g;
+  while ((m = quotedRe.exec(raw))) {
+    ids.add(m[1]);
+  }
+
+  return [...ids];
+}
+
+const COMMON_WORDS = new Set([
+  "the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one", "our", "out", "day", "get", "has", "him", "his", "how", "its", "may", "new", "now", "old", "see", "two", "who", "boy", "did", "its", "let", "put", "say", "she", "too", "use", "very", "want", "when", "will", "with", "have", "this", "that", "they", "from", "just", "like", "make", "more", "some", "time", "very", "what", "work", "into", "your", "over", "also", "back", "after", "than", "then", "them", "these", "only", "most", "such", "because", "through", "before", "during", "without", "between", "should", "would", "could", "about", "other", "there", "where", "which", "while", "their", "being", "under", "might", "still", "those", "found", "great", "right", "small", "large", "never", "every", "under", "above", "below", "within", "beyond", "inside", "outside", "around", "through", "across", "against", "among", "toward", "behind", "beneath", "beside", "beyond", "except", "despite", "unless", "until", "since", "though", "although", "whether", "whichever", "whenever", "wherever", "whoever", "however", "whatever", "whichever",
+  "inspected", "risk", "evidence", "verdict", "pass", "fail", "block", "ready", "missing", "file", "path", "source", "code", "function", "variable", "constant", "uniform", "shader", "compile", "error", "warning", "line", "column", "message", "diagnostic", "identifier", "undeclared", "syntax", "semantic", "type", "mismatch", "assignment", "expression", "statement", "declaration", "definition", "reference", "scope", "context", "module", "import", "export", "default", "named", "namespace", "interface", "type", "alias", "generic", "constraint", "extends", "implements", "abstract", "final", "static", "public", "private", "protected", "readonly", "optional", "required", "nullable", "undefined", "null", "void", "never", "unknown", "any", "object", "array", "string", "number", "boolean", "symbol", "bigint", "promise", "async", "await", "yield", "generator", "iterator", "observable", "subject", "subscription", "operator", "pipe", "map", "filter", "reduce", "merge", "concat", "switch", "case", "default", "break", "continue", "return", "throw", "try", "catch", "finally", "with", "debugger", "function", "var", "let", "const", "export", "import", "from", "as", "default", "namespace", "module", "declare", "global", "typeof", "keyof", "infer", "extends", "never", "any", "unknown", "void", "null", "undefined", "true", "false", "this", "super", "new", "delete", "typeof", "instanceof", "in", "of", "for", "while", "do", "if", "else", "switch", "case", "default", "break", "continue", "return", "throw", "try", "catch", "finally", "with", "debugger"
+]);
 
 export function unionToolNames(...lists) {
   const out = [];
